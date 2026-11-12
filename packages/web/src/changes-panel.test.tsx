@@ -5,6 +5,8 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PaneTabs } from "./App.tsx";
 import { ChangesPanel } from "./changes-panel.tsx";
+import { askPanel } from "./panel-ask.ts";
+import { changesFocus, resetChangesFocusForTests } from "./changes-focus.ts";
 import { getRepoChoice, setRepoChoice } from "./repo-choice.ts";
 import type { connect } from "./client.ts";
 import { loadDiffMode, saveDiffMode, sessionDiffChoice } from "./diff-mode.ts";
@@ -68,6 +70,7 @@ beforeEach(() => saveDiffMode("session"));
 afterEach(() => {
   act(() => root.render(null));
   narrow = false;
+  resetChangesFocusForTests();
   localStorage.clear();
   sessionDiffChoice.clear();
 });
@@ -1679,6 +1682,46 @@ it("a line selection sends the numbered diff lines", async () => {
   expect(onSend.mock.calls[0]![0]).toContain("-2 | b\n+2 | X");
 });
 
+// ---- GH-722: palette commands ask the panel ----
+it("GH-722: a rollback ask opens the rollback dialog for the checked row, else the selected row", async () => {
+  saveDiffMode("uncommitted");
+  const git = { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 0 }, { status: "M", path: "c.ts", added: 1, removed: 0 }]), at: { [`${BASE}:a.ts`]: "a\n", [`${BASE}:c.ts`]: "c\n" } };
+  const client = fakeClient({ "/p/a.ts": "a2\n", "/p/c.ts": "c2\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  await act(async () => el.querySelector<HTMLInputElement>("[data-testid=commit-check][data-path='/p/c.ts']")!.click());
+  vi.useFakeTimers({ toFake: ["setTimeout"] });
+  askPanel({ kind: "rollback" });
+  await act(async () => void vi.runAllTimers());
+  vi.useRealTimers();
+  await flush();
+  expect(gitCalls(client, "git.rollbackPreview")).toEqual([{ type: "git.rollbackPreview", cwd: "/p", paths: ["c.ts"] }]);
+  expect([...document.querySelectorAll("[data-testid=rollback-file]")].map((x) => x.textContent)).toEqual(["Mc.ts"]);
+});
+
+it("GH-722: a sendSelection ask sends the selected diff lines; without a selection nothing is sent and the ask stays", async () => {
+  const onSend = vi.fn();
+  await mountSend("M", "session", onSend);
+  vi.useFakeTimers({ toFake: ["setTimeout"] });
+  askPanel({ kind: "sendSelection" });
+  await act(async () => void vi.runAllTimers());
+  expect(onSend).not.toHaveBeenCalled();
+  expect(changesFocus().hasDiffSelection).toBe(false);
+  await act(async () => (diff.options as { onLineSelected?: (r: unknown) => void }).onLineSelected!({ start: 2, side: "deletions", end: 2, endSide: "additions" }));
+  expect(changesFocus().hasDiffSelection).toBe(true);
+  askPanel({ kind: "sendSelection" });
+  await act(async () => void vi.runAllTimers());
+  vi.useRealTimers();
+  expect(onSend.mock.calls[0]![0]).toContain("-2 | b\n+2 | X");
+});
+
+it("GH-722: the panel publishes its selected row for Add to prompt, none for a deleted file's mention", async () => {
+  await mountSend("M", "uncommitted", vi.fn());
+  expect(changesFocus().selected).toEqual({ path: "/p/a.ts", cwd: "/p", deleted: false });
+  await act(async () => root.render(null));
+  expect(changesFocus().selected).toBeUndefined();
+});
+
 // ---- Conflict banner (GH-560) ----
 const banner = () => el.querySelector("[data-testid=conflict-banner]");
 const MERGE: GitOperation = { kind: "merge", conflicted: ["a.ts", "b.ts"] };
@@ -1750,4 +1793,89 @@ it("right click on a row offers Open, Copy path and, in an app-capable browser, 
   expect(await menu()).toEqual(["row-open", "row-copyPath", "row-copyRel", "row-ext-menu-reveal", "row-ext-menu-code", "row-ext-menu-default"]);
   await act(async () => void document.querySelector<HTMLElement>("[data-testid=row-ext-menu-code]")!.click());
   expect(run).toHaveBeenCalledWith("/p/a.ts", "code", "/p");
+});
+
+// ---- GH-722: recommendation hooks ----
+const recClean = () => (setRecommendationHost(undefined), localStorage.clear(), resetPageForTests());
+
+it("GH-722: the third new diff selection offers Send selection; Show me rings the button; a change of the same selection does not count", async () => {
+  recClean();
+  const show = vi.fn();
+  setRecommendationHost({ blocked: () => false, show });
+  await mountSend("M", "session", vi.fn());
+  const select = (end: number | null) => act(async () => (diff.options as { onLineSelected?: (r: unknown) => void }).onLineSelected!(end === null ? null : { start: 2, side: "deletions", end, endSide: "additions" }));
+  await select(2);
+  await select(3); // the same selection grows: not a new one
+  await select(null);
+  await select(2);
+  await select(null);
+  expect(show).not.toHaveBeenCalled();
+  await select(2);
+  expect(show).toHaveBeenCalledOnce();
+  expect(show.mock.calls[0]![0]).toBe("Send the selected diff lines to Claude.");
+  expect(show.mock.calls[0]![1].label).toBe("Show me");
+  await act(async () => show.mock.calls[0]![1].run());
+  const button = el.querySelector<HTMLElement>("[data-testid=diff-send-selection]")!;
+  expect(button.hasAttribute("data-locate")).toBe(true);
+  expect(document.activeElement).toBe(button);
+  recClean();
+});
+
+it("GH-722: the third Copy path offers Open in file manager only where the file can be opened; Show me reopens the row menu on Reveal", async () => {
+  recClean();
+  const show = vi.fn();
+  setRecommendationHost({ blocked: () => false, show });
+  const client = fakeClient({ "/p/a.ts": "a = 2\n" });
+  const ext = { editors: [], canOpen: () => true, isLocal: () => true, run: vi.fn() };
+  const panel = (o?: OpenExternal) => (
+    <OpenExternalContext value={o}>
+      <ChangesPanel client={client} view={view([edit("e1", "/p/a.ts", "a = 1", "a = 2")])} cwd="/p" onOpen={() => {}} onCopy={() => {}} />
+    </OpenExternalContext>
+  );
+  const copy = async () => {
+    await act(async () => void el.querySelector("[data-testid=changed-file]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    await act(async () => void document.querySelector<HTMLElement>("[data-testid=row-copyPath]")!.click());
+    await flush();
+  };
+  await act(async () => root.render(panel()));
+  await flush();
+  for (let i = 0; i < 3; i++) await copy();
+  expect(show, "a browser that cannot open files").not.toHaveBeenCalled();
+  await act(async () => root.render(panel(ext)));
+  await flush();
+  await copy();
+  expect(show).toHaveBeenCalledOnce();
+  expect(show.mock.calls[0]![0]).toBe("Open this file or folder in the file manager or an editor.");
+  await act(async () => show.mock.calls[0]![1].run());
+  await act(async () => void (await new Promise((r) => setTimeout(r, 120))));
+  const reveal = document.querySelector<HTMLElement>("[data-testid=row-ext-menu-reveal]")!;
+  expect(reveal).not.toBeNull();
+  expect(reveal.hasAttribute("data-locate")).toBe(true);
+  recClean();
+});
+
+it("GH-722: the first rollback dialog shows the Local history hint, the second does not; it closes by its button", async () => {
+  recClean();
+  saveDiffMode("uncommitted");
+  const git = { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 0 }, { status: "M", path: "c.ts", added: 1, removed: 0 }]), at: { [`${BASE}:a.ts`]: "a\n", [`${BASE}:c.ts`]: "c\n" } };
+  const client = fakeClient({ "/p/a.ts": "a2\n", "/p/c.ts": "c2\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  const button = () => el.querySelector<HTMLButtonElement>("[data-testid=rollback-button]")!;
+  await act(async () => el.querySelector<HTMLInputElement>("[data-testid=commit-check][data-path='/p/c.ts']")!.click());
+  const open = async () => {
+    await act(async () => button().click());
+    await flush();
+  };
+  await open();
+  const hint = () => document.querySelector("[data-testid=rec-local-history]");
+  expect(hint()!.textContent).toContain("The replaced text stays in the Timeline.");
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=rec-local-history-close]")!.click());
+  expect(hint()).toBeNull();
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=rollback-cancel]")!.click());
+  await flush();
+  await open();
+  expect(document.querySelector("[data-testid=rollback-files]")).not.toBeNull();
+  expect(hint(), "once ever").toBeNull();
+  recClean();
 });

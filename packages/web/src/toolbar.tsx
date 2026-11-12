@@ -5,6 +5,7 @@ import { Popover } from "@base-ui/react/popover";
 import { Combobox } from "@base-ui/react/combobox";
 import { t, useT, type Key } from "./i18n.ts";
 import { keyText } from "./shortcuts.ts";
+import { count, offer } from "./recommendations.ts";
 import type { SendMode } from "./send-mode.ts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ALL_CAPABILITIES, permissionModesFor, type AgentInfo, type ContextUsage, type Effort, type EngineCapabilities, type ModelInfo, type PermissionMode } from "@claude-ui/protocol";
@@ -372,7 +373,7 @@ export function PromptToolbar(props: {
           title={t("app.toolbar.attach")}
           data-testid="attach"
           className={`${GHOST} flex w-7 shrink-0 items-center justify-center px-0! pointer-coarse:w-11`}
-          onClick={() => file.current?.click()}
+          onClick={() => (offer("filePaste", { n: count("attach") }), file.current?.click())}
         >
           <PlusIcon className="size-4" />
         </button>

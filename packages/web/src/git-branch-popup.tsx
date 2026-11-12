@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Popover } from "@base-ui/react/popover";
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import type { GitBranchResult } from "@claude-ui/protocol";
 import { cn } from "@/lib/utils";
-import type { connect } from "./client.ts";
+import type { connect, RequestError } from "./client.ts";
+import { usePanelAsk, type BranchAskAction } from "./panel-ask.ts";
 import { BranchActions, useBranchHost, type BranchHost, type MenuItem } from "./git-branch-menu.tsx";
 import { POPUP } from "./session-actions.tsx";
 import { useT } from "./i18n.ts";
@@ -14,6 +16,9 @@ type Row = { id: string; kind: "all" | "head" | "local" | "remote" | "remotes" |
 const short = (ref: string) => ref.replace(/^refs\/(heads|remotes|tags)\//, "");
 const hasActions = (r?: Row) => r?.kind === "local" || r?.kind === "remote";
 const isNav = (r: Row) => r.kind !== "title";
+/** GH-722: a branch pick started by a palette command; "new" has no pick (it opens the New branch dialog at once). */
+type Pick = Exclude<BranchAskAction, "new">;
+const PICK_TEXT = { checkout: "app.cmd.pickCheckout", checkoutSmart: "app.cmd.pickCheckoutSmart", merge: "app.cmd.pickMerge", rebase: "app.cmd.pickRebase" } as const;
 
 const PopItem: MenuItem = ({ className, disabled, onClick, children, ...p }) => (
   <button type="button" role="menuitem" aria-disabled={disabled || undefined} onClick={disabled ? undefined : onClick} className={cn("flex h-8 w-full cursor-pointer select-none items-center rounded-md px-2 text-left outline-none hover:bg-secondary focus-visible:bg-secondary aria-disabled:cursor-not-allowed aria-disabled:text-muted-foreground aria-disabled:hover:bg-transparent max-md:h-11", className)} {...p}>
@@ -45,7 +50,12 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
   const [remotesOpen, setRemotesOpen] = useState(false);
-  const [sub, setSub] = useState<string>();
+  const [subRaw, setSubRaw] = useState<string>();
+  // GH-722: a pick (palette Checkout, Smart checkout, Merge, Rebase) lists the branches to pick, with no actions submenu.
+  const [pick, setPick] = useState<Pick>();
+  const [pickNote, setPickNote] = useState<string>();
+  const sub = pick ? undefined : subRaw;
+  const setSub = (v: string | undefined) => void (!pick && setSubRaw(v));
   const input = useRef<HTMLInputElement>(null);
   const subEl = useRef<HTMLDivElement>(null);
   // Hover opens the actions without moving focus, so typing stays in the search box.
@@ -54,6 +64,15 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
   const rows = useMemo<Row[]>(() => {
     const ok = (l: string) => !needle || l.toLowerCase().includes(needle.toLowerCase());
     const out: Row[] = [];
+    if (pick) {
+      // The current branch is not offered; Merge and Rebase take a local branch (the menu offers them for local branches only).
+      const pickable = (b: string) => b !== head && ok(short(b));
+      const local = branches.filter((b) => b.startsWith("refs/heads/") && pickable(b));
+      if (local.length) out.push({ id: "t-local", kind: "title", value: "", label: t("files.graph.local") }, ...local.map((b) => ({ id: b, kind: "local" as const, value: b, label: short(b) })));
+      const remote = pick === "checkout" || pick === "checkoutSmart" ? branches.filter((b) => b.startsWith("refs/remotes/") && !b.endsWith("/HEAD") && pickable(b)) : [];
+      if (remote.length) out.push({ id: "t-remote", kind: "title", value: "", label: t("files.graph.remote") }, ...remote.map((b) => ({ id: b, kind: "remote" as const, value: b, label: short(b) })));
+      return out;
+    }
     if (ok(allLabel)) out.push({ id: "all", kind: "all", value: "all", label: allLabel });
     if (ok(headLabel)) out.push({ id: "HEAD", kind: "head", value: "HEAD", label: headLabel });
     const local = branches.filter((b) => b.startsWith("refs/heads/") && ok(short(b)));
@@ -65,7 +84,7 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
       if (needle || remotesOpen) out.push(...remote.map((b) => ({ id: b, kind: "remote" as const, value: b, label: short(b) })));
     }
     return out;
-  }, [branches, needle, remotesOpen, allLabel, headLabel, t]);
+  }, [branches, needle, remotesOpen, allLabel, headLabel, t, pick, head]);
   const nav = rows.filter(isNav);
   const cur = nav[Math.min(active, nav.length - 1)];
   useEffect(() => setActive(0), [needle, open]);
@@ -75,8 +94,35 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
   useEffect(() => {
     if (sub && !hovered.current) subEl.current?.querySelector<HTMLElement>("[role=menuitem]:not([aria-disabled])")?.focus();
   }, [sub]);
-  const close = () => (setOpen(false), setQ(""), setSub(undefined));
+  const close = () => (setOpen(false), setQ(""), setSubRaw(undefined), setPick(undefined), setPickNote(undefined));
+  // Picked branch: Checkout runs at once; Merge and Rebase read the branch first (their command and the reason one is blocked).
+  const pickBranch = (ref: string) => {
+    if (host.busy || !pick) return;
+    if (pick === "checkout" || pick === "checkoutSmart") return (close(), host.checkout(ref, pick === "checkoutSmart"));
+    const kind = pick;
+    setPickNote(undefined);
+    client.request<GitBranchResult>({ type: "git.branch", cwd, ...(exact && { exact: true as const }), ref }).then(
+      (r) => {
+        const info = r.branch;
+        if (!info) return setPickNote(t("sidebar.git.notRepo"));
+        if (!info[kind]) return setPickNote(info.why?.[kind] ?? t("sidebar.git.failed"));
+        close();
+        host.pick(kind, info);
+      },
+      (e: RequestError) => setPickNote(e.message || t("sidebar.git.failed")),
+    );
+  };
+  // GH-722: the palette's branch commands (panel-ask.ts).
+  usePanelAsk("branch", (a) => {
+    if (a.action === "new") return void host.newBranch(undefined, head ? short(head) : "HEAD");
+    setPickNote(undefined);
+    setPick(a.action);
+    setSubRaw(undefined);
+    setQ("");
+    setOpen(true);
+  });
   const choose = (r: Row) => {
+    if (pick && (r.kind === "local" || r.kind === "remote")) return pickBranch(r.value);
     if (r.kind === "remotes") return setRemotesOpen((o) => !o);
     onChange(r.value);
     close();
@@ -148,6 +194,8 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
           <Popover.Positioner align="start" sideOffset={4} className="z-50">
             <Popover.Popup initialFocus={input} className={cn(POPUP, "flex max-h-[min(24rem,var(--available-height))] max-w-[calc(100vw-1rem)] gap-1 p-1", sub ? "md:w-[34rem]" : "w-72")} onKeyDown={onPopupKey} data-testid="branch-popup">
               <div className={cn("flex min-h-0 w-72 max-w-full flex-1 flex-col", sub && "max-md:hidden")}>
+                {pick && <p className="mb-1 px-2 font-medium text-xs" data-testid="branch-popup-pick">{t(PICK_TEXT[pick])}</p>}
+                {pickNote && <p className="mb-1 px-2 text-muted-foreground text-xs" role="alert" data-testid="branch-popup-pick-note">{pickNote}</p>}
                 <input ref={input} type="search" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onInputKey} role="combobox" aria-expanded aria-controls="bp-list" aria-activedescendant={cur ? `bp-${cur.id}` : undefined} aria-label={t("files.graph.searchBranches")} placeholder={t("files.graph.searchBranches")} className="mb-1 h-8 w-full shrink-0 rounded-md bg-secondary/60 px-2 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" data-testid="branch-popup-search" />
                 <div id="bp-list" role="listbox" aria-label={t("files.graph.branch")} className="min-h-0 flex-1 overflow-y-auto">
                   {rows.map((r) =>

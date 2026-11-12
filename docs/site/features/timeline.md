@@ -37,6 +37,16 @@ Rewind returns the session to before one of your prompts. Pick what to restore:
 
 You can also run "Rewind" from the [command palette](palette). Rewind is not available while Claude is working.
 
+## Local history (file Timeline)
+
+Not to be confused with the session timeline above: the **Timeline** section under the file tree of [Files](files) belongs to the file open in the editor. It lists, newest first, its **Local history** entries and its **Git history** commits. The filter menu (**Filter timeline**) shows one kind or both, kept in this browser.
+
+- **Local history** keeps the previous content of a file each time you save it, Claude edits it or a git action replaces it. An entry holds the text from before the change, so the current text is always on disk.
+- Each entry has a reason: "File saved", "Agent edit", "Before rollback", "Before checkout", "Before reset", "Before stash drop", "Before abort", "Before restore", "Before paste" or "Named entry". Reset hard, Smart checkout, stash drop, Abort and [Rollback](git#roll-back-changes) save the replaced text first, so none of them loses work.
+- **Create named entry** keeps the file as it is on disk now, under a name you give.
+- A row menu offers **Compare with current**, **Compare with previous**, and for Local history rows **Restore**, **Rename** and **Delete**. **Restore** first asks you to save or discard your edits.
+- Up to 50 entries and 256 KB per file are kept, in the daemon's config folder. **Settings › Local history** turns it off and lists **Excluded paths** (glob patterns, for example `**/dist/**`). See [Settings](../reference/settings#local-history).
+
 ## Good to know
 
 - **Signal only** applies to every session in this browser. Your prompts, Claude's text, errors and requests waiting for you always stay visible.

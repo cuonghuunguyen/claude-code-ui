@@ -4,7 +4,8 @@ import { DIFF_MODES, type DiffMode } from "./diff-mode.ts";
 import { t } from "./i18n.ts";
 import type { AutoClose } from "./tab-cleanup.ts";
 
-export type RuleId = "jira" | "compactTabs" | "cleanupTabs" | "autoClose" | "diffMode" | "searchSessions" | "artifactsPane" | "contextBreakdown" | "push" | "keepAwake" | "middleClick" | "phoneSwipe";
+export type RuleId = "jira" | "compactTabs" | "cleanupTabs" | "autoClose" | "diffMode" | "searchSessions" | "artifactsPane" | "contextBreakdown" | "push" | "keepAwake" | "middleClick" | "phoneSwipe"
+  | "commitInChanges" | "sendSelection" | "findInFiles" | "localHistory" | "defaultMode" | "switchAccount" | "openInFileManager" | "expandChip" | "filePaste";
 type Facts = {
   jira: { ready: boolean };
   compactTabs: { compact: boolean; overflow: boolean; projects: number };
@@ -18,6 +19,16 @@ type Facts = {
   keepAwake: { slept: boolean; supported: boolean; on: boolean };
   middleClick: { fine: boolean; n: number };
   phoneSwipe: { phone: boolean; n: number };
+  // GH-722: 1.3.0 features.
+  commitInChanges: { n: number; dirty: boolean };
+  sendSelection: { n: number };
+  findInFiles: { n: number };
+  localHistory: Record<string, never>;
+  defaultMode: { mode: string; def: string; streak: number; /** The shown name of `mode`. */ label?: string };
+  switchAccount: { accounts: number };
+  openInFileManager: { n: number };
+  expandChip: { n: number };
+  filePaste: { n: number };
 };
 export type Rule<K extends RuleId> = {
   id: K;
@@ -45,12 +56,22 @@ export const RULES: { [K in RuleId]: Rule<K> } = {
   keepAwake: { id: "keepAwake", trigger: "App: the page became visible or reconnected", surface: "toast", button: "turnOn", when: (f) => f.slept && f.supported && !f.on, text: () => t("rec.keepAwake") },
   middleClick: { id: "middleClick", trigger: "files: Open in tab", surface: "toast", button: "none", when: (f) => f.fine && f.n >= 2, text: () => t("rec.middleClick") },
   phoneSwipe: { id: "phoneSwipe", trigger: "tabs-bar: a neighbour tab picked", surface: "toast", button: "none", when: (f) => f.phone && f.n >= 3, text: () => t("rec.phoneSwipe") },
+  // GH-722
+  commitInChanges: { id: "commitInChanges", trigger: "prompt box: a bash line starts with git commit or git add", surface: "toast", button: "showMe", when: (f) => f.dirty && f.n >= 2, text: () => t("rec.commitInChanges") },
+  sendSelection: { id: "sendSelection", trigger: "changes-panel: diff lines selected", surface: "toast", button: "showMe", when: (f) => f.n >= 3, text: () => t("rec.sendSelection") },
+  findInFiles: { id: "findInFiles", trigger: "file-tree: the filter has no match", surface: "toast", button: "showMe", when: (f) => f.n >= 3, text: () => t("rec.findInFiles") },
+  localHistory: { id: "localHistory", trigger: "Reset hard, stash drop or rollback confirm opens", surface: "inline", button: "none", when: () => true, text: () => t("rec.localHistory") },
+  defaultMode: { id: "defaultMode", trigger: "App: permission mode picked in a new session", surface: "toast", button: "turnOn", when: (f) => f.mode !== f.def && f.streak >= 3, text: (f) => t("rec.defaultMode", { mode: f.label ?? f.mode }) },
+  switchAccount: { id: "switchAccount", trigger: "App: the plan usage turned rejected", surface: "toast", button: "showMe", when: (f) => f.accounts >= 2, text: () => t("rec.switchAccount") },
+  openInFileManager: { id: "openInFileManager", trigger: "file tree or Changes: Copy path", surface: "toast", button: "showMe", when: (f) => f.n >= 3, text: () => t("rec.openInFileManager") },
+  expandChip: { id: "expandChip", trigger: "prompt box: a pasted-text chip created", surface: "toast", button: "none", when: (f) => f.n >= 3, text: () => t("rec.expandChip") },
+  filePaste: { id: "filePaste", trigger: "toolbar: Attach button", surface: "toast", button: "none", when: (f) => f.n >= 3, text: () => t("rec.filePaste") },
 };
 
 export const KEY = "claude-ui.recommendations";
 export const PER_DAY = 5;
 export const GAP_MS = 30 * 60_000;
-export type RecState = { v: 1; off?: true; shown: RuleId[]; day?: string; dayCount: number; lastAt?: number; counts: Record<string, number>; streak?: { mode: string; n: number } };
+export type RecState = { v: 1; off?: true; shown: RuleId[]; day?: string; dayCount: number; lastAt?: number; counts: Record<string, number>; streaks?: Record<string, { mode: string; n: number }> };
 const fresh = (): RecState => ({ v: 1, shown: [], dayCount: 0, counts: {} });
 const MAX_COUNT = 99;
 
@@ -65,7 +86,11 @@ export function parseRec(raw: string | null): RecState {
     if (o.off === true) s.off = true;
     if (typeof o.day === "string") s.day = o.day;
     if (typeof o.lastAt === "number" && Number.isFinite(o.lastAt)) s.lastAt = o.lastAt;
-    if (o.streak && typeof o.streak.mode === "string" && Number.isInteger(o.streak.n)) s.streak = { mode: o.streak.mode, n: o.streak.n };
+    const streaks: Record<string, { mode: string; n: number }> = {};
+    const legacy = (o as { streak?: { mode?: unknown; n?: unknown } }).streak; // before GH-722 one shared streak belonged to diffMode
+    if (legacy && typeof legacy.mode === "string" && Number.isInteger(legacy.n)) streaks.diffMode = { mode: legacy.mode, n: legacy.n as number };
+    if (o.streaks && typeof o.streaks === "object") for (const [k, v] of Object.entries(o.streaks)) if (v && typeof v.mode === "string" && Number.isInteger(v.n)) streaks[k] = { mode: v.mode, n: v.n };
+    if (Object.keys(streaks).length) s.streaks = streaks;
     return s;
   } catch {
     return fresh();
@@ -94,7 +119,10 @@ export function markShown(s: RecState, id: RuleId, now: number): RecState {
   return { ...s, shown: [...s.shown, id], day, dayCount: s.day === day ? s.dayCount + 1 : 1, lastAt: now };
 }
 export const bump = (s: RecState, key: string): RecState => ({ ...s, counts: { ...s.counts, [key]: Math.min((s.counts[key] ?? 0) + 1, MAX_COUNT) } });
-export const nextStreak = (s: RecState, mode: string): RecState => ({ ...s, streak: { mode, n: s.streak?.mode === mode ? s.streak.n + 1 : 1 } });
+export const nextStreak = (s: RecState, mode: string, key = "diffMode"): RecState => {
+  const cur = s.streaks?.[key];
+  return { ...s, streaks: { ...s.streaks, [key]: { mode, n: cur?.mode === mode ? cur.n + 1 : 1 } } };
+};
 
 /** Sum of scroll distance within the last 10 s is at least 3 viewport heights. */
 export function scrolledFar(samples: { t: number; top: number }[], now: number, height: number): boolean {
@@ -164,13 +192,19 @@ export function count(key: string): number {
 }
 export const seen = (key: string): number => load().counts[key] ?? 0;
 /** Counts a pick of `mode` in a row; returns the length of the run. */
-export function streak(mode: string): number {
-  const s = nextStreak(load(), mode);
+export function streak(mode: string, key = "diffMode"): number {
+  const s = nextStreak(load(), mode, key);
   save(s);
-  return s.streak!.n;
+  return s.streaks![key]!.n;
 }
 
 export const tipMiddleClick = () => offer("middleClick", { fine: window.matchMedia?.("(pointer: fine)").matches ?? false, n: count("openInTab") });
+
+/** Copy path used (every site counts it); `showMe` is given only where the menu can reopen, and `canOpen` is false for a path the browser's machine cannot open. */
+export const tipOpenInFileManager = (canOpen: boolean, showMe: () => void) => {
+  const n = count("copyPath");
+  return canOpen && offer("openInFileManager", { n }, showMe);
+};
 
 export function setRecommendationsOn(on: boolean) {
   const { off: _, ...rest } = load();

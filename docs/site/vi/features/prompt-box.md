@@ -42,7 +42,9 @@ Khi Claude đang làm việc, lệnh `!` chờ trong hàng đợi như một tin
 - Gõ `@` và một phần tên tệp để nhắc đến tệp.
 - Dán hoặc thả ảnh vào hộp, hoặc bấm **+** (**Thêm ảnh và tệp**). PNG, JPEG, GIF và WebP được gửi đến Claude dưới dạng ảnh.
 - Các tệp khác được tải lên và thêm vào prompt dưới dạng đường dẫn.
+- Tệp bạn đã sao chép trong Explorer hoặc Finder cũng dùng được: dán (<kbd>Ctrl</kbd>+<kbd>V</kbd>, <kbd>⌘</kbd> <kbd>V</kbd> trên Mac) hoặc kéo thả vào hộp. Thư mục bị bỏ qua với thông báo "Không thể đính kèm thư mục; hãy nhắc đến thư mục bằng @." và các tệp khác vẫn được đính kèm.
 - Văn bản dán lớn (hơn 800 ký tự hoặc hơn 2 dấu xuống dòng) hiện thành một khối `[Pasted text #1 +120 lines]` trong hộp và trong tin nhắn đã gửi. Bấm vào khối để đọc văn bản. Xóa nó như một ký tự (<kbd>Backspace</kbd>). Claude nhận toàn bộ văn bản. Nhiều lần dán được đánh số #1, #2…
+- **Mở rộng** (nút mở rộng trên chip văn bản đã dán dưới hộp, "Mở rộng văn bản đã dán #1 vào ô nhập") thay khối bằng văn bản thuần để bạn chỉnh sửa. <kbd>Ctrl</kbd>+<kbd>Z</kbd> (**Hoàn tác**) đưa khối và chip trở lại. Nếu bạn sao chép token của khối rồi dán lại, bản sao được chèn dưới dạng văn bản thuần; bản đầu vẫn là khối.
 
 ## Bộ chọn dưới hộp {#pickers-under-the-box}
 

@@ -42,6 +42,15 @@ const ROWS: { id: keyof typeof RULES; yes: object; no: object[] }[] = [
   { id: "keepAwake", yes: { slept: true, supported: true, on: false }, no: [{ slept: false, supported: true, on: false }, { slept: true, supported: false, on: false }, { slept: true, supported: true, on: true }] },
   { id: "middleClick", yes: { fine: true, n: 2 }, no: [{ fine: false, n: 2 }, { fine: true, n: 1 }] },
   { id: "phoneSwipe", yes: { phone: true, n: 3 }, no: [{ phone: false, n: 3 }, { phone: true, n: 2 }] },
+  { id: "commitInChanges", yes: { n: 2, dirty: true }, no: [{ n: 1, dirty: true }, { n: 2, dirty: false }] },
+  { id: "sendSelection", yes: { n: 3 }, no: [{ n: 2 }] },
+  { id: "findInFiles", yes: { n: 3 }, no: [{ n: 2 }] },
+  { id: "localHistory", yes: {}, no: [] },
+  { id: "defaultMode", yes: { mode: "plan", def: "default", streak: 3 }, no: [{ mode: "plan", def: "plan", streak: 3 }, { mode: "plan", def: "default", streak: 2 }] },
+  { id: "switchAccount", yes: { accounts: 2 }, no: [{ accounts: 1 }, { accounts: 0 }] },
+  { id: "openInFileManager", yes: { n: 3 }, no: [{ n: 2 }] },
+  { id: "expandChip", yes: { n: 3 }, no: [{ n: 2 }] },
+  { id: "filePaste", yes: { n: 3 }, no: [{ n: 2 }] },
 ];
 
 describe("rules", () => {
@@ -189,16 +198,19 @@ describe("helpers", () => {
     const s = parseRec('{"v":1,"shown":["jira","nope",3],"dayCount":2,"day":"2026-6-1","lastAt":5,"counts":{"a":2,"b":1.5,"c":"x"},"streak":{"mode":"branch","n":2}}');
     expect(s.shown).toEqual(["jira"]);
     expect(s.counts).toEqual({ a: 2 });
-    expect(s.streak).toEqual({ mode: "branch", n: 2 });
+    expect(s.streaks).toEqual({ diffMode: { mode: "branch", n: 2 } });
     expect(s.dayCount).toBe(2);
   });
   it("localDay uses local time", () => expect(localDay(new Date(2026, 0, 5, 23, 59).getTime())).toBe("2026-1-5"));
   it("bump caps at 99", () => expect(bump({ ...fresh(), counts: { a: 99 } }, "a").counts.a).toBe(99));
   it("streak resets on another mode", () => {
-    expect(nextStreak(fresh(), "branch").streak).toEqual({ mode: "branch", n: 1 });
-    expect(nextStreak(nextStreak(fresh(), "branch"), "branch").streak?.n).toBe(2);
-    expect(nextStreak(nextStreak(fresh(), "branch"), "session").streak).toEqual({ mode: "session", n: 1 });
+    expect(nextStreak(fresh(), "branch").streaks?.diffMode).toEqual({ mode: "branch", n: 1 });
+    expect(nextStreak(nextStreak(fresh(), "branch"), "branch").streaks?.diffMode?.n).toBe(2);
+    expect(nextStreak(nextStreak(fresh(), "branch"), "session").streaks?.diffMode).toEqual({ mode: "session", n: 1 });
     expect([streak("branch"), streak("branch"), streak("session"), streak("branch")]).toEqual([1, 2, 1, 1]);
+  });
+  it("GH-722: streaks are kept per rule", () => {
+    expect([streak("plan", "defaultMode"), streak("plan", "defaultMode"), streak("branch"), streak("plan", "defaultMode")]).toEqual([1, 2, 1, 3]);
   });
   it("scrolledFar", () => {
     const s = [{ t: 0, top: 0 }, { t: 1000, top: 400 }, { t: 2000, top: 0 }, { t: 3000, top: 400 }];
@@ -206,5 +218,56 @@ describe("helpers", () => {
     expect(scrolledFar(s, 3000, 500)).toBe(false);
     expect(scrolledFar(s, 20_000, 400)).toBe(false);
     expect(scrolledFar(s, 3000, 0)).toBe(false);
+  });
+});
+
+describe("GH-722 rules", () => {
+  const CASES: { id: keyof typeof RULES; facts: object; button?: string }[] = [
+    { id: "commitInChanges", facts: { n: 2, dirty: true }, button: "Show me" },
+    { id: "sendSelection", facts: { n: 3 }, button: "Show me" },
+    { id: "findInFiles", facts: { n: 3 }, button: "Show me" },
+    { id: "defaultMode", facts: { mode: "plan", def: "default", streak: 3 }, button: "Turn on" },
+    { id: "switchAccount", facts: { accounts: 2 }, button: "Show me" },
+    { id: "openInFileManager", facts: { n: 3 }, button: "Show me" },
+    { id: "expandChip", facts: { n: 3 } },
+    { id: "filePaste", facts: { n: 3 } },
+  ];
+  const go = (id: keyof typeof RULES, facts: object, now = T0) => (offer as (id: string, f: object, run?: () => void, now?: number) => boolean)(id, facts, () => {}, now);
+  it.each(CASES)("$id: shown once ever, with its button", ({ id, facts, button }) => {
+    expect(go(id, facts)).toBe(true);
+    expect(shown).toHaveBeenCalledWith(expect.stringMatching(/./), button ? { label: button, run: expect.any(Function) } : undefined);
+    expect(stored().shown).toEqual([id]);
+    resetPageForTests();
+    expect(go(id, facts, T0 + 24 * 3600_000)).toBe(false);
+  });
+  it.each(CASES)("$id: skipped while another toast shows", ({ id, facts }) => {
+    const r = toast();
+    expect(go(id, facts)).toBe(false);
+    r.remove();
+    expect(go(id, facts)).toBe(true);
+  });
+  it.each(CASES)("$id: off with the master switch", ({ id, facts }) => {
+    setRecommendationsOn(false);
+    expect(go(id, facts)).toBe(false);
+    expect(shown).not.toHaveBeenCalled();
+  });
+  it("localHistory: inline, shown once ever, ignores a toast and needs no host", () => {
+    toast();
+    setRecommendationHost(undefined);
+    expect(go("localHistory", {})).toBe(true);
+    expect(shown).not.toHaveBeenCalled();
+    resetPageForTests();
+    expect(go("localHistory", {}, T0 + 24 * 3600_000)).toBe(false);
+  });
+  it("localHistory: off with the master switch", () => {
+    setRecommendationsOn(false);
+    expect(go("localHistory", {})).toBe(false);
+  });
+  it("defaultMode text names the mode", () => {
+    go("defaultMode", { mode: "plan", def: "default", streak: 3 });
+    expect(shown.mock.calls[0]![0]).toBe("Make plan the default for new sessions?");
+  });
+  it("an old single streak parses into streaks.diffMode", () => {
+    expect(parseRec('{"v":1,"shown":[],"dayCount":0,"counts":{},"streak":{"mode":"tree","n":2}}').streaks).toEqual({ diffMode: { mode: "tree", n: 2 } });
   });
 });

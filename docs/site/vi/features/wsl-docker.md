@@ -38,6 +38,14 @@ Trong Mở dự án, **Container này cần gì** liệt kê các mục trên ch
 
 Bundle cần máy của bạn truy cập nodejs.org và npm registry một lần cho mỗi phiên bản claude-code-ui (`CLAUDE_UI_UPDATE_REGISTRY` đặt registry mirror). Nếu không truy cập được và cũng không có bản trong bộ nhớ đệm, container cài bằng npm.
 
+## Khi cài đặt thất bại {#when-an-install-fails}
+
+Cài đặt hoặc khởi động thất bại không chôn lý do trong một đống chữ.
+
+- **Trong thanh bên,** dưới các dự án của môi trường đó, một dòng tóm tắt nói điều gì thất bại ("Không khởi động được" khi không có gì thêm). **Chi tiết** mở ra kết quả phía sau, ví dụ kết quả của npm, bạn có thể chọn và sao chép. **Thử lại** chạy lại. **Chi tiết** vẫn mở sau khi **Thử lại**, nên lần thất bại thứ hai hiện kết quả ngay chỗ bạn đang đọc.
+- **Trong Mở dự án,** cùng dòng tóm tắt và **Chi tiết** hiện trong bảng của môi trường. Nút chính ghi **Thử cài lại** (**Thử cập nhật lại** sau một lần cập nhật thất bại) và chạy lại việc cài đặt. **Kiểm tra lại** xem lại máy mà không cài, ví dụ sau khi bạn tự cài công cụ còn thiếu. Bảng nêu rõ cần sửa gì trước tiên: Node.js, công cụ build, `tar` và `gzip`, một thư mục ghi được.
+- Lỗi của chính bước thiết lập (thiếu công cụ, Node.js quá cũ) không tự thử lại. Hãy sửa rồi bấm **Thử cài lại**. Lỗi khởi động khác khi Claude UI khởi động được tự thử thêm một lần sau 30 giây.
+
 ## Quay lại sau khi khởi động lại {#coming-back-after-a-restart}
 
 Môi trường đã chạy một lần sẽ khởi động lại cùng Claude UI, và tự khởi động lại nếu dừng (sau 2 giây, 10 giây và 60 giây; lần dừng thứ tư trong vòng mười phút hiện lỗi kèm **Thử lại**). Container chạy lại sẽ khởi động trong khoảng 30 giây. Sau bản build Claude UI mới, môi trường cập nhật từ bundle đã tải; nếu distro hoặc container của nó cần npm, môi trường vẫn tắt và thanh bên hiện **Cần cập nhật** kèm **Cập nhật**. Khi môi trường đang khởi động, các dự án của nó vẫn nằm trong thanh bên. Trong **Cài đặt › Môi trường**, **Khởi động cùng Claude UI** tắt hành vi này cho một môi trường (các dự án của nó rời khỏi thanh bên) và **Tự động cập nhật** dừng việc cập nhật tự động.
@@ -57,7 +65,7 @@ ssh chạy không hỏi gì (`BatchMode`): không mật khẩu, không hỏi pas
 
 ### Một Hub cho mỗi máy {#one-hub-per-machine}
 
-Một môi trường là Hub của máy đó. Nếu host đã chạy một Claude UI, Claude UI của bạn gắn vào nó và không khởi động cái thứ hai. Nếu chưa có, Claude UI của bạn khởi động một cái ở đó (chỉ trên `127.0.0.1`) rồi gắn vào. Hub do chính bạn khởi động trên host không bao giờ bị dừng, khởi động lại hay đổi cấu hình. Cài đặt của nó (thư mục gốc được phép, bypass, chế độ mặc định) giới hạn các phiên được gắn vào.
+Một môi trường là Hub của máy đó. Nếu host đã chạy một Claude UI, Claude UI của bạn gắn vào nó và không khởi động cái thứ hai. Việc này không cần cài đặt khi Claude UI đó là bản dựng nói được giao thức tương thích (không cần cùng phiên bản): Claude UI của bạn dùng cầu nối của Hub ở đó và không sao chép gì. Nó chỉ cài bản dựng của chính nó khi không có Claude UI nào chạy ở đó hoặc các giao thức không trùng nhau (xem [Phiên bản](#versions)). Nếu chưa có, Claude UI của bạn khởi động một cái ở đó (chỉ trên `127.0.0.1`) rồi gắn vào. Hub do chính bạn khởi động trên host không bao giờ bị dừng, khởi động lại hay đổi cấu hình. Cài đặt của nó (thư mục gốc được phép, bypass, chế độ mặc định) giới hạn các phiên được gắn vào.
 
 Nhiều Claude UI có thể gắn vào cùng một host, giống nhiều trình duyệt cùng kết nối một Hub.
 
@@ -66,7 +74,7 @@ Nhiều Claude UI có thể gắn vào cùng một host, giống nhiều trình 
 - Kết nối ssh bị đứt không làm dừng lượt chạy, terminal hay prompt trên host. Môi trường hiện **Đang kết nối lại…** và tự gắn lại.
 - Sau khi bạn khởi động lại Claude UI, nó gắn lại vào các host đã gắn trước đó. Lượt chạy và terminal vẫn như cũ.
 - Hub mà Claude UI của bạn đã khởi động trên host sẽ kết thúc khi không có Claude UI nào gắn vào, không có trình duyệt nào kết nối và không có lượt chạy nào trong thời gian chờ (**Grace period**). Đặt theo từng môi trường trong **Cài đặt › Môi trường** (**Giữ chạy khi không có Claude UI (phút)**, mặc định 30).
-- Nếu việc gắn thất bại hẳn, dòng hiện lý do và **Thử lại**.
+- Nếu việc gắn thất bại hẳn, dòng hiện lý do và **Thử lại**, kèm kết quả phía sau **Chi tiết** (xem [Khi cài đặt thất bại](#when-an-install-fails)).
 
 ### Phiên bản {#versions}
 

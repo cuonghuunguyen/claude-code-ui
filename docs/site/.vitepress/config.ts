@@ -59,7 +59,7 @@ const SIDEBAR: [string, [string, string][]][] = [
   ["Working in a session", [["The prompt box", "/features/prompt-box"], ["Permissions & modes", "/features/permissions"], ["Reading a session", "/features/timeline"], ["Usage & context", "/features/usage"], ["Ask an aside (/btw)", "/features/aside"], ["Background shells", "/features/background-shells"]]],
   ["Many sessions", [["Projects & worktrees", "/features/projects"], ["Focus page", "/features/focus"], ["Notifications", "/features/notifications"], ["Orchestration (workers)", "/features/orchestration"]]],
   ["Workspace & layout", [["Sessions & tabs", "/features/sessions"], ["Panes & layout", "/features/panes"], ["Split view", "/features/split-view"], ["Context menus", "/features/context-menus"], ["Clean up", "/features/clean-up"], ["Command palette", "/features/palette"], ["Keep screen awake", "/features/keep-awake"]]],
-  ["Code & git", [["Files", "/features/files"], ["Changes & diffs", "/features/changes"], ["Git graph", "/features/git-graph"], ["Terminal", "/features/terminal"]]],
+  ["Code & git", [["Files", "/features/files"], ["Changes & diffs", "/features/changes"], ["Git operations", "/features/git"], ["Git graph", "/features/git-graph"], ["Terminal", "/features/terminal"]]],
   ["Setup & access", [["Phone & remote access", "/features/remote-access"], ["WSL, Docker & SSH", "/features/wsl-docker"], ["MCP, skills & plugins", "/features/config-dialogs"], ["Addons", "/features/addons"], ["Inline visualizations", "/features/visualize"], ["Updates", "/features/updates"]]],
   ["Reference", [["Keyboard shortcuts", "/reference/shortcuts"], ["Settings", "/reference/settings"], ["CLI flags", "/reference/cli"], ["Troubleshooting & FAQ", "/reference/troubleshooting"], ["Privacy", "/reference/privacy"]]],
 ];
@@ -98,6 +98,7 @@ const VI: Labels = {
   "Code & git": "Mã nguồn và git",
   Files: "Tệp",
   "Changes & diffs": "Thay đổi và diff",
+  "Git operations": "Thao tác Git",
   "Git graph": "Đồ thị git",
   Terminal: "Terminal",
   "Setup & access": "Thiết lập và truy cập",

@@ -143,6 +143,24 @@ export type CommandContext = {
   /** Opens the Manage Plugins dialog of the shown project; none without a project. */
   openPlugins?: () => void;
   openAddons?: () => void;
+  /** GH-722: git commands of the Changes and Git graph panels; each is set only while it applies (a git repository with panels). They have no default key. */
+  rollback?: () => void;
+  newBranch?: () => void;
+  checkout?: () => void;
+  smartCheckout?: () => void;
+  stash?: () => void;
+  merge?: () => void;
+  rebase?: () => void;
+  /** Annotate (Blame) of the file the Files editor shows; none without one. */
+  annotate?: () => void;
+  /** Reveals the shown file, the selected Changes row or the session folder in the OS file manager; none where the browser's machine cannot open it. */
+  revealFile?: () => void;
+  /** Puts the selected Changes row in the prompt as a file mention; none without a selected, not deleted row. */
+  addToPrompt?: () => void;
+  /** Sends the selected diff lines of the Changes tab; none without a line selection. */
+  sendSelection?: () => void;
+  /** Claude accounts: the choices the plan meter's switcher lists (Default, Claude Code login, the named accounts). The row shows with 2 or more. */
+  accounts?: { choices: { id: string; title: string }[]; active?: string; switchTo: (id: string) => void };
 };
 
 const RECENT_SESSIONS = 5;
@@ -209,6 +227,26 @@ export function appCommands(c: CommandContext): PaletteItem[] {
     c.panels && c.isGit && cmd("pane.graph", t("app.cmd.paneGraph"), () => c.showPane("graph")),
     c.panels && c.isGit && cmd("git.commit", t("app.cmd.gitCommit"), () => c.commitBox("commit")),
     c.panels && c.isGit && cmd("git.push", t("app.cmd.gitPush"), () => c.commitBox("push")),
+    // GH-722: no default key; each shows only while its callback is set (App sets them by their conditions).
+    c.panels && c.isGit && c.rollback && cmd("git.rollback", t("app.cmd.gitRollback"), c.rollback),
+    c.panels && c.isGit && c.newBranch && cmd("git.branchNew", t("app.cmd.gitBranchNew"), c.newBranch),
+    c.panels && c.isGit && c.checkout && cmd("git.checkout", t("app.cmd.gitCheckout"), c.checkout),
+    c.panels && c.isGit && c.smartCheckout && cmd("git.checkoutSmart", t("app.cmd.gitCheckoutSmart"), c.smartCheckout),
+    c.panels && c.isGit && c.stash && cmd("git.stash", t("app.cmd.gitStash"), c.stash),
+    c.panels && c.isGit && c.annotate && cmd("git.annotate", t("app.cmd.gitAnnotate"), c.annotate),
+    c.panels && c.isGit && c.merge && cmd("git.merge", t("app.cmd.gitMerge"), c.merge),
+    c.panels && c.isGit && c.rebase && cmd("git.rebase", t("app.cmd.gitRebase"), c.rebase),
+    c.revealFile && cmd("file.reveal", t("app.cmd.fileReveal"), c.revealFile),
+    c.addToPrompt && cmd("changes.addToPrompt", t("app.cmd.changesAddToPrompt"), c.addToPrompt),
+    c.sendSelection && cmd("changes.sendSelection", t("app.cmd.changesSendSelection"), c.sendSelection),
+    c.accounts &&
+      c.accounts.choices.length > 1 &&
+      page(
+        "account.switch",
+        t("app.cmd.accountSwitch"),
+        t("app.cmd.accountChoose"),
+        c.accounts.choices.map((a) => ({ id: `account:${a.id || "default"}`, ...grp("app.cmd.groupAccounts"), title: a.title, checked: a.id === c.accounts!.active, run: () => c.accounts!.switchTo(a.id) })),
+      ),
     s && !s.draft && c.viewChanges && cmd("viewer.changes", t("app.cmd.viewerChanges"), c.viewChanges),
     s && !s.draft && c.viewPlan && cmd("viewer.plan", t("app.cmd.viewerPlan"), c.viewPlan),
     c.showPlan && cmd("plan.show", t("app.cmd.planShow"), c.showPlan),

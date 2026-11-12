@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import { ALL_CAPABILITIES, type SessionListItem } from "@claude-ui/protocol";
 import { appCommands, shortcutFor, type CommandContext } from "./app-commands.ts";
 import { CLEANUP_RULES, RULE_LABEL, type CleanupMenu, type CleanupRule } from "./tab-cleanup.ts";
+import type { PaletteItem } from "./palette.tsx";
 import { KEYS } from "./shortcuts.ts";
 import { bind, resetAll } from "./keymap.ts";
 
@@ -618,4 +619,52 @@ it("GH-656: Ask aside is disabled with the reason when the Engine cannot fork; t
   expect(appCommands(c).find((i) => i.id === "aside.ask")).toMatchObject({ disabled: true, description: "Not supported by this session's engine" });
   const page = appCommands(ctx({ models: [{ value: "p/m", displayName: "M", description: "d", group: "Acme" }] })).find((i) => i.id === "model.choose")!;
   expect("page" in page && page.page.items[0]).toMatchObject({ description: "Acme" });
+});
+
+const GIT_IDS = ["git.rollback", "git.branchNew", "git.checkout", "git.checkoutSmart", "git.stash", "git.annotate", "git.merge", "git.rebase"];
+const gitCallbacks = () => ({ rollback: vi.fn(), newBranch: vi.fn(), checkout: vi.fn(), smartCheckout: vi.fn(), stash: vi.fn(), merge: vi.fn(), rebase: vi.fn(), annotate: vi.fn() });
+const ids = (c: CommandContext) => appCommands(c).map((i) => i.id);
+
+it("GH-722: the git commands show only in a git repository with panels", () => {
+  expect(ids(ctx({ isGit: false, ...gitCallbacks() })).filter((i) => i.startsWith("git."))).toEqual([]);
+  // The App sets a callback only while its condition holds: none set, no row.
+  expect(ids(ctx({ isGit: true })).filter((i) => GIT_IDS.includes(i))).toEqual([]);
+  const all = ids(ctx({ isGit: true, ...gitCallbacks() }));
+  for (const id of GIT_IDS) expect(all, id).toContain(id);
+});
+
+it("GH-722: a git command has no key (Not set) and runs its callback", () => {
+  const cb = gitCallbacks();
+  const c = ctx({ isGit: true, ...cb });
+  for (const [id, fn] of [["git.rollback", cb.rollback], ["git.branchNew", cb.newBranch], ["git.checkout", cb.checkout], ["git.checkoutSmart", cb.smartCheckout], ["git.stash", cb.stash], ["git.merge", cb.merge], ["git.rebase", cb.rebase], ["git.annotate", cb.annotate]] as const) {
+    const i = run(c, id);
+    expect(i.keys, id).toBeUndefined();
+    expect(fn, id).toHaveBeenCalledTimes(1);
+  }
+});
+
+it("GH-722: Open in file manager, Add to prompt and Send selection show only with their callback", () => {
+  const none = ids(ctx());
+  for (const id of ["file.reveal", "changes.addToPrompt", "changes.sendSelection"]) expect(none, id).not.toContain(id);
+  const revealFile = vi.fn();
+  const addToPrompt = vi.fn();
+  const sendSelection = vi.fn();
+  const c = ctx({ revealFile, addToPrompt, sendSelection });
+  expect(run(c, "file.reveal").keys).toBeUndefined();
+  run(c, "changes.addToPrompt");
+  run(c, "changes.sendSelection");
+  expect([revealFile, addToPrompt, sendSelection].map((f) => f.mock.calls.length)).toEqual([1, 1, 1]);
+});
+
+it("GH-722: Switch Claude account is a page only with 2 or more choices and checks the active one", () => {
+  const switchTo = vi.fn();
+  expect(ids(ctx())).not.toContain("account.switch");
+  expect(ids(ctx({ accounts: { choices: [{ id: "cli", title: "Claude Code login" }], active: "cli", switchTo } }))).not.toContain("account.switch");
+  const c = ctx({ accounts: { choices: [{ id: "cli", title: "Claude Code login" }, { id: "work", title: "Work" }], active: "work", switchTo } });
+  const row = appCommands(c).find((i) => i.id === "account.switch")! as PaletteItem & { page: { items: (PaletteItem & { run: () => void })[] } };
+  expect(row.keys).toBeUndefined();
+  const items = row.page.items;
+  expect(items.map((i) => [i.title, i.checked])).toEqual([["Claude Code login", false], ["Work", true]]);
+  items[0]!.run();
+  expect(switchTo).toHaveBeenCalledWith("cli");
 });

@@ -3,11 +3,13 @@ import type { GitBranchInfo, GitCommit, GitCommitDetail, GitCommitMenu } from "@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import { resetPageForTests } from "./recommendations.ts";
 import type { connect } from "./client.ts";
 import { GraphPane, GraphPanel } from "./git-graph-panel.tsx";
 import { forgetRepoChoices, getRepoChoice, setRepoChoice } from "./repo-choice.ts";
 import type { GitRepo } from "@claude-ui/protocol";
 import { forgetRemoteOps } from "./git-remote-ops.ts";
+import { askPanel } from "./panel-ask.ts";
 import { focusCommit } from "./graph-focus.ts";
 import { noteRefs, refsOf } from "./git-refs.ts";
 import * as graph from "./git-graph.ts";
@@ -1228,6 +1230,28 @@ it("Reset Current Branch to Here: Hard lists the files it loses and sends mode a
   expect(c.sent.filter((m) => m.type === "git.reset")).toEqual([{ type: "git.reset", cwd: "/p", hash: hash(2), mode: "hard", headRef: "refs/heads/main", headHash: hash(3), argv: ["reset", "--hard", "--no-recurse-submodules", hash(2)], dirty: "fp1" }]);
 });
 
+it("GH-722: Reset hard shows the Local history hint once; Mixed does not", async () => {
+  localStorage.clear();
+  resetPageForTests();
+  const c = fake(withRefs());
+  await mount(c);
+  await menuAt(rowOf(hash(2)));
+  await act(async () => byId("commit-reset").click());
+  await flush();
+  expect(el.querySelector("[data-testid=rec-local-history]"), "Mixed is picked first").toBeNull();
+  await act(async () => byId("git-reset-hard").click());
+  await flush();
+  expect(el.ownerDocument.querySelector("[data-testid=rec-local-history]")!.textContent).toContain("The replaced text stays in the Timeline.");
+  await act(async () => byId("git-reset-mixed").click());
+  await act(async () => byId("git-reset-hard").click());
+  await flush();
+  expect(el.ownerDocument.querySelector("[data-testid=rec-local-history]"), "the dialog stayed open: still shown").not.toBeNull();
+  await act(async () => byId("git-reset-cancel").click());
+  await flush();
+  localStorage.clear();
+  resetPageForTests();
+});
+
 // ---- Annotate (GH-564): focusCommit ----
 it("focusCommit before the pane shows: the filter gets the hash, git.log asks for it, the commit is selected; a nested repository's pane reads at GitRepo.path", async () => {
   const c = fake(history(10));
@@ -1392,4 +1416,68 @@ it("Esc with the actions open closes only them; a printable key on an action goe
   await flush();
   expect(document.querySelector("[data-testid=branch-popup-sub]")).toBeNull();
   expect(byId("branch-popup")).not.toBeNull();
+});
+
+// ---- GH-722: palette commands (panel-ask.ts) ----
+const ask = async (a: Parameters<typeof askPanel>[0]) => {
+  askPanel(a);
+  await flush();
+  await flush();
+};
+
+it("GH-722: a Smart checkout ask lists the other branches under a pick header, and picking one checks it out with smart", async () => {
+  branchCount = 3;
+  const c = fake(history(3));
+  await mount(c);
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await ask({ kind: "branch", action: "checkoutSmart" });
+  expect(byId("branch-popup-pick").textContent).toContain("Smart checkout");
+  // The current branch is not offered.
+  expect(popupRows()).toEqual(["b0", "b1"]);
+  await act(async () => void document.querySelectorAll<HTMLElement>("[data-testid=branch-popup-row]")[0]!.click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.checkout")).toEqual([{ type: "git.checkout", cwd: "/p", ref: "refs/heads/b0", smart: true }]);
+  expect(document.querySelector("[data-testid=branch-popup]")).toBeNull();
+});
+
+it("GH-722: a Checkout ask also offers remote branches and sends no smart flag", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await ask({ kind: "branch", action: "checkout" });
+  expect(popupRows()).toEqual(["origin/main"]);
+  await act(async () => void document.querySelector<HTMLElement>("[data-testid=branch-popup-row]")!.click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.checkout")).toEqual([{ type: "git.checkout", cwd: "/p", ref: "refs/remotes/origin/main" }]);
+});
+
+it("GH-722: a Merge ask takes local branches only; picking one opens the merge confirm dialog, a blocked one shows its reason", async () => {
+  branchCount = 3;
+  const c = fake(history(3));
+  await mount(c);
+  await ask({ kind: "branch", action: "merge" });
+  expect(popupRows()).toEqual(["b0", "b1"]);
+  branchInfo = (ref) => infoMain({ ref, merge: undefined, why: { merge: "Merging is blocked: a rebase is in progress" } });
+  await act(async () => void document.querySelectorAll<HTMLElement>("[data-testid=branch-popup-row]")[0]!.click());
+  await flush();
+  expect(byId("branch-popup-pick-note").textContent).toContain("rebase is in progress");
+  expect(byId("git-merge-dialog")).toBeNull();
+  branchInfo = (ref) => infoMain({ ref });
+  await act(async () => void document.querySelectorAll<HTMLElement>("[data-testid=branch-popup-row]")[1]!.click());
+  await flush();
+  expect(byId("git-merge-dialog")).not.toBeNull();
+  expect(document.querySelector("[data-testid=branch-popup]")).toBeNull();
+  await act(async () => byId("git-merge-cancel").click());
+});
+
+it("GH-722: a New branch ask opens the New branch dialog; a Stash ask opens the stash message dialog", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  await ask({ kind: "branch", action: "new" });
+  expect(byId("git-new-branch-dialog")).not.toBeNull();
+  await act(async () => byId("git-new-branch-cancel").click());
+  await ask({ kind: "stash" });
+  expect(el.querySelector("[data-testid=stash-section]")).not.toBeNull();
+  expect(byId("git-stash-push-dialog")).not.toBeNull();
+  await act(async () => byId("git-stash-push-cancel").click());
 });

@@ -37,9 +37,26 @@ Right-click (long press, or <kbd>Shift</kbd>+<kbd>F10</kbd>) a file or folder:
 | **New file…**, **New folder…** | Creates it in that folder. The same items are in the menu of empty tree space. |
 | **Rename** (<kbd>F2</kbd>), **Duplicate** | Renames or copies the file. |
 | **Delete** (<kbd>Delete</kbd>) | Deletes it after you confirm. |
+| **Cut**, **Copy**, **Paste** | Moves or copies files and folders. See [Copy, cut, paste and drag](#copy-cut-paste-and-drag). |
 | **Copy path**, **Copy relative path** | Copies the path. |
+| **Reveal in Finder** (**Reveal in File Explorer** on Windows, **Open Containing Folder** on Linux) | Shows the file or folder in the file manager of the computer that runs claude-code-ui. |
+| **Open in** *editor* | Opens the file or folder in VS Code, Cursor or IntelliJ IDEA, when it is installed on that computer. |
+| **Open with Default App** | Opens a file with the app your system picked for its type. Not for folders. |
 | **Open in tab** | Moves the file into its own tab next to its session (also middle click on the row). See [Panes & layout](panes#one-file-or-one-artifact-as-a-tab). |
 | **Add to prompt** | Inserts the file into the prompt box as an @mention. |
+
+### Open in the file manager, an editor or the default app
+
+The three **Reveal**, **Open in** and **Open with Default App** items start a program on the computer that runs the daemon, so they show only when the browser runs on that computer (`localhost`) or the file is in a WSL [side](wsl-docker). A phone, a Tailscale browser, a Docker or an SSH side does not get them. On Linux, **Open Containing Folder** opens the folder without selecting the file. The same items are in the menus of Changes rows. The command palette has **Open in file manager** (no default key) for the open file, the selected Changes row or the session folder. **Settings › Open in app** can add your own editor command.
+
+## Copy, cut, paste and drag
+
+- **Copy** or **Cut** a row (menu, <kbd>Ctrl</kbd>+<kbd>C</kbd> or <kbd>Ctrl</kbd>+<kbd>X</kbd>; <kbd>⌘</kbd> on Mac), then **Paste** into a folder (menu on a folder or on empty tree space, <kbd>Ctrl</kbd>+<kbd>V</kbd>). A cut row is dimmed until you paste it.
+- Drag a row onto a folder to move it. It always asks first ("Move … into …?"). Hold <kbd>Alt</kbd> (<kbd>Option</kbd> on Mac) to copy.
+- It works across [sides](wsl-docker): copy a file on your computer and paste it into a WSL distro, a container or an SSH host. The bytes go through the browser, 1 MiB at a time. The dialog then says "Copy … into … on *side*?".
+- Files and folders dragged from your system into the tree are uploaded. Files pasted from your system clipboard are uploaded too. A folder pasted from the system clipboard is refused; drag it instead.
+- A name that exists in the target asks: **Replace**, **Skip** or **Keep both** ("name copy.ext"), with **Apply to all** when more clashes wait. **Replace** saves the replaced file in [Local history](timeline#local-history-file-timeline).
+- A progress line "Copying 12 of 340 files" with **Cancel** shows for a long copy. Cancel leaves nothing behind. Limits: 10,000 entries and 512 MiB per paste. Links are not copied between machines.
 
 ## Find in files
 

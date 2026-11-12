@@ -37,6 +37,16 @@ Tua lại đưa phiên về trạng thái trước một prompt của bạn. Ch�
 
 Bạn cũng có thể chạy “Tua lại” từ [bảng lệnh](palette). Không thể tua lại khi Claude đang làm việc.
 
+## Lịch sử cục bộ (Dòng thời gian của tệp) {#local-history-file-timeline}
+
+Đừng nhầm với dòng thời gian của phiên ở trên: mục **Dòng thời gian** dưới cây tệp của [Tệp](files) thuộc về tệp đang mở trong trình soạn thảo. Nó liệt kê, mới nhất trước, các bản **Lịch sử cục bộ** và các commit **Lịch sử Git** của tệp. Menu lọc (**Lọc dòng thời gian**) hiển thị một loại hoặc cả hai, lưu trong trình duyệt này.
+
+- **Lịch sử cục bộ** giữ nội dung trước đó của tệp mỗi khi bạn lưu, Claude sửa hoặc một thao tác git thay thế nó. Mỗi bản chứa văn bản từ trước thay đổi, nên văn bản hiện tại luôn nằm trên đĩa.
+- Mỗi bản có một lý do: "Đã lưu tệp", "Claude sửa", "Trước khi hoàn tác", "Trước khi checkout", "Trước khi reset", "Trước khi xóa stash", "Trước khi hủy", "Trước khi khôi phục", "Trước khi dán" hoặc "Bản có tên". Reset hard, Smart checkout, drop stash, Hủy và [Rollback](git#roll-back-changes) lưu văn bản bị thay thế trước, nên không cái nào làm mất công việc.
+- **Tạo bản có tên** giữ tệp như hiện có trên đĩa, dưới một tên bạn đặt.
+- Menu của một hàng có **So sánh với hiện tại**, **So sánh với bản trước**, và với hàng Lịch sử cục bộ có **Khôi phục**, **Đổi tên** và **Xóa**. **Khôi phục** trước tiên yêu cầu bạn lưu hoặc bỏ các thay đổi.
+- Giữ tối đa 50 bản và 256 KB mỗi tệp, trong thư mục cấu hình của daemon. **Cài đặt › Lịch sử cục bộ** tắt nó và liệt kê **Đường dẫn bị loại trừ** (mẫu glob, ví dụ `**/dist/**`). Xem [Cài đặt](../reference/settings#local-history).
+
 ## Cần biết {#good-to-know}
 
 - **Chỉ tín hiệu** áp dụng cho mọi phiên trong trình duyệt này. Prompt của bạn, văn bản của Claude, lỗi và các yêu cầu đang chờ bạn luôn hiển thị.

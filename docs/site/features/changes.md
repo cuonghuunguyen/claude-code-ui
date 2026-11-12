@@ -25,6 +25,20 @@ A project folder can hold several repositories: nested ones, or submodules. In t
 - A submodule with other commits than recorded shows a **submodule** badge instead of a text diff. One with uncommitted changes shows "modified content (N files)". An embedded repository folder shows a **repository** row. **Show changes in** *path* on these rows switches the selector.
 - Which repositories are found follows the settings in [Settings › Git](../reference/settings#git).
 
+## Tell Claude about a change
+
+- **Add to prompt:** right-click a row (long press, <kbd>Shift</kbd>+<kbd>F10</kbd>) and pick **Add to prompt**. It inserts the file as an `@` mention. Not for a deleted file. It is also in the menu in **Session changes** mode.
+- **Send selection to Claude:** in the diff of a text file, select lines on the line numbers (click, <kbd>Shift</kbd>+click or drag), then click **Send selection to Claude** in the diff header, or press <kbd>Alt</kbd>+<kbd>K</kbd> (<kbd>⌥</kbd> <kbd>K</kbd> on Mac). The prompt box gets the file name, the line numbers and the selected lines, removed lines marked `-` and added lines `+`. You edit it and send it.
+- Both are also in the [command palette](palette) (**Add file to prompt**, **Send selection to Claude**), without a default key.
+
+## Status badges
+
+Each row has a letter badge: **M** modified, **A** added, **D** deleted, **R** renamed. A new file that git does not track yet shows a red **U** (untracked) instead of **A**. A file you added to the index with `git add` stays **A**.
+
+## Commit, roll back, resolve
+
+In **Uncommitted** mode a commit box sits above the list: check files, write or generate a message, **Commit** or **Commit and Push**, **Amend**, **Rollback**. A banner shows an unfinished merge or rebase with **Continue**, **Abort** and **Resolve with Claude**. See [Git operations](git).
+
 ## Good to know
 
 - **Uncommitted** and **Against branch** need a git repository.

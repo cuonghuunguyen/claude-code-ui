@@ -70,6 +70,48 @@ Shortcuts work anywhere in the app, including the prompt box, except as noted un
 | Change model | <kbd>Ctrl</kbd>+<kbd>'</kbd> | <kbd>⌘</kbd> <kbd>'</kbd> |
 | Run in background | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>B</kbd> |
 
+## Commands without a default key
+
+These commands are in the [command palette](../features/palette) and show as **Not set** in the **Keyboard shortcuts** dialog. Click **Edit** next to one to give it a key.
+
+- Open Focus
+- Toggle keep screen awake
+- Show guide
+- MCP servers
+- Slash commands
+- Background shells
+- Manage plugins
+- Manage addons
+- Close other tabs
+- Close tabs to the right
+- Close all tabs
+- Pin or unpin tab
+- Clean up tabs…
+- Close idle tabs
+- Close finished tabs
+- Close tabs of archived or deleted sessions
+- Close tabs not used for 1 hour
+- Close tabs not used for 1 day
+- Close tabs not used for 7 days
+- Close worker tabs
+- Split right
+- Split down
+- Focus previous split
+- Join splits
+- Show plan
+- Rollback
+- New branch
+- Checkout
+- Smart checkout
+- Stash
+- Annotate (Blame)
+- Merge
+- Rebase
+- Open in file manager
+- Add to prompt
+- Send selection to Claude
+- Switch Claude account
+
 ## Prefix key
 
 Press <kbd>Alt</kbd>+<kbd>A</kbd> (like tmux), let go, then press one more key within 1.5 seconds:

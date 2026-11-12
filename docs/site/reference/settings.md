@@ -9,11 +9,11 @@ The groups sit under four headings:
 | Heading | Groups |
 | --- | --- |
 | App | Appearance, General, Layout, Notifications, Keyboard |
-| Sessions | Orchestration, Focus, Chat, Usage limits |
-| Integrations | Git, Jira |
+| Sessions | Orchestration, Focus, Chat, New sessions, Usage limits, Local history |
+| Integrations | Git, Jira, Claude account, Open in app |
 | System | Sides, Performance, Help & about |
 
-Most settings are **kept in this browser** only. Orchestration, Focus, Chat, Usage limits (except the ring), Git, Jira, Sides, Performance and desktop notifications are saved in the daemon and apply to every browser.
+Most settings are **kept in this browser** only. Orchestration, Focus, Chat, New sessions, Usage limits (except the ring), Local history, Git, Jira, Claude account, Sides, Performance and desktop notifications are saved in the daemon and apply to every browser.
 
 ## Appearance
 
@@ -105,12 +105,25 @@ Lets a session start and steer worker sessions. Off by default. **Notifications 
 | --- | --- |
 | Inline visualizations | Claude can draw charts, diagrams and small interactive widgets in its replies ([details](../features/visualize)). On by default. Applies to sessions started or resumed after the change; off: they show as code. |
 
+## New sessions
+
+| Setting | Does |
+| --- | --- |
+| Default permission mode | The [permission mode](../features/permissions) of a new Claude session when the Claude settings (`permissions.defaultMode`) set none. Default: **Auto**, which runs as Default on a model without auto mode. OpenCode sessions start in **Use OpenCode config**. Saved in the daemon. |
+
 ## Usage limits
 
 | Setting | Does |
 | --- | --- |
 | Continue automatically after a usage limit resets | Sends "continue" to a session that the plan limit stopped, once the limit resets. |
 | Usage ring shows | Highest usage, Session (5 h) or Weekly. Kept in this browser. |
+
+## Local history
+
+| Setting | Does |
+| --- | --- |
+| Keep local history | On by default. Keeps the previous content of a file each time you save it, Claude edits it or a git action replaces it, so you can compare and restore it from the Timeline in [Files](../features/timeline#local-history-file-timeline). Up to 50 entries and 256 KB per file, in the daemon's config folder. |
+| Excluded paths | Glob patterns of files that never get a history, matched on the absolute path with `/` separators. Example: `**/dist/**`. |
 
 ## Git
 
@@ -126,6 +139,8 @@ The same settings as VS Code's Git extension, with the same names and values. Th
 | Detect submodules / Detect submodules limit | Find submodules, at most this many (default `10`). |
 | Ignore submodules | Ignore submodule changes in the file tree. |
 | Open repository in parent folders | `always` (default), `never` or `prompt` (behaves as `always` here). |
+| Commit message instruction | What Claude is asked when it writes a commit message for the checked files ([Git operations](../features/git#commit-message-instruction)). Empty: the built-in instruction. |
+| Commit message instruction for *project* | Only for that project; wins over the instruction above. Empty: use the instruction above. |
 
 ## Jira
 
@@ -139,6 +154,24 @@ One Jira connection for the **Ticket** tab of [Create worktree](../features/proj
 | Branch template | How a ticket names its branch. Default `{type}/{key}-{summary}`: `{type}` is `bugfix` for a Bug, `feature` for a Story, Task or New Feature, else empty; `{key}` is the ticket key; `{summary}` is the summary, shortened. |
 | Ticket filter (JQL) | The tickets the Ticket tab lists, e.g. `project = ABC AND statusCategory != Done`. Typed text searches inside it; a key or ticket URL ignores it. Empty: your open tickets. |
 | Test connection | Shows "Connected as *your name*" or the error. |
+
+## Claude account
+
+Picks the account that the Claude CLI processes of the daemon use. The list holds **CLI login** (the login of the official Claude CLI), your **token accounts**, and **Default (daemon environment)** when the daemon starts with a Claude token in its environment. The checked row is active.
+
+| Item | Does |
+| --- | --- |
+| Account row | Click to switch the active account. |
+| **Log in…** | Runs the official Claude CLI login in a terminal of the open project. |
+| **Test** | On a token account: checks that the token works. Shows "Token works" or "Token refused: *reason*". The result is not saved. |
+| **Remove** | Deletes a token account. |
+| **Add a token account** | **Name** and **Token**, then **Add**. Create the token with `claude setup-token`. It is stored on the daemon's computer and never shown again (the row says **Token set**). |
+
+With two or more accounts you can also switch from the plan meter (the usage ring) or with **Switch Claude account…** in the [command palette](../features/palette). With a cloud provider (Bedrock, Vertex, Foundry) in the daemon's environment the CLI uses it and the account has no effect.
+
+## Open in app
+
+**Editor command** and **Name in the menu** add your own program to the file menus (**Open in** *name*). Use `{path}` for the file or folder and `{root}` for the session folder. Only a browser on the daemon's computer can change it. See [Files](../features/files#open-in-the-file-manager-an-editor-or-the-default-app).
 
 ## Sides
 

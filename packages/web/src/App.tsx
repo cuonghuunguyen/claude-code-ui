@@ -52,7 +52,7 @@ import type {
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
 import { rawItems } from "./transfer.ts";
-import { ALL_CAPABILITIES, capabilitiesOf, ENGINES, LOCAL_SIDE, isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, type AsideOpenResult, type FsReadResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, capabilitiesOf, ENGINES, LOCAL_SIDE, isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, SESSION_MODES, type AsideOpenResult, type FsReadResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -77,8 +77,8 @@ import { sessionArtifacts } from "./artifacts.ts";
 import { artifactTitle } from "./tools.ts";
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
-import { count, offer, promptBusy, seen as recSeen, setRecommendationHost } from "./recommendations.ts";
-import { GHOST, ModePicker, modesOf, nextAgent, nextMode, PromptToolbar, ROW, type ModelFooterProps, type SendState } from "./toolbar.tsx";
+import { count, offer, promptBusy, streak, seen as recSeen, setRecommendationHost } from "./recommendations.ts";
+import { GHOST, MODE_LABEL, ModePicker, modesOf, nextAgent, nextMode, PromptToolbar, ROW, type ModelFooterProps, type SendState } from "./toolbar.tsx";
 import { activeCommand, asideOf, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { checkError, nextUpdate, undismissUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
 import { StaleToast } from "./stale-toast.tsx";
@@ -152,7 +152,7 @@ import { baseName, inDir, joinPath, relPath } from "./paths.ts";
 import { EditorSync, FilesPanel, FileTab } from "./files-panel.tsx";
 import { FileDialog } from "./file-dialog.tsx";
 import { createEditorStore, useEditorStore } from "./editor-store.ts";
-import { isDirty } from "./files.ts";
+import { fileMention, isDirty } from "./files.ts";
 import { defaultRepo, useRepos } from "./repos.ts";
 import { repoProjectKey, setRepoChoice, type RepoList } from "./repo-choice.ts";
 import { focusCommit } from "./graph-focus.ts";
@@ -202,6 +202,8 @@ import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actio
 import { anySessionRunning, useKeepAwake } from "./keep-awake.ts";
 import { KeepAwakeButton } from "./keep-awake-button.tsx";
 import { askCommitBox } from "./commit-ask.ts";
+import { askPanel } from "./panel-ask.ts";
+import { useChangesFocus } from "./changes-focus.ts";
 import { applyAddonCss, applyAddonThemes, applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
 import { draftToken, rotateDraftToken, uploadOwnerFor, uploadWithRetry, type UploadOwner } from "./upload-owner.ts";
 
@@ -288,6 +290,7 @@ export function App() {
   const [list, setList] = useState<SessionListItem[]>([]);
   // Account-wide plan limits; null (API key, Bedrock, Vertex) or not yet known hides the meter.
   const [plan, setPlan] = useState<PlanUsage | null>(null);
+  const planStatus = useRef<string>(undefined);
   // Known project cwds from the daemon, newest first.
   const [projects, setProjects] = useState<string[]>([]);
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
@@ -310,6 +313,8 @@ export function App() {
   // `mode` is unset until picked: the project's `permissions.defaultMode` (daemon, `defaultMode`) applies.
   const [pick, setDraft] = useState<DraftPick>(NEW_DRAFT);
   const [defaultMode, setDefaultMode] = useState<PermissionMode>("default");
+  // GH-722: the daemon setting New sessions > Default permission mode (the Turn on of its recommendation sets it).
+  const [sessionsMode, setSessionsMode] = useState<PermissionMode>();
   // Modes a new session may start in (session.list): bypassPermissions only when the daemon enables it.
   const [newModes, setNewModes] = useState<PermissionMode[]>(NEW_SESSION_MODES);
   // Every Engine with its flags and start modes (session.list); none on an older daemon: claude only. `lastEngine`: Settings sessions.engine, the draft's engine until one is picked.
@@ -1412,7 +1417,7 @@ export function App() {
     else if (c === "moveToFiles") moveToFiles(id);
     else if (c === "moveToArtifacts") moveToArtifacts(id);
     else if (c === "revealInFiles") revealInFiles(id);
-    else if (c === "copyPath") copyText(pathOf(id), "path");
+    else if (c === "copyPath") (count("copyPath"), copyText(pathOf(id), "path"));
     else if (c === "copyRel") copyText(pathOf(id) && relPath(pathOf(id)!, cwdOfOwner(ownerOf(id)) ?? ""), "relative path");
     else if (isExternalId(c)) openExternal?.run(pathOf(id) ?? "", externalHow(c), cwdOfOwner(ownerOf(id)) ?? "");
     else if (c === "goToSession") (open(ownerOf(id)), focusShownPrompt(ownerOf(id)));
@@ -1485,9 +1490,20 @@ export function App() {
         if (m.deleted) forget(m.deleted, true);
         void refreshList();
       },
-      onPlanUsage: setPlan,
+      onPlanUsage: (u) => {
+        // GH-722: the usage turns to a hit limit; the previous status is read from the same stream.
+        const hit = u?.status === "rejected";
+        if (hit && planStatus.current !== "rejected") offer("switchAccount", { accounts: recNow.current.accounts }, () => {
+          // The plan meter's popover holds the switcher; without a meter, Settings opens on the Claude account group.
+          const meter = document.querySelector<HTMLElement>('[data-testid="plan-meter"]');
+          if (meter) meter.click();
+          else (setSettingsOpen(true), saveSettingsGroup("account"));
+        });
+        planStatus.current = u?.status;
+        setPlan(u);
+      },
       onOpenCodeProviders: dropOpenCodeModels,
-      onSettingsChanged: (m) => (setLastEngine(m.settings.sessions?.engine ?? "claude"), setAppEditors((es) => es && [...es.filter((x) => x.id !== "custom"), ...customEditor(m.settings.editor)]), setLabels(m.settings.labels), setBack(m.settings.back), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled), setVisualizeOn(m.settings.chat?.visualize === true), setClaudeAccount(m.settings.claude?.account ?? ""), setClaudeAccounts(m.claudeAccounts ?? [])),
+      onSettingsChanged: (m) => (setLastEngine(m.settings.sessions?.engine ?? "claude"), setSessionsMode(m.settings.sessions?.defaultMode), setAppEditors((es) => es && [...es.filter((x) => x.id !== "custom"), ...customEditor(m.settings.editor)]), setLabels(m.settings.labels), setBack(m.settings.back), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled), setVisualizeOn(m.settings.chat?.visualize === true), setClaudeAccount(m.settings.claude?.account ?? ""), setClaudeAccounts(m.claudeAccounts ?? [])),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       // Not on the page's first connection: the offer comes from a reconnect or the next time the page shows.
@@ -1515,7 +1531,7 @@ export function App() {
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
-        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLastEngine(r.settings.sessions?.engine ?? "claude"), setLabels(r.settings.labels), setBack(r.settings.back, true), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setVisualizeOn(r.settings.chat?.visualize === true), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLastEngine(r.settings.sessions?.engine ?? "claude"), setSessionsMode(r.settings.sessions?.defaultMode), setLabels(r.settings.labels), setBack(r.settings.back, true), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setVisualizeOn(r.settings.chat?.visualize === true), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
         void refreshList();
         const h = hashId();
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
@@ -2189,7 +2205,7 @@ export function App() {
                         }}
                         onBash={(command) =>
                           status === "connected"
-                            ? client.current!.request({ type: "session.bash", sessionId: s.id, command })
+                            ? (tipCommitInChanges(command, v), client.current!.request({ type: "session.bash", sessionId: s.id, command }))
                             : Promise.reject(new Error(`the daemon is ${status}`))
                         }
                         onQueue={(text, images) => queueRequest({ type: "session.enqueue", sessionId: s.id, text, images })}
@@ -2453,6 +2469,11 @@ export function App() {
     if (a === "side") setBottomMax(false);
     openArea(a);
   };
+  // GH-722: a bash line that commits or stages counts; the second one with changed files suggests the Changes commit box.
+  const tipCommitInChanges = (command: string, view: SessionView) => {
+    if (!/^\s*git\s+(commit|add)\b/.test(command)) return;
+    offer("commitInChanges", { n: count("gitCommitBash"), dirty: changeCount > 0 || sessionChanges(view).length > 0 }, () => (reveal("changes"), askCommitBox("commit")));
+  };
   /** Annotate: the Graph shows one commit of `repo` (the selector set to it first). */
   const openCommit = (repo: GitRepo, hash: string) => {
     if (repoList?.projectKey) setRepoChoice(repoList.projectKey, repo.rel);
@@ -2464,8 +2485,8 @@ export function App() {
   // Recommendations (GH-518): their own toast slot; `recNow` holds what the triggers read (each render), so a trigger is one call.
   const [rec, setRec] = useState<{ key: number; message: string; action?: { label: string; onClick: () => void } }>();
   const recKey = useRef(0);
-  const recNow = useRef({} as { compact: boolean; grouping: TabGrouping; autoClose: AutoClose; worktrees: Record<string, Worktree[]>; guideRun: boolean; drag: boolean; visibleIds: string[]; pushOn: boolean; togglePush: () => void; desktopOn: boolean; keepAwake: () => void; push: () => boolean });
-  recNow.current = { ...recNow.current, compact, grouping, autoClose, worktrees, guideRun: !!guideRun, drag: !!drag, visibleIds: splitOn ? split.ids : [activeId ?? ""], pushOn, togglePush: () => void togglePush(), keepAwake: offerKeepAwake, push: offerPush };
+  const recNow = useRef({} as { compact: boolean; grouping: TabGrouping; autoClose: AutoClose; worktrees: Record<string, Worktree[]>; guideRun: boolean; drag: boolean; visibleIds: string[]; pushOn: boolean; togglePush: () => void; desktopOn: boolean; keepAwake: () => void; push: () => boolean; accounts: number });
+  recNow.current = { ...recNow.current, accounts: (claudeEnvToken ? 1 : 0) + 1 + claudeAccounts.length, compact, grouping, autoClose, worktrees, guideRun: !!guideRun, drag: !!drag, visibleIds: splitOn ? split.ids : [activeId ?? ""], pushOn, togglePush: () => void togglePush(), keepAwake: offerKeepAwake, push: offerPush };
   const sentHere = useRef(new Set<string>());
   /** Sessions whose turn ended and whose context_usage is still to come. */
   const turnEnded = useRef(new Set<string>());
@@ -3018,6 +3039,7 @@ export function App() {
             suspended={!!fileDialog || !here}
             onPopOut={() => popFile()}
             onShowChanges={(path) => (setChangesReveal((r) => ({ path, seq: (r?.seq ?? 0) + 1 })), reveal("changes"))}
+            onFindInFiles={showFind}
             openPath={on ? openFile?.path : undefined}
             openLine={on ? openFile?.line : undefined}
             openFocus={on ? openFile?.focus : undefined}
@@ -3097,6 +3119,10 @@ export function App() {
     const lost = d.mode === "auto" && !list.some((m) => m.value === d.model && m.supportsAutoMode);
     if (lost) setToast(autoUnavailable(list, d.model));
     setDraft(lost ? { ...d, mode: "default" } : { ...d, mode: d.mode === draft.mode ? pick.mode : d.mode });
+    // GH-722: the same other mode picked three times in a row in a new session suggests it as the Default permission mode.
+    const mode = lost ? undefined : d.mode;
+    if (mode && mode !== draft.mode && (SESSION_MODES as readonly string[]).includes(mode))
+      offer("defaultMode", { mode, def: sessionsMode ?? defaultMode, streak: streak(mode, "defaultMode"), label: tr(MODE_LABEL[mode as PermissionMode].label) }, () => void client.current!.request({ type: "settings.set", patch: { sessions: { defaultMode: mode as (typeof SESSION_MODES)[number] } } }).catch((e) => setError((e as Error).message)));
   };
   // The new-session tab's mode comes from the Claude settings of its project, read again each time the tab is shown.
   useEffect(() => {
@@ -3259,6 +3285,14 @@ export function App() {
   const filesTab = editorTabs[editors.get().activePath ?? ""];
   const activeFilesPath = inSight("files") && filesTab && !filesTab.item && paneOwner && inDir(filesTab.path, cwdOfOwner(paneOwner) ?? "\0") ? filesTab.path : undefined;
   const ownerOnScreen = !paneRef || (splitShown && split!.ids.includes(currentId!));
+  // GH-722: what the Changes tab shows (its selected row, selected diff lines) and the file manager target: the Files editor's file, else the selected Changes row, else the folder.
+  const changesNow = useChangesFocus();
+  const changesShown = inSight("changes");
+  const selectedChange = changesShown && changesNow.selected ? changesNow.selected : undefined;
+  const revealCwd = panelTarget?.cwd ?? shownCwd;
+  const revealPath = activeFilesPath ?? selectedChange?.path ?? revealCwd;
+  const accountChoices = [...(claudeEnvToken ? [{ id: "", title: tr("app.plan.accountDefault") }] : []), { id: "cli", title: tr("app.plan.accountCli") }, ...claudeAccounts.map((a) => ({ id: a.id, title: a.name }))];
+  const gitAsk = (pane: "changes" | "graph", ask: Parameters<typeof askPanel>[0]) => () => (reveal(pane), askPanel(ask));
   const commands = appCommands({
     newWorktree: canWorktree ? () => setCreatingWt(gitProject) : undefined,
     askAside: shown && !paneRef && !draftShown ? () => setInsert("/btw ") : undefined,
@@ -3336,6 +3370,19 @@ export function App() {
       reveal("terminal");
     },
     commitBox: (what) => (reveal("changes"), askCommitBox(what)),
+    // GH-722: the panel that owns the action takes the ask (panel-ask.ts). They show only in a git repository with panels (appCommands).
+    rollback: gitAsk("changes", { kind: "rollback" }),
+    newBranch: gitAsk("graph", { kind: "branch", action: "new" }),
+    checkout: gitAsk("graph", { kind: "branch", action: "checkout" }),
+    smartCheckout: gitAsk("graph", { kind: "branch", action: "checkoutSmart" }),
+    stash: gitAsk("graph", { kind: "stash" }),
+    merge: gitAsk("graph", { kind: "branch", action: "merge" }),
+    rebase: gitAsk("graph", { kind: "branch", action: "rebase" }),
+    annotate: activeFilesPath ? () => askPanel({ kind: "annotate", path: activeFilesPath }) : undefined,
+    revealFile: openExternal && revealCwd && revealPath && openExternal.canOpen(revealCwd) ? () => openExternal.run(revealPath, "reveal", revealCwd) : undefined,
+    addToPrompt: selectedChange && !selectedChange.deleted ? () => (setInsert(fileMention(selectedChange.path, selectedChange.cwd)), setPane("session")) : undefined,
+    sendSelection: changesShown && changesNow.hasDiffSelection ? () => askPanel({ kind: "sendSelection" }) : undefined,
+    accounts: shownCaps.account ? { choices: accountChoices, active: claudeAccount === "" && !claudeEnvToken ? "cli" : claudeAccount, switchTo: (id) => void client.current!.request({ type: "settings.set", patch: { claude: { account: id } } }).catch((e) => setError((e as Error).message)) } : undefined,
     resetLayout: resetPanes,
     flipSide: () => saveLayout(flipSide(layout)),
     side: layout.side,
@@ -4218,6 +4265,7 @@ export function App() {
                         suspended={!!fileDialog}
                         onPopOut={() => popFile()}
                         onShowChanges={(path) => (setChangesReveal((r) => ({ path, seq: (r?.seq ?? 0) + 1 })), reveal("changes"))}
+            onFindInFiles={showFind}
                         openPath={openFile?.path}
                         openLine={openFile?.line}
                         openFocus={openFile?.focus}
@@ -6192,6 +6240,7 @@ function PromptBox({
       e.preventDefault();
       const id = nextPasteId(text, pastes);
       setPastes((p) => ({ ...p, [id]: content }));
+      offer("expandChip", { n: count("pasteChip") });
       const el = e.currentTarget as HTMLTextAreaElement;
       const token = pasteToken(id, content);
       // One native edit keeps the textarea's undo stack; setRangeText is the fallback (jsdom, a browser that refuses).

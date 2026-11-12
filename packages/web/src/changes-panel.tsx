@@ -20,13 +20,16 @@ import { pathKey } from "./file-tree-model.ts";
 import { repoDir } from "./repos.ts";
 import { t, useT } from "./i18n.ts";
 import { DIFF_MODES, loadDiffMode, loadDiffScope, repoRoot, saveDiffMode, saveDiffScope, sessionDiffChoice, useDefaultDiffMode, type DiffMode, type DiffScope } from "./diff-mode.ts";
-import { offer, streak } from "./recommendations.ts";
+import { count, offer, streak, tipOpenInFileManager } from "./recommendations.ts";
+import { highlight, reopenMenu } from "./rec-highlight.ts";
 import { commitable, commitPaths, eachLimited, gitEol, gitRows, type GitRow } from "./git-changes.ts";
 import { fileMention, mediaKind, readFailure, textFailure } from "./files.ts";
 import { ImageDiff, type ImagePane } from "./image-diff.tsx";
 import { filePath } from "./tools.ts";
 import { RepoIcon, RepoSelector } from "./repo-selector.tsx";
 import { CommitBox } from "./commit-box.tsx";
+import { usePanelAsk } from "./panel-ask.ts";
+import { setChangesSelected, setDiffSelection } from "./changes-focus.ts";
 import { ConflictBanner } from "./conflict-banner.tsx";
 import { GitOpResult } from "./git-op-result.tsx";
 import { ofRepo } from "./git-branch-menu.tsx";
@@ -572,6 +575,18 @@ export function ChangesPanel({
   const allExpanded = shown.length > 0 && shown.every((r) => expanded[r.path]);
   const active = shown.find((r) => r.path === selected) ?? shown[0];
   const index = active ? shown.indexOf(active) : -1;
+  // GH-722: the palette's Add to prompt reads the selected row (changes-focus.ts); Rollback runs on the checked rows, else on that row.
+  useEffect(() => {
+    setChangesSelected(active ? { path: active.path, cwd, deleted: active.kind === "D" } : undefined);
+    return () => setChangesSelected(undefined);
+  }, [active?.path, active?.kind, cwd]);
+  usePanelAsk("rollback", () => {
+    const paths = commitPaths(commitRows, checked);
+    const one = active && commitable(active) ? commitPaths([active], new Set([active.path])) : [];
+    const list = paths.length ? paths : one;
+    if (!commitMode || opRunning || !list.length) return false;
+    setRollbackPaths(list);
+  });
   const wanted = narrow ? shown.filter((r) => expanded[r.path]).map((r) => r.path) : active ? [active.path] : [];
   const wantedKey = wanted.join("\n");
   useEffect(() => {
@@ -756,10 +771,11 @@ export function ChangesPanel({
     if (r.nested || r.submodule) return [];
     const local = openExt?.canOpen(cwd) ? openExt : undefined;
     return [
-      [{ label: t("files.menu.open"), testId: "row-open", run: () => onOpen(r.path) }, ...(onCopy ? [{ label: t("files.menu.copyPath"), testId: "row-copyPath", run: () => onCopy(r.path, "path") }, { label: t("files.menu.copyRel"), testId: "row-copyRel", run: () => onCopy(relPath(r.path, cwd), "relative path") }] : [])],
+      [{ label: t("files.menu.open"), testId: "row-open", run: () => onOpen(r.path) }, ...(onCopy ? [{ label: t("files.menu.copyPath"), testId: "row-copyPath", run: () => (onCopy(r.path, "path"), tipOpenInFileManager(!!local && r.kind !== "D", () => reopenMenu(rowElOf(r.path), '[data-testid$="ext-menu-reveal"]'))) }, { label: t("files.menu.copyRel"), testId: "row-copyRel", run: () => onCopy(relPath(r.path, cwd), "relative path") }] : [])],
       local ? externalEntries({ isDir: false, editors: local.editors, local: local.isLocal(cwd), disabled: r.kind === "D" }).map((x) => ({ label: x.label, title: x.title, testId: `row-${x.testId}`, disabled: x.disabled, run: () => local.run(r.path, x.how, cwd) })) : [],
     ];
   };
+  const rowElOf = (path: string) => [...document.querySelectorAll<HTMLElement>('[data-testid="changed-file"]')].find((e) => e.dataset.path === path);
   const rowMenu = (r: Row, node: ReactElement) => (
     <RollbackMenu sections={rowSections(r)} enabled={commitMode && commitable(r) && !opRunning} onRollback={() => setRollbackPaths(commitPaths([r], new Set([r.path])))} onMention={onSend && r.kind !== "D" ? () => onSend(fileMention(r.path, cwd)) : undefined}>
       {node}
@@ -1057,6 +1073,7 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
   // One header per file, like OpenCode's (file header off in the library): the panel's own, with the relative path.
   const [range, setRange] = useState<SelectedLineRange | null>(null);
   const box = useRef<HTMLDivElement>(null);
+  const selecting = useRef(false);
   const selectable = onSend !== undefined;
   const options = useMemo(
     () => ({
@@ -1068,7 +1085,13 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
       onPostRender: () => setDrawn(true),
       // Line numbers: click, Shift+click or drag. The box takes focus so Alt+K works right after a click.
       enableLineSelection: selectable,
-      onLineSelected: (r: SelectedLineRange | null) => (setRange(r), r && box.current?.focus({ preventScroll: true })),
+      onLineSelected: (r: SelectedLineRange | null) => {
+        // GH-722: a new selection (not each change of its end) counts for the Send selection recommendation.
+        if (r && !selecting.current) offer("sendSelection", { n: count("diffSelect") }, () => highlight('[data-testid="diff-send-selection"]'));
+        selecting.current = r !== null;
+        setRange(r);
+        if (r) box.current?.focus({ preventScroll: true });
+      },
     }),
     [style, dark, colorTheme, selectable],
   );
@@ -1089,6 +1112,12 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
     });
     return parsed && { at, lines: [...at.keys()].map((k): DiffLineAnnotation => ({ side: k.startsWith("a") ? "additions" : "deletions", lineNumber: Number(k.split(":")[1]) })) };
   }, [parsed, onHunk !== undefined]);
+  // GH-722: the palette's Send selection (changes-focus.ts) knows whether lines are selected; its ask sends them.
+  const focusId = useRef(Symbol("diff")).current;
+  useEffect(() => {
+    setDiffSelection(focusId, range !== null);
+    return () => setDiffSelection(focusId, false);
+  }, [range !== null]);
   const sub = row.submodule;
   const nested = row.nested;
   // Add to prompt for the file (nothing selected, like the Files tab; a deleted file is not on disk) or the selected diff lines.
@@ -1098,6 +1127,11 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
     if (text) onSend?.(text);
   };
   const canSend = !!onSend && !sub && !nested && !row.image && !row.error && !same && !!files;
+  // The diff that has selected lines takes the palette's Send selection; the others leave the ask.
+  usePanelAsk("sendSelection", () => {
+    if (!range || !canSend) return false;
+    send();
+  });
   // `compact`: the header beside the file name is icon-only until it is wide (the name keeps truncate priority).
   const sendButton = (compact?: boolean) =>
     canSend && (
