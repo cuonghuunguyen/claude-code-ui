@@ -31,9 +31,21 @@ if (process.platform === "win32") process.env.CLAUDE_UI_GIT_READONLY_TIMEOUT_MS 
 // The CommonJS object: the namespace of an ES import cannot be written to.
 const cp = createRequire(import.meta.url)("node:child_process") as typeof ChildProcess;
 const execFileSync = cp.execFileSync;
+// STATUS_DLL_INIT_FAILED: under load Windows sometimes cannot start a process at all. It never ran, so running the call again cannot repeat a side effect.
+const NEVER_STARTED = 0xc0000142;
+const startWithRetry = (a: Parameters<typeof execFileSync>) => {
+  for (let n = 0; ; n++) {
+    try {
+      return execFileSync(...a);
+    } catch (e) {
+      if ((e as { status?: number }).status !== NEVER_STARTED || n >= 5) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250 * 2 ** n);
+    }
+  }
+};
 (cp as { execFileSync: typeof execFileSync }).execFileSync = ((...a: Parameters<typeof execFileSync>) => {
   try {
-    return execFileSync(...a);
+    return startWithRetry(a);
   } catch (e) {
     const x = e as Error & { status?: number | null; signal?: string | null; stderr?: unknown };
     x.message += ` [status=${x.status} signal=${x.signal} stderr=${String(x.stderr ?? "").slice(0, 300)}]`;
