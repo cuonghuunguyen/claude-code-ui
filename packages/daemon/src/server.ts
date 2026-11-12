@@ -1394,26 +1394,31 @@ export function createDaemon(opts: {
     const none = () => ({ items: [] as SessionListItem[], ids: new Set<string>(), ran: false });
     if (!openCode.running() && appSettings.get().sessions.engine !== "opencode") return none();
     // Not answering within the wait: no OpenCode items and no prune (`ran` false); the start goes on and the next list has them. The late result is dropped.
+    // Before OpenCode's first answer the list does not wait: projects and Claude sessions show at once on page load.
     let timer: NodeJS.Timeout | undefined;
+    let timedOut = false;
     const late = new Promise<ReturnType<typeof none>>((resolve) => {
       timer = setTimeout(() => {
+        timedOut = true;
         const text = "OpenCode did not answer the session list in time";
-        if (text !== openCodeListError) console.error(`listing OpenCode sessions failed: ${text}`);
+        if (openCodeAnswered && text !== openCodeListError) console.error(`listing OpenCode sessions failed: ${text}`);
         openCodeListError = text;
         resolve(none());
-      }, opts.opencode?.listWaitMs ?? OPENCODE_LIST_WAIT_MS);
+      }, openCodeAnswered ? (opts.opencode?.listWaitMs ?? OPENCODE_LIST_WAIT_MS) : 0);
     });
     try {
       const read = readOpenCodeList(cwds, linked, links);
       const r = await Promise.race([read, late]);
       // The list that did not wait: clients ask again once OpenCode answered.
       // No pile-up: one read per folder is in flight and it has at most one push. A folder that stays slow for several reads can push once per read.
-      if (!r.ran && openCodeListError?.endsWith("in time") && !lateRefresh) lateRefresh = read.then((x) => x.ran && broadcast({ type: "sessions.changed" })).finally(() => (lateRefresh = undefined));
+      if (!r.ran && timedOut && !lateRefresh) lateRefresh = read.then((x) => x.ran && broadcast({ type: "sessions.changed" })).finally(() => (lateRefresh = undefined));
       return r;
     } finally {
       clearTimeout(timer);
     }
   }
+  /** OpenCode answered a session list once in this run. */
+  let openCodeAnswered = false;
   /** The late push of a list that did not wait is pending. */
   let lateRefresh: Promise<unknown> | undefined;
   /** The `GET /session` of a folder in flight: concurrent lists, and a list that starts while an earlier one still waits, share it (the requests are never aborted, so they would pile up on a slow OpenCode). */
@@ -1429,6 +1434,7 @@ export function createDaemon(opts: {
       // No timeout: a cold OpenCode answers after its folder's first load (> 3 s). `list()` waits `listWaitMs` for it; the late answer is pushed as `sessions.changed` (listOpenCode).
       const rows = await mapLimit(cwds, 4, async (cwd) => [cwd, await readSessions(cwd)] as const);
       openCodeListError = undefined;
+      openCodeAnswered = true;
       out.ran = true;
       for (const [cwd, list] of rows)
         for (const row of list) {

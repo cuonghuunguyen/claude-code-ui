@@ -125,14 +125,18 @@ describe("OpenCode engine: lifecycle, create and list", () => {
 
   it("session.list lists the OpenCode sessions of the project's directory only, without child sessions, with OpenCode's title and time", async () => {
     const d = await boot({ engine: "opencode" });
-    const listed = (await d.ok({ type: "session.list" })).result;
+    // The first list does not wait for a cold OpenCode: projects show at once, the OpenCode sessions follow on sessions.changed.
+    const first = (await d.ok({ type: "session.list" })).result;
+    expect(first.projects).toEqual([d.project]);
+    expect(first.sessions.filter((s: any) => s.engine === "opencode")).toEqual([]);
+    const listed = (await d_listOpenCode(d)).result;
     const oc = listed.sessions.filter((s: any) => s.engine === "opencode");
     expect(oc.map((s: any) => s.id)).toEqual(["ses_hist"]);
     expect(oc[0]).toMatchObject({ title: "Listed files", lastActivity: 5000, archived: false, transcript: true, state: "closed", live: false, capabilities: OPENCODE_CAPABILITIES, cwd: d.project });
     expect(d.starts()).toHaveLength(1);
     const asked = d.log().find((l) => l.type === "request" && l.path === "/session" && l.method === "GET")!;
     expect(asked.query).toMatchObject({ directory: d.project, roots: "true" });
-  });
+  }, process.platform === "win32" ? 60_000 : 15_000); // two lists and one OpenCode server start
 
   it("opening a listed OpenCode session shows its stored history as parts", async () => {
     const d = await boot({ engine: "opencode" });
@@ -199,7 +203,7 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     await d_list(down);
     expect(Object.keys(JSON.parse(readFileSync(join(down.root, "sessions.json"), "utf8")))).toContain("ses_gone");
     const up = await boot({ engine: "opencode", sessionsJson: entry });
-    await d_list(up);
+    await d_listOpenCode(up);
     expect(Object.keys(JSON.parse(readFileSync(join(up.root, "sessions.json"), "utf8")))).not.toContain("ses_gone");
   }, process.platform === "win32" ? 60_000 : 15_000); // two daemons and one OpenCode server start, which takes seconds on a loaded Windows machine
 
@@ -256,3 +260,9 @@ describe("OpenCode engine: lifecycle, create and list", () => {
 });
 
 const d_list = (d: Awaited<ReturnType<typeof boot>>) => d.ok({ type: "session.list" });
+/** A list that has the OpenCode sessions: the first list does not wait for OpenCode, its late answer comes as sessions.changed. */
+const d_listOpenCode = async (d: Awaited<ReturnType<typeof boot>>) => {
+  await d_list(d);
+  await until(() => d.inbox.some((m) => m.type === "sessions.changed"));
+  return d_list(d);
+};
