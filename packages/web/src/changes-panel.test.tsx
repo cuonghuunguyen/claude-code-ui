@@ -250,6 +250,16 @@ it("wide: single-child folders compact into one row; the list view shows files b
   expect(rows()).toHaveLength(3);
 });
 
+it("wide: the list view of a Windows project joins every directory with / (no mixed separators)", async () => {
+  localStorage.setItem("claude-ui.changesListView", "list");
+  const client = fakeClient({ "C:\\p\\a\\b\\c\\x.ts": "x = 2\n", "C:\\p\\a\\b\\c\\d\\y.ts": "y = 2\n", "C:\\p\\z.md": "z = 2\n" });
+  const parts = [edit("e1", "C:\\p\\z.md", "z = 1", "z = 2"), edit("e2", "C:\\p\\a\\b\\c\\d\\y.ts", "y = 1", "y = 2"), edit("e3", "C:\\p\\a\\b\\c\\x.ts", "x = 1", "x = 2")];
+  await act(async () => root.render(<ChangesPanel client={client} view={view(parts)} cwd={"C:\\p"} onOpen={() => {}} />));
+  await flush();
+  const rows = [...el.querySelectorAll("ul[aria-label='Changed files'] button")].map((b) => b.textContent);
+  expect(rows).toEqual(["a/b/c/d/y.ts", "a/b/c/x.ts", "z.md"]);
+});
+
 it("wide: the file sidebar resizes by arrow keys on its separator (kept per browser), not cycling files; double click restores the default width", async () => {
   const client = fakeClient({ "/p/a.ts": "a = 2\n", "/p/b.ts": "b = 2\n" });
   const panel = () => <ChangesPanel client={client} view={view([edit("e1", "/p/a.ts", "a = 1", "a = 2"), edit("e2", "/p/b.ts", "b = 1", "b = 2")])} cwd="/p" onOpen={() => {}} />;

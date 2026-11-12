@@ -165,6 +165,8 @@ export function ListResizer({
   );
 }
 export { useNarrow };
+// List view and its sort: one separator whatever the daemon's OS (the tree view joins with "/" too).
+const slashed = (s: string) => s.replaceAll("\\", "/");
 
 /** A folder of OpenCode's review file tree: folders first, then files, each by name. */
 type Folder = { name: string; path: string; folders: Folder[]; files: Row[] };
@@ -550,7 +552,7 @@ export function ChangesPanel({
   const [listView, setListView] = useState(loadListView);
   const flat = narrow || listView === "list";
   // The order on screen: the tree's, or by path in the list view and the narrow accordion (OpenCode's mobile review).
-  const shown = flat ? [...matched].sort((a, b) => relPath(a.path, cwd).localeCompare(relPath(b.path, cwd))) : treeOrder(tree);
+  const shown = flat ? [...matched].sort((a, b) => slashed(relPath(a.path, cwd)).localeCompare(slashed(relPath(b.path, cwd)))) : treeOrder(tree);
   const [closed, setClosed] = useState<Record<string, boolean>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   // Show changes (file tree menu): Uncommitted mode, no filter hiding the file, its folders open, the file selected and scrolled to.
@@ -699,7 +701,7 @@ export function ChangesPanel({
           >
             {rowIcon(r)}
             <span className="min-w-0 flex-1 truncate">
-              {flat && filePath(r.path, cwd).dir && <span className="text-faint">{filePath(r.path, cwd).dir.replace(/\/$/, "")}/</span>}
+              {flat && filePath(r.path, cwd).dir && <span className="text-faint">{slashed(filePath(r.path, cwd).dir.replace(/[\\/]$/, ""))}/</span>}
               {filePath(r.path, cwd).name}
             </span>
             {r.submodule && <SubmoduleBadge />}
