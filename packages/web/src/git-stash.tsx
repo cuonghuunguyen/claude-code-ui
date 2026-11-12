@@ -8,6 +8,7 @@ import type { OpReply, StashRequest } from "./git-remote-ops.ts";
 import { dateFormat, useT } from "./i18n.ts";
 import { ConfirmDialog } from "./session-actions.tsx";
 import { timeAgo } from "./sessions.ts";
+import { useLocalHistoryHint } from "./local-history-hint.tsx";
 
 type Client = ReturnType<typeof connect>;
 const when = (time: number) => (Date.now() / 1000 - time < 7 * 86400 ? timeAgo(time * 1000) : dateFormat().format(new Date(time * 1000)));
@@ -28,6 +29,7 @@ export function StashSection({ client, cwd, exact, repoName, version, busy, onRu
   const [error, setError] = useState<string>();
   const [push, setPush] = useState<{ message: string; untracked: boolean }>();
   const [drop, setDrop] = useState<GitStash>();
+  const localHistory = useLocalHistoryHint(!!drop, !!drop);
   const gen = useRef(0);
   useEffect(() => {
     if (pushAsk) setPush({ message: "", untracked: false });
@@ -87,7 +89,9 @@ export function StashSection({ client, cwd, exact, repoName, version, busy, onRu
           {t("files.graph.stashUntracked")}
         </label>
       </ConfirmDialog>
-      <ConfirmDialog open={!!drop} destructive title={t("files.graph.stashDropTitle", { target: drop ? ref(drop) : "" })} description={`${drop?.message ?? ""}. ${t("files.graph.stashDropText")}`} confirm={t("files.graph.stashDrop")} onConfirm={confirmDrop} onCancel={() => setDrop(undefined)} testId="git-stash-drop" />
+      <ConfirmDialog open={!!drop} destructive title={t("files.graph.stashDropTitle", { target: drop ? ref(drop) : "" })} description={`${drop?.message ?? ""}. ${t("files.graph.stashDropText")}`} confirm={t("files.graph.stashDrop")} onConfirm={confirmDrop} onCancel={() => setDrop(undefined)} testId="git-stash-drop">
+        {localHistory}
+      </ConfirmDialog>
     </div>
   );
 }

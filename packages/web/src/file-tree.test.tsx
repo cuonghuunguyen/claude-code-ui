@@ -7,6 +7,7 @@ import type { GitRepo } from "@claude-ui/protocol";
 import { FileTree, type FileTreeHandle } from "./file-tree.tsx";
 import { OpenExternalContext } from "./open-external-menu.ts";
 import { forgetRepoChoices, getRepoChoice } from "./repo-choice.ts";
+import { resetPageForTests, setRecommendationHost } from "./recommendations.ts";
 
 const ent = (path: string, isDir = false) => ({ name: path.split("/").at(-1)!, path, isDir });
 const listings: Record<string, ReturnType<typeof ent>[]> = {
@@ -1059,4 +1060,65 @@ it("GH-645 the open-in-app entries show for this machine and a WSL side, not for
   };
   for (const side of ["local", "wsl:Ubuntu"]) expect(await ids(side)).toEqual(["ext-menu-reveal", "ext-menu-code", "ext-menu-default"]);
   for (const side of ["docker:dev", "ssh:box"]) expect(await ids(side)).toEqual([]);
+});
+
+it("GH-722: the third filter with no match offers Find in files once per query; Show me runs onFindInFiles", async () => {
+  localStorage.clear();
+  resetPageForTests();
+  const show = vi.fn();
+  setRecommendationHost({ blocked: () => false, show });
+  const onFindInFiles = vi.fn();
+  const t = setup({ onFindInFiles }, { "fs.search": { paths: [] } });
+  await t.render();
+  const input = t.el.querySelector<HTMLInputElement>("input[type=search]")!;
+  const type = (v: string) =>
+    act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, v);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 200));
+    });
+  await type("zz");
+  await type("zz1");
+  expect(show).not.toHaveBeenCalled();
+  await act(async () => void t.render({ visible: true })); // a re-render of the same query counts nothing more
+  await type("zz12");
+  expect(show).toHaveBeenCalledOnce();
+  expect(show.mock.calls[0]![0]).toBe("Search file content with the Find in files shortcut.");
+  expect(show.mock.calls[0]![1].label).toBe("Show me");
+  show.mock.calls[0]![1].run();
+  expect(onFindInFiles).toHaveBeenCalledOnce();
+  t.unmount();
+  setRecommendationHost(undefined);
+  localStorage.clear();
+  resetPageForTests();
+});
+
+it("GH-722: the third Copy path offers Open in file manager when this machine can open it; Show me reopens the row menu on Reveal", async () => {
+  localStorage.clear();
+  resetPageForTests();
+  const show = vi.fn();
+  setRecommendationHost({ blocked: () => false, show });
+  const ext = { editors: [], canOpen: () => true, isLocal: () => true, run: vi.fn() };
+  const t = setup({ onCopy: vi.fn() });
+  await act(async () => t.root.render(<OpenExternalContext.Provider value={ext}><FileTree client={{ request: t.request } as never} cwd="/p" onOpen={() => {}} onViewer={() => {}} onCopy={() => {}} /></OpenExternalContext.Provider>));
+  const copy = async () => {
+    await ctxMenu(t.row("/p/README.md"));
+    await act(async () => menuItem("copyPath").click());
+    await act(async () => {});
+  };
+  await copy();
+  await copy();
+  expect(show).not.toHaveBeenCalled();
+  await copy();
+  expect(show).toHaveBeenCalledOnce();
+  expect(show.mock.calls[0]![0]).toBe("Open this file or folder in the file manager or an editor.");
+  await act(async () => show.mock.calls[0]![1].run());
+  await act(async () => void (await new Promise((r) => setTimeout(r, 120))));
+  const reveal = document.querySelector<HTMLElement>("[data-testid=ext-menu-reveal]")!;
+  expect(reveal.hasAttribute("data-locate")).toBe(true);
+  await closeMenu();
+  t.unmount();
+  setRecommendationHost(undefined);
+  localStorage.clear();
+  resetPageForTests();
 });

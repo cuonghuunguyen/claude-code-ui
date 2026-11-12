@@ -1794,3 +1794,88 @@ it("right click on a row offers Open, Copy path and, in an app-capable browser, 
   await act(async () => void document.querySelector<HTMLElement>("[data-testid=row-ext-menu-code]")!.click());
   expect(run).toHaveBeenCalledWith("/p/a.ts", "code", "/p");
 });
+
+// ---- GH-722: recommendation hooks ----
+const recClean = () => (setRecommendationHost(undefined), localStorage.clear(), resetPageForTests());
+
+it("GH-722: the third new diff selection offers Send selection; Show me rings the button; a change of the same selection does not count", async () => {
+  recClean();
+  const show = vi.fn();
+  setRecommendationHost({ blocked: () => false, show });
+  await mountSend("M", "session", vi.fn());
+  const select = (end: number | null) => act(async () => (diff.options as { onLineSelected?: (r: unknown) => void }).onLineSelected!(end === null ? null : { start: 2, side: "deletions", end, endSide: "additions" }));
+  await select(2);
+  await select(3); // the same selection grows: not a new one
+  await select(null);
+  await select(2);
+  await select(null);
+  expect(show).not.toHaveBeenCalled();
+  await select(2);
+  expect(show).toHaveBeenCalledOnce();
+  expect(show.mock.calls[0]![0]).toBe("Send the selected diff lines to Claude.");
+  expect(show.mock.calls[0]![1].label).toBe("Show me");
+  await act(async () => show.mock.calls[0]![1].run());
+  const button = el.querySelector<HTMLElement>("[data-testid=diff-send-selection]")!;
+  expect(button.hasAttribute("data-locate")).toBe(true);
+  expect(document.activeElement).toBe(button);
+  recClean();
+});
+
+it("GH-722: the third Copy path offers Open in file manager only where the file can be opened; Show me reopens the row menu on Reveal", async () => {
+  recClean();
+  const show = vi.fn();
+  setRecommendationHost({ blocked: () => false, show });
+  const client = fakeClient({ "/p/a.ts": "a = 2\n" });
+  const ext = { editors: [], canOpen: () => true, isLocal: () => true, run: vi.fn() };
+  const panel = (o?: OpenExternal) => (
+    <OpenExternalContext value={o}>
+      <ChangesPanel client={client} view={view([edit("e1", "/p/a.ts", "a = 1", "a = 2")])} cwd="/p" onOpen={() => {}} onCopy={() => {}} />
+    </OpenExternalContext>
+  );
+  const copy = async () => {
+    await act(async () => void el.querySelector("[data-testid=changed-file]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
+    await act(async () => void document.querySelector<HTMLElement>("[data-testid=row-copyPath]")!.click());
+    await flush();
+  };
+  await act(async () => root.render(panel()));
+  await flush();
+  for (let i = 0; i < 3; i++) await copy();
+  expect(show, "a browser that cannot open files").not.toHaveBeenCalled();
+  await act(async () => root.render(panel(ext)));
+  await flush();
+  await copy();
+  expect(show).toHaveBeenCalledOnce();
+  expect(show.mock.calls[0]![0]).toBe("Open this file or folder in the file manager or an editor.");
+  await act(async () => show.mock.calls[0]![1].run());
+  await act(async () => void (await new Promise((r) => setTimeout(r, 120))));
+  const reveal = document.querySelector<HTMLElement>("[data-testid=row-ext-menu-reveal]")!;
+  expect(reveal).not.toBeNull();
+  expect(reveal.hasAttribute("data-locate")).toBe(true);
+  recClean();
+});
+
+it("GH-722: the first rollback dialog shows the Local history hint, the second does not; it closes by its button", async () => {
+  recClean();
+  saveDiffMode("uncommitted");
+  const git = { status: REPO, diff: D([{ status: "M", path: "a.ts", added: 1, removed: 0 }, { status: "M", path: "c.ts", added: 1, removed: 0 }]), at: { [`${BASE}:a.ts`]: "a\n", [`${BASE}:c.ts`]: "c\n" } };
+  const client = fakeClient({ "/p/a.ts": "a2\n", "/p/c.ts": "c2\n" }, git);
+  await act(async () => root.render(panel(client)));
+  await flush();
+  const button = () => el.querySelector<HTMLButtonElement>("[data-testid=rollback-button]")!;
+  await act(async () => el.querySelector<HTMLInputElement>("[data-testid=commit-check][data-path='/p/c.ts']")!.click());
+  const open = async () => {
+    await act(async () => button().click());
+    await flush();
+  };
+  await open();
+  const hint = () => document.querySelector("[data-testid=rec-local-history]");
+  expect(hint()!.textContent).toContain("The replaced text stays in the Timeline.");
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=rec-local-history-close]")!.click());
+  expect(hint()).toBeNull();
+  await act(async () => document.querySelector<HTMLElement>("[data-testid=rollback-cancel]")!.click());
+  await flush();
+  await open();
+  expect(document.querySelector("[data-testid=rollback-files]")).not.toBeNull();
+  expect(hint(), "once ever").toBeNull();
+  recClean();
+});

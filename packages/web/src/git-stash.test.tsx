@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { connect } from "./client.ts";
 import type { OpReply } from "./git-remote-ops.ts";
 import { StashSection } from "./git-stash.tsx";
+import { resetPageForTests, setRecommendationHost } from "./recommendations.ts";
 
 const el = document.createElement("div");
 document.body.append(el);
@@ -71,4 +72,20 @@ it("the push dialog sends the message and includeUntracked only when set", async
   await click(q("stash-untracked"));
   await click(q("git-stash-push-confirm"));
   expect(c.onRun.mock.calls[1][0]).toEqual({ type: "git.stashPush", cwd: "/p", message: "wip", includeUntracked: true });
+});
+
+it("GH-722: the first stash drop confirm shows the Local history hint, the second does not, even with recommendations toasts showing", async () => {
+  localStorage.clear();
+  resetPageForTests();
+  setRecommendationHost(undefined);
+  await mount();
+  await click(q("stash-drop"));
+  expect(q("rec-local-history").textContent).toContain("The replaced text stays in the Timeline.");
+  await click(q("git-stash-drop-cancel"));
+  expect(document.querySelector("[data-testid=rec-local-history]")).toBeNull();
+  await click(q("stash-drop"));
+  expect(q("git-stash-drop-dialog").textContent).toContain("Drop stash@{0}?");
+  expect(document.querySelector("[data-testid=rec-local-history]"), "once ever").toBeNull();
+  localStorage.clear();
+  resetPageForTests();
 });

@@ -3,7 +3,8 @@ import { Fragment, useEffect, useImperativeHandle, useMemo, useRef, useState, ty
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { fileNameProblem, LOCAL_SIDE, type FsDeleteResult, type FsEntry, type FsListResult, type FsPathResult, type FsSearchResult, type GitDiffResult, type GitRepo } from "@claude-ui/protocol";
 import { ChevronRightIcon, FolderIcon, FolderOpenIcon, XIcon } from "lucide-react";
-import { tipMiddleClick } from "./recommendations.ts";
+import { tipMiddleClick, count, offer, tipOpenInFileManager } from "./recommendations.ts";
+import { reopenMenu } from "./rec-highlight.ts";
 import type { connect, RequestError } from "./client.ts";
 import { FileIcon } from "./file-icon.tsx";
 import { ancestors, dropPaths, gitMarks, moveFocus, movePaths, pathKey, repoFolders, repoIconText, repoMarks, repoOfPath, searchRows, sortEntries, typeAhead, visibleRows, type DirMark, type DirState, type Editing, type Mark, type RepoRead, type Row } from "./file-tree-model.ts";
@@ -191,6 +192,7 @@ export function FileTree({
   onViewer,
   onOpenTab,
   onShowChanges,
+  onFindInFiles,
   repos,
   onShowGraph,
   onMention,
@@ -226,6 +228,8 @@ export function FileTree({
   onOpenTab?: (path: string) => void;
   /** Show changes (a file with a git mark). */
   onShowChanges?: (path: string) => void;
+  /** GH-722: Show me of the Find in files recommendation. */
+  onFindInFiles?: () => void;
   /** The repositories of the cwd (`git.repos`): the marks are read per repository. Unset: one `git.diff` of the cwd. */
   repos?: RepoList;
   /** Show graph (a repository folder; hidden when unset). */
@@ -401,6 +405,11 @@ export function FileTree({
   }, [visible, gitStamp, cwd, reloadKey, gitNudge, listKey]);
 
   const rows: Row[] = q ? (found?.query === q ? searchRows(found.paths.map((p) => joinPath(cwd, p)), cwd) : []) : visibleRows(model, cwd, editing);
+  // GH-722: a filter that finds nothing counts once per query.
+  const missed = q && found?.query === q && found.paths.length === 0 ? found.query : undefined;
+  useEffect(() => {
+    if (missed !== undefined) offer("findInFiles", { n: count("filterMiss") }, onFindInFiles);
+  }, [missed]);
   const entries = rows.flatMap((r, i) => (r.kind === "entry" ? [{ r, i }] : []));
   const rowAt = (path: string) => rows.findIndex((r) => r.kind === "entry" && r.entry.path === path);
   const tabPath = [focused, activePath].find((p) => p !== undefined && rowAt(p) >= 0) ?? entries[0]?.r.entry.path;
@@ -747,7 +756,8 @@ export function FileTree({
       case "mention":
         return onMention?.(path);
       case "copyPath":
-        return onCopy?.(path, "path");
+        onCopy?.(path, "path");
+        return void tipOpenInFileManager(!!external, () => reopenMenu(rowEl(root.current, path), '[data-testid$="ext-menu-reveal"]'));
       case "copyRel":
         return onCopy?.(relPath(path, cwd), "relative path");
       case "collapse":

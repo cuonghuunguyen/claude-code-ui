@@ -8,6 +8,7 @@ import { useKeyContextMenu } from "./context-menu-key.ts";
 import { ofRepo } from "./git-branch-menu.tsx";
 import { runRemoteOp } from "./git-remote-ops.ts";
 import { useT } from "./i18n.ts";
+import { useLocalHistoryHint } from "./local-history-hint.tsx";
 import { ConfirmDialog, ITEM, POPUP } from "./session-actions.tsx";
 
 type Client = ReturnType<typeof connect>;
@@ -52,6 +53,7 @@ export function RollbackDialog({ client, cwd, exact, repoName, paths, onClose, o
     onClose();
   };
   const hasAdded = files.some((f) => f.kind === "A");
+  const localHistory = useLocalHistoryHint(!!paths, !!paths);
   return (
     <ConfirmDialog
       open={!!paths}
@@ -65,6 +67,7 @@ export function RollbackDialog({ client, cwd, exact, repoName, paths, onClose, o
       onCancel={onClose}
       testId="rollback"
     >
+      {localHistory}
       {files.length > 0 && (
         <ul className="flex max-h-60 flex-col gap-0.5 overflow-auto font-mono text-xs" aria-label={t("files.changes.rollbackFiles")} data-testid="rollback-files">
           {files.map((f) => (

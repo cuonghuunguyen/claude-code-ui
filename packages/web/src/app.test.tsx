@@ -6410,6 +6410,106 @@ describe("recommendations hooks (GH-518)", () => {
     }
   });
 
+  describe("GH-722 rules", () => {
+    const shownText = () => toastText();
+    const bashLine = async (line: string) => {
+      await act(async () => void promptBox().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "!" })));
+      const box = el.querySelector<HTMLTextAreaElement>('[data-testid="prompt-box"] textarea')!;
+      await typeInto(box, line);
+      await press({ key: "Enter" }, box);
+      await wait(20);
+    };
+
+    it("commitInChanges: the second git commit or git add line with changed files offers the commit box; ls and no changes do not", async () => {
+      replies["session.bash"] = {};
+      await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "tool_call", id: "e1", toolUseId: "e1", tool: "Edit", input: { file_path: "/p/demo/a.ts", old_string: "a", new_string: "b" }, status: "done" } }));
+      await act(async () => emit({ type: "event", sessionId: ID, seq: 2, part: { type: "tool_result", id: "e1:result", toolUseId: "e1", output: "ok", isError: false } }));
+      await bashLine("ls");
+      await bashLine("ls");
+      await bashLine("git status");
+      expect(shownText()).not.toContain("Commit checked files");
+      await bashLine("git add -A");
+      expect(shownText()).not.toContain("Commit checked files");
+      await bashLine("git commit -m x");
+      expect(shownText()).toContain("Commit checked files from the Changes tab, with an AI message.");
+      expect(document.querySelector('[data-testid="toast"] button')!.textContent).toBe("Show me");
+    });
+
+    it("commitInChanges: without changed files nothing shows", async () => {
+      replies["session.bash"] = {};
+      await bashLine("git add -A");
+      await bashLine("git commit -m x");
+      expect(shownText()).not.toContain("Commit checked files");
+    });
+
+    it("expandChip: the third pasted-text chip shows the tip; a short paste counts nothing", async () => {
+      const paste = (text: string) =>
+        act(async () => {
+          const e = new Event("paste", { bubbles: true, cancelable: true });
+          Object.defineProperty(e, "clipboardData", { value: { files: [], getData: () => text } });
+          promptBox().dispatchEvent(e);
+        });
+      const big = "x\ny\nz\nw\n".repeat(3);
+      await paste("short");
+      await paste(big);
+      await paste(big);
+      expect(shownText()).not.toContain("Expand turns a chip");
+      await paste(big);
+      expect(shownText()).toContain("Expand turns a chip back into text.");
+    });
+
+    it("filePaste: the third Attach click shows the tip", async () => {
+      const attach = () => act(async () => el.querySelector<HTMLElement>('[data-testid="attach"]')!.click());
+      await attach();
+      await attach();
+      expect(shownText()).not.toContain("Copy a file in Finder");
+      await attach();
+      expect(shownText()).toContain("Copy a file in Finder or Explorer and paste it in the prompt.");
+    });
+
+    it("switchAccount: a hit usage limit with 2 or more accounts offers the switcher; one account does not", async () => {
+      const hit = { plan: "Max", windows: [], status: "rejected" };
+      await act(async () => planUsage({ ...hit, status: "allowed" }));
+      await act(async () => planUsage(hit));
+      expect(shownText(), "only the CLI login").not.toContain("Another account");
+      localStorage.clear();
+      resetPageForTests();
+      const restore = await remount({ "settings.get": { settings: { orchestration: {}, notifications: { desktop: false }, claude: { account: "cli" } }, claudeAccounts: [{ id: "a1", name: "Work" }], daemon: { host: "h" } } });
+      try {
+        await act(async () => planUsage({ ...hit, status: "allowed" }));
+        await act(async () => planUsage(hit));
+        expect(shownText()).toContain("Another account is available. Switch?");
+        await act(async () => planUsage(hit)); // still rejected: not a new hit
+      } finally {
+        restore();
+      }
+    });
+
+    it("defaultMode: the same other mode picked in three new sessions in a row offers it; Turn on saves it; a mode pick in a session does not count", async () => {
+      const wide = { ...session, permissionModes: ["default", "acceptEdits", "plan", "auto"] };
+      const restore = await remount({ "session.list": { sessions: [wide], projects: ["/p/demo"], permissionModes: ["default", "acceptEdits", "plan", "auto"] }, "session.subscribe": { logEpoch: "e1", session: wide }, "session.setPermissionMode": { session: { ...wide, permissionMode: "plan" } }, "settings.set": { settings: {} } });
+      try {
+        const tab = '[data-testid="new-session-tab"]';
+        const streaks = () => (JSON.parse(localStorage.getItem("claude-ui.recommendations") ?? "{}") as { streaks?: Record<string, { mode: string; n: number }> }).streaks?.defaultMode;
+        await pickOption('[data-testid="mode-select"]', "Plan mode"); // an existing session
+        expect(streaks()).toBeUndefined();
+        for (let i = 0; i < 3; i++) {
+          if (i) await act(async () => el.querySelector<HTMLElement>('[data-testid="tab-close-active"]')!.click());
+          await openNewTab();
+          expect(shownText()).not.toContain("the default for new sessions");
+          await pickOption(`${tab} [data-testid="mode-select"]`, "Plan mode");
+          expect(streaks()).toEqual({ mode: "plan", n: i + 1 });
+        }
+        expect(shownText()).toContain("Make Plan mode the default for new sessions?");
+        sent.length = 0;
+        await act(async () => [...document.querySelectorAll<HTMLElement>('[data-testid="toast"] button')].find((b) => b.textContent === "Turn on")!.click());
+        expect(sent).toContainEqual({ type: "settings.set", patch: { sessions: { defaultMode: "plan" } } });
+      } finally {
+        restore();
+      }
+    });
+  });
+
   describe("push", () => {
     const stubPush = () => {
       vi.stubGlobal("isSecureContext", true);

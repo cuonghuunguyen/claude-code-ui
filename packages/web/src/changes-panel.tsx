@@ -20,7 +20,8 @@ import { pathKey } from "./file-tree-model.ts";
 import { repoDir } from "./repos.ts";
 import { t, useT } from "./i18n.ts";
 import { DIFF_MODES, loadDiffMode, loadDiffScope, repoRoot, saveDiffMode, saveDiffScope, sessionDiffChoice, useDefaultDiffMode, type DiffMode, type DiffScope } from "./diff-mode.ts";
-import { offer, streak } from "./recommendations.ts";
+import { count, offer, streak, tipOpenInFileManager } from "./recommendations.ts";
+import { highlight, reopenMenu } from "./rec-highlight.ts";
 import { commitable, commitPaths, eachLimited, gitEol, gitRows, type GitRow } from "./git-changes.ts";
 import { fileMention, mediaKind, readFailure, textFailure } from "./files.ts";
 import { ImageDiff, type ImagePane } from "./image-diff.tsx";
@@ -770,10 +771,11 @@ export function ChangesPanel({
     if (r.nested || r.submodule) return [];
     const local = openExt?.canOpen(cwd) ? openExt : undefined;
     return [
-      [{ label: t("files.menu.open"), testId: "row-open", run: () => onOpen(r.path) }, ...(onCopy ? [{ label: t("files.menu.copyPath"), testId: "row-copyPath", run: () => onCopy(r.path, "path") }, { label: t("files.menu.copyRel"), testId: "row-copyRel", run: () => onCopy(relPath(r.path, cwd), "relative path") }] : [])],
+      [{ label: t("files.menu.open"), testId: "row-open", run: () => onOpen(r.path) }, ...(onCopy ? [{ label: t("files.menu.copyPath"), testId: "row-copyPath", run: () => (onCopy(r.path, "path"), tipOpenInFileManager(!!local && r.kind !== "D", () => reopenMenu(rowElOf(r.path), '[data-testid$="ext-menu-reveal"]'))) }, { label: t("files.menu.copyRel"), testId: "row-copyRel", run: () => onCopy(relPath(r.path, cwd), "relative path") }] : [])],
       local ? externalEntries({ isDir: false, editors: local.editors, local: local.isLocal(cwd), disabled: r.kind === "D" }).map((x) => ({ label: x.label, title: x.title, testId: `row-${x.testId}`, disabled: x.disabled, run: () => local.run(r.path, x.how, cwd) })) : [],
     ];
   };
+  const rowElOf = (path: string) => [...document.querySelectorAll<HTMLElement>('[data-testid="changed-file"]')].find((e) => e.dataset.path === path);
   const rowMenu = (r: Row, node: ReactElement) => (
     <RollbackMenu sections={rowSections(r)} enabled={commitMode && commitable(r) && !opRunning} onRollback={() => setRollbackPaths(commitPaths([r], new Set([r.path])))} onMention={onSend && r.kind !== "D" ? () => onSend(fileMention(r.path, cwd)) : undefined}>
       {node}
@@ -1071,6 +1073,7 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
   // One header per file, like OpenCode's (file header off in the library): the panel's own, with the relative path.
   const [range, setRange] = useState<SelectedLineRange | null>(null);
   const box = useRef<HTMLDivElement>(null);
+  const selecting = useRef(false);
   const selectable = onSend !== undefined;
   const options = useMemo(
     () => ({
@@ -1082,7 +1085,13 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
       onPostRender: () => setDrawn(true),
       // Line numbers: click, Shift+click or drag. The box takes focus so Alt+K works right after a click.
       enableLineSelection: selectable,
-      onLineSelected: (r: SelectedLineRange | null) => (setRange(r), r && box.current?.focus({ preventScroll: true })),
+      onLineSelected: (r: SelectedLineRange | null) => {
+        // GH-722: a new selection (not each change of its end) counts for the Send selection recommendation.
+        if (r && !selecting.current) offer("sendSelection", { n: count("diffSelect") }, () => highlight('[data-testid="diff-send-selection"]'));
+        selecting.current = r !== null;
+        setRange(r);
+        if (r) box.current?.focus({ preventScroll: true });
+      },
     }),
     [style, dark, colorTheme, selectable],
   );

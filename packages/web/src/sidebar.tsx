@@ -21,7 +21,7 @@ import { CHECK_ITEM, RowContextMenu, RowMenu, Tick } from "./sidebar-menus.tsx";
 import { groupEntries, groupSessions, idleTargets, workerCounts, workerEntries } from "./sidebar-menus.ts";
 import { useKeyContextMenu } from "./context-menu-key.ts";
 import { t, useT } from "./i18n.ts";
-import { offer, scrolledFar } from "./recommendations.ts";
+import { count, offer, scrolledFar } from "./recommendations.ts";
 
 /** What follows the last `/` or `\` (a branch tail, a folder name). */
 const lastSegment = (p: string) => p.split(/[\\/]/).pop()!;
@@ -311,7 +311,7 @@ export function SessionList({
     groupEntries({
       ...menuBase(() => groupSessions(baseGroup(g.cwd) ?? g), projectName(g.cwd), prefix),
       newSession: () => onNew(g.cwd),
-      copyPath: onCopy && (() => onCopy(g.cwd, "path")),
+      copyPath: onCopy && (() => (count("copyPath"), onCopy(g.cwd, "path"))),
       newWorktree: onNewWorktree && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) ? (quick) => onNewWorktree(g.cwd, quick) : undefined,
       rename: onEditProject && (() => onEditProject(g.cwd)),
       cleanUp: onCleanUp && (() => onCleanUp({ kind: "project", cwd: g.cwd })),
@@ -323,7 +323,7 @@ export function SessionList({
     groupEntries({
       ...menuBase(() => (baseGroup(g.cwd)?.worktrees.find((x) => x.path === r.path) ?? r).sessions, label, prefix),
       newSession: r.outsideRoots || isBusy(r) ? undefined : () => onNew(r.path),
-      copyPath: onCopy && (() => onCopy(r.path, "path")),
+      copyPath: onCopy && (() => (count("copyPath"), onCopy(r.path, "path"))),
       tail: onRemoveWorktree && !isBusy(r) && removableWorktree(worktrees?.[g.cwd] ?? [], r) ? { id: `${prefix}remove`, label: t("sidebar.menu.deleteWorktree"), onSelect: () => onRemoveWorktree(g.cwd, r.path) } : undefined,
     });
   const activeSession = list.find((s) => s.id === activeId);

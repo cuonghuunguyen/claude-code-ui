@@ -3,6 +3,7 @@ import type { GitBranchInfo, GitCommit, GitCommitDetail, GitCommitMenu } from "@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import { resetPageForTests } from "./recommendations.ts";
 import type { connect } from "./client.ts";
 import { GraphPane, GraphPanel } from "./git-graph-panel.tsx";
 import { forgetRepoChoices, getRepoChoice, setRepoChoice } from "./repo-choice.ts";
@@ -1227,6 +1228,28 @@ it("Reset Current Branch to Here: Hard lists the files it loses and sends mode a
   await act(async () => byId("git-reset-confirm").click());
   await flush();
   expect(c.sent.filter((m) => m.type === "git.reset")).toEqual([{ type: "git.reset", cwd: "/p", hash: hash(2), mode: "hard", headRef: "refs/heads/main", headHash: hash(3), argv: ["reset", "--hard", "--no-recurse-submodules", hash(2)], dirty: "fp1" }]);
+});
+
+it("GH-722: Reset hard shows the Local history hint once; Mixed does not", async () => {
+  localStorage.clear();
+  resetPageForTests();
+  const c = fake(withRefs());
+  await mount(c);
+  await menuAt(rowOf(hash(2)));
+  await act(async () => byId("commit-reset").click());
+  await flush();
+  expect(el.querySelector("[data-testid=rec-local-history]"), "Mixed is picked first").toBeNull();
+  await act(async () => byId("git-reset-hard").click());
+  await flush();
+  expect(el.ownerDocument.querySelector("[data-testid=rec-local-history]")!.textContent).toContain("The replaced text stays in the Timeline.");
+  await act(async () => byId("git-reset-mixed").click());
+  await act(async () => byId("git-reset-hard").click());
+  await flush();
+  expect(el.ownerDocument.querySelector("[data-testid=rec-local-history]"), "the dialog stayed open: still shown").not.toBeNull();
+  await act(async () => byId("git-reset-cancel").click());
+  await flush();
+  localStorage.clear();
+  resetPageForTests();
 });
 
 // ---- Annotate (GH-564): focusCommit ----

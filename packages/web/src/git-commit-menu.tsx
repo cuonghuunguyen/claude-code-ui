@@ -9,6 +9,7 @@ import { command, ofRepo, type RemoteRequest } from "./git-branch-menu.tsx";
 import type { OpReply } from "./git-remote-ops.ts";
 import { ConfirmDialog, ITEM } from "./session-actions.tsx";
 import { t, useT } from "./i18n.ts";
+import { useLocalHistoryHint } from "./local-history-hint.tsx";
 
 type Client = ReturnType<typeof connect>;
 type Done = string | ((r: OpReply) => string);
@@ -100,6 +101,7 @@ export function ResetDialog({ client, cwd, exact = false, repoName, target, onRu
     );
   };
   const lose = info?.lose ?? [];
+  const localHistory = useLocalHistoryHint(hard, !!target);
   return (
     <ConfirmDialog
       open={!!target}
@@ -123,6 +125,7 @@ export function ResetDialog({ client, cwd, exact = false, repoName, target, onRu
           </label>
         ))}
       </div>
+      {localHistory}
       {info?.reset && (
         <pre className="max-h-24 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] rounded bg-secondary p-2 font-mono text-muted-foreground text-xs" data-testid="git-command">
           {command(info.reset[mode])}

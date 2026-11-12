@@ -10,7 +10,7 @@ import { LOCAL_SIDE, type FsMediaResult, type GitBlameResult, type GitRepo } fro
 import { canOpenSide, externalEntries, useOpenExternal } from "./open-external-menu.ts";
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ExternalLinkIcon, FolderInputIcon, LocateFixedIcon, Maximize2Icon, RotateCwIcon, SquareArrowOutUpRightIcon } from "lucide-react";
-import { tipMiddleClick } from "./recommendations.ts";
+import { count, tipMiddleClick } from "./recommendations.ts";
 import { Button } from "@/components/ui/button";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { useNarrow } from "@/lib/use-narrow.ts";
@@ -67,6 +67,7 @@ export function FilesPanel({
   onCopy,
   onViewer,
   onShowChanges,
+  onFindInFiles,
   repos,
   onShowGraph,
   onOpenCommit,
@@ -104,6 +105,7 @@ export function FilesPanel({
   onViewer?: (path: string) => void;
   /** File tree menu: Show changes. */
   onShowChanges?: (path: string) => void;
+  onFindInFiles?: () => void;
   /** The repositories of the cwd: the tree marks each file with its own repository's status. */
   repos?: RepoList;
   /** Show graph on a repository folder (the tree sets the repository selector first). */
@@ -294,6 +296,7 @@ export function FilesPanel({
             onViewer={dialog ? undefined : onViewer}
             onOpenTab={onOpenTab && ((p) => (inDir(p, cwd) ? onOpenTab(p) : undefined))}
             onShowChanges={onShowChanges}
+            onFindInFiles={onFindInFiles}
             repos={repos}
             onShowGraph={onShowGraph}
             onMention={(p) => onSend(fileMention(p, cwd))}
@@ -457,7 +460,7 @@ export function FilesPanel({
                       </ContextMenu.Item>
                       {onCopy && (
                         <>
-                          <ContextMenu.Item className={ITEM} data-testid="editor-tab-menu-copyPath" onClick={() => onCopy(p, "path")}>
+                          <ContextMenu.Item className={ITEM} data-testid="editor-tab-menu-copyPath" onClick={() => (count("copyPath"), onCopy(p, "path"))}>
                             {tr("files.menu.copyPath")}
                           </ContextMenu.Item>
                           <ContextMenu.Item className={ITEM} data-testid="editor-tab-menu-copyRel" onClick={() => onCopy(relPath(p, cwd), "relative path")}>
