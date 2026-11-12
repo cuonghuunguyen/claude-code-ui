@@ -17,7 +17,7 @@ export default defineConfig({
     projects: [
       {
         extends: true,
-        test: { ...shared, name: "node", include: ["packages/*/test/**/*.test.ts"] },
+        test: { ...shared, name: "node", include: ["packages/*/test/**/*.test.ts", "plugins/*/test/**/*.test.ts"] },
       },
       {
         extends: true,
