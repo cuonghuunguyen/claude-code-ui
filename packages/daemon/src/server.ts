@@ -108,6 +108,8 @@ const OPENCODE_LIST_WAIT_MS = 3000;
 export const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 
 /** Larger files are not opened in the editor. */
+/** Transcript restores running at once. */
+const MAX_RESTORES = 2;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 /** UTF-8 text of a file's bytes; a UTF-16 BOM or NUL means binary-ish, invalid UTF-8 is refused (a lossy decode would be written back by a save). */
 function decodeText(buf: Buffer): { content: string } | { code: "binary" | "not_utf8" } {
@@ -1556,8 +1558,32 @@ export function createDaemon(opts: {
     return track(Session.restore(id, cwd, history as never, openCodeSessionOpts({ model, permissionMode, effort })));
   }
 
+  /** Transcript restores run a few at a time: hundreds at once (a page reconnecting after a restart) starve the event loop for every other request. */
+  const restoreQueue: { id: string; background: boolean; start: () => void }[] = [];
+  let restoreActive = 0;
+  function restoreSlot<T>(id: string, background: boolean, fn: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      restoreQueue.push({
+        id,
+        background,
+        start: () => {
+          restoreActive++;
+          fn().then(resolve, reject).finally(() => (restoreActive--, pumpRestores()));
+        },
+      });
+      pumpRestores();
+    });
+  }
+  function pumpRestores() {
+    while (restoreActive < MAX_RESTORES && restoreQueue.length) {
+      const i = restoreQueue.findIndex((q) => !q.background);
+      restoreQueue.splice(i < 0 ? 0 : i, 1)[0]!.start();
+    }
+  }
+
   /** A session of this daemon run, or one rebuilt from its SDK transcript (ADR 0001). Concurrent calls share one restore. */
-  function findSession(id: string): Promise<Session | undefined> {
+  /** `background`: a follow without a hold; its restore waits behind foreground ones. */
+  function findSession(id: string, background = false): Promise<Session | undefined> {
     // Its transcript still exists until the delete ends; a restore now would bring the session back.
     if (deleting.has(id)) return Promise.resolve(undefined);
     const live = sessions.get(id);
@@ -1565,6 +1591,8 @@ export function createDaemon(opts: {
     // The ID becomes a transcript file name or a request path; only a UUID may reach the SDK, only `ses_…` OpenCode.
     if (typeof id !== "string" || (!UUID.test(id) && !OPENCODE_ID.test(id))) return Promise.resolve(undefined);
     let p = restoring.get(id);
+    // A foreground ask for a restore that waits in the queue moves it ahead of the background ones.
+    if (p && !background) for (const q of restoreQueue) if (q.id === id) q.background = false;
     if (!p && OPENCODE_ID.test(id)) {
       p = restoreOpenCode(id)
         .catch((err) => void console.error(`restoring session ${id} failed:`, err))
@@ -1572,7 +1600,7 @@ export function createDaemon(opts: {
       restoring.set(id, p);
     }
     if (!p) {
-      p = (async () => {
+      p = restoreSlot(id, background, async () => {
         const info = await history.getSessionInfo(id);
         if (!info?.cwd || !allowed(info.cwd)) return undefined;
         transcriptCwds.set(id, info.cwd);
@@ -1596,7 +1624,7 @@ export function createDaemon(opts: {
         // so the first sync does not log the pruned ones after all.
         const read = [...messages, ...runs.flat()].map((m) => m.uuid);
         return track(Session.restore(id, sessionCwd(info.cwd), interleaveRuns(messages, runs, { pruneOrphans: true }), sessionOpts({ model, permissionMode, effort }), read));
-      })()
+      })
         .catch((err) => void console.error(`restoring session ${id} failed:`, err))
         .finally(() => restoring.delete(id));
       restoring.set(id, p);
@@ -2225,7 +2253,7 @@ export function createDaemon(opts: {
           if (fd !== undefined) closeSync(fd);
         }
       };
-      const find = async (id: string) => (await findSession(id)) ?? void fail("unknown_session", `no session ${id}`);
+      const find = async (id: string, background = false) => (await findSession(id, background)) ?? void fail("unknown_session", `no session ${id}`);
 
       switch (msg.type) {
         case "session.create": {
@@ -2352,7 +2380,7 @@ export function createDaemon(opts: {
         case "session.subscribe": {
           const span = perfMon.span("session.open");
           try {
-            const s = await find(msg.sessionId);
+            const s = await find(msg.sessionId, msg.background === true);
             const title = s && (await titleOf(s));
             if (!s || ws.readyState !== ws.OPEN) return;
             // Only an explicit open (link, notification) adds the project; a reconnect resubscribe must not bring back a removed one.

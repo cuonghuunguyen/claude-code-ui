@@ -3245,6 +3245,52 @@ describe("daemon", () => {
     }
   });
 
+  it("restores run two at a time: a foreground subscribe goes ahead of queued background ones, and all of them reply", async () => {
+    const cwd = join(webRoot, "proj");
+    mkdirSync(cwd, { recursive: true });
+    const ids = Array.from({ length: 11 }, (_, i) => `6c2c3d4e-5f60-4718-8a9b-0c1d2e3f4a${String(i).padStart(2, "0")}`);
+    const fg = ids[10]!;
+    const started: string[] = [];
+    const waiting: (() => void)[] = [];
+    let inflight = 0;
+    let peak = 0;
+    const d = createDaemon({
+      webRoot,
+      token,
+      roots: [webRoot],
+      query: permissionQuery as never,
+      history: {
+        listSessions: (async () => ids.map((sessionId) => ({ sessionId, summary: "s", lastModified: 1000, cwd }))) as never,
+        getSessionInfo: (async (sid: string) => ({ sessionId: sid, cwd, summary: "s" })) as never,
+        getSessionMessages: (async (sid: string) => {
+          started.push(sid);
+          peak = Math.max(peak, ++inflight);
+          await new Promise<void>((r) => waiting.push(r));
+          inflight--;
+          return history;
+        }) as never,
+      },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const replies = ids.map((id) => c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0, ...(id === fg ? {} : { background: true }) }));
+      await new Promise((r) => setTimeout(r, 100));
+      expect(inflight).toBeLessThanOrEqual(2);
+      for (let i = 0; i < 200 && started.length < 11; i++) {
+        waiting.splice(0).forEach((f) => f());
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      waiting.splice(0).forEach((f) => f());
+      expect(await Promise.all(replies)).toHaveLength(11);
+      expect(peak).toBeLessThanOrEqual(2);
+      // Two background restores were already running; the foreground one starts next.
+      expect(started.indexOf(fg)).toBeLessThanOrEqual(2);
+    } finally {
+      d.close();
+    }
+  });
+
   it("previews and runs a rewind over WebSocket; bad mode and unknown message are errors", async () => {
     const c = await client();
     const { result } = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
