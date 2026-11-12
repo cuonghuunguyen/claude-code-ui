@@ -21,7 +21,8 @@ When("I open the tree file {string}", async ({ page }, rel: string) => {
   if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
   await expect(row).toBeVisible({ timeout: 30_000 });
   await row.click();
-  await expect(page.getByTestId("file-path-header")).toBeVisible();
+  // The file tab (session area) and the Files pane each show one once a file is open from the tree.
+  await expect(page.getByTestId("file-path-header").first()).toBeVisible();
 });
 
 When("I choose the Markdown view {string}", async ({ page }, view: string) => {

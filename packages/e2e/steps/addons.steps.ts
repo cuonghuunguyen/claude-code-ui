@@ -1,5 +1,7 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { cpSync, mkdtempSync, realpathSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
@@ -7,7 +9,7 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import { REPO_ROOT } from "../support/daemon.ts";
 import { sendPrompt } from "../support/flow.ts";
 import { pickPane, promptBox } from "../support/ui.ts";
-import { Given, Then, When } from "./fixtures.ts";
+import { After, Given, Then, When } from "./fixtures.ts";
 
 // GH-516 addons. The daemon of a run persists across scenarios (one worker): every Given is idempotent.
 export const EXAMPLE = join(REPO_ROOT, "examples", "addons", "example");
@@ -208,6 +210,50 @@ When("I open the {string} addon pane from the more panes menu", async ({ page },
 const GIT_ENV = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" };
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, env: GIT_ENV, stdio: "pipe" });
 let bare = "";
+let shown = ""; // the URL as the dialog shows it: without the credentials
+let httpd: Server | undefined;
+// Git for Windows reads `file://user:pw@host/C:/x` as the UNC path `//user:pw@host/C:/x`, so a file URL cannot carry credentials there:
+// the same repository is served over HTTP by `git http-backend` instead.
+async function serveOverHttp(root: string): Promise<number> {
+  httpd = createServer((req, res) => {
+    const u = new URL(req.url ?? "/", "http://localhost");
+    const cgi = spawn("git", ["http-backend"], {
+      env: {
+        ...process.env,
+        GIT_PROJECT_ROOT: root,
+        GIT_HTTP_EXPORT_ALL: "1",
+        REQUEST_METHOD: req.method ?? "GET",
+        PATH_INFO: u.pathname,
+        QUERY_STRING: u.search.slice(1),
+        CONTENT_TYPE: req.headers["content-type"] ?? "",
+        CONTENT_LENGTH: req.headers["content-length"] ?? "",
+        ...(req.headers["content-encoding"] && { HTTP_CONTENT_ENCODING: req.headers["content-encoding"] }),
+      },
+    });
+    req.pipe(cgi.stdin);
+    const out: Buffer[] = [];
+    cgi.stdout.on("data", (c: Buffer) => out.push(c));
+    cgi.on("close", () => {
+      // CGI output: headers, a blank line, the body; `Status:` carries the code.
+      const all = Buffer.concat(out);
+      const end = all.indexOf("\r\n\r\n");
+      const head = all.subarray(0, end < 0 ? 0 : end).toString().split(/\r?\n/).filter(Boolean);
+      const status = head.find((h) => /^status:/i.test(h))?.replace(/^status:\s*/i, "");
+      res.writeHead(Number.parseInt(status ?? "200", 10), Object.fromEntries(head.filter((h) => !/^status:/i.test(h)).map((h) => [h.slice(0, h.indexOf(":")), h.slice(h.indexOf(":") + 1).trim()])));
+      res.end(all.subarray(end < 0 ? 0 : end + 4));
+    });
+  });
+  await new Promise<void>((r) => httpd!.listen(0, "127.0.0.1", r));
+  httpd.unref();
+  return (httpd.address() as AddressInfo).port;
+}
+After(async () => {
+  const s = httpd;
+  httpd = undefined;
+  if (!s) return;
+  s.closeAllConnections(); // a keep-alive socket from git would hold close() open
+  await new Promise<void>((r) => s.close(() => r()));
+});
 // "/C:/..." on Windows: a bare "C:\..." after the host would not be a valid file URL.
 const urlPath = (p: string): string => pathToFileURL(p).href.slice("file://".length);
 When("I install the example addon from a git URL with the password {string}", async ({ page }, password: string) => {
@@ -220,13 +266,20 @@ When("I install the example addon from a git URL with the password {string}", as
   git(tmp, "clone", "-q", "--bare", join(tmp, "work"), bare);
   await openAddons(page);
   await page.getByTestId("addons-source-git").click();
-  await page.getByRole("textbox", { name: "Repository URL" }).fill(`file://alice:${password}@localhost${urlPath(bare)}`);
+  let url = `file://alice:${password}@localhost${urlPath(bare)}`;
+  shown = `file://localhost${urlPath(bare)}`;
+  if (process.platform === "win32") {
+    const port = await serveOverHttp(tmp);
+    url = `http://alice:${password}@127.0.0.1:${port}/origin.git`;
+    shown = `http://127.0.0.1:${port}/origin.git`;
+  }
+  await page.getByRole("textbox", { name: "Repository URL" }).fill(url);
   await page.getByTestId("addons-install").click();
-  await expect(page.getByTestId("addons-approve-card")).toBeVisible();
+  await expect(page.getByTestId("addons-approve-card")).toBeVisible({ timeout: 60_000 });
 });
 Then("the Addons dialog shows the git source without {string}", async ({ page }, password: string) => {
   const d = dialog(page);
-  await expect(d).toContainText(`git: file://localhost${urlPath(bare)}`);
+  await expect(d).toContainText(`git: ${shown}`);
   await expect(d).not.toContainText(password);
   await expect(d).not.toContainText("alice");
   expect(await d.innerHTML()).not.toContain(password);

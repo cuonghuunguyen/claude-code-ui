@@ -48,7 +48,7 @@ When("I click Reload from disk in the Files editor", async ({ page }) => {
 Then("the Files editor tabs are {string}", async ({ page }, names: string) => {
   const want = names.split(",").map((n) => n.trim());
   await expect(files(page).getByTestId("editor-tab")).toHaveCount(want.length, { timeout: 30_000 });
-  const got = await files(page).getByTestId("editor-tab").evaluateAll((els) => els.map((e) => (e.getAttribute("title") ?? "").split("/").pop()));
+  const got = await files(page).getByTestId("editor-tab").evaluateAll((els) => els.map((e) => (e.getAttribute("title") ?? "").split(/[\\/]/).pop()));
   expect(got).toEqual(want);
 });
 

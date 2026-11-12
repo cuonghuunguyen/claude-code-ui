@@ -262,7 +262,12 @@ Then("the Clean up row {string} mentions {string}", async ({ page }, branch: str
 });
 
 When("I tick the Clean up row {string}", async ({ page }, branch: string) => {
-  await cleanupRow(page, branch).getByTestId("cleanup-check").check();
+  // A row flips to "checking" again while its status resolves (slow on Windows) and then drops the click: retry until the tick stays.
+  const box = cleanupRow(page, branch).getByTestId("cleanup-check");
+  await expect(async () => {
+    await expect(box).toBeEnabled({ timeout: 2_000 });
+    await box.check({ timeout: 5_000 });
+  }).toPass({ timeout: 60_000 });
 });
 
 When("I also delete the branch of the Clean up row {string}", async ({ page }, branch: string) => {
@@ -439,7 +444,8 @@ Then("nothing of the worktree {string} was deleted", async ({ project }, name: s
   expect(existsSync(dir), "folder exists").toBe(true);
   expect(existsSync(join(dir, ".git")), ".git file exists").toBe(true);
   expect(git(project.path, "branch", "--list", name)).toContain(name);
-  expect(git(project.path, "worktree", "list", "--porcelain")).toContain(dir);
+  // git prints forward slashes whatever the OS.
+  expect(git(project.path, "worktree", "list", "--porcelain")).toContain(dir.replaceAll("\\", "/"));
   expect(readFileSync(join(dir, "README.md"), "utf8").length).toBeGreaterThan(0);
 });
 
