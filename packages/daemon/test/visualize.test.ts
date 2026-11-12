@@ -25,7 +25,7 @@ it("a side install finds the plugin next to its cli.js", () => {
 
 it("visualizeSystem is the description and the body of the skill, without frontmatter", () => {
   const s = visualizeSystem(visualizePluginDir())!;
-  expect(s.startsWith("Draw a chart, diagram")).toBe(true);
+  expect(s.startsWith("Draw a ```visualize fence")).toBe(true);
   expect(s).toContain("```visualize");
   expect(s).not.toMatch(/^---$|^name:/m);
   expect(visualizeSystem(undefined)).toBeUndefined();

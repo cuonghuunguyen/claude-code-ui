@@ -1,6 +1,6 @@
 ---
 name: visualize
-description: Draw a chart, diagram, flow, comparison, formula or small interactive widget inline in the reply as a ```visualize fence. Use when a picture explains data, structure or behaviour better than text; not for plain lists or tables.
+description: Draw a ```visualize fence beside the text whenever the reply covers architecture, flow, sequence, comparison, metrics, a UI mock-up, a plan or a tunable value. Also under terse styles. Plain lists and short answers stay text.
 ---
 # visualize
 
@@ -16,7 +16,17 @@ How:
 
 Writing the file keeps the HTML out of the streamed reply. No such uploads folder (other engine, no additional directory): put the HTML fragment itself in the fence instead.
 
-Use it for: data charts, flows and architecture diagrams, comparisons, math, UI mock-ups, small interactive widgets (sliders, toggles). Do not use it for plain lists or tables: write Markdown.
+Draw one whenever the reply covers, also under terse styles and without being asked:
+- How something is built or works: architecture, data flow, sequence, state machine, lifecycle, dependencies, ER model, file tree.
+- Options or before/after: comparison, trade-offs.
+- Numbers: chart, trend, benchmark, test or CI results, cost, progress.
+- A UI or layout: mock-up, wireframe.
+- A tunable value: slider, calculator, regex or cron tester.
+- A formula or algorithm.
+- A bug or review: call graph, root cause, request waterfall, risk by file.
+- A plan: roadmap, ticket dependencies, decision tree, pipeline status.
+
+Plain lists, tables and short answers stay Markdown.
 
 In a question (AskUserQuestion), optional:
 - The question text and each option's `preview` are Markdown: a `visualize` or `mermaid` fence there is drawn. Previews of all options show side by side, so use them to compare options (mock-ups, charts, diagrams).
