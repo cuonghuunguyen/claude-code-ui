@@ -1600,7 +1600,7 @@ export function createRouter(opts: {
     // A saved side that is not ready keeps its last projects and sessions (not live) in the list, owned by that side.
     const cached = sides.cached().filter(([id]) => !conns.has(id)) as [string, ListLike][];
     const cachedIds = new Set(cached.map(([id]) => id));
-    const stale = cached.map(([id, l]) => [id, { type: "reply", reqId: msg.reqId, result: { ...l, sessions: l.sessions.map((s) => ({ ...s, live: false, state: "idle" })) } }] as const);
+    const stale = cached.map(([id, l]) => [id, { type: "reply", reqId: msg.reqId, result: { ...l, sessions: l.sessions.map((s) => ({ ...s, live: false, state: "closed" })) } }] as const);
     const lists = await claimListed([...answers.slice(1), ...stale], new Set((local.result as ListLike).sessions.map((s) => s.id)));
     const perSide = [(local.result as ListLike).projects];
     for (const [id, r] of lists) if (!cachedIds.has(id)) sides.remember(id, r);

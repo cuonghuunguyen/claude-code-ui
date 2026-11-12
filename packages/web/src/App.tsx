@@ -832,8 +832,9 @@ export function App() {
       }
       // Live sessions are followed so their unread markers update without opening them (background: no hold on the CLI).
       // ponytail: replays every live session's log into this tab; follow state only if that gets heavy.
+      // A restored or cached session (`live: false`, idle) has no CLI running: nothing new arrives, so it is not followed.
       for (const s of sessions)
-        if (s.state !== "closed" && (s.state !== "error" || isShown(s.id) || Date.now() - s.lastActivity <= FINISHED_MAX_AGE_MS) && !viewsRef.current[s.id] && !requested.current.has(s.id)) requested.current.add(s.id), void subscribe(s.id, false, false, !isShown(s.id));
+        if (s.state !== "closed" && (s.live !== false || s.state === "running" || s.state === "needs_input") && (s.state !== "error" || isShown(s.id) || Date.now() - s.lastActivity <= FINISHED_MAX_AGE_MS) && !viewsRef.current[s.id] && !requested.current.has(s.id)) requested.current.add(s.id), void subscribe(s.id, false, false, !isShown(s.id));
     } catch (e) {
       if ((e as Error).message !== "disconnected") setError((e as Error).message);
     }

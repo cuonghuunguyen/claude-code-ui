@@ -2271,6 +2271,22 @@ describe("idle close: holds and background follows", () => {
     }
   });
 
+  it("an idle session that is not live (live: false) without a tab is not followed, after a load or a list change", async () => {
+    const stale = { ...other, state: "idle" as const, live: false as const };
+    sent.length = 0;
+    const restore = await remount({ "session.list": { sessions: [session, stale], projects: ["/p/demo", "/p/other"] } });
+    try {
+      expect(subscribes().filter((m) => m.sessionId === stale.id)).toEqual([]);
+      sent.length = 0;
+      await act(async () => sessionsChanged({ type: "sessions.changed" }));
+      await act(async () => {});
+      expect(subscribes().filter((m) => m.sessionId === stale.id)).toEqual([]);
+    } finally {
+      sent.length = 0;
+      restore();
+    }
+  });
+
   it("reconnect: tab sessions resubscribe holding, the others in the background", async () => {
     const restore = await remount({ "session.list": { sessions: [session, other], projects: ["/p/demo", "/p/other"] } });
     try {

@@ -497,6 +497,17 @@ describe("sides", () => {
     expect((sent[0] as any).result.projects).toEqual(["/new", "/old", "/older"]);
   });
 
+  it("session.list: a saved side that is not ready lists its cached sessions closed and not live, so a page does not follow them", async () => {
+    const s = createSides({ targets: [wslSide("Ubuntu")], saved: [{ id: "wsl:Ubuntu" }], discoverMs: 0, discover: async () => [], spawn: () => scriptedSide(() => ({})) });
+    await s.refresh();
+    s.remember("wsl:Ubuntu", { sessions: [{ id: "y", cwd: "/y", lastActivity: 100, state: "idle" }], projects: ["/y"], recentProjects: [] });
+    const sent: ServerMessage[] = [];
+    const list = { sessions: [], projects: [], recentProjects: [] };
+    const router = createRouter({ sides: s, send: (m) => sent.push(m), local: async () => {}, localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: list }), isLocalSession: async () => false });
+    await router.handle({ type: "session.list", reqId: "r" } as never);
+    expect((sent.find((m) => m.type === "reply") as any).result.sessions).toEqual([expect.objectContaining({ id: "y", live: false, state: "closed" })]);
+  });
+
   it("session.list across sides: a side's session-less top project does not rise above local projects", async () => {
     const s = createSides({ targets: [wslSide("Ubuntu")], discoverMs: 0, discover: async () => [], spawn: () => scriptedSide((m) => (m.type === "session.list" ? { sessions: [{ id: "y", cwd: "/y", lastActivity: 100 }], projects: ["/x", "/y"], recentProjects: [] } : {})) });
     await s.refresh();
