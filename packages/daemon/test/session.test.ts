@@ -3060,6 +3060,16 @@ describe("Next for you (GH-305)", () => {
     expect((await setup()).options().promptSuggestions).toBeUndefined();
   });
 
+  it("E2E harness: with CLAUDE_UI_E2E_CLAUDE_CLI the session's query runs that CLI (a fake that sends the suggestion); without it the SDK's own", async () => {
+    expect((await setup()).options().pathToClaudeCodeExecutable).toBeUndefined();
+    process.env.CLAUDE_UI_E2E_CLAUDE_CLI = "/e2e/fake-claude-cli.mjs";
+    try {
+      expect((await setup()).options().pathToClaudeCodeExecutable).toBe("/e2e/fake-claude-cli.mjs");
+    } finally {
+      delete process.env.CLAUDE_UI_E2E_CLAUDE_CLI;
+    }
+  });
+
   it("a suggestion after the result is a head part; the next turn clears it; the snapshot carries it", async () => {
     const t = await setup({ promptSuggestions: () => true });
     t.next(result());
