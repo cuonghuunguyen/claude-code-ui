@@ -3716,6 +3716,7 @@ export function createDaemon(opts: {
             local(msg, resolve).catch((err) => (console.error("request handler failed:", err), resolve({ type: "error", reqId: msg.reqId, code: "internal_error", message: "request failed" }))),
           ),
         isLocalSession,
+        localSessionIds: async () => new Set(await sessionIds()),
         sameHost: sameBrowser,
         media: sideMedia,
         mediaTimeoutMs: opts.sideCallTimeoutMs,

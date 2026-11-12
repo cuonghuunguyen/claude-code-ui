@@ -508,6 +508,27 @@ describe("sides", () => {
     expect((sent.find((m) => m.type === "reply") as any).result.sessions).toEqual([expect.objectContaining({ id: "y", live: false, state: "closed" })]);
   });
 
+  it("session.list: claiming the sessions of a side list asks the cached local scan, not one transcript lookup per ID", async () => {
+    const rows = Array.from({ length: 50 }, (_, i) => ({ id: `side-${i}`, cwd: "/y", lastActivity: i }));
+    const s = createSides({ targets: [wslSide("Ubuntu")], discoverMs: 0, discover: async () => [], spawn: () => scriptedSide((m) => (m.type === "session.list" ? { sessions: rows, projects: ["/y"], recentProjects: [] } : {})) });
+    await s.refresh();
+    await s.start("wsl:Ubuntu");
+    const sent: ServerMessage[] = [];
+    const lookups: string[] = [];
+    const list = { sessions: [{ id: "a", cwd: "/a", lastActivity: 1000 }], projects: ["/a"], recentProjects: [] };
+    const router = createRouter({
+      sides: s,
+      send: (m) => sent.push(m),
+      local: async () => {},
+      localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: list }),
+      isLocalSession: async (id) => (lookups.push(id), false),
+      localSessionIds: async () => new Set(["a"]),
+    });
+    await router.handle({ type: "session.list", reqId: "r" } as never);
+    expect((sent.find((m) => m.type === "reply") as any).result.sessions).toHaveLength(51);
+    expect(lookups).toEqual([]);
+  });
+
   it("session.list across sides: a side's session-less top project does not rise above local projects", async () => {
     const s = createSides({ targets: [wslSide("Ubuntu")], discoverMs: 0, discover: async () => [], spawn: () => scriptedSide((m) => (m.type === "session.list" ? { sessions: [{ id: "y", cwd: "/y", lastActivity: 100 }], projects: ["/x", "/y"], recentProjects: [] } : {})) });
     await s.refresh();
