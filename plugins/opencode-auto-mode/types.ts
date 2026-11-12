@@ -57,6 +57,7 @@ export interface OpencodeClient {
     create(options: {
       body?: { title?: string };
       query?: { directory?: string };
+      signal?: AbortSignal;
     }): Promise<ApiResult<{ id: string }>>;
     prompt(options: {
       path: { id: string };
@@ -73,6 +74,7 @@ export interface OpencodeClient {
     messages(options: {
       path: { id: string };
       query?: { directory?: string };
+      signal?: AbortSignal;
     }): Promise<ApiResult<TranscriptMessage[]>>;
   };
   /** V1 fallback route: `POST /session/{id}/permissions/{permissionID}`. */

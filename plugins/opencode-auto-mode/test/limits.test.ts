@@ -43,6 +43,12 @@ describe("createLimits", () => {
     expect(limits.recordBlock("never-seen")).toBe(true);
   });
 
+  it("recordAllow on an unknown session creates nothing and does not affect later counting", () => {
+    const limits = createLimits({ maxConsecutiveBlocks: 2, maxTotalBlocks: 20 });
+    limits.recordAllow("unknown");
+    expect(limits.recordBlock("unknown")).toBe(false);
+  });
+
   it("tracks sessions independently", () => {
     const limits = createLimits({ maxConsecutiveBlocks: 1, maxTotalBlocks: 20 });
     limits.recordBlock("s1");

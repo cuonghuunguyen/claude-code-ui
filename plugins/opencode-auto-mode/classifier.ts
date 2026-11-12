@@ -62,6 +62,7 @@ export async function classify(permissionInfo: PermissionAskedProperties, ctx: C
     const transcriptResp = await ctx.client.session.messages({
       path: { id: permissionInfo.sessionID },
       query: { directory: ctx.directory },
+      signal: abort.signal,
     });
     if (transcriptResp.error || !transcriptResp.data) return null;
     const messages = transcriptResp.data;
@@ -73,7 +74,7 @@ export async function classify(permissionInfo: PermissionAskedProperties, ctx: C
     const actionLine = buildActionRecord(permissionInfo.permission, permissionInfo.patterns, permissionInfo.metadata, cached);
     const transcriptText = `## Transcript\n${encodeTranscript(messages, { transcriptChars: ctx.transcriptChars })}\n\n## Action\n${actionLine}`;
 
-    const created = await ctx.client.session.create({ body: { title: CLASSIFIER_TITLE }, query: { directory: ctx.directory } });
+    const created = await ctx.client.session.create({ body: { title: CLASSIFIER_TITLE }, query: { directory: ctx.directory }, signal: abort.signal });
     if (created.error || !created.data) return null;
     classifierSessionID = created.data.id;
     ctx.classifierSessions.add(classifierSessionID);

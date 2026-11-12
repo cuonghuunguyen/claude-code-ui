@@ -4,11 +4,14 @@ import { buildClassifierAgentConfig, CLASSIFIER_AGENT } from "./agent-config.ts"
 import { classify } from "./classifier.ts";
 import { createLimits } from "./limits.ts";
 import { logDecision, toast } from "./logging.ts";
-import { allowOnce, otherPendingAsks, rejectWithMessage } from "./reply.ts";
+import { allowOnce, otherPendingAsks, pendingAsks, rejectWithMessage } from "./reply.ts";
 import type { CachedToolCall } from "./transcript.ts";
 import { resolveOptions, type Hooks, type PermissionAskedProperties, type Plugin, type PluginOptions } from "./types.ts";
 
 const MAX_CACHED_TOOL_CALLS = 500;
+const MAX_REPLIED_IDS = 1000;
+/** Whole-job budget beyond the classifier timeout, for the calls around it (list, reply, cleanup). */
+export const JOB_SLACK_MS = 10_000;
 const DEFAULT_BLOCK_MESSAGE = "Blocked by auto mode.";
 
 export const AutoModePlugin: Plugin = async (input, options) => {
@@ -24,16 +27,36 @@ export const AutoModePlugin: Plugin = async (input, options) => {
   function inSession(sessionID: string, job: () => Promise<void>): Promise<void> {
     const run = (queues.get(sessionID) ?? Promise.resolve()).then(job, job);
     queues.set(sessionID, run);
-    void run.then(() => {
+    const cleanup = () => {
       if (queues.get(sessionID) === run) queues.delete(sessionID);
-    });
+    };
+    void run.then(cleanup, cleanup);
     return run;
+  }
+
+  const repliedIds = new Set<string>(); // asks already answered by anyone (permission.replied), bounded
+
+  /** The job under a hard deadline, so one hung call can't wedge the session's queue. */
+  async function withDeadline(info: PermissionAskedProperties, job: () => Promise<void>): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), opts.timeoutMs + JOB_SLACK_MS);
+    });
+    try {
+      const won = await Promise.race([job().then(() => "done" as const), deadline]);
+      if (won === "timeout") await logDecision(client, { sessionID: info.sessionID, permission: info.permission, verdict: "none", reason: "timeout", ms: opts.timeoutMs + JOB_SLACK_MS });
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async function decide(info: PermissionAskedProperties): Promise<void> {
     if (limits.isStopped(info.sessionID)) return;
+    if (repliedIds.has(info.id)) return; // settled while queued
     const target = { sessionID: info.sessionID, id: info.id };
     const base = { sessionID: info.sessionID, permission: info.permission };
+    const pending = await pendingAsks(client, input.directory);
+    if (pending && !pending.some((r) => r.id === info.id)) return; // no longer pending; a list failure proceeds
     const started = Date.now();
     const verdict = await classify(info, {
       client,
@@ -101,13 +124,21 @@ export const AutoModePlugin: Plugin = async (input, options) => {
     },
 
     event: async ({ event }) => {
+      if (event.type === "permission.replied") {
+        const id = (event.properties as { requestID?: unknown } | undefined)?.requestID;
+        if (typeof id === "string") {
+          repliedIds.add(id);
+          if (repliedIds.size > MAX_REPLIED_IDS) repliedIds.delete(repliedIds.values().next().value as string);
+        }
+        return;
+      }
       if (event.type !== "permission.asked") return;
       const info = event.properties as unknown as PermissionAskedProperties;
       if (classifierSessions.has(info.sessionID)) return; // never act on our own classifier
       if (opts.skipPermissions.includes(info.permission)) return;
       if (opts.onlyPermissions && !opts.onlyPermissions.includes(info.permission)) return;
       try {
-        await inSession(info.sessionID, () => decide(info));
+        await inSession(info.sessionID, () => withDeadline(info, () => decide(info)));
       } catch (err) {
         await logDecision(client, { sessionID: info.sessionID, permission: info.permission, verdict: "none", reason: `unexpected error: ${String(err)}`, ms: 0 });
       }

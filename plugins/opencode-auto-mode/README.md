@@ -85,9 +85,14 @@ Set `OPENCODE_AUTO_MODE=0` in the environment to disable it without touching con
   to whatever provider/model opencode is configured to use for the classifier, same as any other
   agent call.
 - **What the classifier sees besides our prompt.** OpenCode adds its own system prompt parts to
-  every agent, the classifier included: the environment block, the project's `AGENTS.md`/`CLAUDE.md`
-  instructions, and MCP/skill descriptions. This plugin therefore does not embed those itself. The
-  classifier has no tools, but all of that text is sent to the classifier model.
+  every agent, the classifier included: the environment block and the project's
+  `AGENTS.md`/`CLAUDE.md` instructions. Skills are suppressed for an agent without tools, and MCP
+  instructions only survive for servers that list no tools. This plugin therefore does not embed
+  `AGENTS.md` itself. The classifier has no tools, but that text is sent to the classifier model.
+- **Reject race.** There is a small window between the pending-ask check and the reject: a sibling
+  ask arriving in between is cascade-rejected without a message, which halts the turn.
+- Each ask's decision has a hard deadline (`timeoutMs` + 10 s) so a hung call cannot block later
+  asks of the session; asks already answered while queued are skipped.
 - A reasoning model, or one that rejects `temperature: 0`, may fail or run out of output tokens;
   that just makes auto mode defer to the human.
 - Denial limits are per-session and in-memory: they reset when the server restarts.

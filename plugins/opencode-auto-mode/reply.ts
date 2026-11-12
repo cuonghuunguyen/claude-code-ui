@@ -56,15 +56,24 @@ export async function rejectWithMessage(client: OpencodeClient, target: ReplyTar
   return (await replyViaV2(client, target, "reject", message)) ?? "failed";
 }
 
-/** Ids of the session's other pending asks, or null when they can't be listed. */
-export async function otherPendingAsks(client: OpencodeClient, target: ReplyTarget, directory: string): Promise<string[] | null> {
+export interface PendingAsk {
+  id: string;
+  sessionID: string;
+}
+
+/** All pending asks (`GET /permission`), or null when they can't be listed. */
+export async function pendingAsks(client: OpencodeClient, directory: string): Promise<PendingAsk[] | null> {
   try {
     const res = await client._client?.get({ url: "/permission", query: { directory } });
     if (!res || res.error || !Array.isArray(res.data)) return null;
-    return (res.data as Array<{ id?: string; sessionID?: string }>)
-      .filter((r) => r.sessionID === target.sessionID && r.id !== target.id)
-      .map((r) => String(r.id));
+    return (res.data as Array<{ id?: string; sessionID?: string }>).map((r) => ({ id: String(r.id), sessionID: String(r.sessionID) }));
   } catch {
     return null;
   }
+}
+
+/** Ids of the session's other pending asks, or null when they can't be listed. */
+export async function otherPendingAsks(client: OpencodeClient, target: ReplyTarget, directory: string): Promise<string[] | null> {
+  const all = await pendingAsks(client, directory);
+  return all && all.filter((r) => r.sessionID === target.sessionID && r.id !== target.id).map((r) => r.id);
 }

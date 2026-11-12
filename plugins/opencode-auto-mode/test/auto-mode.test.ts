@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AutoModePlugin } from "../auto-mode.ts";
+import { AutoModePlugin, JOB_SLACK_MS } from "../auto-mode.ts";
 import type { ChatParamsOutput, Hooks, OpencodeClient, PluginInput } from "../types.ts";
 
 interface FakeClientOptions {
@@ -13,7 +13,11 @@ interface FakeClientOptions {
   v2Fails?: "once" | "reject";
 }
 
+/** Every ask the test fired, as the default GET /permission listing returns them. */
+const asked = new Map<string, string>();
+
 function fakeClient(opts: FakeClientOptions = {}) {
+  asked.clear();
   const log: Array<Record<string, unknown>> = [];
   const toasts: Array<Record<string, unknown>> = [];
   const replies: Array<{ id: string; reply: string; message?: string }> = [];
@@ -23,11 +27,12 @@ function fakeClient(opts: FakeClientOptions = {}) {
 
   const client: OpencodeClient = {
     _client: {
-      get: vi.fn(async () => (opts.listFails ? { error: "boom" } : { data: opts.pending ?? [] })),
+      get: vi.fn(async () => (opts.listFails ? { error: "boom" } : { data: opts.pending ?? [...asked].map(([id, sessionID]) => ({ id, sessionID })) })),
       post: vi.fn(async ({ url, path, body }: { url: string; path?: Record<string, unknown>; body?: unknown }) => {
         if (url !== "/permission/{requestID}/reply") throw new Error(`unexpected url ${url}`);
         const b = body as { reply: string; message?: string };
         replies.push({ id: path!.requestID as string, reply: b.reply, message: b.message });
+        asked.delete(path!.requestID as string); // answered: no longer pending
         if (opts.replyStatus === 404) return { response: { status: 404 } };
         if (opts.v2Fails === b.reply) return { error: "boom", response: { status: 500 } };
         return { data: true, response: { status: 200 } };
@@ -73,6 +78,7 @@ function pluginInput(client: OpencodeClient): PluginInput {
 }
 
 function askedEvent(overrides: Partial<{ id: string; sessionID: string; permission: string; metadata: Record<string, unknown>; callID: string }> = {}) {
+  asked.set(overrides.id ?? "per1", overrides.sessionID ?? "ses1");
   return {
     event: {
       type: "permission.asked",
@@ -288,11 +294,11 @@ describe("AutoModePlugin event handler", () => {
     expect(toasts).toEqual([]);
   });
 
-  it("parallel asks of one session are classified one at a time, so limits can't be overshot", async () => {
+  it("parallel asks of one session are classified one at a time", async () => {
     let running = 0;
     let maxRunning = 0;
     const { client, replies } = fakeClient({
-      promptText: "<block>yes</block><reason>no</reason>",
+      promptText: "<block>no</block>",
       onPrompt: async () => {
         running++;
         maxRunning = Math.max(maxRunning, running);
@@ -300,12 +306,65 @@ describe("AutoModePlugin event handler", () => {
         running--;
       },
     });
-    const hooks: Hooks = await AutoModePlugin(pluginInput(client), { maxConsecutiveBlocks: 1 });
+    const hooks: Hooks = await AutoModePlugin(pluginInput(client), {});
 
     await Promise.all([hooks.event!(askedEvent({ id: "per1" })), hooks.event!(askedEvent({ id: "per2" })), hooks.event!(askedEvent({ id: "per3" }))]);
 
     expect(maxRunning).toBe(1);
-    expect(replies).toHaveLength(1);
+    expect(replies).toHaveLength(3);
+  });
+
+  it("skips a queued ask that was replied meanwhile (permission.replied)", async () => {
+    let hooks!: Hooks;
+    const { client, replies } = fakeClient({
+      promptText: "<block>no</block>",
+      onPrompt: async () => {
+        await hooks.event!({ event: { type: "permission.replied", properties: { sessionID: "ses1", requestID: "per2", reply: "once" } } });
+      },
+    });
+    hooks = await AutoModePlugin(pluginInput(client), {});
+    await Promise.all([hooks.event!(askedEvent({ id: "per1" })), hooks.event!(askedEvent({ id: "per2" }))]);
+
+    expect(replies.map((r) => r.id)).toEqual(["per1"]);
+    expect(client.session.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips an ask that is no longer pending at job start; proceeds when the list fails", async () => {
+    const a = fakeClient({ promptText: "<block>no</block>", pending: [] });
+    const hooksA = await AutoModePlugin(pluginInput(a.client), {});
+    await hooksA.event!(askedEvent());
+    expect(a.client.session.create).not.toHaveBeenCalled();
+
+    const b = fakeClient({ promptText: "<block>no</block>", listFails: true });
+    const hooksB = await AutoModePlugin(pluginInput(b.client), {});
+    await hooksB.event!(askedEvent());
+    expect(b.replies).toHaveLength(1);
+  });
+
+  it("passes the abort signal to session.messages and session.create", async () => {
+    const { client } = fakeClient({ promptText: "<block>no</block>" });
+    const hooks = await AutoModePlugin(pluginInput(client), {});
+    await hooks.event!(askedEvent());
+    expect(vi.mocked(client.session.messages).mock.calls[0][0].signal).toBeInstanceOf(AbortSignal);
+    expect(vi.mocked(client.session.create).mock.calls[0][0].signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("a hung call can't wedge the session queue: the job is cut off at timeoutMs + slack and the next ask proceeds", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, replies, log } = fakeClient({ promptText: "<block>no</block>" });
+      vi.mocked(client._client!.get).mockImplementationOnce(() => new Promise(() => {})); // GET /permission hangs, ignoring any signal
+      const hooks = await AutoModePlugin(pluginInput(client), { timeoutMs: 1000 });
+      const first = hooks.event!(askedEvent({ id: "per1" }));
+      const second = hooks.event!(askedEvent({ id: "per2" }));
+      await vi.advanceTimersByTimeAsync(1000 + JOB_SLACK_MS + 1);
+      await Promise.all([first, second]);
+
+      expect(replies.map((r) => r.id)).toEqual(["per2"]);
+      expect(log.some((l) => (l.extra as { reason: string }).reason === "timeout")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("skipPermissions and onlyPermissions leave asks to the human", async () => {

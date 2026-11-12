@@ -37,7 +37,8 @@ export function createLimits(opts: LimitsOptions): Limits {
   return {
     isStopped: (sessionID) => sessions.get(sessionID)?.stopped ?? false,
     recordAllow(sessionID) {
-      state(sessionID).consecutive = 0;
+      const s = sessions.get(sessionID);
+      if (s) s.consecutive = 0;
     },
     recordBlock(sessionID) {
       const s = state(sessionID);
