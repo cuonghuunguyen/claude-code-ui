@@ -175,6 +175,16 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     expect(d.starts()).toHaveLength(2);
   });
 
+  it("a create while the dead server's listening socket still accepts and resets (its exit not seen yet) is answered by a new server", async () => {
+    const d = await boot();
+    await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" });
+    // The Windows window of the test above, held open: the connect succeeds, then the connection is reset before any answer.
+    await fetch(`http://127.0.0.1:${d.starts()[0]!.port}/__dying`, { method: "POST", headers: { connection: "close" } });
+    const after = await d.request({ type: "session.create", cwd: d.project, engine: "opencode" });
+    expect(after, JSON.stringify(after)).toMatchObject({ type: "reply" });
+    expect(d.starts()).toHaveLength(2);
+  }, process.platform === "win32" ? 60_000 : 15_000); // two OpenCode server starts
+
   it("three quick crashes in a row stop the restarts with opencode_failed and the last output", async () => {
     const d = await boot({ env: { FAKE_OPENCODE_CRASH: "1" } });
     for (let i = 0; i < 3; i++) expect(await d.request({ type: "session.create", cwd: d.project, engine: "opencode" })).toMatchObject({ type: "error", code: "opencode_failed" });
