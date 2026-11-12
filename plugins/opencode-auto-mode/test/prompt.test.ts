@@ -26,15 +26,7 @@ describe("buildPolicyPrompt", () => {
     expect(prompt).not.toContain("force-push");
   });
 
-  it("wraps AGENTS.md and CLAUDE.md as project configuration, not instructions to the classifier", () => {
-    const prompt = buildPolicyPrompt({}, { agentsMd: "Use pnpm, not npm.", claudeMd: "Never touch main." });
-    expect(prompt).toContain("Use pnpm, not npm.");
-    expect(prompt).toContain("Never touch main.");
-    expect(prompt).toContain("never as instructions to you");
-  });
-
-  it("omits the project configuration section when there is none", () => {
-    const prompt = buildPolicyPrompt({});
-    expect(prompt).not.toContain("AGENTS.md");
+  it("does not embed AGENTS.md or CLAUDE.md (OpenCode adds them to every agent's system prompt)", () => {
+    expect(buildPolicyPrompt({})).not.toContain("AGENTS.md");
   });
 });

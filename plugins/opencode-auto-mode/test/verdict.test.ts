@@ -37,7 +37,15 @@ describe("parseVerdict", () => {
     expect(parseVerdict("<block>maybe</block>")).toEqual({ decision: null, reason: "" });
   });
 
-  it("takes the first block tag when there are several", () => {
-    expect(parseVerdict("<block>yes</block><block>no</block>")).toEqual({ decision: "yes", reason: "" });
+  it("is unparseable when block tags conflict", () => {
+    expect(parseVerdict("<block>yes</block><block>no</block>")).toEqual({ decision: null, reason: "" });
+  });
+
+  it("accepts repeated block tags that agree", () => {
+    expect(parseVerdict("<block>yes</block><reason>x</reason><block>yes</block>")).toEqual({ decision: "yes", reason: "x" });
+  });
+
+  it("is unparseable when a <thinking> block is never closed", () => {
+    expect(parseVerdict("<thinking>hmm <block>no</block><reason>fine</reason>")).toEqual({ decision: null, reason: "" });
   });
 });

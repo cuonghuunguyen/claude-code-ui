@@ -40,6 +40,7 @@ interface ApiResult<T> {
 
 /** The hey-api `Client`'s raw, un-generated request surface (`client._client`). */
 export interface RawClient {
+  get(options: { url: string; query?: Record<string, unknown>; signal?: AbortSignal }): Promise<ApiResult<unknown>>;
   post(options: {
     url: string;
     path?: Record<string, unknown>;
@@ -68,6 +69,7 @@ export interface OpencodeClient {
       signal?: AbortSignal;
     }): Promise<ApiResult<{ info: unknown; parts: MessagePart[] }>>;
     delete(options: { path: { id: string }; query?: { directory?: string } }): Promise<ApiResult<unknown>>;
+    abort(options: { path: { id: string }; query?: { directory?: string } }): Promise<ApiResult<unknown>>;
     messages(options: {
       path: { id: string };
       query?: { directory?: string };
@@ -133,11 +135,19 @@ export interface ToolExecuteBeforeOutput {
   args: unknown;
 }
 
+export interface ToolExecuteAfterInput {
+  tool: string;
+  sessionID: string;
+  callID: string;
+  args: unknown;
+}
+
 export interface Hooks {
   event?: (input: { event: OpencodeEvent }) => Promise<void>;
   config?: (input: ConfigHookInput) => Promise<void>;
   "chat.params"?: (input: ChatParamsInput, output: ChatParamsOutput) => Promise<void>;
   "tool.execute.before"?: (input: ToolExecuteBeforeInput, output: ToolExecuteBeforeOutput) => Promise<void>;
+  "tool.execute.after"?: (input: ToolExecuteAfterInput, output: unknown) => Promise<void>;
 }
 
 export type Plugin = (input: PluginInput, options?: PluginOptions) => Promise<Hooks>;
@@ -153,7 +163,7 @@ export interface AutoModeOptions {
   softDeny?: string[];
   environment?: string[];
   replaceDefaults?: boolean;
-  includeAgentsMd?: boolean;
+  maxOutputTokens?: number;
   transcriptChars?: number;
   /** Permissions never auto-decided; left for the human. */
   skipPermissions?: string[];
@@ -171,7 +181,7 @@ export interface ResolvedAutoModeOptions {
   softDeny: string[];
   environment: string[];
   replaceDefaults: boolean;
-  includeAgentsMd: boolean;
+  maxOutputTokens: number;
   transcriptChars: number;
   skipPermissions: string[];
   onlyPermissions?: string[];
@@ -186,26 +196,35 @@ export const DEFAULT_OPTIONS: ResolvedAutoModeOptions = {
   softDeny: [],
   environment: [],
   replaceDefaults: false,
-  includeAgentsMd: true,
+  maxOutputTokens: 1024,
   transcriptChars: 60_000,
   skipPermissions: [],
 };
 
+function strings(v: unknown): string[] | undefined {
+  return Array.isArray(v) && v.every((x) => typeof x === "string") ? v : undefined;
+}
+
+function positive(v: unknown, fallback: number): number {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : fallback;
+}
+
+/** Malformed values fall back to the defaults (or, for the permission filters, are ignored). */
 export function resolveOptions(options: PluginOptions | undefined): ResolvedAutoModeOptions {
-  const o = (options ?? {}) as AutoModeOptions;
+  const o = (options ?? {}) as Record<string, unknown>;
   return {
-    enabled: o.enabled ?? DEFAULT_OPTIONS.enabled,
-    model: o.model,
-    timeoutMs: o.timeoutMs ?? DEFAULT_OPTIONS.timeoutMs,
-    maxConsecutiveBlocks: o.maxConsecutiveBlocks ?? DEFAULT_OPTIONS.maxConsecutiveBlocks,
-    maxTotalBlocks: o.maxTotalBlocks ?? DEFAULT_OPTIONS.maxTotalBlocks,
-    allow: o.allow ?? DEFAULT_OPTIONS.allow,
-    softDeny: o.softDeny ?? DEFAULT_OPTIONS.softDeny,
-    environment: o.environment ?? DEFAULT_OPTIONS.environment,
-    replaceDefaults: o.replaceDefaults ?? DEFAULT_OPTIONS.replaceDefaults,
-    includeAgentsMd: o.includeAgentsMd ?? DEFAULT_OPTIONS.includeAgentsMd,
-    transcriptChars: o.transcriptChars ?? DEFAULT_OPTIONS.transcriptChars,
-    skipPermissions: o.skipPermissions ?? DEFAULT_OPTIONS.skipPermissions,
-    onlyPermissions: o.onlyPermissions,
+    enabled: typeof o.enabled === "boolean" ? o.enabled : DEFAULT_OPTIONS.enabled,
+    model: typeof o.model === "string" && o.model.includes("/") ? o.model : undefined,
+    timeoutMs: positive(o.timeoutMs, DEFAULT_OPTIONS.timeoutMs),
+    maxConsecutiveBlocks: positive(o.maxConsecutiveBlocks, DEFAULT_OPTIONS.maxConsecutiveBlocks),
+    maxTotalBlocks: positive(o.maxTotalBlocks, DEFAULT_OPTIONS.maxTotalBlocks),
+    allow: strings(o.allow) ?? DEFAULT_OPTIONS.allow,
+    softDeny: strings(o.softDeny) ?? DEFAULT_OPTIONS.softDeny,
+    environment: strings(o.environment) ?? DEFAULT_OPTIONS.environment,
+    replaceDefaults: o.replaceDefaults === true,
+    maxOutputTokens: positive(o.maxOutputTokens, DEFAULT_OPTIONS.maxOutputTokens),
+    transcriptChars: positive(o.transcriptChars, DEFAULT_OPTIONS.transcriptChars),
+    skipPermissions: strings(o.skipPermissions) ?? DEFAULT_OPTIONS.skipPermissions,
+    onlyPermissions: strings(o.onlyPermissions),
   };
 }

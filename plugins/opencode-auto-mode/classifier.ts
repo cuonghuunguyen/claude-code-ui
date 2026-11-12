@@ -8,7 +8,6 @@ import type { MessageInfo, OpencodeClient, PermissionAskedProperties, Transcript
 
 export const CLASSIFIER_AGENT = "auto-mode-classifier";
 export const CLASSIFIER_TITLE = "auto-mode classifier";
-export const DEFAULT_MAX_OUTPUT_TOKENS = 512;
 
 export interface ClassifyContext {
   client: OpencodeClient;
@@ -53,7 +52,11 @@ function isTextPart(part: { type: string }): part is { type: "text"; text: strin
 
 export async function classify(permissionInfo: PermissionAskedProperties, ctx: ClassifyContext): Promise<Verdict | null> {
   const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), ctx.timeoutMs);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    abort.abort();
+  }, ctx.timeoutMs);
   let classifierSessionID: string | undefined;
   try {
     const transcriptResp = await ctx.client.session.messages({
@@ -68,7 +71,7 @@ export async function classify(permissionInfo: PermissionAskedProperties, ctx: C
 
     const cached = permissionInfo.tool ? ctx.toolInputCache.get(permissionInfo.tool.callID) : undefined;
     const actionLine = buildActionRecord(permissionInfo.permission, permissionInfo.patterns, permissionInfo.metadata, cached);
-    const transcriptText = [encodeTranscript(messages, { transcriptChars: ctx.transcriptChars }), actionLine].filter(Boolean).join("\n");
+    const transcriptText = `## Transcript\n${encodeTranscript(messages, { transcriptChars: ctx.transcriptChars })}\n\n## Action\n${actionLine}`;
 
     const created = await ctx.client.session.create({ body: { title: CLASSIFIER_TITLE }, query: { directory: ctx.directory } });
     if (created.error || !created.data) return null;
@@ -95,6 +98,13 @@ export async function classify(permissionInfo: PermissionAskedProperties, ctx: C
     clearTimeout(timer);
     if (classifierSessionID) {
       ctx.classifierSessions.delete(classifierSessionID);
+      if (timedOut) {
+        try {
+          await ctx.client.session.abort({ path: { id: classifierSessionID }, query: { directory: ctx.directory } });
+        } catch {
+          // best-effort: the delete below still removes it
+        }
+      }
       try {
         await ctx.client.session.delete({ path: { id: classifierSessionID }, query: { directory: ctx.directory } });
       } catch {

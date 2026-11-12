@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AutoModePlugin } from "../auto-mode.ts";
-import type { Hooks, OpencodeClient, PluginInput } from "../types.ts";
+import type { ChatParamsOutput, Hooks, OpencodeClient, PluginInput } from "../types.ts";
 
 interface FakeClientOptions {
   promptText?: string;
   onPrompt?: (sessionID: string) => Promise<void> | void;
   replyStatus?: number;
+  /** Pending asks as the GET /permission listing returns them. */
+  pending?: Array<{ id: string; sessionID: string }>;
+  listFails?: boolean;
+  /** The V2 reply route errors for this reply kind. */
+  v2Fails?: "once" | "reject";
 }
 
 function fakeClient(opts: FakeClientOptions = {}) {
@@ -13,18 +18,19 @@ function fakeClient(opts: FakeClientOptions = {}) {
   const toasts: Array<Record<string, unknown>> = [];
   const replies: Array<{ id: string; reply: string; message?: string }> = [];
   const deleted: string[] = [];
+  const aborted: string[] = [];
   let sessionCounter = 0;
 
   const client: OpencodeClient = {
     _client: {
+      get: vi.fn(async () => (opts.listFails ? { error: "boom" } : { data: opts.pending ?? [] })),
       post: vi.fn(async ({ url, path, body }: { url: string; path?: Record<string, unknown>; body?: unknown }) => {
-        if (url === "/permission/{requestID}/reply") {
-          const b = body as { reply: string; message?: string };
-          replies.push({ id: path!.requestID as string, reply: b.reply, message: b.message });
-          if (opts.replyStatus === 404) return { response: { status: 404 } };
-          return { data: true, response: { status: 200 } };
-        }
-        throw new Error(`unexpected url ${url}`);
+        if (url !== "/permission/{requestID}/reply") throw new Error(`unexpected url ${url}`);
+        const b = body as { reply: string; message?: string };
+        replies.push({ id: path!.requestID as string, reply: b.reply, message: b.message });
+        if (opts.replyStatus === 404) return { response: { status: 404 } };
+        if (opts.v2Fails === b.reply) return { error: "boom", response: { status: 500 } };
+        return { data: true, response: { status: 200 } };
       }),
     },
     session: {
@@ -38,6 +44,10 @@ function fakeClient(opts: FakeClientOptions = {}) {
       }),
       delete: vi.fn(async ({ path }: { path: { id: string } }) => {
         deleted.push(path.id);
+        return {};
+      }),
+      abort: vi.fn(async ({ path }: { path: { id: string } }) => {
+        aborted.push(path.id);
         return {};
       }),
     },
@@ -55,14 +65,14 @@ function fakeClient(opts: FakeClientOptions = {}) {
       }),
     },
   };
-  return { client, log, toasts, replies, deleted };
+  return { client, log, toasts, replies, deleted, aborted };
 }
 
 function pluginInput(client: OpencodeClient): PluginInput {
   return { client, directory: "/proj", worktree: "/proj", serverUrl: new URL("http://127.0.0.1:4096") };
 }
 
-function askedEvent(overrides: Partial<{ id: string; sessionID: string; permission: string; metadata: Record<string, unknown> }> = {}) {
+function askedEvent(overrides: Partial<{ id: string; sessionID: string; permission: string; metadata: Record<string, unknown>; callID: string }> = {}) {
   return {
     event: {
       type: "permission.asked",
@@ -73,10 +83,15 @@ function askedEvent(overrides: Partial<{ id: string; sessionID: string; permissi
         patterns: ["*"],
         metadata: overrides.metadata ?? { command: "ls" },
         always: [],
+        ...(overrides.callID ? { tool: { messageID: "m1", callID: overrides.callID } } : {}),
       },
     },
   };
 }
+
+const extras = (log: Array<Record<string, unknown>>) => log.map((l) => l.extra as { verdict: string; outcome?: string });
+const paramsOut = (): ChatParamsOutput => ({ temperature: 1, topP: 1, topK: 1, maxOutputTokens: undefined, options: {} });
+const promptText = (client: OpencodeClient, call: number) => vi.mocked(client.session.prompt).mock.calls[call][0].body.parts[0].text;
 
 describe("AutoModePlugin event handler", () => {
   beforeEach(() => {
@@ -92,7 +107,7 @@ describe("AutoModePlugin event handler", () => {
     await hooks.event!(askedEvent());
 
     expect(replies).toEqual([{ id: "per1", reply: "once", message: undefined }]);
-    expect(log.some((l) => (l.extra as { verdict: string }).verdict === "allow")).toBe(true);
+    expect(extras(log)).toEqual([expect.objectContaining({ verdict: "allow", outcome: "replied" })]);
   });
 
   it("block: rejects with the model's reason and logs a block verdict", async () => {
@@ -101,8 +116,64 @@ describe("AutoModePlugin event handler", () => {
     await hooks.event!(askedEvent());
 
     expect(replies).toEqual([{ id: "per1", reply: "reject", message: "force-push to main" }]);
-    expect(log.some((l) => (l.extra as { verdict: string }).verdict === "block")).toBe(true);
+    expect(extras(log)).toEqual([expect.objectContaining({ verdict: "block", outcome: "replied" })]);
     expect(toasts.some((t) => t.variant === "warning")).toBe(true);
+  });
+
+  it("block with an empty reason still sends a non-empty message (so the turn continues)", async () => {
+    const { client, replies } = fakeClient({ promptText: "<block>yes</block>" });
+    const hooks: Hooks = await AutoModePlugin(pluginInput(client), {});
+    await hooks.event!(askedEvent());
+
+    expect(replies).toEqual([{ id: "per1", reply: "reject", message: "Blocked by auto mode." }]);
+  });
+
+  it("block while other asks of the session are pending: does not reject, leaves it to the human", async () => {
+    const { client, log, replies } = fakeClient({
+      promptText: "<block>yes</block><reason>bad</reason>",
+      pending: [{ id: "per1", sessionID: "ses1" }, { id: "per2", sessionID: "ses1" }],
+    });
+    const hooks: Hooks = await AutoModePlugin(pluginInput(client), {});
+    await hooks.event!(askedEvent());
+
+    expect(replies).toEqual([]);
+    expect(extras(log)).toEqual([expect.objectContaining({ verdict: "deferred" })]);
+  });
+
+  it("pending asks of other sessions do not prevent a reject", async () => {
+    const { client, replies } = fakeClient({
+      promptText: "<block>yes</block><reason>bad</reason>",
+      pending: [{ id: "per1", sessionID: "ses1" }, { id: "perX", sessionID: "other" }],
+    });
+    const hooks: Hooks = await AutoModePlugin(pluginInput(client), {});
+    await hooks.event!(askedEvent());
+
+    expect(replies).toHaveLength(1);
+  });
+
+  it("block when the pending asks can't be listed: does not reject", async () => {
+    const { client, replies } = fakeClient({ promptText: "<block>yes</block><reason>bad</reason>", listFails: true });
+    const hooks: Hooks = await AutoModePlugin(pluginInput(client), {});
+    await hooks.event!(askedEvent());
+
+    expect(replies).toEqual([]);
+  });
+
+  it("V2 reject failure: no V1 fallback (the V1 route carries no message and would halt the turn)", async () => {
+    const { client, log } = fakeClient({ promptText: "<block>yes</block><reason>bad</reason>", v2Fails: "reject" });
+    const hooks: Hooks = await AutoModePlugin(pluginInput(client), {});
+    await hooks.event!(askedEvent());
+
+    expect(client.postSessionIdPermissionsPermissionId).not.toHaveBeenCalled();
+    expect(extras(log)).toEqual([expect.objectContaining({ verdict: "block", outcome: "failed" })]);
+  });
+
+  it("V2 allow failure: falls back to the V1 route", async () => {
+    const { client } = fakeClient({ promptText: "<block>no</block>", v2Fails: "once" });
+    const hooks: Hooks = await AutoModePlugin(pluginInput(client), {});
+    await hooks.event!(askedEvent());
+
+    expect(client.postSessionIdPermissionsPermissionId).toHaveBeenCalledWith({ path: { id: "ses1", permissionID: "per1" }, body: { response: "once" } });
   });
 
   it("unparseable reply: does nothing (no reply, logged as 'none')", async () => {
@@ -111,20 +182,32 @@ describe("AutoModePlugin event handler", () => {
     await hooks.event!(askedEvent());
 
     expect(replies).toEqual([]);
-    expect(log.some((l) => (l.extra as { verdict: string }).verdict === "none")).toBe(true);
+    expect(extras(log)).toEqual([expect.objectContaining({ verdict: "none" })]);
   });
 
   it("classifier error (session.create fails): does nothing", async () => {
-    const { client, replies } = fakeClient({ promptText: "<block>yes</block>" });
+    const { client, replies, deleted } = fakeClient({ promptText: "<block>yes</block>" });
     vi.mocked(client.session.create).mockResolvedValueOnce({ error: new Error("boom") });
     const hooks: Hooks = await AutoModePlugin(pluginInput(client), {});
     await hooks.event!(askedEvent());
 
     expect(replies).toEqual([]);
+    expect(deleted).toEqual([]);
   });
 
-  it("classifier timeout: does nothing", async () => {
-    const { client, replies } = fakeClient();
+  it("classifier prompt error: does nothing and still deletes the session, without aborting it", async () => {
+    const { client, replies, deleted, aborted } = fakeClient();
+    vi.mocked(client.session.prompt).mockRejectedValueOnce(new Error("boom"));
+    const hooks: Hooks = await AutoModePlugin(pluginInput(client), {});
+    await hooks.event!(askedEvent());
+
+    expect(replies).toEqual([]);
+    expect(deleted).toEqual(["classifier-1"]);
+    expect(aborted).toEqual([]);
+  });
+
+  it("classifier timeout: does nothing, aborts then deletes the classifier session", async () => {
+    const { client, replies, deleted, aborted } = fakeClient();
     // Simulates a real fetch client: it rejects once the abort signal fires, it doesn't hang forever.
     vi.mocked(client.session.prompt).mockImplementationOnce(
       ({ signal }: { signal?: AbortSignal }) =>
@@ -136,10 +219,21 @@ describe("AutoModePlugin event handler", () => {
     await hooks.event!(askedEvent());
 
     expect(replies).toEqual([]);
+    expect(aborted).toEqual(["classifier-1"]);
+    expect(deleted).toEqual(["classifier-1"]);
+  });
+
+  it("sends the transcript and the action under their headings", async () => {
+    const { client } = fakeClient({ promptText: "<block>no</block>" });
+    const hooks: Hooks = await AutoModePlugin(pluginInput(client), {});
+    await hooks.event!(askedEvent());
+
+    expect(promptText(client, 0)).toMatch(/^## Transcript\n\{"user":"do the task"\}\n\n## Action\n\{"action":/);
   });
 
   it("ignores permission.asked events from its own classifier session", async () => {
     let innerReplies = -1;
+    let hooks!: Hooks;
     const { client, replies } = fakeClient({
       promptText: "<block>no</block>",
       onPrompt: async (sessionID) => {
@@ -148,19 +242,18 @@ describe("AutoModePlugin event handler", () => {
         innerReplies = replies.length - before;
       },
     });
-    let hooks!: Hooks;
     hooks = await AutoModePlugin(pluginInput(client), {});
     await hooks.event!(askedEvent({ id: "per-outer" }));
 
-    expect(innerReplies).toBe(0); // the recursive, same-session event produced no reply
-    expect(replies.some((r) => r.id === "per-inner")).toBe(false);
-    expect(replies.some((r) => r.id === "per-outer")).toBe(true);
+    expect(innerReplies).toBe(0);
+    expect(replies.map((r) => r.id)).toEqual(["per-outer"]);
   });
 
-  it("swallows a 404 on reply (someone else already answered)", async () => {
-    const { client } = fakeClient({ promptText: "<block>no</block>", replyStatus: 404 });
+  it("a 404 on reply is swallowed and logged as already-answered", async () => {
+    const { client, log } = fakeClient({ promptText: "<block>no</block>", replyStatus: 404 });
     const hooks: Hooks = await AutoModePlugin(pluginInput(client), {});
     await expect(hooks.event!(askedEvent())).resolves.toBeUndefined();
+    expect(extras(log)).toEqual([expect.objectContaining({ verdict: "allow", outcome: "already-answered" })]);
   });
 
   it("stops deciding once the consecutive-block limit is hit", async () => {
@@ -170,15 +263,83 @@ describe("AutoModePlugin event handler", () => {
     await hooks.event!(askedEvent({ id: "per1" }));
     await hooks.event!(askedEvent({ id: "per2" }));
 
-    expect(replies).toHaveLength(1); // the second ask was left for the human
-    expect(toasts.some((t) => (t.message as string).includes("too many blocks"))).toBe(true);
+    expect(replies).toHaveLength(1);
+    expect(toasts.filter((t) => (t.message as string).includes("too many blocks"))).toHaveLength(1);
+  });
+
+  it("blocks that were not actually replied (already answered) do not count toward the limit", async () => {
+    const { client, replies } = fakeClient({ promptText: "<block>yes</block><reason>no</reason>", replyStatus: 404 });
+    const hooks: Hooks = await AutoModePlugin(pluginInput(client), { maxConsecutiveBlocks: 1 });
+
+    await hooks.event!(askedEvent({ id: "per1" }));
+    await hooks.event!(askedEvent({ id: "per2" }));
+
+    expect(replies).toHaveLength(2); // still deciding
+  });
+
+  it("failed block replies do not count toward the limit or toast", async () => {
+    const { client, replies, toasts } = fakeClient({ promptText: "<block>yes</block><reason>no</reason>", v2Fails: "reject" });
+    const hooks: Hooks = await AutoModePlugin(pluginInput(client), { maxConsecutiveBlocks: 1 });
+
+    await hooks.event!(askedEvent({ id: "per1" }));
+    await hooks.event!(askedEvent({ id: "per2" }));
+
+    expect(replies).toHaveLength(2);
+    expect(toasts).toEqual([]);
+  });
+
+  it("parallel asks of one session are classified one at a time, so limits can't be overshot", async () => {
+    let running = 0;
+    let maxRunning = 0;
+    const { client, replies } = fakeClient({
+      promptText: "<block>yes</block><reason>no</reason>",
+      onPrompt: async () => {
+        running++;
+        maxRunning = Math.max(maxRunning, running);
+        await new Promise((r) => setTimeout(r, 5));
+        running--;
+      },
+    });
+    const hooks: Hooks = await AutoModePlugin(pluginInput(client), { maxConsecutiveBlocks: 1 });
+
+    await Promise.all([hooks.event!(askedEvent({ id: "per1" })), hooks.event!(askedEvent({ id: "per2" })), hooks.event!(askedEvent({ id: "per3" }))]);
+
+    expect(maxRunning).toBe(1);
+    expect(replies).toHaveLength(1);
+  });
+
+  it("skipPermissions and onlyPermissions leave asks to the human", async () => {
+    const a = fakeClient({ promptText: "<block>no</block>" });
+    const hooksA = await AutoModePlugin(pluginInput(a.client), { skipPermissions: ["bash"] });
+    await hooksA.event!(askedEvent());
+    expect(a.replies).toEqual([]);
+
+    const b = fakeClient({ promptText: "<block>no</block>" });
+    const hooksB = await AutoModePlugin(pluginInput(b.client), { onlyPermissions: ["edit"] });
+    await hooksB.event!(askedEvent());
+    expect(b.replies).toEqual([]);
+  });
+
+  it("malformed options fall back to defaults instead of throwing", async () => {
+    const { client, replies } = fakeClient({ promptText: "<block>no</block>" });
+    const hooks = await AutoModePlugin(pluginInput(client), { skipPermissions: "bash", onlyPermissions: 3, timeoutMs: "fast", allow: [1], maxConsecutiveBlocks: -1 });
+    await hooks.event!(askedEvent());
+    expect(replies).toHaveLength(1);
+  });
+
+  it("an unexpected error in the handler is logged, not thrown", async () => {
+    const { client, log } = fakeClient({ promptText: "<block>no</block>" });
+    vi.mocked(client._client!.post).mockRejectedValue(new Error("x")); // swallowed by reply.ts
+    vi.mocked(client.postSessionIdPermissionsPermissionId).mockRejectedValue(new Error("y"));
+    const hooks: Hooks = await AutoModePlugin(pluginInput(client), {});
+    await expect(hooks.event!(askedEvent())).resolves.toBeUndefined();
+    expect(extras(log)).toEqual([expect.objectContaining({ verdict: "allow", outcome: "failed" })]);
   });
 
   it("is a no-op when disabled via options", async () => {
-    const { client, replies } = fakeClient({ promptText: "<block>yes</block>" });
+    const { client } = fakeClient({ promptText: "<block>yes</block>" });
     const hooks: Hooks = await AutoModePlugin(pluginInput(client), { enabled: false });
     expect(hooks.event).toBeUndefined();
-    void replies;
   });
 
   it("is a no-op when OPENCODE_AUTO_MODE=0", async () => {
@@ -192,5 +353,75 @@ describe("AutoModePlugin event handler", () => {
       if (prev === undefined) delete process.env.OPENCODE_AUTO_MODE;
       else process.env.OPENCODE_AUTO_MODE = prev;
     }
+  });
+});
+
+describe("AutoModePlugin other hooks", () => {
+  it("config registers the classifier agent with the wildcard deny", async () => {
+    const { client } = fakeClient();
+    const hooks = await AutoModePlugin(pluginInput(client), {});
+    const config: { agent?: Record<string, unknown> } = {};
+    await hooks.config!(config);
+    expect(config.agent!["auto-mode-classifier"]).toMatchObject({ hidden: true, permission: { "*": "deny" } });
+  });
+
+  it("chat.params forces temperature 0 and maxOutputTokens only for classifier sessions", async () => {
+    let seen: ChatParamsOutput | undefined;
+    let hooks!: Hooks;
+    const { client } = fakeClient({
+      promptText: "<block>no</block>",
+      onPrompt: async (sessionID) => {
+        const out = paramsOut();
+        await hooks["chat.params"]!({ sessionID, agent: "a", model: {}, provider: {}, message: {} }, out);
+        seen = out;
+      },
+    });
+    hooks = await AutoModePlugin(pluginInput(client), { maxOutputTokens: 256 });
+    await hooks.event!(askedEvent());
+    expect(seen).toMatchObject({ temperature: 0, maxOutputTokens: 256 });
+
+    const other = paramsOut();
+    await hooks["chat.params"]!({ sessionID: "ses-user", agent: "a", model: {}, provider: {}, message: {} }, other);
+    expect(other).toMatchObject({ temperature: 1, maxOutputTokens: undefined });
+  });
+
+  it("maxOutputTokens defaults to 1024", async () => {
+    let seen: ChatParamsOutput | undefined;
+    let hooks!: Hooks;
+    const { client } = fakeClient({
+      promptText: "<block>no</block>",
+      onPrompt: async (sessionID) => {
+        seen = paramsOut();
+        await hooks["chat.params"]!({ sessionID, agent: "a", model: {}, provider: {}, message: {} }, seen);
+      },
+    });
+    hooks = await AutoModePlugin(pluginInput(client), {});
+    await hooks.event!(askedEvent());
+    expect(seen?.maxOutputTokens).toBe(1024);
+  });
+
+  it("tool.execute.after drops the cached tool input", async () => {
+    const { client } = fakeClient({ promptText: "<block>no</block>" });
+    const hooks = await AutoModePlugin(pluginInput(client), {});
+    await hooks["tool.execute.before"]!({ tool: "bash", sessionID: "ses1", callID: "c1" }, { args: { command: "SECRET_CMD" } });
+    await hooks["tool.execute.after"]!({ tool: "bash", sessionID: "ses1", callID: "c1", args: {} }, {});
+    await hooks.event!(askedEvent({ callID: "c1", metadata: { command: "FALLBACK_CMD" } }));
+
+    expect(promptText(client, 0)).toContain("FALLBACK_CMD");
+    expect(promptText(client, 0)).not.toContain("SECRET_CMD");
+  });
+
+  it("the tool-input cache entry is dropped after the decision, and the cache is capped", async () => {
+    const { client } = fakeClient({ promptText: "<block>no</block>" });
+    const hooks = await AutoModePlugin(pluginInput(client), {});
+    await hooks["tool.execute.before"]!({ tool: "bash", sessionID: "ses1", callID: "c1" }, { args: { command: "CACHED_CMD" } });
+    await hooks.event!(askedEvent({ id: "p1", callID: "c1" }));
+    await hooks.event!(askedEvent({ id: "p2", callID: "c1", metadata: { command: "FALLBACK_CMD" } }));
+    expect(promptText(client, 0)).toContain("CACHED_CMD");
+    expect(promptText(client, 1)).toContain("FALLBACK_CMD");
+
+    for (let i = 0; i < 501; i++) await hooks["tool.execute.before"]!({ tool: "bash", sessionID: "ses1", callID: `k${i}` }, { args: { command: `CMD${i}` } });
+    await hooks.event!(askedEvent({ id: "p3", callID: "k0", metadata: { command: "EVICTED_FALLBACK" } }));
+    expect(promptText(client, 2)).toContain("EVICTED_FALLBACK");
   });
 });

@@ -37,6 +37,12 @@ describe("createLimits", () => {
     expect(limits.recordBlock("s1")).toBe(false);
   });
 
+  it("isStopped does not create session entries", () => {
+    const limits = createLimits({ maxConsecutiveBlocks: 1, maxTotalBlocks: 1 });
+    expect(limits.isStopped("never-seen")).toBe(false);
+    expect(limits.recordBlock("never-seen")).toBe(true);
+  });
+
   it("tracks sessions independently", () => {
     const limits = createLimits({ maxConsecutiveBlocks: 1, maxTotalBlocks: 20 });
     limits.recordBlock("s1");
