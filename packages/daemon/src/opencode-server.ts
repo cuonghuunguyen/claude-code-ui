@@ -4,7 +4,8 @@ import { randomBytes } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { Readable } from "node:stream";
-import { delimiter, join } from "node:path";
+import { homedir, release } from "node:os";
+import { posix, win32 } from "node:path";
 import { OPENCODE_MIN, type OpenCodeStatus } from "@claude-ui/protocol";
 import { SERVE_WATCHER } from "./tailscale.ts";
 import { winQuote } from "./update.ts";
@@ -60,15 +61,44 @@ export const parseVersion = (text: string) => /(\d+)\.(\d+)\.(\d+)/.exec(text)?.
 /** a < b for `x.y.z` lists. */
 export const olderThan = (a: number[], b: number[]) => (a.find((n, i) => n !== b[i]) ?? 0) < (b.find((n, i) => n !== a[i]) ?? 0);
 
-/** The binary on PATH: `opencode`; on Windows `opencode.exe`, else `opencode.cmd` (run through cmd.exe, see invocation). */
-function lookup(env: NodeJS.ProcessEnv): string[] | undefined {
-  const win = process.platform === "win32";
-  for (const dir of (env.PATH ?? env.Path ?? "").split(delimiter).filter(Boolean))
+/** A Windows drive mounted in WSL: a binary there is a Windows one (interop), and its `serve` listens on the Windows loopback, which the distro cannot reach. */
+const WINDOWS_MOUNT = /^\/mnt\/[a-z]\//i;
+
+export type LookupOpts = { platform?: NodeJS.Platform; wsl?: boolean; home?: string; exists?: (file: string) => boolean };
+/**
+ * The binary to run when no path is set: `opencode` on PATH (on Windows `opencode.exe`, else `opencode.cmd`, run through cmd.exe, see invocation),
+ * else the official installer's `~/.opencode/bin/opencode` (the installer puts that folder on PATH in a shell rc file the daemon may not read).
+ * Inside WSL a hit on a Windows drive is skipped; `windows` names the first one, for the error when nothing else is found.
+ */
+export function lookup(env: NodeJS.ProcessEnv, o: LookupOpts = {}): { cmd?: string[]; windows?: string } {
+  const platform = o.platform ?? process.platform;
+  const exists = o.exists ?? existsSync;
+  const win = platform === "win32";
+  const path = win ? win32 : posix;
+  const wsl = o.wsl ?? (platform === "linux" && (!!env.WSL_DISTRO_NAME || /microsoft/i.test(release())));
+  let windows: string | undefined;
+  for (const dir of (env.PATH ?? env.Path ?? "").split(path.delimiter).filter(Boolean))
     for (const name of win ? ["opencode.exe", "opencode.cmd"] : ["opencode"]) {
-      const file = join(dir, name);
-      if (existsSync(file)) return [file];
+      const file = path.join(dir, name);
+      if (!exists(file)) continue;
+      if (wsl && WINDOWS_MOUNT.test(file)) {
+        windows ??= file;
+        continue;
+      }
+      return { cmd: [file] };
     }
+  const home = o.home ?? (env.HOME || homedir());
+  if (!win && home) {
+    const file = posix.join(home, ".opencode", "bin", "opencode");
+    if (exists(file)) return { cmd: [file] };
+  }
+  return windows ? { windows } : {};
 }
+const windowsOnly = (file: string) =>
+  new OpenCodeError(
+    "opencode_missing",
+    `Only the Windows OpenCode was found (${file}); it cannot serve this WSL distro. Install OpenCode inside the distro (https://opencode.ai/docs) or set its Linux path in Settings › OpenCode.`,
+  );
 
 /** How to run `binary ...args`: a Windows .cmd/.bat goes through cmd.exe as one quoted line (`/s` strips the outer quotes), passed verbatim, so a path with spaces survives. */
 export function invocation(binary: string, args: string[], platform: NodeJS.Platform = process.platform): { file: string; args: string[]; verbatim: boolean } {
@@ -88,6 +118,8 @@ export type OpenCodeServerOpts = {
   path: () => string;
   /** Test seam: the argv prefix used while `path()` is "" (replaces the PATH lookup). */
   command?: string[];
+  /** Test seam: platform, WSL, home and file checks of the PATH lookup. */
+  lookup?: LookupOpts;
   /** Test seam: added to the daemon's environment for the child. */
   env?: () => NodeJS.ProcessEnv;
   now?: () => number;
@@ -126,7 +158,10 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   const argv = () => {
     const path = o.path();
     if (path) return existsSync(path) ? [path] : undefined;
-    return o.command ?? lookup(env());
+    if (o.command) return o.command;
+    const found = lookup(env(), o.lookup);
+    if (found.windows) throw windowsOnly(found.windows);
+    return found.cmd;
   };
 
   /** Binary and version, never a server: throws OpenCodeError. The bound is the start timeout, not a shorter one of its own: `--version` starts the same binary, so a machine too busy to answer it in 10 s would refuse to start OpenCode although `serve` is given 20 s. */
