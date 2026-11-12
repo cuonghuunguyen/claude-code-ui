@@ -105,7 +105,7 @@ On by default. Every decision is appended, one JSON object per line, to
 `<data dir>/auto-mode/decisions.jsonl`. The data dir is `logDir` if set, else what OpenCode itself
 uses (`$XDG_DATA_HOME/opencode`, falling back to `~/.local/share/opencode` on Linux, macOS and
 Windows alike: `opencode debug paths` shows it). It is never inside your project. The file is
-created with mode `0600` and its directory `0700` (best effort on Windows) and rotated once to `decisions.1.jsonl` past
+created with mode `0600` and its directory `0700` when the plugin creates it (best effort on Windows) and rotated once to `decisions.1.jsonl` past
 `logMaxBytes`.
 
 - `{"v":1,"kind":"decision", at, requestID, sessionID, project, permission, patterns, model,
@@ -126,7 +126,7 @@ inputs). It stays on your machine. It leaves it only through the two tools below
 model (`auto_mode_eval`, as replays) and to your session model (`auto_mode_improve`, as a compact
 report of overrides). Because any agent can call those tools, each use asks you first (permission
 `auto_mode_log`, shown with the scope and arguments); the plugin never answers that ask itself, and
-registers it as an `ask` rule unless you set your own. A write failure is reported through the OpenCode
+registers it as an `ask` rule (global and in every agent's own permission) unless you set your own. An explicit per-agent or global rule you set for `auto_mode_log`, and OpenCode's `--auto` / skip-permissions CLI flags, override that ask. A write failure is reported through the OpenCode
 log (at most once an hour) and never affects a decision. Several OpenCode processes may share the
 log; rotation takes a lock file (`decisions.lock`, stale after 30 s).
 

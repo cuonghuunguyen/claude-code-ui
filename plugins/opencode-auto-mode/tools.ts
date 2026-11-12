@@ -73,7 +73,7 @@ export function createTools(deps: ToolDeps): Record<string, PluginTool> {
         "COST WARNING: it calls the classifier model once per case (up to `limit`), so it spends tokens. " +
         "Pass the defaults when unsure: limit 0 = 50 (max 100), only \"labeled\", scope \"project\", model \"\" = the configured/recorded model.",
       args: {
-        limit: { type: "number", description: "How many most recent cases to replay; 0 for the default of 50 (max 500)." },
+        limit: { type: "number", description: `How many most recent cases to replay; 0 for the default of 50 (max ${MAX_EVAL_LIMIT}).` },
         only: { type: "string", enum: ["labeled", "all"], description: "\"labeled\": cases the human decided (truth = their answer). \"all\": every logged case, reference = the previous verdict." },
         scope: { type: "string", enum: ["project", "all"], description: "\"project\": decisions of the current project; \"all\": every project in the log." },
         model: { type: "string", description: "Classifier model as provider/model; empty string for the plugin's configured or recorded model." },

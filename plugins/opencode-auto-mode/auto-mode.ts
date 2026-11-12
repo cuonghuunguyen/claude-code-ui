@@ -183,6 +183,13 @@ export const AutoModePlugin: Plugin = async (input, options) => {
       if (perm === undefined || perm === null) config.permission = { [LOG_PERMISSION]: "ask" };
       else if (typeof perm === "string") config.permission = { "*": perm, [LOG_PERMISSION]: "ask" };
       else if (typeof perm === "object" && !(LOG_PERMISSION in perm)) (perm as Record<string, unknown>)[LOG_PERMISSION] = "ask";
+      // Agent permissions are merged after the global ones (last match wins), so an agent with "*": "allow" would silently allow it.
+      for (const agent of Object.values(config.agent ?? {})) {
+        const a = agent as { permission?: unknown } | undefined;
+        if (!a || typeof a !== "object" || a.permission === undefined || a.permission === null) continue;
+        if (typeof a.permission === "string") a.permission = { "*": a.permission, [LOG_PERMISSION]: "ask" };
+        else if (typeof a.permission === "object" && !(LOG_PERMISSION in a.permission)) (a.permission as Record<string, unknown>)[LOG_PERMISSION] = "ask";
+      }
       config.agent = config.agent ?? {};
       config.agent[CLASSIFIER_AGENT] = buildClassifierAgentConfig(opts);
       config.command = config.command ?? {};

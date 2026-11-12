@@ -107,6 +107,18 @@ describe("rotation across processes", () => {
     expect(existsSync(lock)).toBe(false); // released
   });
 
+  it("rotates when the file plus the incoming line would exceed the cap, even if the file alone does not", async () => {
+    const dir = tmp();
+    const base = join(dir, "auto-mode");
+    mkdirSync(base, { recursive: true });
+    const line = JSON.stringify(decision()) + String.fromCharCode(10);
+    const size = Buffer.byteLength(line);
+    writeFileSync(join(base, "decisions.jsonl"), "x".repeat(size - 1) + String.fromCharCode(10));
+    const store = createLogStore({ dir, maxBytes: size + 5, onError: () => {} });
+    await store.append(decision());
+    expect(existsSync(join(base, "decisions.1.jsonl"))).toBe(true);
+  });
+
   it("two stores sharing one dir keep appending through rotations without errors", async () => {
     const dir = tmp();
     const onError = vi.fn();

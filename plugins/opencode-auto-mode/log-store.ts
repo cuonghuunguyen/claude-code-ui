@@ -112,7 +112,7 @@ export function createLogStore(opts: LogStoreOptions): LogStore {
   let chain: Promise<void> = Promise.resolve();
   let lastReport = -Infinity;
 
-  async function rotate(): Promise<void> {
+  async function rotate(incoming: number): Promise<void> {
     await withLock(opts.dir, now, async () => {
       const file = logFile(opts.dir);
       let size = 0;
@@ -121,7 +121,7 @@ export function createLogStore(opts: LogStoreOptions): LogStore {
       } catch {
         return;
       }
-      if (size <= opts.maxBytes) return;
+      if (size + incoming <= opts.maxBytes) return; // same condition as the caller's
       await rm(rotatedFile(opts.dir), { force: true });
       try {
         await rename(file, rotatedFile(opts.dir));
@@ -143,7 +143,7 @@ export function createLogStore(opts: LogStoreOptions): LogStore {
     }
     if (size > 0 && size + Buffer.byteLength(line) > opts.maxBytes) {
       try {
-        await rotate();
+        await rotate(Buffer.byteLength(line));
       } catch {
         // rotation is best-effort; the append below still happens
       }

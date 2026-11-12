@@ -802,6 +802,26 @@ describe("commands and tools", () => {
     expect(str.permission).toEqual({ "*": "allow", auto_mode_log: "ask" });
   });
 
+  it("the auto_mode_log ask rule is also added to every agent's own permission (agent rules are merged after global ones)", async () => {
+    const { client } = fakeClient();
+    const hooks = await AutoModePlugin(pluginInput(client), { logDir: newLogDir() });
+    const config: { agent?: Record<string, any> } = {
+      agent: { yolo: { permission: { "*": "allow" } }, str: { permission: "allow" }, none: {}, own: { permission: { auto_mode_log: "deny" } } },
+    };
+    await hooks.config!(config);
+    expect(config.agent!.yolo.permission).toEqual({ "*": "allow", auto_mode_log: "ask" });
+    expect(config.agent!.str.permission).toEqual({ "*": "allow", auto_mode_log: "ask" });
+    expect(config.agent!.none.permission).toBeUndefined();
+    expect(config.agent!.own.permission).toEqual({ auto_mode_log: "deny" });
+    expect(config.agent!["auto-mode-classifier"].permission).toEqual({ "*": "deny" });
+  });
+
+  it("the eval tool's limit description uses the real cap", async () => {
+    const { client } = fakeClient();
+    const hooks = await AutoModePlugin(pluginInput(client), { logDir: newLogDir() });
+    expect(JSON.stringify(hooks.tool!.auto_mode_eval)).not.toContain("500");
+  });
+
   it("eval caps the replay count at 100", async () => {
     const { run, hooks } = await seeded();
     await hooks.tool!.auto_mode_eval.execute({ limit: 100000, only: "all", scope: "all", model: "" }, toolCtx("/proj"));
