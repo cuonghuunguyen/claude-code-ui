@@ -321,6 +321,8 @@ export class Session {
   sync() {
     return this.run.sync();
   }
+  /** The turn that runs is a keep-warm tick (set by the orchestration): its idle carries `keepWarm`, once. */
+  keepWarmTurn = false;
   working() {
     return this.run.working();
   }
@@ -563,7 +565,9 @@ export class Session {
       this.emit({ type: "prompt_suggestion", id: "prompt_suggestion", text: null });
     }
     this.run.beforeStateEvent();
-    this.emit({ type: "session_state", id: "session_state", state, ...(state === "idle" && this.working() ? { working: true as const } : {}) });
+    const keepWarm = state === "idle" && this.keepWarmTurn;
+    if (state === "idle") this.keepWarmTurn = false;
+    this.emit({ type: "session_state", id: "session_state", state, ...(state === "idle" && this.working() ? { working: true as const } : {}), ...(keepWarm ? { keepWarm: true as const } : {}) });
     if (state === "idle") this.run.idle();
   }
 

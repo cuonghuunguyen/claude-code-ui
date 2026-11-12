@@ -1,5 +1,5 @@
 // Per-session client store keyed by part id; events apply idempotently by seq (docs/spec.md "Client state").
-import { isAttention, ORCHESTRATION_KEEPWARM, type AgentInfo, type ContextUsage, type Cursor, type Effort, type Event, type Part, type PermissionMode, type PosPart, type QueuedPrompt, type SearchHit, type SessionState, type SlashCommand, type SubscribeResult, type TimelinePage, type TodoItem } from "@claude-ui/protocol";
+import { isAttention, type AgentInfo, type ContextUsage, type Cursor, type Effort, type Event, type Part, type PermissionMode, type PosPart, type QueuedPrompt, type SearchHit, type SessionState, type SlashCommand, type SubscribeResult, type TimelinePage, type TodoItem } from "@claude-ui/protocol";
 import { CONTEXT_TOOLS } from "./tools.ts";
 
 export type ToolCall = Extract<Part, { type: "tool_call" }>;
@@ -70,21 +70,11 @@ export const bashRunning = (s: SessionView) => [...s.parts.values()].some((p) =>
 /** The state tabs, sidebar and header show: an idle session in which a terminal CLI turn or background work runs shows running. */
 export const shownState = (s: SessionView | undefined) => ((s?.externalTurn || s?.working) && s.state === "idle" ? "running" : s?.state);
 
-/** The last user message of the view is a keep-warm tick. */
-function endsKeepWarmTurn(s: SessionView) {
-  for (let i = s.order.length - 1; i >= 0; i--) {
-    const p = s.parts.get(s.order[i]!);
-    if (p?.type === "user_text") return p.text.startsWith(ORCHESTRATION_KEEPWARM);
-  }
-  return false;
-}
-
 export function applyEvent(s: SessionView, e: Event): SessionView {
   if (e.seq <= s.lastSeq) return s;
   const { part } = e;
   if (part.type === "session_state") {
-    // The end of a keep-warm tick is no news: the session does not turn unread.
-    const attention = isAttention(s.state, part) && !(part.state === "idle" && endsKeepWarmTurn(s));
+    const attention = isAttention(s.state, part);
     // Not live: drop the list, so a later turn without TodoWrite shows no stale one (OpenCode todoState "clear").
     const todos = part.state === "idle" || part.state === "error" ? [] : s.todos;
     return { ...s, lastSeq: e.seq, state: part.state, working: !!part.working, attentionSeq: attention ? e.seq : s.attentionSeq, todos };

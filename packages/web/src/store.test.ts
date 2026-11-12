@@ -297,7 +297,7 @@ it("the end of a keep-warm tick turn does not mark the session unread; a real tu
   const user = (seq: number, id: string, text: string): Event => ({ type: "event", sessionId: "s", seq, part: { type: "user_text", id, text, images: [] } });
   let s = applyEvent(emptySession(), user(1, "k", "[claude-ui keep-warm] Nothing to do."));
   s = applyEvent(s, st(2, "running"));
-  s = applyEvent(s, st(3, "idle"));
+  s = applyEvent(s, { ...st(3, "idle"), part: { type: "session_state", id: "session_state", state: "idle", keepWarm: true } });
   expect(s.attentionSeq).toBe(0);
   s = applyEvent(s, user(4, "u", "hello"));
   s = applyEvent(s, st(5, "running"));

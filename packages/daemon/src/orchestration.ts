@@ -449,7 +449,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
     if (p.type === "user_text" && !p.parentId) {
       // Any turn but a keep-warm one starts the count again.
       // A notice or prompt folded into a tick's turn makes it a real turn: its end is handled as usual.
-      if (!p.text.startsWith(ORCHESTRATION_KEEPWARM)) (ticks.delete(s.id), warming.delete(s.id));
+      if (!p.text.startsWith(ORCHESTRATION_KEEPWARM)) (ticks.delete(s.id), warming.delete(s.id), (s.keepWarmTurn = false));
       return void lastText.delete(s.id);
     }
     // The CLI ended by itself (closed) or failed: the tree's running count dropped.
@@ -597,6 +597,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
       if (!stillWaiting(id) || notified.has(id) || (queues.get(id) ?? []).some(fresh)) continue;
       if (now - last < minutes * 60_000 || (ticks.get(id) ?? 0) >= MAX_KEEPWARM_TICKS) continue;
       warming.add(id);
+      c.keepWarmTurn = true;
       ticks.set(id, (ticks.get(id) ?? 0) + 1);
       lastTurnEnd.set(id, now);
       const epoch = epochs.get(id) ?? 0;
@@ -607,6 +608,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
           if (!err) return;
           if (stillWanted()) {
             warming.delete(id);
+            c.keepWarmTurn = false;
             ticks.set(id, Math.max(0, (ticks.get(id) ?? 1) - 1));
           }
           console.warn(`orchestration: keep-warm message to coordinator ${id} not sent: ${err}`);
