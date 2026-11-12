@@ -2,11 +2,12 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { Given, Then, When } from "./fixtures.ts";
+import { endsWithPath } from "../support/css.ts";
 
 const tab = (page: Page, name: string): Locator => page.locator('[data-testid="tab"][data-tab-id^="file:"]').filter({ hasText: name });
 const strip = (page: Page, name: string): Locator => tab(page, name).locator('[role="tab"]');
-const body = (page: Page, name: string): Locator => page.locator(`[data-pane-tab-body^="file:"][data-pane-tab-body$="/${name}"]`);
-const row = (page: Page, rel: string): Locator => page.locator(`[data-testid="tree-entry"][data-path$="/${rel}"]`).first();
+const body = (page: Page, name: string): Locator => page.locator(`[data-pane-tab-body^="file:"]${endsWithPath("data-pane-tab-body", name)}`);
+const row = (page: Page, rel: string): Locator => page.locator(`[data-testid="tree-entry"]${endsWithPath("data-path", rel)}`).first();
 let question = "";
 
 Given("the scratch project has the file {string} with the text {string}", async ({ project }, rel: string, text: string) => {
@@ -93,7 +94,7 @@ Then("the file tab {string} opens right of its session tab with the editor focus
   await expect(tab(page, name)).toHaveCount(1);
   await expect(strip(page, name)).toHaveAttribute("aria-selected", "true");
   const ids = await page.locator('[data-testid="tab-strip"] [data-testid="tab"]').evaluateAll((els) => els.map((e) => e.getAttribute("data-tab-id") ?? ""));
-  const at = ids.findIndex((i) => i.startsWith("file:") && i.endsWith(`/${name}`));
+  const at = ids.findIndex((i) => i.startsWith("file:") && (i.endsWith(`/${name}`) || i.endsWith(`\\${name}`)));
   expect(at).toBeGreaterThan(0);
   expect(ids[at - 1]).toBe(ids[at]!.split(":")[1]);
   await expect(body(page, name).locator(".cm-content")).toBeFocused();

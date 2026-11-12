@@ -4,13 +4,14 @@ import { expect, type Page } from "@playwright/test";
 import { git } from "../support/git-fixture.ts";
 import { promptBox } from "../support/ui.ts";
 import { Given, Then, When } from "./fixtures.ts";
+import { endsWithPath } from "../support/css.ts";
 
 const put = (repo: string, file: string) => {
   mkdirSync(dirname(join(repo, file)), { recursive: true });
   writeFileSync(join(repo, file), "x\n");
 };
 const tree = (page: Page) => page.getByTestId("file-tree");
-const entry = (page: Page, rel: string) => tree(page).locator(`[data-testid="tree-entry"][data-path$="/${rel}"]`);
+const entry = (page: Page, rel: string) => tree(page).locator(`[data-testid="tree-entry"]${endsWithPath("data-path", rel)}`);
 
 Given("the nested repository {string} has the file {string}", async ({ project }, name: string, file: string) => {
   const repo = join(project.path, name);

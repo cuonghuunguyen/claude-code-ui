@@ -236,7 +236,8 @@ Then("the session list lists the aside", async ({ page, memo }) => {
 });
 
 Then("the permission mode is {string}", async ({ page }, label: string) => {
-  await expect(page.getByTestId("mode-select")).toHaveAttribute("aria-label", new RegExp(`^${label}`));
+  // A hidden session tab stays mounted, so only the visible select counts.
+  await expect(owner(page).locator('[data-testid="mode-select"]:visible')).toHaveAttribute("aria-label", new RegExp(`^${label}`));
 });
 
 Given("a new Haiku session", async ({ page, daemon, project }) => {

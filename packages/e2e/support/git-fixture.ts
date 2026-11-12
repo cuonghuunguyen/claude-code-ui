@@ -7,6 +7,12 @@ const env = { ...process.env, GIT_AUTHOR_NAME: "E2E", GIT_AUTHOR_EMAIL: "e2e@exa
 
 export const git = (cwd: string, ...args: string[]): string => execFileSync("git", args, { cwd, env, encoding: "utf8" }).trim();
 
+/** git init on main. The system gitconfig may set core.autocrlf=true, and the daemon's own git calls read the repo config, so pin it off: a restore must write the bytes that were committed. */
+export function initRepo(cwd: string, ...rest: string[]): void {
+  git(cwd, "init", "-b", "main", ...rest);
+  git(rest.includes("--bare") ? rest[rest.length - 1]! : cwd, "config", "core.autocrlf", "false");
+}
+
 function commit(cwd: string, file: string, text: string, message: string): void {
   writeFileSync(join(cwd, file), text);
   git(cwd, "add", file);
@@ -19,10 +25,10 @@ function commit(cwd: string, file: string, text: string, message: string): void 
  */
 export function makeRepoWithOrigin(repo: string, origin: string): void {
   mkdirSync(dirname(origin), { recursive: true });
-  git(dirname(origin), "init", "--bare", "-b", "main", origin);
+  initRepo(dirname(origin), "--bare", origin);
   const seed = `${origin}.seed`;
   mkdirSync(seed, { recursive: true });
-  git(seed, "init", "-b", "main");
+  initRepo(seed);
   commit(seed, "README.md", "main\n", "initial");
   for (const b of ["feat/remote", "feature/PRJ-2-old-try"]) {
     git(seed, "checkout", "-b", b, "main");
@@ -31,7 +37,7 @@ export function makeRepoWithOrigin(repo: string, origin: string): void {
   git(seed, "remote", "add", "origin", origin);
   git(seed, "push", "origin", "main", "feat/remote", "feature/PRJ-2-old-try");
 
-  git(repo, "init", "-b", "main");
+  initRepo(repo);
   git(repo, "remote", "add", "origin", origin);
   git(repo, "fetch", "origin");
   git(repo, "checkout", "-B", "main", "origin/main");
@@ -60,14 +66,14 @@ export type SubmoduleShas = { first: string; second: string };
 export function makeSuperproject(repo: string, state: SubmoduleState): SubmoduleShas {
   const lib = join(repo, "libs", "lib");
   mkdirSync(lib, { recursive: true });
-  git(lib, "init", "-b", "main");
+  initRepo(lib);
   commit(lib, "a.txt", "1\n", "lib one");
   const first = git(lib, "rev-parse", "--short", "HEAD");
   commit(lib, "a.txt", "2\n", "lib two");
   const second = git(lib, "rev-parse", "--short", "HEAD");
   git(lib, "checkout", "-q", first);
   if (state === "dirty-with-nested") git(lib, "branch", "lib-only", second);
-  git(repo, "init", "-b", "main");
+  initRepo(repo);
   writeFileSync(join(repo, ".git", "info", "exclude"), ".claude/\n");
   writeFileSync(join(repo, "s.txt"), "s\n");
   const added = ["s.txt", "libs/lib"];
@@ -100,14 +106,14 @@ export function makeSuperproject(repo: string, state: SubmoduleState): Submodule
 export function makeNestedRepo(dir: string, name: string, subject: string, edit = false): void {
   const repo = join(dir, name);
   mkdirSync(repo, { recursive: true });
-  git(repo, "init", "-b", "main");
+  initRepo(repo);
   commit(repo, "a.txt", "1\n", subject);
   if (edit) writeFileSync(join(repo, "a.txt"), "1\nedited\n");
 }
 
 /** Makes `repo` (an existing folder, already holding `.claude/settings.json`) a repository with two commits and a README.md and src/app.ts to open in Files. */
 export function makeRepoWithTwoCommits(repo: string): void {
-  git(repo, "init", "-b", "main");
+  initRepo(repo);
   writeFileSync(join(repo, ".git", "info", "exclude"), ".claude/\n");
   commit(repo, "README.md", "# Fixture\n", "first commit");
   mkdirSync(join(repo, "src"), { recursive: true });
@@ -126,7 +132,7 @@ export function addSubmoduleRemotes(repo: string): void {
     [repo, "super.git", "super-remote-only"],
   ] as const) {
     const origin = join(origins, bare);
-    git(origins, "init", "--bare", "-b", "main", origin);
+    initRepo(origins, "--bare", origin);
     git(dir, "remote", "add", "origin", origin);
     git(dir, "push", "origin", "main");
     const tmp = join(origins, `${basename(bare, ".git")}-tmp`);

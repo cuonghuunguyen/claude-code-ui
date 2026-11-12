@@ -1,9 +1,10 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 import { git } from "../support/git-fixture.ts";
 import { Then, When } from "./fixtures.ts";
+import { endsWithPath } from "../support/css.ts";
 
 const side = (page: Page) => page.getByTestId("side-panel");
-const entry = (page: Page, rel: string): Locator => page.locator(`[data-testid="tree-entry"][data-path$="/${rel}"]`).first();
+const entry = (page: Page, rel: string): Locator => page.locator(`[data-testid="tree-entry"]${endsWithPath("data-path", rel)}`).first();
 
 /** Desktop: a tab of the side panel. Phone: the Panes tab list. */
 async function openPane(page: Page, name: RegExp): Promise<void> {

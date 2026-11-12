@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { REPO_ROOT } from "../support/daemon.ts";
@@ -207,6 +208,8 @@ When("I open the {string} addon pane from the more panes menu", async ({ page },
 const GIT_ENV = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" };
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, env: GIT_ENV, stdio: "pipe" });
 let bare = "";
+// "/C:/..." on Windows: a bare "C:\..." after the host would not be a valid file URL.
+const urlPath = (p: string): string => pathToFileURL(p).href.slice("file://".length);
 When("I install the example addon from a git URL with the password {string}", async ({ page }, password: string) => {
   const tmp = realpathSync(mkdtempSync(join(tmpdir(), "e2e-addon-git-")));
   cpSync(EXAMPLE, join(tmp, "work"), { recursive: true });
@@ -217,13 +220,13 @@ When("I install the example addon from a git URL with the password {string}", as
   git(tmp, "clone", "-q", "--bare", join(tmp, "work"), bare);
   await openAddons(page);
   await page.getByTestId("addons-source-git").click();
-  await page.getByRole("textbox", { name: "Repository URL" }).fill(`file://alice:${password}@localhost${bare}`);
+  await page.getByRole("textbox", { name: "Repository URL" }).fill(`file://alice:${password}@localhost${urlPath(bare)}`);
   await page.getByTestId("addons-install").click();
   await expect(page.getByTestId("addons-approve-card")).toBeVisible();
 });
 Then("the Addons dialog shows the git source without {string}", async ({ page }, password: string) => {
   const d = dialog(page);
-  await expect(d).toContainText(`git: file://localhost${bare}`);
+  await expect(d).toContainText(`git: file://localhost${urlPath(bare)}`);
   await expect(d).not.toContainText(password);
   await expect(d).not.toContainText("alice");
   expect(await d.innerHTML()).not.toContain(password);
