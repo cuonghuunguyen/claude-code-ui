@@ -2483,14 +2483,25 @@ describe("keep the coordinator's cache warm", () => {
     expect(ticksOf(coord)).toEqual([]);
   });
 
-  it("a background command of the coordinator itself counts as waiting: a tick with no worker at all", async () => {
+  it("a background command of the coordinator itself counts as waiting, with only an idle worker link", async () => {
     enable({ keepWarmMinutes: 55, stallMinutes: 0 });
     const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "idle", cwd: dirB, prompt: "ok" });
+    await until(async () => (await state(w.sessionId)) === "idle" && (await call(coord, "worker_wait", { timeoutMs: 0 })).events.length > 0);
     await c.request({ type: "session.prompt", sessionId: coord, text: "bg" });
     await until(() => runsOf(coord).at(-1)?.texts.includes("bg"));
     await settle(coord);
     expect(await sweepAt(coord, 54 * MIN)).toBe(0);
     expect(await sweepAt(coord, 56 * MIN, true)).toBe(1);
+  });
+
+  it("a plain session with no worker link gets no tick, whatever runs in its background", async () => {
+    enable({ keepWarmMinutes: 55, stallMinutes: 0 });
+    const plain = await coordinator();
+    await c.request({ type: "session.prompt", sessionId: plain, text: "bg" });
+    await until(() => runsOf(plain).at(-1)?.texts.includes("bg"));
+    await settle(plain);
+    expect(await sweepAt(plain, 56 * MIN)).toBe(0);
   });
 
   it("no tick while the usage limit blocks the session", async () => {

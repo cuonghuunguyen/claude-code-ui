@@ -577,6 +577,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
     const minutes = deps.settings().keepWarmMinutes;
     if (!(minutes > 0) || !deps.settings().enabled) return;
     for (const id of served) {
+      // Only an orchestrator: a plain session never gets a tick, whatever it runs in the background.
+      if (workers(id).length === 0) continue;
       const c = deps.sessions.get(id);
       // The same guards as notify: a live CLI that was served the tools; a tick never starts a CLI.
       if (!c?.isLive() || !c.live() || c.info().engine !== "claude") continue;
@@ -599,7 +601,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
       const epoch = epochs.get(id) ?? 0;
       const stillWanted = () => (epochs.get(id) ?? 0) === epoch;
       void deps
-        .prompt(c, `${ORCHESTRATION_KEEPWARM} Workers are still running. Nothing to do: no tool calls, reply "ok".`, stillWanted)
+        .prompt(c, `${ORCHESTRATION_KEEPWARM} Keeping the cache warm while work runs. Nothing to do: no tool calls, reply "ok".`, stillWanted)
         .then((err) => {
           if (!err) return;
           if (stillWanted()) {

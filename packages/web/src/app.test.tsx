@@ -2003,11 +2003,11 @@ it("a keep-warm message shows as a chip in a coordinator session, not in the Rew
   const coord = { ...session, coordinator: true as const };
   const restore = await remount({ "session.list": { sessions: [coord], projects: ["/p/demo"] }, "session.subscribe": { logEpoch: "e1", session: coord } });
   try {
-    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "user_text", id: "k1", text: "[claude-ui keep-warm] Workers are still running. Nothing to do.", images: [] } }));
+    await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "user_text", id: "k1", text: "[claude-ui keep-warm] Keeping the cache warm while work runs. Nothing to do.", images: [] } }));
     await act(async () => emit({ type: "event", sessionId: ID, seq: 2, part: { type: "user_text", id: "u2", text: "hello", images: [] } }));
     const chips = el.querySelectorAll('[data-testid="orchestration-notice"]');
     expect(chips).toHaveLength(1);
-    expect(chips[0]!.textContent).toContain("Workers are still running.");
+    expect(chips[0]!.textContent).toContain("Keeping the cache warm while work runs.");
     expect(chips[0]!.textContent).not.toContain("[claude-ui");
     expect(el.querySelectorAll('[data-testid="user-message"]')).toHaveLength(1);
     await press({ key: "k", code: "KeyK", ctrlKey: true });
