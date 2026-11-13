@@ -2,30 +2,65 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
-## 1.3.0 - 2026-11-06
+## 1.3.0 - 2026-11-13
 
 ### Added
 
+- OpenCode engine: a session can run on [OpenCode](https://opencode.ai) instead of Claude. The new-session tab has an **Engine** chip, the sidebar tags OpenCode sessions, and the UI is the same: prompt, steering, permissions, questions, Rewind, Aside, slash commands, `/compact`, `/undo`, `/redo`, orchestration as coordinator or worker, and SSH, WSL and Docker Sides. Settings › OpenCode sets the binary and restarts the server ([#654](https://github.com/cuonghuunguyen/claude-code-ui/issues/654), [#655](https://github.com/cuonghuunguyen/claude-code-ui/issues/655), [#656](https://github.com/cuonghuunguyen/claude-code-ui/issues/656), [#658](https://github.com/cuonghuunguyen/claude-code-ui/issues/658), [#665](https://github.com/cuonghuunguyen/claude-code-ui/issues/665)).
+- OpenCode: Settings › OpenCode › Providers connects and disconnects providers (API key, OAuth, plugin login) ([#657](https://github.com/cuonghuunguyen/claude-code-ui/issues/657)).
+- OpenCode: the model picker lists every model OpenCode can run, has a search field from 8 models, reports a failed list with **Retry** and links to **Connect a provider…** ([#679](https://github.com/cuonghuunguyen/claude-code-ui/issues/679), [#680](https://github.com/cuonghuunguyen/claude-code-ui/issues/680)).
+- OpenCode: an agent chooser (Build, Plan, custom agents) next to the permission chooser. Shift+Tab cycles the agents ([#684](https://github.com/cuonghuunguyen/claude-code-ui/issues/684)).
+- OpenCode: new sessions use **Use OpenCode config** as permission mode: the OpenCode defaults, `opencode.json` and the agent decide ([#705](https://github.com/cuonghuunguyen/claude-code-ui/issues/705)).
+- OpenCode: a retry of a busy or rate-limited model shows the reason and a countdown in place of Thinking ([#683](https://github.com/cuonghuunguyen/claude-code-ui/issues/683)).
+- Find in files: **Ctrl+Shift+F** (Cmd+Shift+F) searches file contents with regex, file globs, ignored files and context lines. Selected text prefills the query ([#649](https://github.com/cuonghuunguyen/claude-code-ui/issues/649)).
+- Find in files: **Replace** rewrites the checked matches, with a per-match preview, skipped files for stale or unsaved files, and one-step Undo ([#650](https://github.com/cuonghuunguyen/claude-code-ui/issues/650)).
+- Inline visualizations: Claude draws charts, diagrams and small interactive widgets in its replies. Settings › Sessions › Chat › **Inline visualizations** turns it off. Works on Docker, WSL and SSH Sides and with OpenCode ([#690](https://github.com/cuonghuunguyen/claude-code-ui/issues/690), [#693](https://github.com/cuonghuunguyen/claude-code-ui/issues/693)).
+- I'll be back: a button on a finished reply marks it for later. The session writes a short brief, you can add a note and a reminder, and the Focus page lists the marks under **Come back to** ([#622](https://github.com/cuonghuunguyen/claude-code-ui/issues/622)).
+- Changes: **Commit** the checked files, with **Amend** and **Commit and Push** ([#566](https://github.com/cuonghuunguyen/claude-code-ui/issues/566)). **Generate commit message** writes the message for the checked files, with a global and a per-project instruction ([#559](https://github.com/cuonghuunguyen/claude-code-ui/issues/559)).
+- Changes: **Rollback** of checked files and single hunks ([#558](https://github.com/cuonghuunguyen/claude-code-ui/issues/558)).
+- Git: **Merge** and **Rebase** from the branch menu, and a conflict banner with **Resolve with Claude**, **Continue** and **Abort** ([#560](https://github.com/cuonghuunguyen/claude-code-ui/issues/560)).
+- Git: **New branch**, **Checkout** and **Smart checkout** from the Git graph branch menu ([#561](https://github.com/cuonghuunguyen/claude-code-ui/issues/561)).
+- Git graph: the commit menu has Undo Commit, Revert, Cherry-Pick, Reset Current Branch to Here and **Copy Revision Number** ([#562](https://github.com/cuonghuunguyen/claude-code-ui/issues/562), [#670](https://github.com/cuonghuunguyen/claude-code-ui/pull/670)).
+- Git graph: a branch popup with search and the branch actions replaces the branch filter list ([#671](https://github.com/cuonghuunguyen/claude-code-ui/issues/671)).
+- Git graph: **Stashes**: stash, list, apply, pop and drop ([#563](https://github.com/cuonghuunguyen/claude-code-ui/issues/563)).
+- Files: **Annotate** shows who changed each line and opens the commit in the Git graph ([#564](https://github.com/cuonghuunguyen/claude-code-ui/issues/564)).
+- Local history: every file write is kept, and a **Timeline** under the file tree compares, restores, renames and deletes entries, next to the file's commits. Settings › Local history ([#565](https://github.com/cuonghuunguyen/claude-code-ui/issues/565)).
+- Git: shortcuts for **Commit** (Alt+K) and **Push** (Alt+Shift+K), Mod+Enter in the commit box, Alt+M for Amend, and a folder checkbox in the Changes tree ([#702](https://github.com/cuonghuunguyen/claude-code-ui/pull/702)).
+- Files: copy, cut, paste and drag and drop of files and folders in the file tree, also across Sides ([#555](https://github.com/cuonghuunguyen/claude-code-ui/issues/555)).
+- Settings › **Launcher**: saves the start options and creates an OS launcher shortcut ([#553](https://github.com/cuonghuunguyen/claude-code-ui/issues/553)).
+- Claude account: **Log in…** from Settings or after a failed login runs the Claude CLI login in a terminal; token accounts switch from the usage ring or Settings ([#615](https://github.com/cuonghuunguyen/claude-code-ui/issues/615), [#616](https://github.com/cuonghuunguyen/claude-code-ui/issues/616)).
+- Orchestration: Settings › Orchestration › **Keep warm** keeps the prompt cache of an idle coordinator warm while its workers run ([#730](https://github.com/cuonghuunguyen/claude-code-ui/pull/730)).
 - Prompt: a file copied in Explorer or Finder and pasted or dropped in the prompt box is attached ([#613](https://github.com/cuonghuunguyen/claude-code-ui/issues/613)).
 - Prompt: **Expand** turns a pasted-text chip into plain text, and Undo restores the chip. A copied token pasted back is inlined ([#620](https://github.com/cuonghuunguyen/claude-code-ui/issues/620)).
 - Changes: **Add to prompt** adds a changed file to the prompt, and **Send selection to Claude** sends the selected diff lines ([#611](https://github.com/cuonghuunguyen/claude-code-ui/issues/611)).
 - Changes: untracked files show a red **U** badge, apart from added files ([#610](https://github.com/cuonghuunguyen/claude-code-ui/issues/610)).
-- Files: the file menus open a file or folder in the file manager, an editor or the default app ([#612](https://github.com/cuonghuunguyen/claude-code-ui/issues/612)).
+- Files: the file menus open a file or folder in the file manager, an editor or the default app. This works for a WSL daemon and WSL projects. Settings › Open in app sets your own editor command ([#612](https://github.com/cuonghuunguyen/claude-code-ui/issues/612), [#645](https://github.com/cuonghuunguyen/claude-code-ui/issues/645), [#646](https://github.com/cuonghuunguyen/claude-code-ui/issues/646)).
 - Settings: **Test** checks a Claude token account ([#627](https://github.com/cuonghuunguyen/claude-code-ui/issues/627)).
-- Settings › New sessions › **Default permission mode**: the mode of a new session when the Claude settings set none. Default: auto.
+- Settings › New sessions › **Default permission mode**: the mode of a new Claude session when the Claude settings set none. Default: auto.
 - Git: Reset hard, Smart checkout, stash drop and Abort keep the replaced file text in the Timeline ([#606](https://github.com/cuonghuunguyen/claude-code-ui/issues/606)).
+- SSH Sides: a macOS host installs from the bundle, like a Linux host, without npm ([#589](https://github.com/cuonghuunguyen/claude-code-ui/issues/589)).
+- SSH Sides: commands on the host run with the environment of your login shell, so PATH entries from `~/.zprofile` and `~/.bashrc` apply ([#592](https://github.com/cuonghuunguyen/claude-code-ui/issues/592)).
 - SSH Sides: a failed install shows one summary line in the sidebar and the npm output behind **Details**. **Open project** offers **Retry install** and **Check again** ([#617](https://github.com/cuonghuunguyen/claude-code-ui/issues/617), [#618](https://github.com/cuonghuunguyen/claude-code-ui/issues/618)).
 
 ### Changed
 
+- Changes: the tab opens in **Uncommitted** when no default diff view is saved ([#669](https://github.com/cuonghuunguyen/claude-code-ui/pull/669)).
 - SSH Sides: a Side attaches to a running Hub of a schema-compatible build without an install ([#619](https://github.com/cuonghuunguyen/claude-code-ui/issues/619)).
 - SSH Sides: the **Details** of a failed Side stay open across **Retry**, and a setup error is not retried automatically ([#640](https://github.com/cuonghuunguyen/claude-code-ui/issues/640)).
+- Git: a repository whose config points outside the allowed folders (`include.path`, `core.hooksPath` and similar) is refused ([#319](https://github.com/cuonghuunguyen/claude-code-ui/issues/319), [#323](https://github.com/cuonghuunguyen/claude-code-ui/issues/323)).
 - Orchestration: workers in auto mode are no longer asked for git commands ([#628](https://github.com/cuonghuunguyen/claude-code-ui/issues/628)).
 - Changes: the diff header keeps the file name on a narrow screen, and its buttons are 44px high below the `md` breakpoint.
 - Artifacts: the list column is narrower and shows a tooltip with the full title ([#614](https://github.com/cuonghuunguyen/claude-code-ui/issues/614)).
 
 ### Fixed
 
+- Popup menus cap their height to the free screen space and scroll, so every item of a long menu stays reachable on a phone ([#585](https://github.com/cuonghuunguyen/claude-code-ui/pull/585)).
+- Find in files ends within 5 s, and a cut line never splits an emoji ([#652](https://github.com/cuonghuunguyen/claude-code-ui/issues/652)).
+- A restored idle session with a placeholder title shows the text, not a skeleton ([#634](https://github.com/cuonghuunguyen/claude-code-ui/issues/634)).
+- A session whose transcript was deleted leaves the list instead of showing **New session** ([#635](https://github.com/cuonghuunguyen/claude-code-ui/issues/635)).
+- OpenCode: a turn in a folder with slow MCP servers gets its reply, and a turn OpenCode ends on its own says why ([#682](https://github.com/cuonghuunguyen/claude-code-ui/issues/682)).
+- OpenCode: a restart after a crash or a dead server resends a safe request, and the first prompt on a cold server is not lost ([#685](https://github.com/cuonghuunguyen/claude-code-ui/issues/685), [#729](https://github.com/cuonghuunguyen/claude-code-ui/pull/729)).
+- First load: the web app no longer floods the daemon with subscribes and transcript restores when many sessions of stopped Sides exist ([#731](https://github.com/cuonghuunguyen/claude-code-ui/pull/731)).
 - A session with no CLI no longer drops its first new CLI after a login or an account change ([#615](https://github.com/cuonghuunguyen/claude-code-ui/issues/615)).
 - Git: the repository safety check no longer starts git's fsmonitor daemon.
 
