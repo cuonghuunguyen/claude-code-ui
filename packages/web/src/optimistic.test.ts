@@ -128,10 +128,18 @@ describe("optimistic prompts", () => {
     const mine: Pending[] = addPending(undefined, undefined, p("k", "x"));
     const over = apply(said(emptySession(), "u", "x"), { type: "turn_result", id: "r", durationMs: 1, usage: {}, isError: false } as unknown as Part);
     const failed = apply(said(emptySession(), "u", "x"), { type: "session_state", id: "st", state: "error" } as Part);
-    const ids = promptedIds({ s1: mine, [NEW_TAB]: [{ ...mine[0]!, sessionId: "created" }] }, { s2: said(emptySession(), "u", "x"), s3: emptySession(), s4: over, s5: failed });
+    const running = apply(said(emptySession(), "u", "x"), { type: "session_state", id: "st2", state: "running" } as Part);
+    const ids = promptedIds({ s1: mine, [NEW_TAB]: [{ ...mine[0]!, sessionId: "created" }] }, { s2: running, s3: emptySession(), s4: over, s5: failed });
     // s4 finished its first turn and s5 failed before a transcript: their placeholder title is final, no skeleton.
     expect([...ids].sort()).toEqual(["created", "s1", "s2"]);
     expect(promptedIds({ [NEW_TAB]: mine }, {}).size).toBe(0);
+  });
+
+  it("promptedIds: a restored idle view (user_text and tool parts, no turn end) is not prompted", () => {
+    const tool = { type: "tool_call", id: "t1", name: "Read", input: {}, status: "completed" } as unknown as Part;
+    const restored = applyEvent(said(emptySession(), "u", "x"), ev(2, tool));
+    expect(restored.state).toBe("idle");
+    expect(promptedIds({}, { r: restored }).size).toBe(0);
   });
 
   it("titleLoading: prompted with a placeholder title only", () => {
