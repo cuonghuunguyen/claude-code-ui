@@ -168,6 +168,7 @@ broken app is a failed case that goes back to the implementer.
 
 ## Handoff
 A stage role of the `orchestration` plugin (`orchestration:planner|implementer|ui-tester|reviewer`, skill `orchestration:orchestrate-tickets`) reads this playbook for its repo-specific steps. Its prompt is a HANDOFF block: `report-dir` is the scratch folder `development-docs/GH-<n>/` above; use the one port the handoff sender gave you.
+Every `worker_start` you make (reviewer, ui-tester, any helper) passes `mode: "auto"`, never `"default"`: a `default` worker sends every command, read-only ones included, to the user for approval.
 
 ## Without a coordinator
 Working an issue by hand: run the stages yourself in order (plan when the skip rules in
