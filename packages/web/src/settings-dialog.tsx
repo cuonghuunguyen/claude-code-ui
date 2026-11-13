@@ -747,7 +747,7 @@ function LauncherShortcutRow({ installed, request, onInstalled, onError }: { ins
   );
 }
 
-type Row = { key: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number } | { kind: "list" } | { kind: "text" } | { kind: "select"; options: { value: string; label?: Key }[]; parse?: (v: string) => unknown });
+type Row = { key: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number } | { kind: "list" } | { kind: "text" } | { kind: "line" } | { kind: "select"; options: { value: string; label?: Key }[]; parse?: (v: string) => unknown });
 /** The select option's text: its catalog key, or the value itself for a setting value of VS Code's Git extension (true, subFolders, always). */
 const optionLabel = (o?: { value: string; label?: Key }) => o && (o.label ? t(o.label) : o.value);
 /** The group and section title of a daemon section. */
@@ -823,6 +823,15 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
     id: "terminalAccess",
     rows: [
       { key: "enabled", kind: "switch" },
+    ],
+  },
+  {
+    id: "inlineTask",
+    rows: [
+      { key: "enabled", kind: "switch" },
+      { key: "model", kind: "line" },
+      { key: "openCodeModel", kind: "line" },
+      { key: "maxTurns", kind: "number", min: 1, max: 30 },
     ],
   },
   {
@@ -975,6 +984,21 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
                   ))}
                 </SelectContent>
               </Select>
+            ) : row.kind === "line" ? (
+              <input
+                id={id}
+                aria-describedby={`${id}-hint`}
+                type="text"
+                spellCheck={false}
+                autoCapitalize="off"
+                autoComplete="off"
+                value={draft[id] ?? String(value)}
+                onChange={(e) => setDraft((d) => ({ ...d, [id]: e.target.value }))}
+                onBlur={() => id in draft && void save(patch(draft[id]!.trim()), id)}
+                onKeyDown={(e) => e.key === "Enter" && !isImeKey(e.nativeEvent) && (e.preventDefault(), e.currentTarget.blur())}
+                className="h-8 w-44 min-w-0 rounded-md border bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 max-md:w-36"
+                data-testid={id}
+              />
             ) : (
               <input
                 id={id}
@@ -1029,6 +1053,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const focus = daemonGroup("focus");
   const chat = daemonGroup("chat");
   const terminalAccess = daemonGroup("terminalAccess");
+  const inlineTask = daemonGroup("inlineTask");
   const sessions = daemonGroup("sessions");
   const git = daemonGroup("git");
   const launcher = daemonGroup("launcher");
@@ -1070,6 +1095,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     ...(focus ? [{ id: "focus", title: sectionTitle(focus.id), category: "Sessions" as const, body: daemonSection(focus) }] : []),
     ...(chat ? [{ id: "chat", title: sectionTitle(chat.id), category: "Sessions" as const, body: daemonSection(chat) }] : []),
     ...(terminalAccess ? [{ id: "terminalAccess", title: sectionTitle(terminalAccess.id), category: "Sessions" as const, body: daemonSection(terminalAccess) }] : []),
+    ...(inlineTask ? [{ id: "inlineTask", title: sectionTitle(inlineTask.id), category: "Sessions" as const, body: daemonSection(inlineTask) }] : []),
     ...(usageLimit
       ? [
           {

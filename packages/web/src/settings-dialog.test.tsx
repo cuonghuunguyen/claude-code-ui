@@ -28,7 +28,7 @@ async function render({ project, legacy = false, sides, docker, failGet = false,
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
   const onAddons = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {} }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {} }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } };
   if (legacy) (delete (settings as Partial<Settings>).power, delete (settings as Partial<Settings>).app, delete (settings as Partial<Settings>).launcher);
   let refuse: string | undefined;
   const calls: Request[] = [];
@@ -42,7 +42,7 @@ async function render({ project, legacy = false, sides, docker, failGet = false,
       if (refuse) throw new Error(refuse);
       const v = (msg.patch.orchestration ?? {}) as Record<string, unknown>;
       if (typeof v.workerCap === "number" && (v.workerCap < 1 || v.workerCap > 20 || !Number.isInteger(v.workerCap))) throw new Error("Maximum workers per tree must be a whole number from 1 to 20");
-      settings = { orchestration: { ...settings.orchestration, ...v }, sessions: { ...settings.sessions, ...((msg.patch.sessions ?? {}) as object) }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, chat: { ...settings.chat, ...((msg.patch.chat ?? {}) as object) }, terminalAccess: { ...settings.terminalAccess, ...((msg.patch.terminalAccess ?? {}) as object) }, focus: { ...settings.focus, ...((msg.patch.focus ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, power: { ...settings.power, ...((msg.patch.power ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, chrome: { ...settings.chrome, ...((msg.patch.chrome ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, opencode: { ...settings.opencode, ...((msg.patch.opencode ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) }, ...(settings.launcher && { launcher: { ...settings.launcher, ...((msg.patch.launcher ?? {}) as object) } }), labels: { ...settings.labels, ...((msg.patch.labels ?? {}) as object) }, ...(settings.app && { app: { ...settings.app, ...((msg.patch.app ?? {}) as object) } }) } as Settings;
+      settings = { orchestration: { ...settings.orchestration, ...v }, sessions: { ...settings.sessions, ...((msg.patch.sessions ?? {}) as object) }, usageLimit: { ...settings.usageLimit, ...((msg.patch.usageLimit ?? {}) as object) }, chat: { ...settings.chat, ...((msg.patch.chat ?? {}) as object) }, terminalAccess: { ...settings.terminalAccess, ...((msg.patch.terminalAccess ?? {}) as object) }, inlineTask: { ...settings.inlineTask, ...((msg.patch.inlineTask ?? {}) as object) }, focus: { ...settings.focus, ...((msg.patch.focus ?? {}) as object) }, notifications: { ...settings.notifications, ...((msg.patch.notifications ?? {}) as object) }, power: { ...settings.power, ...((msg.patch.power ?? {}) as object) }, performance: { ...settings.performance, ...((msg.patch.performance ?? {}) as object) }, chrome: { ...settings.chrome, ...((msg.patch.chrome ?? {}) as object) }, jira: { ...settings.jira, ...((msg.patch.jira ?? {}) as object) }, opencode: { ...settings.opencode, ...((msg.patch.opencode ?? {}) as object) }, git: { ...settings.git, ...((msg.patch.git ?? {}) as object) }, ...(settings.launcher && { launcher: { ...settings.launcher, ...((msg.patch.launcher ?? {}) as object) } }), labels: { ...settings.labels, ...((msg.patch.labels ?? {}) as object) }, ...(settings.app && { app: { ...settings.app, ...((msg.patch.app ?? {}) as object) } }) } as Settings;
     }
     if (msg.type === "opencode.status") return { state: "running", version: "1.18.34" };
     if (msg.type === "launcher.shortcut") return { installed: msg.on };
@@ -376,6 +376,52 @@ it("shows Terminal access: the switch is on by default and sends its patch only 
   expect(q("settings-terminalAccess-enabled")?.getAttribute("aria-checked")).toBe("false");
 });
 
+it("shows Inline tasks under Sessions: switch, Claude model, OpenCode model and max turns, each saving its own patch (GH-734)", async () => {
+  const { q, calls, pick } = await render();
+  await pick("inlineTask");
+  expect(q("settings-group-inlineTask")?.textContent).toContain("Inline tasks");
+  expect(q("settings-inlineTask")?.textContent).toContain("Inline tasks");
+  const label = (id: string) => document.querySelector(`label[for="settings-inlineTask-${id}"]`)?.textContent;
+  expect(label("enabled")).toBe("Let the agent run inline tasks");
+  expect(label("model")).toBe("Claude model");
+  expect(label("openCodeModel")).toBe("OpenCode model");
+  expect(label("maxTurns")).toBe("Maximum turns");
+  expect(q("settings-inlineTask-enabled")?.getAttribute("aria-checked")).toBe("true");
+  expect((q("settings-inlineTask-model") as HTMLInputElement).value).toBe("haiku");
+  expect((q("settings-inlineTask-openCodeModel") as HTMLInputElement).value).toBe("");
+  expect((q("settings-inlineTask-maxTurns") as HTMLInputElement).value).toBe("10");
+  const maxTurns = q("settings-inlineTask-maxTurns") as HTMLInputElement;
+  expect([maxTurns.min, maxTurns.max]).toEqual(["1", "30"]);
+  const type = async (id: string, value: string) => {
+    const input = q(`settings-inlineTask-${id}`) as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  };
+  await act(async () => q("settings-inlineTask-enabled")!.click());
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { inlineTask: { enabled: false } } });
+  await type("model", "sonnet");
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { inlineTask: { model: "sonnet" } } });
+  await type("openCodeModel", "deepseek/deepseek-v4-flash");
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { inlineTask: { openCodeModel: "deepseek/deepseek-v4-flash" } } });
+  await type("maxTurns", "20");
+  expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { inlineTask: { maxTurns: 20 } } });
+});
+
+it("the Inline tasks text fields are single-line inputs with a visible focus ring and 44px height on touch (GH-734)", async () => {
+  const { q, pick } = await render();
+  await pick("inlineTask");
+  for (const id of ["model", "openCodeModel"]) {
+    const input = q(`settings-inlineTask-${id}`) as HTMLInputElement;
+    expect(input.type).toBe("text");
+    expect(input.className).toContain("focus-visible:ring-2");
+    expect(input.className).toContain("max-md:h-11");
+    expect(input.className).not.toMatch(/\bw-\[\d+px\]/);
+  }
+});
+
 it("shows Usage limits: the continue switch is on by default and sends its patch only", async () => {
   const { q, calls, pick } = await render();
   await pick("usageLimit");
@@ -463,7 +509,7 @@ it("shows a Guide section whose Restart guide button calls onRestartGuide", asyn
 it("lists the groups under category headings: App, Sessions, Integrations, System", async () => {
   const { q } = await render();
   const ids = [...document.querySelectorAll('[role=tab]')].map((t) => t.textContent);
-  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Addons", "Orchestration", "New sessions", "Focus", "Chat", "Terminal access", "Usage limits", "Local history", "Claude account", "Git", "Jira", "OpenCode", "Claude in Chrome", "Launcher", "Sides", "Performance", "Help & about"]);
+  expect(ids).toEqual(["Appearance", "General", "Layout", "Notifications", "Keyboard", "Addons", "Orchestration", "New sessions", "Focus", "Chat", "Terminal access", "Inline tasks", "Usage limits", "Local history", "Claude account", "Git", "Jira", "OpenCode", "Claude in Chrome", "Launcher", "Sides", "Performance", "Help & about"]);
   expect(q("settings-groups")?.getAttribute("role")).toBe("tablist");
   const heads = [...q("settings-groups")!.querySelectorAll('[data-testid^="settings-category-"]')];
   expect(heads.map((h) => h.textContent)).toEqual(["App", "Sessions", "Integrations", "System"]);

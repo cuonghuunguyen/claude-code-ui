@@ -9,6 +9,8 @@ import { MAX_WAIT_MS } from "./orchestration.ts";
 import { DAEMON_SERVER } from "./daemon-mcp.ts";
 import { errorKey, errorText, firstLine } from "./opencode-errors.ts";
 import { ascending } from "./opencode-id.ts";
+import { INLINE_SYSTEM, InlineCollector, clip, inlineTools, lastAssistantText } from "./opencode-inline.ts";
+import { INLINE_TIMEOUT_MS, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
 import { mapTool, openCodeParts, OpenCodeMapper, type OpenCodeMessage, type OpenCodeTodo } from "./opencode-parts.ts";
 import { OpenCodeHttpError, type OpenCodeServer } from "./opencode-server.ts";
 import { StopControl } from "./opencode-stop.ts";
@@ -274,6 +276,10 @@ class OpenCodeSession implements EngineSession {
   private turnAssistant: { id: string; model?: string } | undefined;
   /** The errors the turn showed (`errorKey`): OpenCode 1.19.5 sends a model-not-found error twice. */
   private errorKeys = new Set<string>();
+  /** Running inline tasks (GH-734) by child session id: `ui` = the child's parts show under the parent's call. */
+  private readonly inlines = new Map<string, { notify: (e: Payload) => void; ui: boolean }>();
+  /** The `inline_task` calls an inline run already took. */
+  private readonly inlineClaimed = new Set<string>();
 
   constructor(
     private readonly engine: OpenCodeEngineImpl,
@@ -310,7 +316,7 @@ class OpenCodeSession implements EngineSession {
   private get cwd() {
     return this.session.cwd;
   }
-  owns = (sessionId: string) => sessionId === this.id || this.mapper.isChild(sessionId);
+  owns = (sessionId: string) => sessionId === this.id || this.mapper.isChild(sessionId) || this.inlines.has(sessionId);
 
   begin() {
     this.engine.add(this);
@@ -740,6 +746,97 @@ class OpenCodeSession implements EngineSession {
    *   without showing it, and a prompt sent after Stop waits for it (never joins it).
    * Until the turn ended, a prompt sent after Stop waits for it (prompt(): `afterStop`).
    */
+  /**
+   * Inline task (GH-734): a child session of this one runs the prompt on a small model with only the granted tools. Its parts show under the running
+   * `inline_task` call; permission asks go to this session's UI (`owns`). Ends at the child's idle, error, a cap (turns, output tokens, time) or `hooks.signal`.
+   */
+  inlineTask = async (spec: InlineSpec, hooks: InlineHooks): Promise<InlineResult> => {
+    const t0 = Date.now();
+    const fallback = this.model !== "default" ? this.model : "default";
+    const result = (r: Partial<InlineResult> & Pick<InlineResult, "status">, col?: InlineCollector): InlineResult => ({
+      text: "",
+      model: col?.modelName(fallback) ?? fallback,
+      turns: col?.turns ?? 0,
+      tokens: col?.tokens() ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      ...(col && col.cost() > 0 && { costUsd: col.cost() }),
+      filesChanged: col?.filesChanged() ?? [],
+      durationMs: Date.now() - t0,
+      ...r,
+    });
+    let childId: string | undefined;
+    let col: InlineCollector | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    try {
+      const callId = await this.findInlineCall(hooks);
+      if (callId) this.inlineClaimed.add(callId);
+      const model = await this.inlineModel(spec, hooks);
+      const agent = this.agentName();
+      const own = await this.agentPermission(agent).catch(() => [] as Rule[]);
+      // The parent's mode, agent denials and "always" rules; no claude-ui or orchestration tools (modeBlock hides both without own rules): no recursion.
+      const permission = modeBlock(this.permissionMode, this.always, denialsOf(own), { agent, readOnly: this.readOnly(), ...(this.permissionMode === "config" && { config: own }) });
+      const row = await this.server.request<{ id: string }>("/session", { method: "POST", directory: this.cwd, timeoutMs: 0, body: { parentID: this.id, title: `Inline: ${spec.title}`.slice(0, 80), permission } });
+      childId = row.id;
+      const collector = (col = new InlineCollector(childId));
+      if (callId) this.mapper.adopt(childId, callId);
+      const outcome = new Promise<{ status: InlineResult["status"]; limit?: InlineResult["limit"]; error?: string }>((resolve) => {
+        const end = (o: Parameters<typeof resolve>[0]) => resolve(o);
+        this.inlines.set(childId!, {
+          ui: !!callId,
+          notify: (e) => {
+            collector.feed(e);
+            const cap = collector.cap(spec.maxTurns);
+            if (cap) end({ status: "limit", limit: cap });
+            else if (collector.error) end({ status: "error", error: collector.error });
+            else if (collector.idle) end({ status: "done" });
+          },
+        });
+        timer = setTimeout(() => end({ status: "limit", limit: "time" }), INLINE_TIMEOUT_MS);
+        onAbort = () => end({ status: "stopped" });
+        if (hooks.signal.aborted) onAbort();
+        else hooks.signal.addEventListener("abort", onAbort, { once: true });
+      });
+      const messageID = ascending("msg");
+      this.mapper.own.add(messageID);
+      await this.server.streamReady();
+      await this.server.request(`/session/${childId}/prompt_async`, {
+        method: "POST",
+        directory: this.cwd,
+        timeoutMs: 0,
+        body: { messageID, ...(model && { model }), system: INLINE_SYSTEM, tools: inlineTools(spec), parts: [{ id: ascending("prt"), type: "text", text: spec.text }] },
+      });
+      const end = await outcome;
+      if (end.status !== "done" && end.status !== "error") await this.server.request(`/session/${childId}/abort`, { method: "POST", directory: this.cwd }).catch(() => undefined);
+      let text = collector.text();
+      if (!text && end.status === "done") text = lastAssistantText(await this.server.request<OpenCodeMessage[]>(`/session/${childId}/message`, { directory: this.cwd }).catch(() => []));
+      return result({ ...end, ...clip(text) }, collector);
+    } catch (err) {
+      return result({ status: "error", error: (err as Error).message, ...(col && clip(col.text())) }, col);
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (onAbort) hooks.signal.removeEventListener("abort", onAbort);
+      if (childId) this.inlines.delete(childId);
+    }
+  };
+
+  /** The running `inline_task` call this run belongs to: the newest one with an equal input that no run took. Its event may come after the tool request, so it is awaited a moment. */
+  private async findInlineCall(hooks: InlineHooks) {
+    for (let i = 0; i < 20; i++) {
+      const id = this.mapper.runningCall(`mcp__${DAEMON_SERVER}__inline_task`, hooks.input, this.inlineClaimed);
+      if (id || i === 19) return id;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
+  /** Model of the child: the input, else setting `openCodeModel`, else OpenCode's `small_model`, else the parent's (none: OpenCode's default). */
+  private async inlineModel(spec: InlineSpec, hooks: InlineHooks) {
+    let value = spec.model || hooks.openCodeModel || undefined;
+    value ??= (await this.server.request<{ small_model?: string }>("/config", { directory: this.cwd }).catch(() => undefined))?.small_model || undefined;
+    value ??= this.model !== "default" ? this.model : undefined;
+    const [providerID, ...rest] = (value ?? "").split("/");
+    return value && rest.length ? { providerID: providerID!, modelID: rest.join("/") } : undefined;
+  }
+
   async interrupt() {
     if (this.session.currentState() === "idle") return;
     this.stopped = true;
@@ -840,7 +937,14 @@ class OpenCodeSession implements EngineSession {
   /** One event of the server for this session or one of its subagent sessions. */
   event(payload: Payload) {
     const p = payload.properties;
-    const root = (p.sessionID ?? p.part?.sessionID ?? p.info?.sessionID ?? p.info?.id) === this.id;
+    const sid = p.sessionID ?? p.part?.sessionID ?? p.info?.sessionID ?? p.info?.id;
+    const root = sid === this.id;
+    const inline = sid && sid !== this.id ? this.inlines.get(sid) : undefined;
+    if (inline) {
+      inline.notify(payload);
+      // A run without a call to hang under shows nothing; its permission asks still reach the user.
+      if (!inline.ui && ["message.updated", "message.part.updated", "message.part.delta", "todo.updated"].includes(payload.type)) return;
+    }
     switch (payload.type) {
       case "message.updated": {
         const info = p.info;

@@ -1031,6 +1031,8 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
   chat: { visualize: boolean };
   /** Agent terminal access (GH-709): the session's agent may list, read and run commands in the open terminals of its project (the claude-ui MCP server's terminal tools). Read at each query start. */
   terminalAccess: { enabled: boolean };
+  /** Inline tasks (GH-734): the claude-ui MCP server's `inline_task` tool runs a mid-size task on a small model with minimized context. `model`: Claude model (alias or id); `openCodeModel`: `provider/model`, "" = OpenCode's small model, else the session's model; `maxTurns` is the default of one run. Enabled is read at each query start. */
+  inlineTask: { enabled: boolean; model: string; openCodeModel: string; maxTurns: number };
   /** Claude account (GH-615): `""` = Default (the Daemon's environment), `"cli"` = the CLI login (no CLAUDE_CODE_OAUTH_TOKEN), else the id of a token account. Hub-local. */
   claude: { account: string };
   /** Local history (GH-565): `exclude` globs (matched on the absolute path with / separators) are never stored. */

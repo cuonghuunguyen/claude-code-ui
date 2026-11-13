@@ -35,6 +35,8 @@ import { readTail, taskDirs } from "./shell-output.ts";
 import { perf, type PerfSpanHandle } from "./perf.ts";
 import { interleaveRuns, type TranscriptEnd } from "./transcript.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
+import { gitDirty, runInlineClaude, type InlineBridge } from "./inline-claude.ts";
+import type { InlineHooks, InlineResult, InlineSpec } from "./inline-types.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 /** The SDK types the rest of the daemon's session code names; session.ts imports them from here, never from the SDK. */
@@ -353,8 +355,17 @@ export class ClaudeSession implements EngineSession {
     return this.bashPinned;
   }
 
-  /** Rules already saved never reach this callback. No timeout: the promise waits for the Session's answer or the SDK's abort. */
-  private readonly canUseTool: CanUseTool = async (tool, input, opts) => {
+  /** The parent's own query's callback (the SDK calls it through the owner). */
+  private readonly canUseTool: CanUseTool = (tool, input, opts) => this.askPermission(tool, input, opts);
+
+  /** Inline task runs (GH-734) by the `inline_task` call's tool_use id: each one's abort. */
+  private readonly inlineRuns = new Map<string, () => void>();
+
+  /**
+   * Rules already saved never reach this callback. No timeout: the promise waits for the Session's answer or the SDK's abort.
+   * `bridge`: a step of an inline run asks through the same flow; its call lives in the run's own adapter and its parts get the run's parentId.
+   */
+  private async askPermission(tool: string, input: Record<string, unknown>, opts: Parameters<CanUseTool>[2], bridge?: InlineBridge): Promise<PermissionResult> {
     const { signal, toolUseID, title: sdkTitle, mcpServer, blockedPath, defaultToNo } = opts;
     let suggestions = opts.suggestions ?? [];
     // Forwarded by sdk.mjs (0.3.285) but not declared in its CanUseTool type.
@@ -387,16 +398,18 @@ export class ClaudeSession implements EngineSession {
               settled: false,
               at: Date.now(),
             };
-      this.session.request({ part, ctx: { blockedPath, defaultToNo, requiresUserInteraction }, onAllow: card?.onAllow, reply: (r) => this.reply(part, resolve, r) });
+      this.session.request({ part, ctx: { blockedPath, defaultToNo, requiresUserInteraction }, onAllow: card?.onAllow, reply: (r) => this.reply(part, resolve, r, bridge) });
       signal.addEventListener("abort", () => this.session.cancel(requestId, "Request cancelled"), { once: true });
     });
-  };
+  }
 
   /** The Session's answer to a pending request, as the SDK's `PermissionResult` (the Claude-specific half of respond, answer, cancel). */
-  private reply(part: Parameters<Session["request"]>[0]["part"], resolve: (r: PermissionResult) => void, r: Reply) {
+  private reply(part: Parameters<Session["request"]>[0]["part"], resolve: (r: PermissionResult) => void, r: Reply, bridge?: InlineBridge) {
     const { toolUseId } = part;
+    const adapter = bridge?.adapter ?? this.adapter;
+    const emit = bridge?.emit ?? ((p: Part) => this.session.emit(p));
     const denyCard = () => {
-      for (const p of this.adapter.deny(toolUseId)) this.session.emit(p);
+      for (const p of adapter.deny(toolUseId)) emit(p);
     };
     switch (r.kind) {
       case "allow": {
@@ -413,7 +426,7 @@ export class ClaudeSession implements EngineSession {
               : undefined;
         if (updatedPermissions) this.grants.push(...updatedPermissions.filter((u) => u.destination === "session"));
         // Edit before accept: the timeline shows what runs, not Claude's proposal.
-        if (updatedInput) for (const p of this.adapter.edit(toolUseId, updatedInput)) this.session.emit(p);
+        if (updatedInput) for (const p of adapter.edit(toolUseId, updatedInput)) emit(p);
         return resolve({ behavior: "allow", updatedInput: updatedInput ?? (input as Record<string, unknown>), ...(updatedPermissions ? { updatedPermissions } : {}) });
       }
       case "deny":
@@ -425,7 +438,7 @@ export class ClaudeSession implements EngineSession {
         denyCard();
         return resolve({ behavior: "deny", message: REJECTED, interrupt: true });
       case "coordinator":
-        for (const p of this.adapter.byCoordinator(toolUseId, r.decision, r.message)) this.session.emit(p);
+        for (const p of adapter.byCoordinator(toolUseId, r.decision, r.message)) emit(p);
         if (r.decision === "allow") return resolve({ behavior: "allow", updatedInput: (part as { input: unknown }).input as Record<string, unknown> });
         denyCard();
         // No interrupt: the worker goes on with the reason, like the user's "No" with feedback.
@@ -523,6 +536,7 @@ export class ClaudeSession implements EngineSession {
     this.bashRun?.kill();
     for (const b of this.bashShells.values()) ((b.cleared = true), b.run.kill());
     this.bashNotices = [];
+    for (const stop of [...this.inlineRuns.values()]) stop();
     clearTimeout(this.externalQuiet);
     clearTimeout(this.staleTimer);
     this.generation++;
@@ -794,11 +808,41 @@ export class ClaudeSession implements EngineSession {
     this.session.setState("idle");
   }
 
+  /** Inline task (GH-734): a minimized query on a small model; its steps are child parts of the running `inline_task` call. */
+  inlineTask = (spec: InlineSpec, hooks: InlineHooks): Promise<InlineResult> =>
+    runInlineClaude(
+      {
+        query: (p) => (this.opts.query ?? sdkQuery)(p as never),
+        parent: () => {
+          const dirs = [...(this.opts.uploadDir?.(this.id) ? [this.opts.uploadDir!(this.id)!] : []), ...sessionDirs(this.grants)];
+          const rules = sessionRules(this.grants);
+          return {
+            cwd: this.cwd,
+            permissionMode: this.permissionMode as Exclude<PermissionMode, "config">,
+            allowBypass: !!this.opts.allowBypass,
+            ...(dirs.length && { additionalDirectories: dirs }),
+            ...(rules.length && { allowedTools: rules }),
+          };
+        },
+        parentQuery: () => this.liveQuery(),
+        defaultModel: () => "haiku", // server.ts fills spec.model from Settings.inlineTask.model
+        emit: (p) => this.session.emit(p),
+        canUseTool: (tool, input, o, bridge) => this.askPermission(tool, input, o, bridge),
+        gitDirty,
+        env: () => claudeEnv(),
+        runs: this.inlineRuns,
+      },
+      spec,
+      hooks,
+    );
+
   /**
    * Stops the task of call `callId`: a subagent run (Stop agent; the parent turn goes on with the run's error result) or a
    * background shell (Kill, GH-442). False when no task of that call runs in the live query.
    */
   async stopSubagent(callId: string): Promise<boolean> {
+    const inline = this.inlineRuns.get(callId);
+    if (inline) return inline(), true;
     const task = this.tasks.get(callId);
     if (!task || !this.query) return false;
     await this.query.stopTask(task);

@@ -1,5 +1,6 @@
 // The Engine interface (CONTEXT.md "Engine", ADR 0012): the agent runtime behind a Session: the Claude Engine and the OpenCode Engine.
 import type { Effort, Engine as EngineName, EngineCapabilities, PermissionMode, RewindMode, RewindPreview } from "@claude-ui/protocol";
+import type { InlineRunner } from "./inline-types.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 export interface Engine {
@@ -47,6 +48,8 @@ export interface EngineSession {
   /** Engines with `agents`: reads the agent list again and emits the `agents` part (the chooser's retry). */
   refreshAgents?(): Promise<void>;
   interrupt(): Promise<void>;
+  /** Runs an inline task (GH-734) as a child of the running `inline_task` call; Engines without it refuse the tool. */
+  inlineTask?: InlineRunner;
   stopSubagent(callId: string): Promise<boolean>;
   backgroundShell(toolUseId: string): Promise<boolean>;
   stopShell(id: string): Promise<boolean>;

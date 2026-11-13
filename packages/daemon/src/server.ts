@@ -62,8 +62,9 @@ import { createSessionSettings } from "./session-settings.ts";
 import { createUploads, SESSION_DIR } from "./uploads.ts";
 import { createUpdater, type Updater } from "./update.ts";
 import { createOrchestration, SERVER as ORCHESTRATION_SERVER } from "./orchestration.ts";
-import { createDaemonMcp, DAEMON_SERVER } from "./daemon-mcp.ts";
+import { createDaemonMcp, DAEMON_SERVER, ToolError } from "./daemon-mcp.ts";
 import { createAgentTerminals, terminalPort } from "./agent-terminals.ts";
+import { createInlineTask } from "./inline-task.ts";
 import type { AddressInfo } from "node:net";
 import { serveAppIcon } from "./app-icon.ts";
 import { serveStatic } from "./static.ts";
@@ -1266,6 +1267,18 @@ export function createDaemon(opts: {
         real: (p) => real(p) ?? p,
         known: () => [opts.token, ...secrets.values()],
         enabled: () => appSettings.get().terminalAccess.enabled,
+      }),
+      createInlineTask({
+        enabled: () => appSettings.get().inlineTask.enabled,
+        settings: () => appSettings.get().inlineTask,
+        real: (p) => real(p) ?? p,
+        run: async (id, spec, signal, toolUseId, input) => {
+          const s = sessions.get(id);
+          if (!s?.run.inlineTask) throw new ToolError("This engine cannot run inline tasks.");
+          // The Claude model setting applies to Claude sessions; OpenCode reads its own setting (`openCodeModel`) when the spec names none.
+          const model = spec.model ?? (s.info().engine === "claude" ? appSettings.get().inlineTask.model : undefined);
+          return s.run.inlineTask({ ...spec, ...(model && { model }) }, { signal, toolUseId, input, openCodeModel: appSettings.get().inlineTask.openCodeModel });
+        },
       }),
     ],
   });

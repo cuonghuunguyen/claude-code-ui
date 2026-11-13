@@ -57,6 +57,9 @@ export function mapTool(name: string, input: Record<string, unknown> = {}): { to
   return { tool: rule[0], input: mapped };
 }
 
+/** A value with its object keys sorted, for comparing inputs. */
+const canon = (v: unknown): unknown => (Array.isArray(v) ? v.map(canon) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, x]) => [k, canon(x)])) : v);
+
 const sumTokens = (parts: Iterable<OpenCodePart>) => {
   const t = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
   let cost = 0;
@@ -89,6 +92,13 @@ export class OpenCodeMapper {
   /** The child session of a task call. */
   childOf = (callId: string) => [...this.children].find(([, c]) => c === callId)?.[0];
   isChild = (sessionId: string) => this.children.has(sessionId);
+  /** An inline task's child session (GH-734): its parts show under the call `callId`. */
+  adopt = (childId: string, callId: string) => void this.children.set(childId, callId);
+  /** The newest running call of `tool` whose input equals `input` and is not in `skip` (the call an inline run belongs to). */
+  runningCall(tool: string, input: Record<string, unknown> | undefined, skip: ReadonlySet<string>): string | undefined {
+    const want = JSON.stringify(canon(input ?? {}));
+    return [...this.calls.values()].reverse().find((c) => c.type === "tool_call" && c.tool === tool && (c.status === "running" || c.status === "pending") && !skip.has(c.id) && JSON.stringify(canon(c.input)) === want)?.id;
+  }
   /** The mapped call of a tool call id (Claude card name and input). */
   call = (callId: string) => this.calls.get(callId);
   /** Usage and cost summed over the step-finish parts since the last `resetTurn`. */

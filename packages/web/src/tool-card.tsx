@@ -24,8 +24,9 @@ import { keyText } from "./shortcuts.ts";
 import { fileSize } from "./files.ts";
 import { BackgroundShellContext, PlanTabContext, ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
 import { ArtifactLinkMenu, ArtifactPreview, usePreviewOpen } from "./artifact-preview.tsx";
-import { ARTIFACT_TOOLS, artifactPreviewable, artifactSummary, artifactTitle, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, terminalResult, terminalSummary, terminalTool, todoItems, todoSummary, toolSummary } from "./tools.ts";
+import { ARTIFACT_TOOLS, artifactPreviewable, artifactSummary, artifactTitle, claudeUrl, diffStats, editFiles, filePath, inlineTaskTool, isClaudeUrl, readRange, terminalResult, terminalSummary, terminalTool, todoItems, todoSummary, toolSummary } from "./tools.ts";
 import { t as tr, useT } from "./i18n.ts";
+import { InlineTaskCard, type RunSteps } from "./run-card.tsx";
 import { AddonBlock } from "./addon-render.tsx";
 import { AddonsContext, rendererFor } from "./addons.ts";
 
@@ -90,7 +91,13 @@ export function useExpanded(id: string, force = false) {
 
 /** `awaiting`: the call waits for a permission answer, so the card is held open; except an Edit/Write with a diff,
  *  which stays collapsed because the permission panel shows that diff (GH-86); a click still expands it. */
-export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; result?: ToolResult; awaiting?: boolean; /** An ExitPlanMode call's plan (planOfPart); absent: its `input.plan`. */ plan?: string }) {
+export function ToolCard(props: { call: ToolCall; result?: ToolResult; awaiting?: boolean; /** An ExitPlanMode call's plan (planOfPart); absent: its `input.plan`. */ plan?: string; /** An inline_task call's child steps (GH-734). */ run?: RunSteps }) {
+  // GH-734: the inline_task call is a run card with the steps of its child parts.
+  if (inlineTaskTool(props.call.tool)) return <InlineTaskCard call={props.call} result={props.result} awaiting={props.awaiting} run={props.run} />;
+  return <PlainToolCard {...props} />;
+}
+
+function PlainToolCard({ call, result, awaiting, plan }: { call: ToolCall; result?: ToolResult; awaiting?: boolean; plan?: string; run?: RunSteps }) {
   const t = useT();
   const range = call.tool === "Read" ? readRange(call.input, result?.output) : "";
   const stats = useMemo(() => diffStats(call.tool, call.input), [call.tool, call.input]);

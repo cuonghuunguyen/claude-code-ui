@@ -33,7 +33,7 @@ document.body.append(el);
 const root = createRoot(el);
 afterEach(() => act(() => root.render(<></>)));
 
-const render = (v: SessionView, onShells?: () => void) =>
+const render = (v: SessionView, onShells?: () => void, onStopRun?: (id: string) => Promise<unknown>) =>
   act(async () =>
     root.render(
       <SessionPane
@@ -55,6 +55,7 @@ const render = (v: SessionView, onShells?: () => void) =>
         onRespond={noop}
         onAnswer={noop}
         onShells={onShells}
+        onStopRun={onStopRun}
       />,
     ),
   );
@@ -263,4 +264,43 @@ it("the status bar shells field of a pane calls that pane's own onShells (split 
   expect(field.tagName).toBe("BUTTON");
   await act(async () => field.click());
   expect(mine).toHaveBeenCalledTimes(1);
+});
+
+// GH-734: the inline_task call is a run card whose steps are the call's child parts.
+const INLINE = "mcp__claude-ui__inline_task";
+const child = (id: string, parentId: string, tool: string, input: unknown): Part => ({ ...call(id, tool, input), parentId }) as Part;
+const runCards = () => [...el.querySelectorAll<HTMLElement>('[data-testid="run-card"]')];
+
+it("an inline task shows as one run card; its child steps are not top-level cards and appear in its steps", async () => {
+  const parts = [call("i1", INLINE, { prompt: "find foo" }, "running"), child("c1", "i1", "Grep", { pattern: "foo" }), child("c2", "i1", "Bash", { command: "ls" })];
+  await render(view(parts));
+  expect(runCards()).toHaveLength(1);
+  expect(cards()).toHaveLength(0);
+  await act(async () => runCards()[0]!.querySelector("button")!.click());
+  const toggleSteps = el.querySelector<HTMLElement>('[data-testid="run-steps-toggle"]')!;
+  expect(toggleSteps.textContent).toContain("2 steps");
+  expect(cards()).toHaveLength(0);
+  await act(async () => toggleSteps.click());
+  expect(cards().map((c) => c.textContent)).toEqual([expect.stringContaining("Grep"), expect.stringContaining("Bash")]);
+});
+
+it("a permission request of a child step opens the inline task card and its steps", async () => {
+  const parts = [call("i2", INLINE, { prompt: "run it" }, "running"), child("c3", "i2", "Bash", { command: "rm x" }), permission("c3")];
+  await render(view(parts));
+  expect(cards()).toHaveLength(1);
+  expect(expanded(cards()[0]!)).toBe(true);
+  expect(runCards()[0]!.querySelector("button")!.getAttribute("aria-expanded")).toBe("true");
+});
+
+it("Stop on a running inline task sends the stop request with the call id", async () => {
+  const stop = vi.fn(async () => ({}));
+  await render(view([call("i3", INLINE, { prompt: "long" }, "running")]), undefined, stop);
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="run-stop"]')!.click());
+  expect(stop).toHaveBeenCalledWith("i3");
+});
+
+it("a restored inline task without child parts says its steps are not kept", async () => {
+  await render(view([call("i4", INLINE, { prompt: "old" })]));
+  await act(async () => runCards()[0]!.querySelector("button")!.click());
+  expect(el.querySelector('[data-testid="run-steps-note"]')?.textContent).toBe("Steps are not kept after the daemon restarts.");
 });

@@ -44,7 +44,7 @@ async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object
   const env: Record<string, string> = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_DATA: dataFile, FAKE_OPENCODE_SCRIPT: (o.script ?? []).map(turn).join(","), ...o.env };
   // Terminal access (GH-709) attaches a second MCP server to every session: off here; "OpenCode claude-ui tools" turns it on.
   const appSettings = createSettings();
-  appSettings.set({ terminalAccess: { enabled: false } });
+  appSettings.set({ terminalAccess: { enabled: false }, inlineTask: { enabled: false } } as never);
   const http = createDaemon({
     webRoot: root,
     roots: [root],

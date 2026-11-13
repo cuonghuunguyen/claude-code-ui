@@ -106,6 +106,18 @@ describe("createDaemonMcp", () => {
       expect(spy).toHaveBeenCalled();
       spy.mockRestore();
     });
+    it("passes the calling tool_use id (_meta claudecode/toolUseId) and the abort signal to the tool's ctx", async () => {
+      let seen: { toolUseId?: string; signal?: AbortSignal } = {};
+      const g = group({ tools: [{ name: "who", description: "d", shape: {}, permission: "allow", run: async (ctx) => ((seen = ctx), "ok") }] });
+      const c = await client(make([g]));
+      await c.callTool({ name: "who", arguments: {}, _meta: { "claudecode/toolUseId": "toolu_42" } });
+      expect(seen.toolUseId).toBe("toolu_42");
+      expect(seen.signal).toBeInstanceOf(AbortSignal);
+      await c.callTool({ name: "who", arguments: {} });
+      expect(seen.toolUseId).toBeUndefined();
+      await c.callTool({ name: "who", arguments: {}, _meta: { "claudecode/toolUseId": 7 } });
+      expect(seen.toolUseId).toBeUndefined();
+    });
     it("a gone session gives a tool error", async () => {
       const r = (await (await client(make([group()], () => undefined))).callTool({ name: "demo_read", arguments: { n: 1 } })) as { isError?: boolean };
       expect(r.isError).toBe(true);
