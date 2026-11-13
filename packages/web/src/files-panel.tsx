@@ -717,7 +717,7 @@ export function FileEditor({
               source={() => viewRef.current?.dom ?? null}
               onDismiss={dismissMenu}
               actions={[
-                { id: "add", label: tr("files.selection.add"), icon: <MessageSquarePlusIcon />, title: tr("files.panel.sendSelectionTitle"), onSelect: () => viewRef.current && onSend(selectionMention(viewRef.current.state, path, cwd)) },
+                { id: "add", label: tr("common.selection.addToChat"), icon: <MessageSquarePlusIcon />, title: tr("files.panel.sendSelectionTitle"), onSelect: () => viewRef.current && onSend(selectionMention(viewRef.current.state, path, cwd)) },
                 {
                   id: "quote",
                   label: tr("session.quote.button"),

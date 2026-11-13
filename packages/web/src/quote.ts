@@ -38,6 +38,9 @@ export function appendQuote(
   return { text: t, caret: t.length };
 }
 
+/** Text inserted into the prompt box as its own paragraph: a quote, or any fenced block (a diff selection, terminal output). A mention or slash command has neither. */
+export const isBlockInsert = (s: string) => s.startsWith(">") || /(^|\n)`{3,}[\w-]*\n/.test(s);
+
 const elOf = (n: Node | null) => (n instanceof Element ? n : n?.parentElement);
 
 /** The quotable timeline element holding both ends of the selection (and being `within` when given); cheap, no text is read. */

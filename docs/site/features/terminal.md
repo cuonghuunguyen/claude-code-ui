@@ -27,6 +27,7 @@ For Git Bash on Windows, set `SHELL` to `C:\Program Files\Git\bin\bash.exe` befo
 
 - Terminals live in the daemon. They survive a page reload or a lost connection, and the last output is replayed.
 - A shell starts only when you open the terminal (Toggle terminal, New terminal, or a click on its tab), never on a reload, a session or project switch, or a reconnect. A terminal you left open shows again only while its folder has running shells, and then it does not take the focus.
+- Select output and click **Add to chat** (in the menu next to the selection, or in the right-click menu) to put it in the prompt box as a code block with the terminal's name and folder. The block keeps the last 8,000 characters of a longer selection. Right click also has **Copy** and **Paste**; <kbd>Shift</kbd>+right click shows the browser's own menu, and a program that uses the mouse (vim, tmux) keeps the right click.
 - Plain <kbd>Ctrl</kbd>+letter keys go to the shell. App shortcuts with <kbd>Alt</kbd> still work.
 - Up to 8 terminals per browser tab, 32 in total.
 - Nerd Font icons (as used by many shell prompts) display correctly.
