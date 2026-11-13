@@ -8,7 +8,7 @@ import { WEB_VERSION } from "./version.ts";
 import { useT } from "./i18n.ts";
 import { checkError, installUpdate, updateText, type UpdateInfo } from "./update.tsx";
 
-const BUTTON = "h-7 shrink-0 rounded-md border px-2.5 text-foreground text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 max-md:h-11";
+export const BUTTON = "h-7 shrink-0 rounded-md border px-2.5 text-foreground text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 max-md:h-11";
 
 /** `onCheckUpdate`: App's check (it also brings the notice back); none: no Updates row. `update`: what the daemon announced. */
 function UpdatesRow({ update, onCheckUpdate, request }: { update?: UpdateInfo; onCheckUpdate: () => Promise<UpdateCheckResult>; request?: (m: Request) => Promise<unknown> }) {

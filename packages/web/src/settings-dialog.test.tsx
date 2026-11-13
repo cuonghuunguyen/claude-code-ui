@@ -471,7 +471,7 @@ it("General holds Timeline, Sending, Screen and Recommendations; Layout holds Si
   expect(order()).toEqual(["settings-sidebar", "settings-tabs", "settings-changes", "settings-terminal"]);
   expect(q("settings-terminal")!.querySelector("#settings-terminal-position-hint")!.textContent).toContain("with Main area, as the session's Terminal tab");
   await pick("about");
-  expect(order()).toEqual(["settings-guide", "settings-about"]);
+  expect(order()).toEqual(["settings-guide", "settings-about", "settings-browser-logs"]);
   expect(q("settings-about-web")).not.toBeNull();
   expect(q("settings-about-daemon")).toBeNull();
 });

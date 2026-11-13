@@ -24,6 +24,7 @@ import { TAB_GROUPINGS, type TabGrouping } from "./tab-grouping.ts";
 import { USAGE_RINGS, saveUsageRing, useUsageRing, type UsageRing } from "./usage-ring.ts";
 import { GuideSection } from "./guide-settings.tsx";
 import { AboutSection } from "./about-settings.tsx";
+import { BrowserLogsSection } from "./browser-logs-settings.tsx";
 import type { UpdateInfo } from "./update.tsx";
 import { PerformanceSection } from "./perf-settings.tsx";
 import { SEND_MODES, saveSendMode, useSendMode, type SendMode } from "./send-mode.ts";
@@ -1130,6 +1131,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
         <>
           {onRestartGuide && <GuideSection onRestart={onRestartGuide} />}
           <AboutSection daemonVersion={daemon?.version} update={update} onCheckUpdate={onCheckUpdate} request={request} />
+          <BrowserLogsSection />
         </>
       ),
     },
