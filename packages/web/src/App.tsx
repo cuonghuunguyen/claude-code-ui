@@ -12,6 +12,7 @@ import type {
   Event,
   FsListResult,
   FsGrepResult,
+  FsReplaceResult,
   FsSearchResult,
   ListResult,
   McpListResult,
@@ -161,7 +162,7 @@ import { ChangesPanel } from "./changes-panel.tsx";
 import { sessionDiffChoice } from "./diff-mode.ts";
 import { sessionChanges } from "./changes.ts";
 import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
-import { FindInFiles, type FindQuery } from "./find-in-files.tsx";
+import { FindInFiles, type FindQuery, type FindReplace } from "./find-in-files.tsx";
 import { selectionQuery } from "./find-in-files.ts";
 import { CommandPalette } from "./palette.tsx";
 import { appCommands, shortcutFor } from "./app-commands.ts";
@@ -672,6 +673,7 @@ export function App() {
   const [findOpen, setFindOpen] = useState(false);
   /** The selection Find in files opened with (GH-649). */
   const [findQuery, setFindQuery] = useState<string>();
+  const [findReplace, setFindReplace] = useState(false);
   const [quickOpenQuery, setQuickOpenQuery] = useState("");
   /** A bare-name file link of a docked session: quick open searches that session's folder. */
   const [quickOpenOwner, setQuickOpenOwner] = useState<{ id: string; cwd: string }>();
@@ -2818,12 +2820,21 @@ export function App() {
     status === "connected"
       ? client.current!.request<FsGrepResult>({ type: "fs.grep", cwd, ...q }, { timeoutMs: 15_000 })
       : Promise.reject(new Error(`the daemon is ${status}`));
+  const replaceFiles = (cwd: string) => (r: FindReplace) =>
+    status === "connected"
+      ? client.current!.request<FsReplaceResult>({ type: "fs.replace", cwd, ...r }, { timeoutMs: 30_000 })
+      : Promise.reject(new Error(`the daemon is ${status}`));
+  const undoReplace = (cwd: string) => (id: string, unsaved: string[]) =>
+    status === "connected"
+      ? client.current!.request<FsReplaceResult>({ type: "fs.replaceUndo", cwd, id, unsaved }, { timeoutMs: 30_000 })
+      : Promise.reject(new Error(`the daemon is ${status}`));
   const canQuickOpen = !!shown && status !== "unauthorized";
   // The shortcut runs in the keydown, so focus is still on the editor or field whose selection becomes the query.
-  const showFind = () => {
+  const showFind = (withReplace = false) => {
     if (!findOpen) {
       findOpener.current = document.activeElement;
       setFindQuery(selectionQuery());
+      setFindReplace(withReplace);
     }
     setFindOpen(true);
   };
@@ -3088,7 +3099,7 @@ export function App() {
             suspended={!!fileDialog || !here}
             onPopOut={() => popFile()}
             onShowChanges={(path) => (setChangesReveal((r) => ({ path, seq: (r?.seq ?? 0) + 1 })), reveal("changes"))}
-            onFindInFiles={showFind}
+            onFindInFiles={() => showFind()}
             openPath={on ? openFile?.path : undefined}
             openLine={on ? openFile?.line : undefined}
             openFocus={on ? openFile?.focus : undefined}
@@ -3397,7 +3408,8 @@ export function App() {
     togglePin: activeId && activeId !== NEW_TAB && activeId !== FOCUS_TAB && strip.includes(activeId) ? () => togglePin(activeId) : undefined,
     pinned: !!activeId && pinnedSet.has(activeId),
     quickOpen: showQuickOpen,
-    findInFiles: showFind,
+    findInFiles: () => showFind(),
+    replaceInFiles: () => showFind(true),
     // md: the sidebar breakpoint; below it the sidebar is a drawer.
     toggleSidebar: () => (wide(768) ? setSidebar((v) => !v) : setDrawer((v) => !v)),
     // lg: the side panel breakpoint; below it the session and the files share one pane.
@@ -4314,7 +4326,7 @@ export function App() {
                         suspended={!!fileDialog}
                         onPopOut={() => popFile()}
                         onShowChanges={(path) => (setChangesReveal((r) => ({ path, seq: (r?.seq ?? 0) + 1 })), reveal("changes"))}
-            onFindInFiles={showFind}
+            onFindInFiles={() => showFind()}
                         openPath={openFile?.path}
                         openLine={openFile?.line}
                         openFocus={openFile?.focus}
@@ -4533,7 +4545,14 @@ export function App() {
         <FindInFiles
           connected={status === "connected"}
           initialQuery={findQuery}
+          initialReplace={findReplace || undefined}
           onSearch={grep(shown.cwd)}
+          onReplace={replaceFiles(shown.cwd)}
+          onUndo={undoReplace(shown.cwd)}
+          isUnsaved={(rel) => {
+            const tab = editors.get().tabs[joinPath(shown.cwd, rel)];
+            return !!tab && isDirty(tab);
+          }}
           onOpen={(p, line) => (hideFind(false), openInPanel(p, line))}
           onClose={() => hideFind(true)}
         />

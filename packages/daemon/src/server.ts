@@ -17,8 +17,9 @@ import { configDir } from "./token.ts";
 import { createLocalHistory, HistoryError } from "./local-history.ts";
 import { createSleepWatch, SLEEP_CHECK_MS, SLEEP_KEEP_MS, type Slept } from "./sleep-watch.ts";
 import { asideDisallowed, asideForkPoint, portListening } from "./aside.ts";
+import { createReplaceUndo, replaceInFiles, ReplaceError, undoReplace } from "./replace.ts";
 import { clearSearchCache, searchFiles } from "./search.ts";
-import { findInFiles, GrepError, parseGlobs } from "./grep.ts";
+import { findInFiles, GREP_LIMITS, GrepError, matcher, parseGlobs } from "./grep.ts";
 import { createReposCache } from "./repos-cache.ts";
 import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
 import { copyEntry, createEntry, deleteEntry, duplicateFile, readFileChunk, renameEntry, walkEntry, writeFileChunk, type FsOpsContext } from "./fs-ops.ts";
@@ -619,7 +620,9 @@ export function createDaemon(opts: {
     }
   };
   /** Local history (local-history.ts): `before()` is the one entry point for every write that replaces file content (editor save, agent Edit/Write, git writes). */
-  const localHistory = createLocalHistory({ dir: opts.historyDir ?? join(tmpdir(), `claude-ui-history-${randomUUID()}`), settings: () => appSettings.get().history, allowed: (p) => allowed(p) });
+/** The undo records of applied `fs.replace` calls (docs/spec.md "Editor"), shared by every connection. */
+  const replaceUndo = createReplaceUndo();
+    const localHistory = createLocalHistory({ dir: opts.historyDir ?? join(tmpdir(), `claude-ui-history-${randomUUID()}`), settings: () => appSettings.get().history, allowed: (p) => allowed(p) });
   const secrets = opts.secrets ?? createSecrets();
   const jira = createJira({ config: () => appSettings.get().jira, token: (o) => secrets.jiraToken(o), ...(opts.jiraFetch && { fetch: opts.jiraFetch }) });
   /** `settings.get` / `settings.set` / `jira.token` reply: the settings, the daemon, whether a Jira token is saved (never the token). */
@@ -2136,6 +2139,9 @@ export function createDaemon(opts: {
     let searching: AbortController | undefined;
     /** The running `fs.grep` of this connection: stopped by a newer one and the close. */
     let grepping: AbortController | undefined;
+    /** The running `fs.replace` dry run of this connection (a newer one and the close stop it), and whether an apply or undo is running. */
+    let replacing: AbortController | undefined;
+    let writingReplace = false;
     /** The running `git.commitMessage` of this connection: stopped by `git.commitMessageCancel`, a newer one, and the close. */
     let generating: AbortController | undefined;
     /** Clean up scans (`worktree.status` with `scan`) of this connection: aborted by `worktree.cancel` and when it closes. */
@@ -2157,6 +2163,7 @@ export function createDaemon(opts: {
       attached.forEach((d) => d());
       searching?.abort();
       grepping?.abort();
+      replacing?.abort();
       generating?.abort();
       scans.forEach((a) => a.abort());
       scans.clear();
@@ -3044,6 +3051,53 @@ export function createDaemon(opts: {
             return fail(e instanceof GrepError ? e.code : "fs_error", (e as Error).message);
           } finally {
             if (grepping === ctl) grepping = undefined;
+          }
+        }
+        case "fs.replace":
+        case "fs.replaceUndo": {
+          const isUndo = msg.type === "fs.replaceUndo";
+          const dry = !isUndo && msg.dryRun === true;
+          if (dry) {
+            replacing?.abort();
+            replacing = undefined;
+          }
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          const strs = (v: unknown, max: number) => Array.isArray(v) && v.length <= max && v.every((x) => typeof x === "string");
+          if (isUndo) {
+            if (typeof msg.id !== "string" || msg.id.length > 100 || (msg.unsaved !== undefined && !strs(msg.unsaved, 200))) return fail("bad_request", "id must be a string and unsaved at most 200 strings");
+          } else {
+            if (typeof msg.query !== "string" || !msg.query.trim() || msg.query.length > MAX_SEARCH_CHARS) return fail("bad_request", `query must be a non-blank string of at most ${MAX_SEARCH_CHARS} characters`);
+            if (typeof msg.replace !== "string" || [msg.regex, msg.dryRun].some((b) => b !== undefined && typeof b !== "boolean")) return fail("bad_request", "replace must be a string, regex and dryRun booleans");
+            const files: unknown = msg.files;
+            const lineCount = Array.isArray(files) ? files.reduce((n: number, f: { lines?: unknown[] }) => n + (Array.isArray(f?.lines) ? f.lines.length : Infinity), 0) : Infinity;
+            if (!Array.isArray(files) || files.length < 1 || files.length > GREP_LIMITS.files || lineCount > GREP_LIMITS.matches)
+              return fail("bad_request", `files must list 1 to ${GREP_LIMITS.files} files and at most ${GREP_LIMITS.matches} lines`);
+            const okFile = (f: { path?: unknown; lines?: unknown; mtime?: unknown; size?: unknown }) =>
+              typeof f?.path === "string" && Array.isArray(f.lines) && f.lines.every((n) => Number.isSafeInteger(n) && (n as number) >= 1) && [f.mtime, f.size].every((v) => v === undefined || typeof v === "number");
+            if (!files.every(okFile)) return fail("bad_request", "each file needs a path, line numbers from 1, and numeric mtime and size");
+            try {
+              matcher(msg.query, !!msg.regex);
+            } catch (e) {
+              return fail("bad_regex", (e as Error).message);
+            }
+          }
+          if (!dry) {
+            if (writingReplace) return fail("busy", "Another replace or undo is running");
+            writingReplace = true;
+          }
+          const ctl = dry ? (replacing = new AbortController()) : undefined;
+          const o = { allowed, snapshot: (f: string, why: "replace" | "restore") => localHistory.before(f, why), undo: replaceUndo, afterWrite: clearSearchCache };
+          try {
+            const r = isUndo ? await undoReplace(cwd, msg.id, msg.unsaved ?? [], o) : await replaceInFiles(cwd, { query: msg.query, regex: !!msg.regex, replace: msg.replace, dryRun: dry, files: msg.files }, { ...o, signal: ctl?.signal });
+            // Counts only: the query and the replacement may hold a secret.
+            console.log(`${msg.type}${dry ? " (dry run)" : ""}: ${r.files.length} files listed, ${r.changedFiles} changed, ${r.changedLines} lines`);
+            return reply(r);
+          } catch (e) {
+            return fail(e instanceof ReplaceError ? e.code : "fs_error", (e as Error).message);
+          } finally {
+            if (!dry) writingReplace = false;
+            if (ctl && replacing === ctl) replacing = undefined;
           }
         }
         case "sessions.search": {

@@ -387,6 +387,7 @@ export default {
   "files.timeline.reason.restore": "Before restore",
   "files.timeline.reason.named": "Named entry",
   "files.timeline.reason.paste": "Before paste",
+  "files.timeline.reason.replace": "Before replace in files",
   "files.timeline.actionsFor": "Actions for {title}",
   // blame gutter (GH-564)
   "files.annotate.toggle": "Annotate",

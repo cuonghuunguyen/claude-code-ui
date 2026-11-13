@@ -460,6 +460,7 @@ export default {
   "shortcut.palette.alt": "Bảng lệnh (phím thứ hai)",
   "shortcut.file.open": "Mở tệp",
   "shortcut.find.files": "Tìm trong tệp",
+  "shortcut.replace.files": "Thay thế trong tệp",
   "shortcut.settings.open": "Mở cài đặt",
   "shortcut.shortcuts.open": "Phím tắt",
   "shortcut.notifications.focus": "Đến thông báo",
