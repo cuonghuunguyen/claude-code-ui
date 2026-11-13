@@ -1287,7 +1287,7 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
   );
 }
 
-/** The rect of the last selected line shown (pierre marks them `data-selected-line` inside its shadow root); undefined when none is inside `clip` (the diff's scroll box, else the viewport). */
+/** The rect spanning the selected lines that are shown (pierre marks them `data-selected-line` inside its shadow root), at the x of the last one; undefined when none is inside `clip` (the diff's scroll box, else the viewport). */
 function selectedLinesRect(box: HTMLElement | null, clip: HTMLElement | null | undefined): DOMRect | undefined {
   const lines = box?.querySelector("diffs-container")?.shadowRoot?.querySelectorAll("[data-selected-line]");
   if (!lines?.length) return undefined;
@@ -1295,10 +1295,13 @@ function selectedLinesRect(box: HTMLElement | null, clip: HTMLElement | null | u
   // A box without height has no layout (not attached, display none): do not clip by it.
   const top = c?.height ? Math.max(0, c.top) : 0;
   const bottom = c?.height ? Math.min(window.innerHeight, c.bottom) : window.innerHeight;
-  let best: DOMRect | undefined;
+  let last: DOMRect | undefined;
+  let first: DOMRect | undefined;
   for (const l of lines) {
     const r = l.getBoundingClientRect();
-    if (r.bottom > top && r.top < bottom && (!best || r.bottom >= best.bottom)) best = r;
+    if (r.bottom <= top || r.top >= bottom) continue;
+    if (!first || r.top < first.top) first = r;
+    if (!last || r.bottom >= last.bottom) last = r;
   }
-  return best;
+  return first && last && new DOMRect(last.left, first.top, last.width, last.bottom - first.top);
 }

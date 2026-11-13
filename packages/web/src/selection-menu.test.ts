@@ -17,3 +17,7 @@ it("x is clamped 48px from the viewport edges", () => {
   expect(menuPosition(rect(0, 300, 10), view, false).left).toBe(48);
   expect(menuPosition(rect(990, 300, 10), view, false).left).toBe(952);
 });
+it("a wide menu keeps its whole width inside the viewport", () => {
+  expect(menuPosition(rect(990, 300, 10), view, false, 190).left).toBe(897);
+  expect(menuPosition(rect(0, 300, 10), view, false, 190).left).toBe(103);
+});

@@ -14,7 +14,7 @@ Một ô tìm kiếm cho lệnh, phiên, tệp và nội dung tin nhắn.
 
 | Nhóm | Ví dụ |
 | --- | --- |
-| **Lệnh** | Phiên mới, Worktree mới…, Bật/tắt terminal, Hiện đồ thị git, Bật/tắt chỉ tín hiệu, Mở cài đặt, Hiện hướng dẫn, Mở Focus, Dừng, Đổi model, Đổi mức suy nghĩ, Đổi chế độ quyền, Tua lại, Đổi tài khoản Claude…, Mở trong trình quản lý tệp, Thêm tệp vào prompt, Gửi phần chọn cho Claude |
+| **Lệnh** | Phiên mới, Worktree mới…, Bật/tắt terminal, Hiện đồ thị git, Bật/tắt chỉ tín hiệu, Mở cài đặt, Hiện hướng dẫn, Mở Focus, Dừng, Đổi model, Đổi mức suy nghĩ, Đổi chế độ quyền, Tua lại, Đổi tài khoản Claude…, Mở trong trình quản lý tệp, Thêm tệp vào prompt, Thêm phần chọn vào chat |
 | **Git** | Git: Commit, Git: Push, Git: Rollback…, Git: Nhánh mới…, Git: Checkout…, Git: Smart checkout…, Git: Stash…, Git: Chú thích (Blame), Git: Merge…, Git: Rebase… |
 | **Tùy chỉnh** | Máy chủ MCP, Lệnh slash, Quản lý plugin |
 | **Phiên** | Các phiên của bạn, mới nhất trước |
@@ -24,7 +24,7 @@ Một ô tìm kiếm cho lệnh, phiên, tệp và nội dung tin nhắn.
 ## Cần biết {#good-to-know}
 
 - Chỉ các lệnh phù hợp ở thời điểm hiện tại mới được liệt kê. Ví dụ, Tua lại bị ẩn khi Claude đang làm việc.
-- Các lệnh git hiện trong kho git. Rollback, Checkout, Merge và Rebase mở hộp thoại tương ứng hoặc danh sách nhánh trong Đồ thị git, để bạn chọn nhánh ở đó. **Gửi phần chọn cho Claude** hiện khi có dòng diff được chọn trong Thay đổi, và **Đổi tài khoản Claude…** hiện khi có từ hai tài khoản.
-- Các lệnh Rollback, Nhánh mới, Checkout, Smart checkout, Stash, Chú thích, Merge, Rebase, Mở trong trình quản lý tệp, Thêm vào prompt, Gửi phần chọn và Đổi tài khoản không có phím tắt mặc định. Gán phím trong **Phím tắt**.
+- Các lệnh git hiện trong kho git. Rollback, Checkout, Merge và Rebase mở hộp thoại tương ứng hoặc danh sách nhánh trong Đồ thị git, để bạn chọn nhánh ở đó. **Thêm phần chọn vào chat** hiện khi có dòng diff được chọn trong Thay đổi, và **Đổi tài khoản Claude…** hiện khi có từ hai tài khoản.
+- Các lệnh Rollback, Nhánh mới, Checkout, Smart checkout, Stash, Chú thích, Merge, Rebase, Mở trong trình quản lý tệp, Thêm vào prompt, Thêm phần chọn vào chat và Đổi tài khoản không có phím tắt mặc định. Gán phím trong **Phím tắt**.
 - Mỗi lệnh hiển thị phím tắt của nó. Tất cả có trên trang [Phím tắt](../reference/shortcuts).
 - Để mở trực tiếp một tệp, <kbd>Ctrl</kbd>+<kbd>P</kbd> (**Mở tệp**) nhanh hơn.

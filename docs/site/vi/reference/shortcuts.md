@@ -110,7 +110,7 @@ Các lệnh này nằm trong [bảng lệnh](../features/palette) và hiện **C
 - Rebase
 - Mở trong trình quản lý tệp
 - Thêm vào prompt
-- Gửi phần chọn cho Claude
+- Thêm phần chọn vào chat
 - Đổi tài khoản Claude
 
 ## Phím tiền tố {#prefix-key}

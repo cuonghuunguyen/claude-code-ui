@@ -26,11 +26,13 @@ export function SelectionMenu({ anchor, actions, source, onDismiss, onScroll = "
   const t = useT();
   const [rect, setRect] = useState<DOMRect | undefined>(anchor);
   const root = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
   const live = useRef({ anchor, source, onDismiss });
   live.current = { anchor, source, onDismiss };
   useLayoutEffect(() => {
     const next = anchor();
     setRect((r) => (same(r, next) ? r : next));
+    setWidth(root.current?.offsetWidth ?? 0);
   });
   useEffect(() => {
     let frame = 0;
@@ -71,7 +73,7 @@ export function SelectionMenu({ anchor, actions, source, onDismiss, onScroll = "
   }, [onScroll]);
   if (!rect) return null;
   const coarse = !!window.matchMedia?.("(pointer: coarse)").matches;
-  const place = menuPosition(rect, { width: window.innerWidth, height: window.innerHeight }, coarse);
+  const place = menuPosition(rect, { width: window.innerWidth, height: window.innerHeight }, coarse, width);
   return createPortal(
     <div
       ref={root}
