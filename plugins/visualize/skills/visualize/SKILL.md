@@ -37,13 +37,19 @@ Rules:
 - Prefer plain inline SVG for simple charts and diagrams: no network needed.
 - Libraries only from `cdn.jsdelivr.net`, `cdnjs.cloudflare.com` or `unpkg.com` (Chart.js, D3, Mermaid ESM, ...). Any other host is blocked.
 - No `fetch`/XHR, no storage or cookies, no forms, no popups, no access to the page around the frame. All are blocked.
-- Colours: use the host CSS variables so the visual follows the light/dark theme: `--background`, `--foreground`, `--primary`, `--primary-foreground`, `--muted`, `--muted-foreground`, `--border`, `--accent`. Use them for text, axes, lines and the main series (`fill="var(--primary)"`); pick your own hex colours for further series, readable on both light and dark.
-- The page is transparent with 13px sans-serif text. The frame height follows the content; make the width fluid (`width:100%`, `viewBox`), height at most ~800px.
+- Theme: the frame follows the app's light/dark mode and colour theme (Default, Catppuccin, Nord, ...) and recolours live on a switch. Every colour comes from a host CSS variable; never a hex, rgb or named colour, never a library's default palette.
+  - Surfaces and text: `--background`, `--foreground`, `--card`, `--card-foreground`, `--secondary`, `--muted`, `--muted-foreground`, `--border`, `--accent`, `--ring`.
+  - Emphasis: `--primary` with `--primary-foreground` on it.
+  - Status: `--success`, `--warning`, `--destructive`, `--info`.
+  - Series, in order: `--chart-1` … `--chart-8` (distinct hues, readable on `--background`).
+  - Shape and type: `--radius`, `--font-sans`.
+  - SVG: `fill="var(--chart-1)"`. JS (canvas, Chart.js, D3): read with `getComputedStyle(document.documentElement).getPropertyValue("--chart-1").trim()` and redraw on `addEventListener("themechange", draw)` (fired after a theme switch updates the variables; CSS `var()` updates by itself).
+- The page has `--background`, `--foreground` text, 13px `--font-sans`. The frame height follows the content; make the width fluid (`width:100%`, `viewBox`), height at most ~800px.
 - The frame is as tall as the root box: keep every element in normal flow inside it. No `position:absolute`/`fixed` content outside the root box, no negative margins pushing out, no `100vh`/`100%`-height layouts; give the root an explicit height when a chart library needs one.
 - Add one short sentence of text outside the fence about what the visual shows.
 
 Example fragment (the file content, or the fence content without an uploads folder):
 
 ```visualize
-<svg viewBox="0 0 240 120" width="100%"><rect x="20" y="70" width="40" height="40" fill="var(--primary)"/><rect x="90" y="40" width="40" height="70" fill="#3b82f6"/><rect x="160" y="10" width="40" height="100" fill="#f59e0b"/></svg>
+<svg viewBox="0 0 240 120" width="100%"><rect x="20" y="70" width="40" height="40" fill="var(--primary)"/><rect x="90" y="40" width="40" height="70" fill="var(--chart-2)"/><rect x="160" y="10" width="40" height="100" fill="var(--chart-3)"/></svg>
 ```

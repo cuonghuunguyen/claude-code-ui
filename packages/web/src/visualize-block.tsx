@@ -18,13 +18,17 @@ export const VisualizeAnswerContext = createContext<((text: string) => void) | u
 export const ANSWER_MAX = 2000;
 const FILE = /^(?:\/|[A-Za-z]:[\\/])[^\n]*\.html?$/;
 
-/** The host colours handed to the frame (a fixed list: the frame never reads the app). */
-const VARS = ["--background", "--foreground", "--primary", "--primary-foreground", "--muted", "--muted-foreground", "--border", "--accent"];
+/** The host tokens handed to the frame (a fixed list: the frame never reads the app). */
+const VARS = ["--background", "--foreground", "--card", "--card-foreground", "--primary", "--primary-foreground", "--secondary", "--muted", "--muted-foreground", "--border", "--accent", "--ring", "--destructive", "--success", "--warning", "--info", "--radius", "--font-sans"];
+/** `--chart-1..8`: series colours from the colour theme's syntax and status tokens, so each palette (Catppuccin, Nord, ...) recolours the series; all reach 4.5:1 on the theme background. */
+const CHART = ["--syntax-function", "--syntax-string", "--syntax-number", "--syntax-keyword", "--warning", "--syntax-variable", "--syntax-type", "--info"];
 const themeVars = () => {
   const cs = getComputedStyle(document.documentElement);
+  const v = (n: string) => cs.getPropertyValue(n).trim();
   // --scheme feeds the frame's color-scheme: without it the frame keeps the light canvas in a dark app.
   const scheme = document.documentElement.classList.contains("dark") ? "dark" : "light";
-  return { ...Object.fromEntries(VARS.map((n) => [n, cs.getPropertyValue(n).trim()] as const).filter(([, v]) => v)), "--scheme": scheme };
+  const pairs = [...VARS.map((n) => [n, v(n)] as const), ...CHART.map((n, i) => [`--chart-${i + 1}`, v(n)] as const)];
+  return { ...Object.fromEntries(pairs.filter(([, x]) => x)), "--scheme": scheme };
 };
 
 /** Streamdown renderer of the `visualize` fence: a placeholder while it streams (re-highlighting a growing HTML block per token stalls the UI), the frame once it is closed. */

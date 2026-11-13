@@ -46,8 +46,8 @@ export const VISUALIZE_HEADERS = {
 } as const;
 
 // Height = the root box (content height); scrollHeight would never fall below the frame height, so a narrower viewport could not shrink it.
-// Runs inside the written document (document.open drops the shell's listeners): reports its height, applies theme updates.
-const INNER = `(function(){var p=parent,H=function(){p.postMessage({v:1,type:"height",height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*")};new ResizeObserver(H).observe(document.documentElement);addEventListener("load",H);addEventListener("message",function(e){var d=e.data;if(e.source===p&&d&&d.v===1&&d.type==="theme"&&d.vars)for(var k in d.vars)if(OK(k,d.vars[k]))document.documentElement.style.setProperty(k,d.vars[k])})})();`;
+// Runs inside the written document (document.open drops the shell's listeners): reports its height, applies theme updates and fires `themechange` so JS-drawn visuals recolour.
+const INNER = `(function(){var p=parent,H=function(){p.postMessage({v:1,type:"height",height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*")};new ResizeObserver(H).observe(document.documentElement);addEventListener("load",H);addEventListener("message",function(e){var d=e.data;if(e.source===p&&d&&d.v===1&&d.type==="theme"&&d.vars){for(var k in d.vars)if(OK(k,d.vars[k]))document.documentElement.style.setProperty(k,d.vars[k]);dispatchEvent(new Event("themechange"))}})})();`;
 
 /** The shell: waits for the host's render message, then replaces its document with the fence HTML after a style and script prefix. */
 export const VISUALIZE_SHELL = `<!doctype html><meta charset="utf-8"><title>visualization</title><script>
@@ -60,7 +60,7 @@ done=true;
 var vars="";for(var k in (d.vars||{}))if(OK(k,d.vars[k]))vars+=k+":"+d.vars[k]+";";
 var ok="var OK="+OK.toString()+";";
 document.open();
-document.write("<!doctype html><meta charset=utf-8><style>:root{"+vars+"}html{color-scheme:var(--scheme,light)}html,body{margin:0;background:var(--background);color:var(--foreground);font:13px ui-sans-serif,system-ui,sans-serif}</style><scr"+"ipt>"+ok+${JSON.stringify(INNER)}+"</scr"+"ipt>"+d.html);
+document.write("<!doctype html><meta charset=utf-8><style>:root{"+vars+"}html{color-scheme:var(--scheme,light)}html,body{margin:0;background:var(--background);color:var(--foreground);font:13px var(--font-sans,ui-sans-serif,system-ui,sans-serif)}</style><scr"+"ipt>"+ok+${JSON.stringify(INNER)}+"</scr"+"ipt>"+d.html);
 document.close();
 });
 parent.postMessage({v:1,type:"ready"},"*");

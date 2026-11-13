@@ -105,6 +105,20 @@ it("a theme change re-sends the colours with the scheme to the frame", async () 
   document.documentElement.classList.remove("dark");
 });
 
+it("the frame gets the theme tokens and --chart-1..8 from the colour theme's syntax and status colours", async () => {
+  const root = document.documentElement.style;
+  root.setProperty("--card", "#123456");
+  root.setProperty("--syntax-function", "#0000aa");
+  root.setProperty("--info", "#00aaaa");
+  const el = await mount(<VisualizeBlock code="<p>hi</p>" />);
+  const f = frameOf(el);
+  const post = vi.fn();
+  Object.defineProperty(f, "contentWindow", { value: { postMessage: post } });
+  await from(f.contentWindow, { v: 1, type: "ready" });
+  expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: "render", vars: expect.objectContaining({ "--card": "#123456", "--chart-1": "#0000aa", "--chart-8": "#00aaaa" }) }), "*");
+  for (const n of ["--card", "--syntax-function", "--info"]) root.removeProperty(n);
+});
+
 it("Show code swaps the frame for the source and back", async () => {
   const el = await mount(<VisualizeBlock code="<p>src</p>" />);
   const btn = () => el.querySelector<HTMLElement>('[data-testid="visualize-show-code"]')!;

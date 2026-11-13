@@ -87,7 +87,7 @@ it("the written prefix paints the page with the host colours and color-scheme be
   const doc = written[0]!;
   expect(doc).toContain(":root{--background:#111;--scheme:dark;}");
   expect(doc).toContain("html{color-scheme:var(--scheme,light)}");
-  expect(doc).toContain("html,body{margin:0;background:var(--background);color:var(--foreground);");
+  expect(doc).toContain("html,body{margin:0;background:var(--background);color:var(--foreground);font:13px var(--font-sans,ui-sans-serif,system-ui,sans-serif)}");
   expect(doc).not.toContain("background:transparent");
   expect(doc.indexOf("<style>")).toBeLessThan(doc.indexOf("<p>x</p>"));
   // The theme listener of the written document sets the same variables, --scheme included, and refuses unsafe ones.
@@ -95,9 +95,12 @@ it("the written prefix paints the page with the host colours and color-scheme be
   const style: Record<string, string> = {};
   const listeners: ((e: unknown) => void)[] = [];
   const p2 = { postMessage() {} };
-  new Function("parent", "addEventListener", "document", "ResizeObserver", inner)(p2, (t: string, h: (e: unknown) => void) => t === "message" && listeners.push(h), { documentElement: { scrollHeight: 0, getBoundingClientRect: () => ({ height: 0 }), style: { setProperty: (k: string, v: string) => (style[k] = v) } } }, class { observe() {} });
+  const fired: string[] = [];
+  new Function("parent", "addEventListener", "document", "ResizeObserver", "dispatchEvent", inner)(p2, (t: string, h: (e: unknown) => void) => t === "message" && listeners.push(h), { documentElement: { scrollHeight: 0, getBoundingClientRect: () => ({ height: 0 }), style: { setProperty: (k: string, v: string) => (style[k] = v) } } }, class { observe() {} }, (e: Event) => fired.push(`${e.type}:${style["--background"]}`));
   listeners[0]!({ source: p2, data: { v: 1, type: "theme", vars: { "--background": "#fff", "--scheme": "light", "--bad": "a;b" } } });
   expect(style).toEqual({ "--background": "#fff", "--scheme": "light" });
+  // JS-drawn visuals redraw on `themechange`, fired after the variables are set.
+  expect(fired).toEqual(["themechange:#fff"]);
   // Height is the root box: scrollHeight never falls below the frame height, so the frame could not shrink.
   let sent: unknown;
   const content = { height: 50 };
