@@ -704,8 +704,10 @@ it("GH-710 the shell gets the focus back when the context menu closes, but not a
   const view = el.querySelector("[data-testid=terminal-view]")!;
   await ctx(view);
   const before = t.focused;
-  await act(async () => byId("terminal-menu-copy")!.click());
+  // Closed with Escape (no item that focuses by itself): the shell still gets the focus.
+  await act(async () => void byId("terminal-menu")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
   await later(50);
+  expect(byId("terminal-menu")).toBeNull();
   expect(t.focused).toBeGreaterThan(before);
   await ctx(view);
   const mid = t.focused;
