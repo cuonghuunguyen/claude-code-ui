@@ -321,6 +321,8 @@ export class Session {
   sync() {
     return this.run.sync();
   }
+  /** The turn that runs is a keep-warm tick (set by the orchestration): its idle carries `keepWarm`, once. */
+  keepWarmTurn = false;
   working() {
     return this.run.working();
   }
@@ -359,6 +361,11 @@ export class Session {
   setLimitStop(resetsAt: number | undefined) {
     this.limitStopped = true;
     this.emit({ type: "limit_stop", id: "limit_stop", stopped: true, ...(resetsAt && { resetsAt }) });
+  }
+
+  /** The last turn ended at the usage limit and no turn has started since. */
+  get limitStop() {
+    return this.limitStopped;
   }
 
   /** Shows the queued messages and why they are paused (prompt-queue.ts). */
@@ -558,7 +565,9 @@ export class Session {
       this.emit({ type: "prompt_suggestion", id: "prompt_suggestion", text: null });
     }
     this.run.beforeStateEvent();
-    this.emit({ type: "session_state", id: "session_state", state, ...(state === "idle" && this.working() ? { working: true as const } : {}) });
+    const keepWarm = state === "idle" && this.keepWarmTurn;
+    if (state === "idle") this.keepWarmTurn = false;
+    this.emit({ type: "session_state", id: "session_state", state, ...(state === "idle" && this.working() ? { working: true as const } : {}), ...(keepWarm ? { keepWarm: true as const } : {}) });
     if (state === "idle") this.run.idle();
   }
 

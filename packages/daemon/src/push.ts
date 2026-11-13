@@ -110,7 +110,7 @@ export function createNotifier(opts: {
       clearTimeout(t.timer);
       if (part.state !== "needs_input") leave(id, t);
       if (part.state === "needs_input") fireGrouped(id, t, `Needs input · ${t.request ? describe(t.request) : "waiting for an answer"}`, false);
-      else if ((part.state === "error" || (part.state === "idle" && !part.working)) && busy) {
+      else if ((part.state === "error" || (part.state === "idle" && !part.working)) && busy && !part.keepWarm) {
         const body = t.error ? `Error · ${t.error}` : (lastLine(t.text) ?? "Finished");
         t.timer = setTimeout(() => fire(id, t, body), FINISH_DELAY_MS);
       }

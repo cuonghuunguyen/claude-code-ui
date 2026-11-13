@@ -143,7 +143,7 @@ export type Part = { parentId?: string } & (
       at?: number;
     }
   /** `working`: only with `idle`; a background task (subagent run, background shell) of the session's own query still runs (Session.working()). */
-  | { type: "session_state"; id: string; state: SessionState; working?: true }
+  | { type: "session_state"; id: string; state: SessionState; working?: true; /** The idle that ends a keep-warm tick turn (the daemon's own): it makes no session unread and no finished notification. */ keepWarm?: true }
   /** Model switched with session.setModel. `model` is a `ModelInfo.value`; "default" = the SDK default. */
   | { type: "session_model"; id: string; model: string }
   /** Permission mode changed: by session.setPermissionMode, or by the CLI (plan approved, "all edits this session"). */
@@ -213,7 +213,8 @@ export const TIMELINE_EXCLUDED: ReadonlySet<Part["type"]> = new Set<Part["type"]
 ]);
 
 /** A session_state that makes the session unread: needs input, or finished (idle without background work, or error) after being busy. */
-export function isAttention(prev: SessionState, part: { state: SessionState; working?: true }): boolean {
+export function isAttention(prev: SessionState, part: { state: SessionState; working?: true; keepWarm?: true }): boolean {
+  if (part.keepWarm) return false;
   const busy = prev === "running" || prev === "needs_input";
   return part.state === "needs_input" || (busy && (part.state === "error" || (part.state === "idle" && !part.working)));
 }

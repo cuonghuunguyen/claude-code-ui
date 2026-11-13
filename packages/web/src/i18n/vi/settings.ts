@@ -223,6 +223,8 @@ export default {
   "settings.row.orchestration.maxChildren.hint": "Số worker mà một phiên (bạn hoặc một worker) được chạy cùng lúc. Số worker tối đa mỗi cây vẫn tính cả cây.",
   "settings.row.orchestration.stallMinutes.label": "Cảnh báo treo sau (phút)",
   "settings.row.orchestration.stallMinutes.hint": "Báo cho coordinator khi một worker đang chạy không gửi gì trong khoảng thời gian này. 0 = tắt.",
+  "settings.row.orchestration.keepWarmMinutes.label": "Giữ cache của coordinator ấm (phút)",
+  "settings.row.orchestration.keepWarmMinutes.hint": "Khi coordinator đang chờ worker, subagent hoặc lệnh nền đang chạy, đánh thức nó bằng một tin một dòng sau khoảng thời gian này kể từ lượt cuối để cache prompt không nguội. Đặt thấp hơn tuổi thọ cache: 55 cho cache 1 giờ, 4 cho cache 5 phút. 0 = tắt.",
   "settings.row.orchestration.workerMode.label": "Chế độ worker",
   "settings.row.orchestration.workerMode.hint": "Chế độ quyền của worker mới khi coordinator không chỉ định. Chế độ của coordinator: chế độ của chính coordinator (bypass cho ra auto). Chế độ cao hơn của coordinator vẫn hỏi bạn trên thẻ worker_start.",
   "settings.workerMode.coordinator": "Chế độ của coordinator",

@@ -221,6 +221,8 @@ export default {
   "settings.row.orchestration.maxChildren.hint": "Workers one session (you or a worker) may run at the same time. Maximum workers per tree still counts its whole tree.",
   "settings.row.orchestration.stallMinutes.label": "Stall alert after (minutes)",
   "settings.row.orchestration.stallMinutes.hint": "Tell the coordinator when a running worker sends nothing for this long. 0 = off.",
+  "settings.row.orchestration.keepWarmMinutes.label": "Keep coordinator cache warm (minutes)",
+  "settings.row.orchestration.keepWarmMinutes.hint": "While a coordinator waits on running workers, subagents or background commands, wake it this long after its last turn with a one-line message so its prompt cache stays warm. Keep it under the cache lifetime: 55 for the 1-hour cache, 4 for the 5-minute cache. 0 = off.",
   "settings.row.orchestration.workerMode.label": "Worker mode",
   "settings.row.orchestration.workerMode.hint": "Permission mode of a new worker when the coordinator does not name one. Coordinator's mode: the coordinator's own (bypass gives auto). A mode above the coordinator's still asks you on the worker_start card.",
   "settings.workerMode.coordinator": "Coordinator's mode",

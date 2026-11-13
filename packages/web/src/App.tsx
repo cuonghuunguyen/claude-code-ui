@@ -52,7 +52,7 @@ import type {
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
 import { rawItems } from "./transfer.ts";
-import { ALL_CAPABILITIES, capabilitiesOf, ENGINES, LOCAL_SIDE, isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, SESSION_MODES, type AsideOpenResult, type FsReadResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, capabilitiesOf, ENGINES, LOCAL_SIDE, isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_KEEPWARM, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, SESSION_MODES, type AsideOpenResult, type FsReadResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -226,6 +226,8 @@ const RESUBSCRIBE_CONCURRENCY = 4;
 const TERMINAL_KEY = "claude-ui.terminalOpen";
 const PANEL_HIDDEN_KEY = "claude-ui.sidePanelHidden";
 const FILE_TREE_HIDDEN_KEY = "claude-ui.fileTreeHidden";
+/** The marker a coordinator's daemon-sent message starts with (a worker notice or a keep-warm message), else undefined. */
+const noticeMarker = (text: string) => [ORCHESTRATION_NOTICE, ORCHESTRATION_KEEPWARM].find((m) => text.startsWith(m));
 const lastSegment = (p: string) => p.split(/[\\/]/).pop()!;
 type RemovingWt = { project: string; path: string; branch: string; status?: WorktreeStatusResult; cached?: WorktreeStatusResult; checking: boolean; error?: string };
 /** The remove dialog's text: Checking… (with the cached status and its age when there is one), the reason when blocked, the error, or the counts. */
@@ -3365,7 +3367,7 @@ export function App() {
       modes: modesOf(shown.permissionModes, view?.model ?? shown.model, modelsOf(shown.engine ?? "claude", shown.cwd), capabilitiesOf(shown)),
       capabilities: capabilitiesOf(shown),
       running: view?.state === "running" || view?.state === "needs_input",
-      prompts: timeline(view!).flatMap((i) => (i.kind === "part" && i.part.type === "user_text" && !(isCoordinator(shown.id) && i.part.text.startsWith(ORCHESTRATION_NOTICE)) ? [{ id: i.part.id, text: summarizePasted(i.part.text) }] : [])),
+      prompts: timeline(view!).flatMap((i) => (i.kind === "part" && i.part.type === "user_text" && !(isCoordinator(shown.id) && noticeMarker(i.part.text)) ? [{ id: i.part.id, text: summarizePasted(i.part.text) }] : [])),
     } : undefined,
     runInBackground: shown && ownerOnScreen && !draftShown && view && foregroundShells(view).length
       ? () => {
@@ -5617,7 +5619,7 @@ export function SessionPane({
           itemKey={timelineKey}
           reveal={reveal}
           sticky={(item) => {
-            if (item.kind !== "part" || item.part.type !== "user_text" || briefTag(item.part.text) || (coordinator && item.part.text.startsWith(ORCHESTRATION_NOTICE))) return;
+            if (item.kind !== "part" || item.part.type !== "user_text" || briefTag(item.part.text) || (coordinator && noticeMarker(item.part.text))) return;
             const { text } = splitUploads(summarizePasted(item.part.text));
             const n = item.part.images.length;
             const label = text || `${n} image${n === 1 ? "" : "s"}`;
@@ -5654,12 +5656,12 @@ export function SessionPane({
               </FoldRow>
             ) : item.kind === "context" ? (
               <ContextGroup calls={item.calls} result={(c) => resultOf(view, c)} awaiting={(c) => awaitingPermission(view).has(c.toolUseId)} />
-            ) : item.part.type === "user_text" && coordinator && item.part.text.startsWith(ORCHESTRATION_NOTICE) ? (
+            ) : item.part.type === "user_text" && coordinator && noticeMarker(item.part.text) ? (
               <div className={`flex ${index ? "mt-3" : ""}`} data-testid="orchestration-notice">
                 <span className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-secondary px-2 py-0.5 text-muted-foreground text-xs">
                   <UsersIcon className="size-3.5 shrink-0" aria-hidden />
                   <span className="sr-only">{tr("app.prompt.orchestration")} </span>
-                  <span className="min-w-0 [overflow-wrap:anywhere]">{item.part.text.slice(ORCHESTRATION_NOTICE.length).trim()}</span>
+                  <span className="min-w-0 [overflow-wrap:anywhere]">{item.part.text.slice(noticeMarker(item.part.text)!.length).trim()}</span>
                 </span>
               </div>
             ) : item.part.type === "user_text" && briefTag(item.part.text) ? (
