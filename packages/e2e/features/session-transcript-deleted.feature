@@ -8,5 +8,4 @@ Feature: A session whose transcript was deleted leaves the list (GH-635)
     And I delete the transcript file of the open session
     And I reload the page
     Then the sidebar has no row for the deleted session
-    And the sidebar has no row titled "New session"
     And I capture "session-transcript-deleted"

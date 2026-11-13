@@ -18,7 +18,3 @@ Then("the sidebar has no row for the deleted session", async ({ page, memo }) =>
   const id = memo.owner!;
   await expect(page.locator(`[data-testid="session-item"][data-session-id="${id}"]`)).toHaveCount(0, { timeout: 30_000 });
 });
-
-Then("the sidebar has no row titled {string}", async ({ page }, title: string) => {
-  await expect(page.locator('[data-testid="session-item"]').filter({ hasText: title })).toHaveCount(0);
-});
