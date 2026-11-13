@@ -2,7 +2,7 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
-## 1.3.0 - 2026-11-13
+## 1.3.0 - 2026-11-14
 
 ### Added
 
