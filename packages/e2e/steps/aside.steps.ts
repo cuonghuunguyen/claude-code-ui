@@ -1,10 +1,10 @@
 // Aside (/btw) steps (docs/spec.md "Aside"). The owner's locators are scoped to the session area, the popup's to [data-aside-popup]:
 // with a popup open the page has two prompt boxes, send buttons and permission panels.
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { openApp, openProject, prepareHaikuSession, sendPrompt, waitTurnEnd } from "../support/flow.ts";
+import { transcriptOf } from "../support/transcript.ts";
 import { TURN_MS } from "../support/ui.ts";
 import { Given, Then, When } from "./fixtures.ts";
 
@@ -14,16 +14,6 @@ const prompt = (scope: ReturnType<typeof owner>) => scope.getByRole("combobox", 
 const popupBox = async (page: Page) => (await popup(page).boundingBox())!;
 const sessionId = (page: Page) => new URL(page.url()).hash.replace(/^#/, "").split("/")[0]!;
 
-/** Claude Code's transcript of a session, wherever its project folder is (the folder name encodes the cwd). */
-function transcriptOf(id: string): string | undefined {
-  const root = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
-  if (!existsSync(root)) return undefined;
-  for (const d of readdirSync(root)) {
-    const f = join(root, d, `${id}.jsonl`);
-    if (existsSync(f)) return f;
-  }
-  return undefined;
-}
 const fingerprint = (file: string) => `${statSync(file).mtimeMs}:${readFileSync(file, "utf8")}`;
 
 Given("a Haiku session that has read {string}", async ({ page, daemon, project }, name: string) => {
