@@ -496,6 +496,8 @@ export class ClaudeSession implements EngineSession {
         canUseTool: (tool, input, o) => owner.run.canUseTool(tool, input, o),
         mcpServers: this.opts.mcpServers?.(this.id),
         ...(agent && { agent }),
+        // E2E harness only: a fake CLI (packages/e2e/support/fake-claude-cli.mjs) for what the real one does only sometimes, e.g. a prompt suggestion.
+        ...(process.env.CLAUDE_UI_E2E_CLAUDE_CLI && { pathToClaudeCodeExecutable: process.env.CLAUDE_UI_E2E_CLAUDE_CLI }),
       },
     }));
     this.resumeAt = undefined;

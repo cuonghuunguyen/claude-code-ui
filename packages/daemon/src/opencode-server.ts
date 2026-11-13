@@ -379,7 +379,18 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
       }
     },
     /** JSON in and out; starts the server when it is down (a crash restarts here); `directory` scopes the request to a project. */
-    async request<T>(path: string, r: { method?: string; directory?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<T> {
+    async request<T>(
+      path: string,
+      r: {
+        method?: string;
+        directory?: string;
+        body?: unknown;
+        timeoutMs?: number;
+        signal?: AbortSignal;
+        /** Safe to send again when its connection broke before any answer and the server turned out dead (default: GET and HEAD); see below. */
+        resend?: boolean;
+      } = {},
+    ): Promise<T> {
       // The caller's timeout counts from each send (a start or restart of the server is not part of it, as before the merge of GH-685).
       const ms = r.timeoutMs ?? REQUEST_TIMEOUT_MS;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -391,10 +402,13 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
         timer = setTimeout(() => rejectLate(Object.assign(new Error(`OpenCode ${r.method ?? "GET"} ${path} did not answer in ${ms} ms`), { name: "TimeoutError" })), ms);
       };
       const work = (async () => {
-        // The server died and its exit event has not reached us yet (the pid is gone first, a moment longer on Windows): the connect fails (no pooled connections, ocFetch).
-        // If the server does not answer a health probe either, drop it, start the next one and send the request once more. Any other failure, also a connection that
-        // broke after the connect, is the caller's (OpenCode may have got the request), and a live server is never restarted.
+        // The server died and its exit event has not reached us yet (the pid is gone first, a moment longer on Windows): the connect fails (no pooled connections,
+        // ocFetch), or, on Windows, the dead server's listening socket still completes the handshake and then resets the connection before any answer.
+        // If the server does not answer a health probe either, drop it and start the next one. The request is sent once more when it cannot have reached the
+        // server (a failed connect) or is safe to send again (`resend`): after a reset that came past the connect, OpenCode may have read it before it died.
+        // Any other failure is the caller's, and a live server is never restarted.
         // `srv` is the server this request used: only when it is still the current one (`up`) is it dropped; a server another request restarted meanwhile is kept.
+        const resend = r.resend ?? ["GET", "HEAD"].includes(r.method ?? "GET");
         let res: Response;
         for (let retry = true; ; retry = false) {
           const srv = await ensure();
@@ -411,15 +425,17 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
             });
             break;
           } catch (err) {
-            // Nothing reached the server: the probe and a restart are not the caller's wait either.
-            if (retry && neverArrived(err)) clearTimeout(timer);
-            if (!retry || !neverArrived(err) || (await alive(srv))) throw err;
+            const again = neverArrived(err) || (resend && cutBeforeAnswer(err));
+            // Nothing reached the server, or it may get the request again: the probe and a restart are not the caller's wait either.
+            if (retry && again) clearTimeout(timer);
+            if (!retry || !(again || cutBeforeAnswer(err)) || (await alive(srv))) throw err;
             if (up === srv) {
               stopRequested = true;
               killSync();
               child = undefined;
               up = undefined;
             }
+            if (!again) throw err;
           }
         }
         const text = await res.text();
@@ -449,6 +465,11 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
 const neverArrived = (err: unknown): boolean => {
   const c = (err as { cause?: { syscall?: string; code?: string } } | undefined)?.cause;
   return c?.syscall === "connect" || c?.code === "UND_ERR_CONNECT_TIMEOUT";
+};
+/** A connection that broke after the connect and before any answer (ocFetch rejects only until the response head arrives): a reset, a broken pipe, a hang up. */
+const cutBeforeAnswer = (err: unknown): boolean => {
+  const c = (err as { cause?: { code?: string } } | undefined)?.cause;
+  return c?.code === "ECONNRESET" || c?.code === "EPIPE";
 };
 /** Whether the server answers its health check at all. */
 const alive = (srv: { url: string; auth: string }) =>

@@ -1,6 +1,12 @@
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, type Page } from "@playwright/test";
+import { freePort, ownerPorts, startDaemon, type Daemon } from "../support/daemon.ts";
+import { openApp, openProject, prepareHaikuSession } from "../support/flow.ts";
+import { projectsRoot, runDir, slug, testSlugs } from "../support/paths.ts";
 import { TURN_MS, promptBox } from "../support/ui.ts";
-import { Then, When } from "./fixtures.ts";
+import { After, Given, Then, When } from "./fixtures.ts";
 
 async function clickFocus(page: Page) {
   // On a phone the tab strip sits behind the switcher.
@@ -98,9 +104,44 @@ When("I enable Next for you in Settings", async ({ page }) => {
   await expect(page.getByTestId("settings-dialog")).toBeHidden();
 });
 
+// Next for you without a real suggestion (the real CLI sends one only sometimes, seconds after a turn): the scenario's own daemon runs its Claude
+// sessions on the fake CLI (support/fake-claude-cli.mjs, CLAUDE_UI_E2E_CLAUDE_CLI). Its turn waits for the gate file, whose text it sends as the
+// prompt suggestion after the turn, the way the real CLI does. No model call.
+const FAKE_CLI = fileURLToPath(new URL("../support/fake-claude-cli.mjs", import.meta.url));
+let fake: { daemon: Daemon; gate: string; project: string } | undefined;
+
+After(async () => {
+  await fake?.daemon.stop();
+  if (fake) rmSync(fake.gate, { recursive: true, force: true });
+  fake = undefined;
+});
+
+Given("the app is open on a daemon whose Claude sessions run the fake CLI", async ({ page, $testInfo }) => {
+  const run = runDir();
+  // Not the `project` fixture: it starts the worker daemon. The same project settings: a write asks first.
+  const { feature, scenario } = testSlugs($testInfo);
+  const project = `${slug(`${feature}-${scenario}`, 56)}-r${$testInfo.retry}`;
+  const path = join(projectsRoot(run), project);
+  mkdirSync(join(path, ".claude"), { recursive: true });
+  writeFileSync(join(path, ".claude", "settings.json"), JSON.stringify({ permissions: { defaultMode: "default" } }, null, 2));
+  const gate = join(run, `fake-claude-gate-w${$testInfo.workerIndex}`);
+  mkdirSync(gate, { recursive: true });
+  const daemon = await startDaemon(run, 3000 + $testInfo.workerIndex, { port: await freePort(ownerPorts(), ""), env: { CLAUDE_UI_E2E_CLAUDE_CLI: FAKE_CLI, FAKE_CLAUDE_GATE: gate } });
+  fake = { daemon, gate, project };
+  await openApp(page, daemon);
+  await openProject(page, path);
+});
+
+Given("I start a new Haiku session on the fake CLI", async ({ page }) => {
+  await prepareHaikuSession(page, fake!.project);
+});
+
+When("the fake CLI ends the turn with the suggestion {string}", async ({}, text: string) => {
+  writeFileSync(join(fake!.gate, "next"), text);
+});
+
 Then("a Finished row in Focus shows a Next for you chip", async ({ page }) => {
-  // Timing-dependent: the CLI sends the suggestion a few seconds after the turn, and not always.
-  await expect(page.getByTestId("focus-suggestion").first()).toBeVisible({ timeout: TURN_MS * 2 });
+  await expect(page.getByTestId("focus-suggestion").first()).toBeVisible({ timeout: TURN_MS });
   await expect(page.getByTestId("focus-suggestion").first()).toContainText("Next for you");
 });
 
@@ -108,9 +149,9 @@ When("I click the Next for you chip", async ({ page }) => {
   await page.getByTestId("focus-suggestion").first().click();
 });
 
-Then("the session opens with a prompt box that is not empty", async ({ page }) => {
+Then("the session opens with {string} in the prompt box", async ({ page }, text: string) => {
   await expect(page.getByTestId("focus-page")).toBeHidden();
-  await expect(promptBox(page)).toHaveValue(/\S/, { timeout: 15_000 });
+  await expect(promptBox(page)).toHaveValue(text, { timeout: 15_000 });
 });
 
 Then("Focus shows a Finished row", async ({ page }) => {
