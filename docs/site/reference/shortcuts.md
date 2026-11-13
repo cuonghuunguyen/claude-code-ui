@@ -110,7 +110,7 @@ These commands are in the [command palette](../features/palette) and show as **N
 - Rebase
 - Open in file manager
 - Add to prompt
-- Send selection to Claude
+- Add selection to chat
 - Switch Claude account
 
 ## Prefix key

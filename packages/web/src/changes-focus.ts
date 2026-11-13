@@ -1,4 +1,4 @@
-// GH-722: what the Changes tab shows right now, for the palette: the selected row (Add to prompt) and whether a diff has selected lines (Send selection).
+// GH-722: what the Changes tab shows right now, for the palette: the selected row (Add to prompt) and whether a diff has selected lines (Add selection to chat).
 // A tiny external store: App reads it with `useChangesFocus`; changes-panel.tsx writes it.
 import { useSyncExternalStore } from "react";
 

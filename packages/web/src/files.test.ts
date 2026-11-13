@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { inDir } from "./paths.ts";
-import { goneTab, restoredTab, mediaKind, pin, placeTab, readFailure, type Tab, diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention, fileMention, moveTabs, dropTabs, movedPath } from "./files.ts";
+import { goneTab, restoredTab, mediaKind, pin, placeTab, readFailure, type Tab, diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention, selectionQuote, fileMention, moveTabs, dropTabs, movedPath } from "./files.ts";
 
 const tab = opened("/p/a.ts", { content: "one", mtime: 1 });
 
@@ -224,5 +224,24 @@ describe("restoredTab (GH-366)", () => {
     expect(isDirty(t)).toBe(true);
     expect(t).toMatchObject({ gone: true, error: "Deleted on disk. Save creates it again." });
     expect(diskChanged(t, r)).toMatchObject({ draft: "mine", conflict: r, gone: undefined, error: undefined });
+  });
+});
+
+describe("selectionQuote", () => {
+  const at = (doc: string, anchor: number, head = anchor) => EditorState.create({ doc, selection: { anchor, head } });
+  it("a fenced blockquote of the selected text, whatever the drag direction", () => {
+    expect(selectionQuote(at("one\ntwo\nthree\n", 4, 13))).toBe("> ```\n> two\n> three\n> ```\n\n");
+    expect(selectionQuote(at("one\ntwo\nthree\n", 13, 4))).toBe("> ```\n> two\n> three\n> ```\n\n");
+  });
+  it("CRLF is read as one line break", () => {
+    expect(selectionQuote(at("a\r\nb", 0, 3))).toBe("> ```\n> a\n> b\n> ```\n\n");
+  });
+  it("is cut at the quote cap", () => {
+    const q = selectionQuote(at("x".repeat(5000), 0, 5000))!;
+    expect(q).toContain("…");
+    expect(q.length).toBeLessThan(2100);
+  });
+  it("an empty selection has no quote", () => {
+    expect(selectionQuote(at("abc", 1))).toBeUndefined();
   });
 });

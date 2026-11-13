@@ -1,6 +1,6 @@
 import { parseDiffFromFile } from "@pierre/diffs";
 import { describe, expect, it } from "vitest";
-import { diffSelection, hunkAnchor, wireHunk } from "./hunk.ts";
+import { diffQuote, diffSelectedRows, diffSelection, hunkAnchor, wireHunk } from "./hunk.ts";
 
 const diff = (a: string, b: string) => parseDiffFromFile({ name: "f.txt", contents: a }, { name: "f.txt", contents: b });
 const nums = (n: number) => Array.from({ length: n }, (_, i) => `l${i + 1}`);
@@ -70,5 +70,21 @@ describe("diffSelection", () => {
   });
   it("a line that is not in the diff", () => {
     expect(diffSelection(d, { start: 99, end: 99 }, "f.txt")).toBeUndefined();
+  });
+});
+
+describe("diffSelectedRows and diffQuote", () => {
+  const d = diff("a\nb\nc\nd\n", "a\nX\nY\nc\nd\n");
+  it("the rows between both ends in unified order, whatever the drag direction", () => {
+    const rows = diffSelectedRows(d, { start: 1, end: 3 })!;
+    expect(rows.map((r) => `${r.tag}${r.text}`)).toEqual([" a", "-b", "+X", "+Y"]);
+    expect(diffSelectedRows(d, { start: 3, end: 1 })).toEqual(rows);
+  });
+  it("undefined when an end is not in the diff", () => {
+    expect(diffSelectedRows(d, { start: 1, end: 99 })).toBeUndefined();
+    expect(diffQuote(d, { start: 1, end: 99 })).toBeUndefined();
+  });
+  it("the quote is a fenced blockquote of the unified lines, without line numbers", () => {
+    expect(diffQuote(d, { start: 1, end: 3 })).toBe("> ```\n>  a\n> -b\n> +X\n> +Y\n> ```\n\n");
   });
 });

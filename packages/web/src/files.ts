@@ -5,6 +5,7 @@ import type { RequestError } from "./client.ts";
 import { t } from "./i18n.ts";
 import { mentionPath } from "./mentions.ts";
 import { isWinPath, relPath } from "./paths.ts";
+import { QUOTE_MAX, quoteText } from "./quote.ts";
 
 export type Tab = {
   path: string;
@@ -162,7 +163,7 @@ const mentionRel = (path: string, cwd: string) => (isWinPath(path) ? relPath(pat
 export const fileMention = (path: string, cwd: string) => mentionPath(mentionRel(path, cwd));
 
 /**
- * "Send selection to Claude": `@path#Lstart-end` of the main selection, path relative to `cwd`; the file alone when nothing is selected.
+ * "Add to chat" (Alt+K): `@path#Lstart-end` of the main selection, path relative to `cwd`; the file alone when nothing is selected.
  * The SDK attaches only the range for `#L…` (`#start-end` attaches the whole file), and a quoted path needs the range inside the quotes.
  */
 export function selectionMention(state: EditorState, path: string, cwd: string) {
@@ -174,6 +175,12 @@ export function selectionMention(state: EditorState, path: string, cwd: string) 
   // A selection that ends at the start of a line (whole lines selected) does not include that line.
   const last = end.number > start.number && to === end.from ? end.number - 1 : end.number;
   return mentionPath(`${rel}#L${start.number}${last > start.number ? `-${last}` : ""}`);
+}
+
+/** "Quote" in the editor: the selected text as a fenced blockquote (cut at the quote cap); undefined for an empty selection. */
+export function selectionQuote(state: EditorState) {
+  const { from, to, empty } = state.selection.main;
+  return empty ? undefined : quoteText(state.sliceDoc(from, to), QUOTE_MAX, true);
 }
 
 export const fileSize = (n: number) => (n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${+(n / 1024).toFixed(1)} KB` : `${+(n / 1024 ** 2).toFixed(1)} MB`);

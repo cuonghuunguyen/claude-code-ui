@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { GitDiff, GitOperation, GitStatus, Part } from "@claude-ui/protocol";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PaneTabs } from "./App.tsx";
@@ -15,13 +15,26 @@ import { applyEvent, emptySession, type SessionView } from "./store.ts";
 
 // The diff library renders in a worker; the stub keeps the last options so a test can see them and finish the render.
 const diff = vi.hoisted(() => ({ options: undefined as undefined | { enableLineSelection?: boolean; onLineSelected?: (r: unknown) => void; theme?: { light: string; dark: string }; disableFileHeader?: boolean; onPostRender?: (...a: unknown[]) => void }, onFiles: undefined as undefined | ((p: never) => void) }));
+const pierreShadow = vi.hoisted(() => (host: HTMLElement | null) => {
+  if (!host || host.shadowRoot?.querySelector("[data-selected-line]")) return;
+  const line = document.createElement("div");
+  line.setAttribute("data-selected-line", "");
+  line.getBoundingClientRect = () => new DOMRect(10, 100, 200, 16);
+  (host.shadowRoot ?? host.attachShadow({ mode: "open" })).append(line);
+});
 vi.mock("@pierre/diffs/react", () => ({
   MultiFileDiff: (p: { options: typeof diff.options }) => ((diff.options = p.options), diff.onFiles?.(p as never), <div data-testid="pierre-diff" />),
   // The hunk Rollback annotations are drawn by the caller's `renderAnnotation`; the stub places them under the diff.
   FileDiff: (p: { options: typeof diff.options; fileDiff: { deletionLines: string[]; additionLines: string[] }; lineAnnotations?: unknown[]; renderAnnotation?: (a: never) => React.ReactNode }) => (
     (diff.options = p.options),
     diff.onFiles?.({ oldFile: { contents: p.fileDiff.deletionLines.join("") }, newFile: { contents: p.fileDiff.additionLines.join("") } } as never),
-    (<div data-testid="pierre-diff">{p.lineAnnotations?.map((a, i) => <div key={i}>{p.renderAnnotation?.(a as never)}</div>)}</div>)
+    (
+      <div data-testid="pierre-diff">
+        {/* The library marks the selected lines inside its shadow root; the stub always has one, at a fixed place (jsdom has no layout). */}
+        {createElement("diffs-container", { ref: pierreShadow })}
+        {p.lineAnnotations?.map((a, i) => <div key={i}>{p.renderAnnotation?.(a as never)}</div>)}
+      </div>
+    )
   ),
 }));
 
@@ -1640,7 +1653,7 @@ it("a hunk's Rollback sends the hunk at once, no dialog; none for an added file 
   expect(el.querySelector("[data-testid=changes-op-result]")!.textContent).toContain("Rolled back a change in a.ts");
 });
 
-// ---- Add to prompt, Send selection to Claude (GH-611) ----
+// ---- Add to prompt, the selection menu (GH-611, GH-706) ----
 const mountSend = async (kind: "M" | "D", mode: "session" | "uncommitted", onSend?: (t: string) => void) => {
   saveDiffMode(mode);
   const git = { status: REPO, diff: D([{ status: kind, path: "a.ts", added: 1, removed: 1 }]), at: { [`${BASE}:a.ts`]: "a\nb\nc\n" } };
@@ -1674,31 +1687,66 @@ it("a deleted file has no Add to prompt", async () => {
   expect(await menuOf()).toEqual(["row-rollback"]);
 });
 
-it("no row menu and no button without onSend", async () => {
+it("no row menu and no selection menu without onSend", async () => {
   await mountSend("M", "session");
   expect(await menuOf()).toEqual([]);
-  expect(el.querySelector("[data-testid=diff-send-selection]")).toBeNull();
+  await selectLines();
+  expect(el.querySelector("[data-testid=selection-menu]")).toBeNull();
 });
 
-it("the diff header button and Alt+K send the file when no line is selected", async () => {
+const select = (r: unknown) => act(async () => (diff.options as { onLineSelected?: (r: unknown) => void }).onLineSelected!(r));
+const selectLines = async () => {
+  await select({ start: 2, side: "deletions", end: 2, endSide: "additions" });
+  await act(async () => void (await new Promise((r) => setTimeout(r, 200))));
+};
+const menu = () => document.querySelector<HTMLElement>("[data-testid=selection-menu]");
+const pick = (id: "add" | "quote") => act(async () => document.querySelector<HTMLButtonElement>(`[data-testid=selection-menu-${id}]`)!.click());
+
+it("no Send selection button anywhere; Alt+K sends the file when no line is selected", async () => {
   const onSend = vi.fn();
   await mountSend("M", "session", onSend);
   const box = () => el.querySelector<HTMLElement>("[data-testid=file-diff]")!;
   expect(diff.options).toMatchObject({ enableLineSelection: true });
-  await act(async () => el.querySelector<HTMLButtonElement>("[data-testid=diff-send-selection]")!.click());
-  expect(onSend).toHaveBeenLastCalledWith("@a.ts");
+  expect(el.querySelector("[data-testid=diff-send-selection]")).toBeNull();
+  expect(el.textContent).not.toContain("Claude");
   await act(async () => void box().dispatchEvent(new KeyboardEvent("keydown", { code: "KeyK", altKey: true, bubbles: true })));
-  expect(onSend).toHaveBeenCalledTimes(2);
+  expect(onSend).toHaveBeenLastCalledWith("@a.ts");
   await act(async () => void box().dispatchEvent(new KeyboardEvent("keydown", { code: "KeyK", altKey: true, ctrlKey: true, bubbles: true })));
-  expect(onSend).toHaveBeenCalledTimes(2);
+  expect(onSend).toHaveBeenCalledTimes(1);
 });
 
-it("a line selection sends the numbered diff lines", async () => {
+it("a line selection shows the menu after 150 ms; Add to chat sends the numbered diff lines", async () => {
   const onSend = vi.fn();
   await mountSend("M", "session", onSend);
-  await act(async () => (diff.options as { onLineSelected?: (r: unknown) => void }).onLineSelected!({ start: 2, side: "deletions", end: 2, endSide: "additions" }));
-  await act(async () => el.querySelector<HTMLButtonElement>("[data-testid=diff-send-selection]")!.click());
+  expect(menu()).toBeNull();
+  await select({ start: 2, side: "deletions", end: 2, endSide: "additions" });
+  expect(menu()).toBeNull();
+  await act(async () => void (await new Promise((r) => setTimeout(r, 200))));
+  expect(menu()!.textContent).toBe("Add to chatQuote");
+  await pick("add");
   expect(onSend.mock.calls[0]![0]).toContain("-2 | b\n+2 | X");
+  expect(menu()).toBeNull();
+});
+
+it("Quote sends the selected lines as a fenced blockquote of the unified diff", async () => {
+  const onSend = vi.fn();
+  await mountSend("M", "session", onSend);
+  await selectLines();
+  await pick("quote");
+  expect(onSend).toHaveBeenCalledWith("> ```\n> -b\n> +X\n> ```\n\n");
+});
+
+it("no menu without a selection, after the selection is cleared, or on Escape", async () => {
+  await mountSend("M", "session", vi.fn());
+  expect(menu()).toBeNull();
+  await selectLines();
+  expect(menu()).not.toBeNull();
+  await act(async () => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(menu()).toBeNull();
+  await selectLines();
+  expect(menu()).not.toBeNull();
+  await select(null);
+  expect(menu()).toBeNull();
 });
 
 // ---- GH-722: palette commands ask the panel ----
@@ -1817,7 +1865,7 @@ it("right click on a row offers Open, Copy path and, in an app-capable browser, 
 // ---- GH-722: recommendation hooks ----
 const recClean = () => (setRecommendationHost(undefined), localStorage.clear(), resetPageForTests());
 
-it("GH-722: the third new diff selection offers Send selection; Show me rings the button; a change of the same selection does not count", async () => {
+it("GH-722: the third new diff selection offers Add to chat; Show me rings the menu button; a change of the same selection does not count", async () => {
   recClean();
   const show = vi.fn();
   setRecommendationHost({ blocked: () => false, show });
@@ -1831,10 +1879,11 @@ it("GH-722: the third new diff selection offers Send selection; Show me rings th
   expect(show).not.toHaveBeenCalled();
   await select(2);
   expect(show).toHaveBeenCalledOnce();
-  expect(show.mock.calls[0]![0]).toBe("Send the selected diff lines to Claude.");
+  expect(show.mock.calls[0]![0]).toBe("Add the selected diff lines to the chat.");
   expect(show.mock.calls[0]![1].label).toBe("Show me");
   await act(async () => show.mock.calls[0]![1].run());
-  const button = el.querySelector<HTMLElement>("[data-testid=diff-send-selection]")!;
+  await act(async () => void (await new Promise((r) => setTimeout(r, 100))));
+  const button = document.querySelector<HTMLElement>("[data-testid=selection-menu-add]")!;
   expect(button.hasAttribute("data-locate")).toBe(true);
   expect(document.activeElement).toBe(button);
   recClean();

@@ -1,5 +1,6 @@
 // A hunk of pierre's parsed diff (`parseDiffFromFile`) as the lines `git.rollbackHunk` sends (docs/spec.md, Changes tab hunk Rollback).
 import type { FileDiffMetadata, SelectedLineRange } from "@pierre/diffs";
+import { QUOTE_MAX, quoteText } from "./quote.ts";
 
 const NO_EOL = "\\ No newline at end of file";
 const bare = (l: string) => l.replace(/\r?\n$/, "");
@@ -62,19 +63,31 @@ function diffRows(d: FileDiffMetadata): Row[] {
 
 const span = (a: number[]) => (a.length ? (a[0] === a.at(-1) ? `${a[0]}` : `${a[0]}-${a.at(-1)}`) : "");
 
-/**
- * "Send selection to Claude" in the Changes tab: the selected rows of a diff as prompt text (path, line ranges, a fenced diff with line numbers).
- * `-` rows carry the old number and are not in the current file. A side missing in the range is `additions` (unified view, context lines).
- * undefined: an end of the range is not in the diff any more.
- */
-export function diffSelection(d: FileDiffMetadata, range: SelectedLineRange, rel: string): string | undefined {
+/** The rows between the two ends of a selected line range, in unified order. undefined: an end of the range is not in the diff any more. */
+export function diffSelectedRows(d: FileDiffMetadata, range: SelectedLineRange): Row[] | undefined {
   const rows = diffRows(d);
   const find = (line: number, side: "additions" | "deletions" = "additions") => rows.findIndex((r) => (side === "deletions" ? r.old : r.new) === line);
   let a = find(range.start, range.side);
   let b = find(range.end, range.endSide ?? range.side);
   if (a < 0 || b < 0) return undefined;
   if (a > b) [a, b] = [b, a];
-  const sel = rows.slice(a, b + 1);
+  return rows.slice(a, b + 1);
+}
+
+/** "Quote" in the Changes tab: the selected rows as unified diff lines (tag and text, no line numbers) in a fenced blockquote. */
+export function diffQuote(d: FileDiffMetadata, range: SelectedLineRange): string | undefined {
+  const sel = diffSelectedRows(d, range);
+  return sel && quoteText(sel.map((r) => `${r.tag}${r.text}`).join("\n"), QUOTE_MAX, true);
+}
+
+/**
+ * "Add to chat" in the Changes tab: the selected rows of a diff as prompt text (path, line ranges, a fenced diff with line numbers).
+ * `-` rows carry the old number and are not in the current file. A side missing in the range is `additions` (unified view, context lines).
+ * undefined: an end of the range is not in the diff any more.
+ */
+export function diffSelection(d: FileDiffMetadata, range: SelectedLineRange, rel: string): string | undefined {
+  const sel = diffSelectedRows(d, range);
+  if (!sel) return undefined;
   const olds = sel.flatMap((r) => (r.tag === "+" ? [] : [r.old!]));
   const news = sel.flatMap((r) => (r.tag === "-" ? [] : [r.new!]));
   const body = sel.map((r) => `${r.tag}${r.tag === "-" ? r.old : r.new} | ${r.text}`);

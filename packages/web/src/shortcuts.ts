@@ -81,7 +81,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "git.rebase", title: "Rebase", group: "Panels" },
   { id: "file.reveal", title: "Open in file manager", group: "General" },
   { id: "changes.addToPrompt", title: "Add to prompt", group: "Session" },
-  { id: "changes.sendSelection", title: "Send selection to Claude", group: "Session" },
+  { id: "changes.sendSelection", title: "Add selection to chat", group: "Session" },
   { id: "account.switch", title: "Switch Claude account", group: "Session" },
   { id: "signal.toggle", title: "Toggle signal only", group: "Panels", key: "mod+alt+s" },
   { id: "terminal.toggle", title: "Toggle terminal", group: "Panels", key: "ctrl+`" },

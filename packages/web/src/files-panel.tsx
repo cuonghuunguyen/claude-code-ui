@@ -9,7 +9,8 @@ import { syntaxHighlighting } from "@codemirror/language";
 import { LOCAL_SIDE, type FsMediaResult, type GitBlameResult, type GitRepo } from "@claude-ui/protocol";
 import { canOpenSide, externalEntries, useOpenExternal } from "./open-external-menu.ts";
 import { ContextMenu } from "@base-ui/react/context-menu";
-import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ExternalLinkIcon, FolderInputIcon, LocateFixedIcon, Maximize2Icon, RotateCwIcon, SquareArrowOutUpRightIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ExternalLinkIcon, FolderInputIcon, LocateFixedIcon, Maximize2Icon, MessageSquarePlusIcon, RotateCwIcon, SquareArrowOutUpRightIcon, TextQuoteIcon } from "lucide-react";
+import { SelectionMenu, useMenuGate } from "./selection-menu.tsx";
 import { count, tipMiddleClick } from "./recommendations.ts";
 import { Button } from "@/components/ui/button";
 import { MessageResponse } from "@/components/ai-elements/message";
@@ -36,7 +37,7 @@ import { blameEntries, type BlameEntry } from "./blame.ts";
 import { TimelinePanel } from "./timeline-panel.tsx";
 import { ListResizer, loadListWidth, saveListWidth } from "./changes-panel.tsx";
 import { usePanelAsk } from "./panel-ask.ts";
-import { docText, fileSize, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, pin, fileMention, replaceDoc, saveMdView, selectionMention, type MdView } from "./files.ts";
+import { docText, fileSize, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, pin, fileMention, replaceDoc, saveMdView, selectionMention, selectionQuote, type MdView } from "./files.ts";
 import { createEditorStore, useEditorStore, useEditorSync, type EditorStore } from "./editor-store.ts";
 
 type Client = ReturnType<typeof connect>;
@@ -507,7 +508,7 @@ export function FilesPanel({
   );
 }
 
-/** The editor body of one file tab: conflict bar, error, notice, media, header (breadcrumb, markdown view, Send selection, Save, `place`), CodeEditor, markdown preview. Files panel, file dialog and the file tab show it. */
+/** The editor body of one file tab: conflict bar, error, notice, media, header (breadcrumb, markdown view, Save, `place`), CodeEditor, markdown preview. Files panel, file dialog and the file tab show it. */
 export function FileEditor({
   store,
   path,
@@ -528,7 +529,7 @@ export function FileEditor({
   /** Annotate (GH-564): the repositories of the cwd (the toggle shows for a file inside one) and the click on a commit. */
   repos?: RepoList;
   onOpenCommit?: (repo: GitRepo, hash: string) => void;
-  /** The mounted CodeEditor's view (Send selection reads it); one ref per mounted editor. */
+  /** The mounted CodeEditor's view (the selection menu and Alt+K read it); one ref per mounted editor. */
   viewRef: RefObject<EditorView | undefined>;
   onSend: (mention: string) => void;
   /** A breadcrumb folder was clicked. */
@@ -540,6 +541,10 @@ export function FileEditor({
 }) {
   const tr = useT();
   const { tabs, sourceOnly, goto, draftsNotKept } = useEditorStore(store);
+  // The selection menu (Add to chat, Quote): shown 150 ms after the selection stops changing; the head is where the drag ended.
+  const [sel, setSel] = useState<EditorSel>();
+  useEffect(() => setSel(undefined), [path]);
+  const [menuShown, dismissMenu] = useMenuGate(sel ? `${path}:${sel.from}-${sel.to}` : "", !!sel);
   const active = tabs[path];
   const [mdView, setMdView] = useState<MdView>(loadMdView);
   const narrow = useNarrow();
@@ -653,18 +658,6 @@ export function FileEditor({
                 {tr("files.artifact.show")}
               </Button>
             )}
-            {/* preventDefault keeps the editor focused, so a desktop selection stays visible; the selection lives in the editor state either way. */}
-            <Button
-              size="xs"
-              variant="outline"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => viewRef.current && onSend(selectionMention(viewRef.current.state, path, cwd))}
-              className="max-md:h-11 pointer-coarse:h-11"
-              title={tr("files.panel.sendSelectionTitle")}
-              data-testid="send-selection"
-            >
-              {tr("files.panel.sendSelection")}
-            </Button>
             {repo && (
               <Button size="xs" variant="outline" aria-pressed={annotate} onClick={() => setAnnotate((a) => !a)} className="max-md:h-11 pointer-coarse:h-11" data-testid="editor-annotate">
                 {tr("files.annotate.toggle")}
@@ -689,6 +682,7 @@ export function FileEditor({
                 doc={active.draft}
                 viewRef={viewRef}
                 onSend={(state) => onSend(selectionMention(state, path, cwd))}
+                onSelect={setSel}
                 onChange={(draft) => update(path, (t) => ({ ...pin(t), draft }))}
                 goto={goto?.path === path ? goto : undefined}
                 onGoto={store.clearGoto}
@@ -715,6 +709,25 @@ export function FileEditor({
               </div>
             )}
           </div>
+          {menuShown && sel && (
+            <SelectionMenu
+              anchor={() => editorHeadRect(viewRef.current, sel.head)}
+              source={() => viewRef.current?.dom ?? null}
+              onDismiss={dismissMenu}
+              actions={[
+                { id: "add", label: tr("files.selection.add"), icon: <MessageSquarePlusIcon />, title: tr("files.panel.sendSelectionTitle"), onSelect: () => viewRef.current && onSend(selectionMention(viewRef.current.state, path, cwd)) },
+                {
+                  id: "quote",
+                  label: tr("session.quote.button"),
+                  icon: <TextQuoteIcon />,
+                  onSelect: () => {
+                    const q = viewRef.current && selectionQuote(viewRef.current.state);
+                    if (q) onSend(q);
+                  },
+                },
+              ]}
+            />
+          )}
         </>
       )}
     </div>
@@ -928,6 +941,23 @@ const chrome = [
   syntaxHighlighting(syntaxStyle),
 ];
 
+/** The editor's main selection when it is not empty (`head`: the end the user moved last). */
+type EditorSel = { from: number; to: number; head: number };
+
+/** The line box at `pos` as a viewport rect; undefined when that line is outside the editor's visible area. */
+function editorHeadRect(v: EditorView | undefined, pos: number): DOMRect | undefined {
+  let c: ReturnType<EditorView["coordsAtPos"]> = null;
+  try {
+    c = v && pos <= v.state.doc.length ? v.coordsAtPos(pos) : null;
+  } catch {
+    // No layout (not attached yet).
+  }
+  if (!v || !c) return undefined;
+  const clip = v.scrollDOM.getBoundingClientRect();
+  if (clip.height > 0 && (c.bottom < clip.top || c.top > clip.bottom)) return undefined;
+  return new DOMRect(c.left, c.top, Math.max(c.right - c.left, 1), c.bottom - c.top);
+}
+
 const languageC = new Compartment();
 const darkC = new Compartment();
 const wiringC = new Compartment();
@@ -940,6 +970,7 @@ export function CodeEditor({
   onChange,
   onSave,
   onSend,
+  onSelect,
   readOnly,
   tabbable,
   line,
@@ -958,6 +989,8 @@ export function CodeEditor({
   onChange: (doc: string) => void;
   onSave: () => void;
   onSend: (state: EditorState) => void;
+  /** The main selection after each change of it or of the document (undefined when empty). */
+  onSelect?: (sel: EditorSel | undefined) => void;
   readOnly?: boolean;
   tabbable?: boolean;
   line?: number;
@@ -968,8 +1001,8 @@ export function CodeEditor({
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView>(undefined);
   const reported = useRef(doc);
-  const cb = useRef({ onChange, onSave, onSend });
-  cb.current = { onChange, onSave, onSend };
+  const cb = useRef({ onChange, onSave, onSend, onSelect });
+  cb.current = { onChange, onSave, onSend, onSelect };
   const open = useRef(blame?.onOpen);
   open.current = blame?.onOpen;
 
@@ -981,6 +1014,10 @@ export function CodeEditor({
     const wiring = () => [
       Prec.high(keymap.of(editorKeys({ onSave: () => cb.current.onSave(), onSend: (s) => cb.current.onSend(s) }))),
       EditorView.updateListener.of((u) => {
+        if (u.selectionSet || u.docChanged) {
+          const m = u.state.selection.main;
+          cb.current.onSelect?.(m.empty ? undefined : { from: m.from, to: m.to, head: m.head });
+        }
         if (!u.docChanged) return;
         reported.current = docText(u.state);
         cb.current.onChange(reported.current);

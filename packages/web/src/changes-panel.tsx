@@ -4,7 +4,7 @@ import { useNarrow } from "@/lib/use-narrow.ts";
 import type { FsMediaResult, FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitOperation, GitOperationResult, GitRepo, GitStatusResult } from "@claude-ui/protocol";
 import { parseDiffFromFile, type DiffLineAnnotation, type SelectedLineRange } from "@pierre/diffs";
 import { FileDiff as PierreFileDiff } from "@pierre/diffs/react";
-import { ArchiveIcon, ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, ListIcon, ListTreeIcon, Maximize2Icon, MessageSquarePlusIcon, RotateCcwIcon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon } from "lucide-react";
+import { ArchiveIcon, ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, ListIcon, ListTreeIcon, Maximize2Icon, MessageSquarePlusIcon, RotateCcwIcon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon, TextQuoteIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -34,7 +34,8 @@ import { ConflictBanner } from "./conflict-banner.tsx";
 import { GitOpResult } from "./git-op-result.tsx";
 import { ofRepo } from "./git-branch-menu.tsx";
 import { runRemoteOp, useRemoteOp } from "./git-remote-ops.ts";
-import { diffSelection, hunkAnchor, wireHunk } from "./hunk.ts";
+import { diffQuote, diffSelection, hunkAnchor, wireHunk } from "./hunk.ts";
+import { SelectionMenu, useMenuGate } from "./selection-menu.tsx";
 import { RollbackDialog, RollbackMenu, type RowMenuItem } from "./rollback-dialog.tsx";
 import { externalEntries, useOpenExternal } from "./open-external-menu.ts";
 import { repoLabel, selectorVisible, useSelectedRepo, type RepoList } from "./repo-choice.ts";
@@ -288,7 +289,7 @@ export function ChangesPanel({
   ignoreSubmodules?: boolean;
   /** Reload from disk also asks `git.repos` again. */
   onReload?: () => void;
-  /** Add to prompt and Send selection to Claude: the text goes into the prompt box. Without it the panel offers neither. */
+  /** Add to prompt and the selection menu (Add to chat, Quote): the text goes into the prompt box. Without it the panel offers neither. */
   onSend?: (text: string) => void;
   /** After a commit: files changed on disk's git state (the file tree marks). */
   onGitWrite?: () => void;
@@ -1076,6 +1077,9 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
   const [range, setRange] = useState<SelectedLineRange | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const selecting = useRef(false);
+  const [selSeq, setSelSeq] = useState(0);
+  const scroller = useRef<HTMLDivElement>(null);
+  const showMenu = useRef(() => {});
   const selectable = onSend !== undefined;
   const options = useMemo(
     () => ({
@@ -1088,10 +1092,11 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
       // Line numbers: click, Shift+click or drag. The box takes focus so Alt+K works right after a click.
       enableLineSelection: selectable,
       onLineSelected: (r: SelectedLineRange | null) => {
-        // GH-722: a new selection (not each change of its end) counts for the Send selection recommendation.
-        if (r && !selecting.current) offer("sendSelection", { n: count("diffSelect") }, () => highlight('[data-testid="diff-send-selection"]'));
+        // GH-722: a new selection (not each change of its end) counts for the Add to chat recommendation; Show me brings the selection menu back (the click on the toast dismissed it) and rings its button.
+        if (r && !selecting.current) offer("sendSelection", { n: count("diffSelect") }, () => showMenu.current());
         selecting.current = r !== null;
         setRange(r);
+        setSelSeq((n) => n + 1);
         if (r) box.current?.focus({ preventScroll: true });
       },
     }),
@@ -1114,7 +1119,7 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
     });
     return parsed && { at, lines: [...at.keys()].map((k): DiffLineAnnotation => ({ side: k.startsWith("a") ? "additions" : "deletions", lineNumber: Number(k.split(":")[1]) })) };
   }, [parsed, onHunk !== undefined]);
-  // GH-722: the palette's Send selection (changes-focus.ts) knows whether lines are selected; its ask sends them.
+  // GH-722: the palette's Add selection to chat (changes-focus.ts) knows whether lines are selected; its ask sends them.
   const focusId = useRef(Symbol("diff")).current;
   useEffect(() => {
     setDiffSelection(focusId, range !== null);
@@ -1129,19 +1134,22 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
     if (text) onSend?.(text);
   };
   const canSend = !!onSend && !sub && !nested && !row.image && !row.error && !same && !!files;
-  // The diff that has selected lines takes the palette's Send selection; the others leave the ask.
+  // The diff that has selected lines takes the palette's Add selection to chat; the others leave the ask.
   usePanelAsk("sendSelection", () => {
     if (!range || !canSend) return false;
     send();
   });
-  // `compact`: the header beside the file name is icon-only until it is wide (the name keeps truncate priority).
-  const sendButton = (compact?: boolean) =>
-    canSend && (
-      <Button size={compact ? "icon-sm" : "sm"} variant="ghost" className={cn("max-md:h-11", compact && "shrink-0 max-md:w-11 @xl:w-auto @xl:px-2.5")} title={t("files.panel.sendSelectionTitle")} aria-label={t("files.panel.sendSelection")} onClick={send} data-testid="diff-send-selection">
-        <MessageSquarePlusIcon />
-        <span className={compact ? "hidden @xl:inline" : undefined}>{t("files.panel.sendSelection")}</span>
-      </Button>
-    );
+  // The selection menu (Add to chat, Quote) shows 150 ms after the selection stops changing.
+  const [menuShown, dismissMenu, revealMenu] = useMenuGate(String(selSeq), !!range && canSend && !!parsed);
+  showMenu.current = () => {
+    revealMenu();
+    const poll = (n: number) => !highlight('[data-testid="selection-menu-add"]') && n > 0 && setTimeout(() => poll(n - 1), 50);
+    poll(20);
+  };
+  const quote = () => {
+    const text = range && parsed && diffQuote(parsed, range);
+    if (text) onSend?.(text);
+  };
   const dirtyText = row.dirty ? t("files.changes.dirtyText", { count: row.dirty }) : "";
   return (
     <div
@@ -1156,9 +1164,8 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
       }}
     >
       {inline ? (
-        (canSend || (!sub && !nested && inDir(path, cwd))) && (
+        !sub && !nested && inDir(path, cwd) && (
           <div className="flex justify-end gap-1 px-2 pt-1">
-            {sendButton()}
             {!sub && !nested && inDir(path, cwd) && (
               <Button size="sm" variant="ghost" className="h-11" onClick={() => onOpen(path)} data-testid="open-in-editor">
                 <SquareArrowOutUpRightIcon /> {t("files.panel.openInEditor")}
@@ -1176,7 +1183,6 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
           {sub && <SubmoduleBadge />}
           {nested && <RepoBadge />}
           {row.stats && <StatsText stats={row.stats} />}
-          {sendButton(true)}
           {/* The files pane shows only tabs inside cwd, so a file outside it has no Open in editor (OpenCode lists only project files). */}
           {!sub && !nested && inDir(path, cwd) && (
             <Button size="sm" variant="ghost" className="@max-xl:size-8 @max-xl:shrink-0 @max-xl:px-0 max-md:size-11!" title={t("files.panel.openInEditor")} aria-label={t("files.panel.openInEditor")} onClick={() => onOpen(path)} data-testid="open-in-editor">
@@ -1185,7 +1191,7 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
           )}
         </div>
       )}
-      <div className={cn("text-xs", !inline && "min-h-0 flex-1 overflow-auto p-2")}>
+      <div ref={scroller} className={cn("text-xs", !inline && "min-h-0 flex-1 overflow-auto p-2")}>
         {sub && (
           <p className="p-2 text-muted-foreground" data-testid="submodule-detail">
             {row.dirtyOnly ? (
@@ -1266,6 +1272,33 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
           )
         )}
       </div>
+      {menuShown && range && (
+        <SelectionMenu
+          anchor={() => selectedLinesRect(box.current, inline ? undefined : scroller.current)}
+          source={() => box.current}
+          onDismiss={dismissMenu}
+          actions={[
+            { id: "add", label: t("files.selection.add"), icon: <MessageSquarePlusIcon />, title: t("files.panel.sendSelectionTitle"), onSelect: send },
+            { id: "quote", label: t("session.quote.button"), icon: <TextQuoteIcon />, onSelect: quote },
+          ]}
+        />
+      )}
     </div>
   );
+}
+
+/** The rect of the last selected line shown (pierre marks them `data-selected-line` inside its shadow root); undefined when none is inside `clip` (the diff's scroll box, else the viewport). */
+function selectedLinesRect(box: HTMLElement | null, clip: HTMLElement | null | undefined): DOMRect | undefined {
+  const lines = box?.querySelector("diffs-container")?.shadowRoot?.querySelectorAll("[data-selected-line]");
+  if (!lines?.length) return undefined;
+  const c = clip?.getBoundingClientRect();
+  // A box without height has no layout (not attached, display none): do not clip by it.
+  const top = c?.height ? Math.max(0, c.top) : 0;
+  const bottom = c?.height ? Math.min(window.innerHeight, c.bottom) : window.innerHeight;
+  let best: DOMRect | undefined;
+  for (const l of lines) {
+    const r = l.getBoundingClientRect();
+    if (r.bottom > top && r.top < bottom && (!best || r.bottom >= best.bottom)) best = r;
+  }
+  return best;
 }
