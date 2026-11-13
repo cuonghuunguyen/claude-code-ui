@@ -51,7 +51,9 @@ export function terminalSnippet(raw: string, { title, cwd }: { title: string; cw
     }
   }
   const fence = "`".repeat(Math.max(3, ...[...body.matchAll(/`+/g)].map((m) => m[0].length + 1)));
-  return `Output of terminal "${title}" in \`${cwd}\`${note}:\n${fence}text\n${body}\n${fence}\n`;
+  const tick = "`".repeat(Math.max(1, ...[...cwd.matchAll(/`+/g)].map((m) => m[0].length + 1)));
+  const where = cwd.startsWith("`") || cwd.endsWith("`") ? `${tick} ${cwd} ${tick}` : `${tick}${cwd}${tick}`;
+  return `Output of terminal "${title}" in ${where}${note}:\n${fence}text\n${body}\n${fence}\n`;
 }
 
 /**

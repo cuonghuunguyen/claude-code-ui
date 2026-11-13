@@ -54,3 +54,7 @@ it("cellRect maps a selection end cell to a screen rect", () => {
   expect(cellRect({ x: 0, y: 29 }, screen, 80, 24, 5)).toBeUndefined();
   expect(cellRect({ x: 0, y: 28 }, screen, 80, 24, 5)).toEqual({ left: 100, top: 50 + 23 * 20, width: 10, height: 20 });
 });
+
+it("terminalSnippet keeps a cwd with a backtick inside inline code", () => {
+  expect(terminalSnippet("x", { title: "T", cwd: "/a`b" })!.split("\n")[0]).toBe('Output of terminal "T" in ``/a`b``:');
+});

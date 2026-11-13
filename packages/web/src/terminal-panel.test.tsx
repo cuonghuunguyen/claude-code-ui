@@ -71,7 +71,7 @@ vi.mock("@xterm/xterm", () => ({
       this.t.written = [];
     }
     get buffer() {
-      return { active: { viewportY: this.t.viewportY, cursorX: 2, cursorY: 1 } };
+      return { active: { viewportY: this.t.viewportY, cursorX: 2, cursorY: 1, baseY: 0 } };
     }
     get modes() {
       return { mouseTrackingMode: this.t.mouse };
@@ -695,4 +695,21 @@ it("GH-710 the ContextMenu key opens the menu and is not sent to the shell", asy
   expect(t.key!(new KeyboardEvent("keydown", { key: "ContextMenu", cancelable: true }))).toBe(false);
   await later(50);
   expect(byId("terminal-menu")).not.toBeNull();
+});
+
+it("GH-710 the shell gets the focus back when the context menu closes, but not after Add to chat", async () => {
+  Object.assign(navigator, { clipboard: { writeText: vi.fn(async () => {}), readText: vi.fn(async () => "") } });
+  const t = await sending(vi.fn());
+  t.selection = "out";
+  const view = el.querySelector("[data-testid=terminal-view]")!;
+  await ctx(view);
+  const before = t.focused;
+  await act(async () => byId("terminal-menu-copy")!.click());
+  await later(50);
+  expect(t.focused).toBeGreaterThan(before);
+  await ctx(view);
+  const mid = t.focused;
+  await act(async () => byId("terminal-menu-add")!.click());
+  await later(50);
+  expect(t.focused).toBe(mid);
 });

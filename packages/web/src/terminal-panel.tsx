@@ -303,6 +303,7 @@ function TerminalView({
   const live = useRef({ title, cwd, onSend });
   live.current = { title, cwd, onSend };
   const [menuShown, dismissMenu] = useMenuGate(String(selSeq), hasSel && active && !!onSend && !menuOpen);
+  const sentFromMenu = useRef(false);
   const canPaste = typeof navigator.clipboard?.readText === "function";
 
   /** Rect of the cell `pos` (buffer coordinates) in the screen, undefined when its row is not visible. */
@@ -385,7 +386,7 @@ function TerminalView({
       // The ContextMenu key opens the menu next to the selection end, else the cursor. Shift+F10 stays the shell's.
       if (e.key === "ContextMenu" && wrap.current) {
         const sel = t.getSelectionPosition()?.end;
-        const at = sel ?? { x: t.buffer.active.cursorX, y: t.buffer.active.cursorY + t.buffer.active.viewportY };
+        const at = sel ?? { x: t.buffer.active.cursorX, y: t.buffer.active.cursorY + t.buffer.active.baseY };
         const r = cellAt(t, at);
         const host = wrap.current;
         // openContextMenuFromKey places the menu at the bottom-left of its target: a stand-in for the cell.
@@ -462,7 +463,10 @@ function TerminalView({
       <ContextMenu.Root
         onOpenChange={(open) => {
           setMenuOpen(open);
-          if (open) setCtxSel(!!term.current?.t.hasSelection());
+          if (open) return setCtxSel(!!term.current?.t.hasSelection());
+          // Closed (an item, Escape, a click elsewhere): the shell takes the focus back, except after Add to chat (the prompt box has it).
+          if (!sentFromMenu.current) requestAnimationFrame(() => term.current?.t.focus());
+          sentFromMenu.current = false;
         }}
       >
         <ContextMenu.Trigger render={view} />
@@ -483,7 +487,7 @@ function TerminalView({
                     disabled={!ctxSel}
                     title={ctxSel ? undefined : tr("files.terminal.needsSelection")}
                     data-testid="terminal-menu-add"
-                    onClick={() => (send(), term.current?.t.focus())}
+                    onClick={() => ((sentFromMenu.current = true), send())}
                   >
                     {tr("common.selection.addToChat")}
                   </ContextMenu.Item>
