@@ -520,7 +520,7 @@ export default {
   "shortcut.git.rebase": "Rebase",
   "shortcut.file.reveal": "Open in file manager",
   "shortcut.changes.addToPrompt": "Add to prompt",
-  "shortcut.changes.sendSelection": "Send selection to Claude",
+  "shortcut.changes.sendSelection": "Add selection to chat",
   "shortcut.account.switch": "Switch Claude account",
   "shortcut.pane.graph": "Show git graph",
   "shortcut.signal.toggle": "Toggle signal only",

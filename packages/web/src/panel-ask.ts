@@ -1,4 +1,4 @@
-// GH-722: palette and shortcut commands that act inside a panel (Rollback, branch picks, Stash, Annotate, Send selection).
+// GH-722: palette and shortcut commands that act inside a panel (Rollback, branch picks, Stash, Annotate, Add selection to chat).
 // The app reveals the panel and files an ask; the panel that owns the action takes it. Kept out of the panels so App.tsx does not load their code.
 // Like commit-ask.ts, an ask is held 2 s so a panel that mounts right after the reveal still takes it.
 import { useEffect, useRef } from "react";

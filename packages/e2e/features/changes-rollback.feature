@@ -84,7 +84,7 @@ Feature: Changes tab rolls back files and hunks and adds files and diff lines to
     Then the Files editor has the text "line 3 edited" and "line 25 edited"
     And I capture "timeline-restored"
 
-  Scenario: Add to prompt from a Changes row menu, Send selection to Claude and Alt+K insert the numbered diff lines
+  Scenario: Add to prompt from a Changes row menu, Add to chat in the selection menu and Alt+K insert the numbered diff lines
     Given the scratch project has the edited file "README.md" and the new file "b.txt"
     And the scratch project has long.txt edited at lines 3 and 25
     And the viewport is 1440x900
@@ -97,11 +97,11 @@ Feature: Changes tab rolls back files and hunks and adds files and diff lines to
     Then the prompt box contains "@README.md"
     And I capture "row-add-to-prompt"
     When I open the diff of "long.txt" in the Changes tab
-    Then the narrow diff header shows the file name and an icon-only send button
+    Then the narrow diff header shows the file name and has no send button
     And I capture "narrow-header"
     When I select the diff lines from the removed line 3 to the added line 3
     And I capture "lines-selected"
-    And I click "Send selection to Claude" in the diff
+    And I click "Add to chat" in the selection menu
     Then the prompt box has the diff lines "-3 | line 3" and "+3 | line 3 edited"
     And I capture "selection-sent"
     When I select the diff lines from the removed line 25 to the added line 25
@@ -109,17 +109,19 @@ Feature: Changes tab rolls back files and hunks and adds files and diff lines to
     Then the prompt box has the diff lines "-25 | line 25" and "+25 | line 25 edited"
     And I capture "alt-k-sent"
 
-  Scenario: The hunk button, the send button and the Rollback dialog fit a phone
+  Scenario: The hunk button, the selection menu and the Rollback dialog fit a phone
     Given the scratch project has long.txt edited at lines 3 and 25
     And the viewport is 1440x900
     And a Haiku session with one finished reply
     And the viewport is 390x844
+    And the pointer is coarse
     When I open the Changes tab of the side panel
     And I choose the "Uncommitted" diff mode
     And I open the diff of "long.txt" in the Changes tab
     Then the diff of "long.txt" has 2 hunk Rollback buttons
     And every hunk Rollback button is inside the viewport
-    And the send selection button is at least 44px high
+    When I select the diff lines from the removed line 3 to the added line 3
+    Then the selection menu buttons are at least 44px high
     And the page has no horizontal scroll
     And I capture "phone-hunk-buttons"
     When I check the file "long.txt" in the Changes tab

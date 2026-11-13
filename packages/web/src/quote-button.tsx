@@ -9,6 +9,7 @@ import {
   selectionTarget,
 } from "./quote.ts";
 import { useT } from "./i18n.ts";
+import { menuPosition } from "./selection-menu.ts";
 
 /** Sends a quote to the active prompt box; absent outside App (the hover action then renders nothing). */
 export const QuoteContext = createContext<
@@ -65,22 +66,14 @@ export function QuoteButton({ onQuote }: { onQuote: (quote: string) => void }) {
   }, [shown]);
   if (!shown) return null;
   const coarse = !!window.matchMedia?.("(pointer: coarse)").matches;
-  const { rect } = shown;
-  const x = Math.min(
-    Math.max(rect.left + rect.width / 2, 48),
-    window.innerWidth - 48,
-  );
+  const place = menuPosition(shown.rect, { width: window.innerWidth, height: window.innerHeight }, coarse);
   return (
     <Button
       size="sm"
       variant="secondary"
       data-testid="quote-button"
       className={`fixed z-50 shadow-md pointer-coarse:min-h-11 ${coarse ? "min-h-11 px-4" : ""}`}
-      style={{
-        left: x,
-        top: coarse ? rect.bottom + 8 : rect.top - 8,
-        transform: coarse ? "translateX(-50%)" : "translate(-50%, -100%)",
-      }}
+      style={place}
       onPointerDown={(e) => e.preventDefault()}
       onMouseDown={(e) => e.preventDefault()}
       onClick={() => (onQuote(shown.quote), setShown(undefined))}

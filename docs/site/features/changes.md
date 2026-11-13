@@ -30,8 +30,8 @@ A project folder can hold several repositories: nested ones, or submodules. In t
 ## Tell Claude about a change
 
 - **Add to prompt:** right-click a row (long press, <kbd>Shift</kbd>+<kbd>F10</kbd>) and pick **Add to prompt**. It inserts the file as an `@` mention. Not for a deleted file. It is also in the menu in **Session changes** mode.
-- **Send selection to Claude:** in the diff of a text file, select lines on the line numbers (click, <kbd>Shift</kbd>+click or drag), then click **Send selection to Claude** in the diff header, or press <kbd>Alt</kbd>+<kbd>K</kbd> (<kbd>⌥</kbd> <kbd>K</kbd> on Mac). The prompt box gets the file name, the line numbers and the selected lines, removed lines marked `-` and added lines `+`. You edit it and send it.
-- Both are also in the [command palette](palette) (**Add file to prompt**, **Send selection to Claude**), without a default key.
+- **Selection menu:** in the diff of a text file, select lines on the line numbers (click, <kbd>Shift</kbd>+click or drag). A small menu appears next to the selection: **Add to chat** or **Quote**. <kbd>Alt</kbd>+<kbd>K</kbd> (<kbd>⌥</kbd> <kbd>K</kbd> on Mac) does the same as **Add to chat**. With **Add to chat** the prompt box gets the file name, the line numbers and the selected lines, removed lines marked `-` and added lines `+`. **Quote** adds the selected lines as a quote block. You edit it and send it. The same menu appears when you select text in a file editor.
+- Both are also in the [command palette](palette) (**Add file to prompt**, **Add selection to chat**), without a default key.
 
 ## Status badges
 

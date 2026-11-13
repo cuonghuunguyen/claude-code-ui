@@ -30,8 +30,8 @@ Một thư mục dự án có thể chứa nhiều kho mã: kho lồng nhau, ho�
 ## Báo cho Claude về một thay đổi {#tell-claude-about-a-change}
 
 - **Thêm vào prompt:** bấm chuột phải một hàng (nhấn giữ, <kbd>Shift</kbd>+<kbd>F10</kbd>) và chọn **Thêm vào prompt**. Nó chèn tệp dưới dạng `@` mention. Không áp dụng cho tệp đã xóa. Mục này cũng có trong menu ở chế độ **Thay đổi của phiên**.
-- **Gửi phần chọn cho Claude:** trong diff của tệp văn bản, chọn các dòng trên số dòng (bấm, <kbd>Shift</kbd>+bấm hoặc kéo), rồi bấm **Gửi phần chọn cho Claude** trên tiêu đề diff, hoặc nhấn <kbd>Alt</kbd>+<kbd>K</kbd> (<kbd>⌥</kbd> <kbd>K</kbd> trên Mac). Ô prompt nhận tên tệp, số dòng và các dòng đã chọn, dòng bị xóa đánh dấu `-` và dòng được thêm đánh dấu `+`. Bạn chỉnh rồi gửi.
-- Cả hai cũng có trong [bảng lệnh](palette) (**Thêm tệp vào prompt**, **Gửi phần chọn cho Claude**), không có phím mặc định.
+- **Menu phần chọn:** trong diff của tệp văn bản, chọn các dòng trên số dòng (bấm, <kbd>Shift</kbd>+bấm hoặc kéo). Một menu nhỏ hiện cạnh phần chọn: **Thêm vào chat** hoặc **Trích dẫn**. <kbd>Alt</kbd>+<kbd>K</kbd> (<kbd>⌥</kbd> <kbd>K</kbd> trên Mac) làm giống **Thêm vào chat**. Với **Thêm vào chat**, ô prompt nhận tên tệp, số dòng và các dòng đã chọn, dòng bị xóa đánh dấu `-` và dòng được thêm đánh dấu `+`. **Trích dẫn** thêm các dòng đã chọn dưới dạng khối trích dẫn. Bạn chỉnh rồi gửi. Menu này cũng hiện khi bạn chọn văn bản trong trình soạn thảo tệp.
+- Cả hai cũng có trong [bảng lệnh](palette) (**Thêm tệp vào prompt**, **Thêm phần chọn vào chat**), không có phím mặc định.
 
 ## Nhãn trạng thái {#status-badges}
 

@@ -664,7 +664,7 @@ export function App() {
   // GH-401: the docked sessions that show (set by an effect below, once the docks' state is known) are on screen too: seen, with their Aside popups and notifications.
   const [dockedVisible, setDockedVisible] = useState<string[]>([]);
   const visibleIds = [...(splitOn ? split.ids : [activeId]), ...dockedVisible];
-  // A mention from "Send selection to Claude", a quote (`>`) or a command, waiting for the prompt box to take it.
+  // A mention from "Add to chat" (the selection menu, Alt+K), a quote (`>`) or a command, waiting for the prompt box to take it.
   const [insert, setInsert] = useState<string>();
   // GH-503: a quote waiting for the prompt box of a docked session.
   const [dockInsert, setDockInsert] = useState<Record<string, string>>({});

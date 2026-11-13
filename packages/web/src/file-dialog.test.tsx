@@ -11,6 +11,8 @@ import { FilesPanel } from "./files-panel.tsx";
 
 Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
 Range.prototype.getBoundingClientRect ??= () => new DOMRect();
+// No layout in jsdom: the selection menu's anchor is the line box at the selection head.
+EditorView.prototype.coordsAtPos = () => ({ left: 10, right: 60, top: 100, bottom: 116 });
 window.matchMedia = ((query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} })) as never;
 
 const el = document.createElement("div");
@@ -230,19 +232,61 @@ it("focus returns to the opener on close", async () => {
   opener.remove();
 });
 
-it("Send selection closes the dialog and hands the @mention to onSend; Alt+K too; the drafts stay in the store", async () => {
+const menuBtn = (id: "add" | "quote") => q<HTMLButtonElement>(`[data-testid=selection-menu-${id}]`);
+/** Selects lines 2-3 of the 50 lines "l1\nl2…" in the editor of `within` and waits for the menu's 150 ms. */
+const selectLines23 = async (within: ParentNode) => {
+  await act(async () => cmView(within).dispatch({ selection: { anchor: 3, head: 8 } }));
+  await act(async () => void (await new Promise((r) => setTimeout(r, 200))));
+};
+
+it("the editor has no Send selection button; a selection shows Add to chat and Quote, an empty one nothing", async () => {
+  const { store } = await setup({ startOpen: true });
+  await openTab(store, "/p/a.ts");
+  expect(q("[data-testid=send-selection]")).toBeNull();
+  expect(menuBtn("add")).toBeNull();
+  await selectLines23(dlg()!);
+  expect(q("[data-testid=selection-menu]")!.textContent).toBe("Add to chatQuote");
+  await act(async () => cmView(dlg()!).dispatch({ selection: { anchor: 3 } }));
+  expect(menuBtn("add")).toBeNull();
+});
+
+it("Escape hides the menu; selecting the same range again shows it again", async () => {
+  const { store } = await setup({ startOpen: true });
+  await openTab(store, "/p/a.ts");
+  await selectLines23(dlg()!);
+  expect(menuBtn("add")).not.toBeNull();
+  await act(async () => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(menuBtn("add")).toBeNull();
+  await selectLines23(dlg()!);
+  expect(menuBtn("add")).not.toBeNull();
+});
+
+it("a file in the dialog: Add to chat hands @path#lines to onSend and closes the dialog; the drafts stay in the store", async () => {
   const onSend = vi.fn();
   const { store } = await setup({ startOpen: true, onSend });
   await openTab(store, "/p/a.ts");
-  await click("[data-testid=send-selection]");
-  expect(onSend).toHaveBeenCalledWith("@a.ts");
+  await selectLines23(dlg()!);
+  await click(menuBtn("add")!);
+  expect(onSend).toHaveBeenCalledWith("@a.ts#L2-3");
   await vi.waitFor(() => expect(dlg()).toBeNull());
   expect(store.get().tabs["/p/a.ts"]).toBeDefined();
-  onSend.mockClear();
-  await click("[data-testid=files-popout]");
-  await flush();
+});
+
+it("Quote hands the selected text as a fenced blockquote to onSend", async () => {
+  const onSend = vi.fn();
+  const { store } = await setup({ startOpen: true, onSend });
+  await openTab(store, "/p/a.ts");
+  await selectLines23(dlg()!);
+  await click(menuBtn("quote")!);
+  expect(onSend).toHaveBeenCalledWith("> ```\n> l2\n> l3\n> ```\n\n");
+});
+
+it("Alt+K with an empty selection hands the file mention to onSend", async () => {
+  const onSend = vi.fn();
+  const { store } = await setup({ startOpen: true, onSend });
+  await openTab(store, "/p/a.ts");
   await act(async () => void cmView(dlg()!).contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "k", altKey: true, bubbles: true, cancelable: true })));
-  expect(onSend).toHaveBeenCalledTimes(1);
+  expect(onSend).toHaveBeenCalledWith("@a.ts");
 });
 
 it("opened with Pop out, Esc and Close return focus to the Pop out button, which the Files tab recreates while the dialog is open", async () => {

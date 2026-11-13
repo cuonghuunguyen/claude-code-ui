@@ -220,7 +220,8 @@ it("path header: the breadcrumb, then Pop out in the Files tab; Open in editor (
   expect(pos & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(header.querySelector("[data-testid=open-in-editor]")).toBeNull();
   expect(header.querySelector("[data-testid=files-popout]")!.className).toContain("max-md:size-11");
-  for (const id of ["send-selection", "editor-save"]) expect(header.querySelector(`[data-testid=${id}]`)!.className, id).toContain("max-md:h-11");
+  expect(header.querySelector("[data-testid=send-selection]")).toBeNull();
+  for (const id of ["editor-save"]) expect(header.querySelector(`[data-testid=${id}]`)!.className, id).toContain("max-md:h-11");
   await show({ surface: "dialog", openPath: "/p/a.ts", onOpenInFiles: () => {} });
   const dialogHeader = q("[data-testid=file-path-header]")!;
   expect(dialogHeader.querySelector("[data-testid=open-in-editor]")).not.toBeNull();

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 // App wiring of the shortcut listener and the palette, with a fake daemon connection.
+import { EditorView } from "@codemirror/view";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6253,12 +6254,21 @@ describe("GH-401 docked session", () => {
     expect(fileDlg()).not.toBeNull();
   };
 
-  it("Send selection to Claude in a docked session's file dialog goes to the docked prompt box", async () => {
-    await openDockedFile();
-    await act(async () => document.querySelector<HTMLElement>("[data-testid=send-selection]")!.click());
-    expect((prompt(S3) as HTMLTextAreaElement).value).toContain("@a.ts");
-    expect(el.querySelector<HTMLTextAreaElement>('[data-testid="session-area"] textarea[aria-label="Prompt"]')!.value).toBe("");
-    expect(fileDlg()).toBeNull();
+  it("the selection menu of a docked session's file dialog: Add to chat and Quote reach the docked prompt box", async () => {
+    // No layout in jsdom: the menu's anchor is the line box at the selection head.
+    const coords = vi.spyOn(EditorView.prototype, "coordsAtPos").mockReturnValue({ left: 10, right: 60, top: 100, bottom: 116 });
+    for (const [id, expected] of [["add", "@a.ts#L1"], ["quote", "> ```\n> x\n> ```"]] as const) {
+      await openDockedFile();
+      expect(document.querySelector("[data-testid=send-selection]")).toBeNull();
+      await act(async () => EditorView.findFromDOM(fileDlg()!.querySelector<HTMLElement>(".cm-editor")!)!.dispatch({ selection: { anchor: 0, head: 1 } }));
+      await act(async () => void (await new Promise((r) => setTimeout(r, 200))));
+      await act(async () => document.querySelector<HTMLElement>(`[data-testid=selection-menu-${id}]`)!.click());
+      expect((prompt(S3) as HTMLTextAreaElement).value).toContain(expected);
+      expect(el.querySelector<HTMLTextAreaElement>('[data-testid="session-area"] textarea[aria-label="Prompt"]')!.value).toBe("");
+      expect(fileDlg()).toBeNull();
+      await remount({ list: withOtherCwd });
+    }
+    coords.mockRestore();
   });
 
   it("a docked session's file dialog hides the panel actions that would target the shown session", async () => {

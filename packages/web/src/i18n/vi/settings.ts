@@ -522,7 +522,7 @@ export default {
   "shortcut.git.rebase": "Rebase",
   "shortcut.file.reveal": "Mở trong trình quản lý tệp",
   "shortcut.changes.addToPrompt": "Thêm vào prompt",
-  "shortcut.changes.sendSelection": "Gửi phần chọn cho Claude",
+  "shortcut.changes.sendSelection": "Thêm phần chọn vào chat",
   "shortcut.account.switch": "Đổi tài khoản Claude",
   "shortcut.pane.graph": "Hiện đồ thị git",
   "shortcut.signal.toggle": "Bật/tắt chỉ tín hiệu",

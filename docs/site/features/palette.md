@@ -14,7 +14,7 @@ One search box for commands, sessions, files and message text.
 
 | Group | Examples |
 | --- | --- |
-| **Commands** | New session, New worktree…, Toggle terminal, Show git graph, Toggle signal only, Open settings, Show guide, Open Focus, Stop, Change model, Change thinking effort, Change permission mode, Rewind, Switch Claude account…, Open in file manager, Add file to prompt, Send selection to Claude |
+| **Commands** | New session, New worktree…, Toggle terminal, Show git graph, Toggle signal only, Open settings, Show guide, Open Focus, Stop, Change model, Change thinking effort, Change permission mode, Rewind, Switch Claude account…, Open in file manager, Add file to prompt, Add selection to chat |
 | **Git** | Git: Commit, Git: Push, Git: Rollback…, Git: New branch…, Git: Checkout…, Git: Smart checkout…, Git: Stash…, Git: Annotate (Blame), Git: Merge…, Git: Rebase… |
 | **Customize** | MCP servers, Slash commands, Manage plugins |
 | **Sessions** | Your sessions, newest first |
@@ -24,7 +24,7 @@ One search box for commands, sessions, files and message text.
 ## Good to know
 
 - Only commands that make sense right now are listed. For example, Rewind is hidden while Claude works.
-- The git commands show in a git repository. Rollback, Checkout, Merge and Rebase open the matching dialog or the branch list in the Git graph, so you pick the branch there. **Send selection to Claude** shows while diff lines are selected in Changes, and **Switch Claude account…** with two or more accounts.
-- The Rollback, New branch, Checkout, Smart checkout, Stash, Annotate, Merge, Rebase, Open in file manager, Add to prompt, Send selection and Switch account commands have no default key. Bind one in **Keyboard shortcuts**.
+- The git commands show in a git repository. Rollback, Checkout, Merge and Rebase open the matching dialog or the branch list in the Git graph, so you pick the branch there. **Add selection to chat** shows while diff lines are selected in Changes, and **Switch Claude account…** with two or more accounts.
+- The Rollback, New branch, Checkout, Smart checkout, Stash, Annotate, Merge, Rebase, Open in file manager, Add to prompt, Add selection to chat and Switch account commands have no default key. Bind one in **Keyboard shortcuts**.
 - Each command shows its keyboard shortcut. All of them are on the [Keyboard shortcuts](../reference/shortcuts) page.
 - To open a file directly, <kbd>Ctrl</kbd>+<kbd>P</kbd> (**Open file**) is faster.
