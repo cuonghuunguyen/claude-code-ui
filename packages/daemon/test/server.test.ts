@@ -3954,6 +3954,101 @@ describe("/clear", () => {
     }
   });
 
+  describe("a restored session whose transcript was deleted", () => {
+    const gone = (id: string, over: { query?: unknown } = {}) => {
+      const state = { listed: [{ sessionId: id, summary: "fix the bug", lastModified: 1000, cwd: webRoot }] as { sessionId: string; summary: string; lastModified: number; cwd: string }[], info: true };
+      const d = createDaemon({
+        webRoot,
+        token,
+        roots: [webRoot],
+        projects: added(webRoot),
+        query: (over.query ?? fakeQuery) as never,
+        history: {
+          listSessions: (async () => state.listed) as never,
+          getSessionInfo: (async (sid: string) => (sid === id && state.info ? { sessionId: id, summary: "fix the bug", lastModified: 1000, cwd: webRoot } : undefined)) as never,
+          getSessionMessages: (async () => history) as never,
+        },
+      });
+      return { d, state };
+    };
+    const titles = async (c: Awaited<ReturnType<typeof client>>) => ((await c.request({ type: "session.list" })) as { result: { sessions: { id: string; title: string }[] } }).result.sessions;
+
+    it("is dropped by the next list: not listed as 'New session', tabs told, not restored again", async () => {
+      const id = randomUUID();
+      const { d, state } = gone(id);
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      try {
+        const c = await client((d.address() as AddressInfo).port);
+        expect((await titles(c)).find((s) => s.id === id)?.title).toBe("fix the bug");
+        expect(await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 })).toMatchObject({ type: "reply" });
+        state.listed = [];
+        state.info = false;
+        expect((await titles(c)).find((s) => s.id === id)).toBeUndefined();
+        await c.waitFor((m) => m.type === "sessions.changed" && m.deleted === id);
+        expect(await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 })).toMatchObject({ code: "unknown_session" });
+      } finally {
+        d.close();
+      }
+    });
+
+    it("stays when the scan missed the file but it still exists", async () => {
+      const id = randomUUID();
+      const { d, state } = gone(id);
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      try {
+        const c = await client((d.address() as AddressInfo).port);
+        await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+        state.listed = [];
+        expect((await titles(c)).some((s) => s.id === id)).toBe(true);
+        expect(c.inbox.some((m) => m.type === "sessions.changed" && m.deleted === id)).toBe(false);
+      } finally {
+        d.close();
+      }
+    });
+
+    it("stays while its CLI runs", async () => {
+      const id = randomUUID();
+      const { d, state } = gone(id, { query: permissionQuery });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      try {
+        const c = await client((d.address() as AddressInfo).port);
+        await c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+        await c.request({ type: "session.prompt", sessionId: id, text: "run tests" });
+        await c.waitFor((m) => m.type === "event" && m.part.type === "permission_request");
+        state.listed = [];
+        state.info = false;
+        expect((await titles(c)).some((s) => s.id === id)).toBe(true);
+        expect(c.inbox.some((m) => m.type === "sessions.changed" && m.deleted === id)).toBe(false);
+      } finally {
+        d.close();
+      }
+    });
+
+    it("a new session whose first prompt failed before any transcript is still listed as 'New session'", async () => {
+      const failing = () => ({
+        // eslint-disable-next-line require-yield
+        async *[Symbol.asyncIterator]() {
+          throw new Error("cli failed");
+        },
+        interrupt: async () => {},
+        close: () => {},
+      });
+      const { d } = gone(randomUUID(), { query: failing });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      try {
+        const c = await client((d.address() as AddressInfo).port);
+        const created = (await c.request({ type: "session.create", cwd: webRoot })) as { result: { session: { id: string } } };
+        const sid = created.result.session.id;
+        await c.request({ type: "session.subscribe", sessionId: sid, sinceSeq: 0 });
+        await c.request({ type: "session.prompt", sessionId: sid, text: "hi" });
+        await new Promise((r) => setTimeout(r, 50));
+        expect((await titles(c)).find((s) => s.id === sid)?.title).toBe("New session");
+      } finally {
+        d.close();
+      }
+    });
+  });
+
   it("lists a cleared session by its first prompt when the SDK titles it '/clear' (prompt past the SDK's head read window)", async () => {
     const id = randomUUID();
     const user = (content: string, extra = {}) => ({ type: "user", uuid: randomUUID(), session_id: id, message: { role: "user", content }, parent_tool_use_id: null, parent_agent_id: null, ...extra });

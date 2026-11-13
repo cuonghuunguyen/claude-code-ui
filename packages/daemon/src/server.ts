@@ -465,6 +465,8 @@ export function createDaemon(opts: {
   const restoring = new Map<string, Promise<Session | undefined>>();
   // Sessions whose delete is in progress (session.delete).
   const deleting = new Set<string>();
+  // Claude sessions whose transcript this run has seen (listed or restored): one that is gone later was deleted outside the daemon.
+  const hadTranscript = new Set<string>();
   const history = { listSessions: listSessionsOffThread, getSessionInfo, getSessionMessages, listSubagents, getSubagentMessages, renameSession, tagSession, deleteSession, forkSession, ...opts.history };
   const claudeDir = opts.claudeDir ?? (process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"));
   const projectsDir = opts.projectsDir ?? join(claudeDir, "projects");
@@ -1489,11 +1491,16 @@ export function createDaemon(opts: {
       const loaded = sessions.get(t.sessionId);
       const live = loaded?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [], capabilities: ALL_CAPABILITIES, engine: "claude" as const };
       const title = CLEARED.test(t.summary) ? (sessions.get(t.sessionId)?.untitled() ? "New session" : await clearedTitle(t.sessionId, t.cwd, t)) : t.summary;
+      if (sessions.has(t.sessionId)) hadTranscript.add(t.sessionId);
       items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastAt.get(t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...(!loaded?.live() && { live: false as const }), ...links(t.sessionId) });
     }
-    // Sessions of this run that have no transcript yet (no prompt sent).
+    // A loaded session whose transcript existed and is gone, with no CLI process: deleted outside the daemon (docs/spec.md "Sessions").
+    const gone = new Set<string>();
+    for (const s of [...sessions.values()])
+      if (hadTranscript.has(s.id) && !known.has(s.id) && !s.live() && !linked.get(s.id)?.ownerId && !deleting.has(s.id) && !(await history.getSessionInfo(s.id).catch(() => undefined)) && (await dropGone(s.id))) gone.add(s.id);
+    // Sessions whose transcript was never seen in this run (no prompt sent, or its first prompt failed before the CLI wrote one).
     for (const s of sessions.values())
-      if (!items.has(s.id) && !linked.get(s.id)?.ownerId) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false, transcript: false, ...(!s.live() && { live: false as const }), ...links(s.id) });
+      if (!gone.has(s.id) && !items.has(s.id) && !linked.get(s.id)?.ownerId) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false, transcript: false, ...(!s.live() && { live: false as const }), ...links(s.id) });
     const listed = [...items.values()];
     // Upgrade from "every transcript cwd is a project": the projects with saved claude-ui state stay, once.
     if (!projects.seeded)
@@ -1606,6 +1613,7 @@ export function createDaemon(opts: {
         const info = await history.getSessionInfo(id);
         if (!info?.cwd || !allowed(info.cwd)) return undefined;
         transcriptCwds.set(id, info.cwd);
+        hadTranscript.add(id);
         // Before the read: a write during it changes the stamp, so the first subscriber syncs it.
         stamps.set(id, statStamp(transcriptFile(projectsDir, info.cwd, id)));
         const { main: messages, runs, entries } = await readTranscript(id, info.cwd);
@@ -1696,6 +1704,29 @@ export function createDaemon(opts: {
     }
     broadcast({ type: "sessions.changed", deleted: id });
     return undefined;
+  }
+
+  /**
+   * Unloads a session whose transcript was deleted outside the daemon. Memory only: never `deleteSessionById` (its transcript lookup
+   * could delete a file that reappeared). Uploads, back marks, briefs and the sessions.json entry stay, as for any session deleted
+   * outside the daemon (the settings prune handles the entry). False when the session started again or is being deleted meanwhile.
+   */
+  async function dropGone(id: string): Promise<boolean> {
+    const s = sessions.get(id);
+    if (!s || s.live() || deleting.has(id) || settings.get(id)?.ownerId) return false;
+    sessions.delete(id);
+    syncRunning();
+    autoContinue.cancel(id);
+    queue.drop(id);
+    orchestration.forget(id);
+    touched.delete(id);
+    caches.delete(id);
+    stamps.delete(id);
+    transcriptCwds.delete(id);
+    hadTranscript.delete(id);
+    await s.close().catch((e) => console.error(`session ${id}: closing after its transcript was deleted failed:`, e));
+    broadcast({ type: "sessions.changed", deleted: id });
+    return true;
   }
 
   /** An Aside's owner (link not dropped by Keep as session). */
