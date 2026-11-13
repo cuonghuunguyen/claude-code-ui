@@ -29,7 +29,7 @@ All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Version
 - Files: copy, cut, paste and drag and drop of files and folders in the file tree, also across Sides ([#555](https://github.com/cuonghuunguyen/claude-code-ui/issues/555)).
 - Settings › **Launcher**: saves the start options and creates an OS launcher shortcut ([#553](https://github.com/cuonghuunguyen/claude-code-ui/issues/553)).
 - Claude account: **Log in…** from Settings or after a failed login runs the Claude CLI login in a terminal; token accounts switch from the usage ring or Settings ([#615](https://github.com/cuonghuunguyen/claude-code-ui/issues/615), [#616](https://github.com/cuonghuunguyen/claude-code-ui/issues/616)).
-- Orchestration: Settings › Orchestration › **Keep warm** keeps the prompt cache of an idle coordinator warm while its workers run ([#730](https://github.com/cuonghuunguyen/claude-code-ui/pull/730)).
+- Orchestration: Settings › Orchestration › **Keep coordinator cache warm** keeps the prompt cache of an idle coordinator warm while its workers run ([#730](https://github.com/cuonghuunguyen/claude-code-ui/pull/730)).
 - Prompt: a file copied in Explorer or Finder and pasted or dropped in the prompt box is attached ([#613](https://github.com/cuonghuunguyen/claude-code-ui/issues/613)).
 - Prompt: **Expand** turns a pasted-text chip into plain text, and Undo restores the chip. A copied token pasted back is inlined ([#620](https://github.com/cuonghuunguyen/claude-code-ui/issues/620)).
 - Changes: **Add to prompt** adds a changed file to the prompt, and **Send selection to Claude** sends the selected diff lines ([#611](https://github.com/cuonghuunguyen/claude-code-ui/issues/611)).
