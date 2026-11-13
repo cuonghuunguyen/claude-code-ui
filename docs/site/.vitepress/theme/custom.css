@@ -15,3 +15,14 @@ html:not(.dark) .only-dark {
   max-width: 100%;
   height: auto;
 }
+
+/* The video on the watch page (/demo): full width of the content column, like the home hero video. */
+.vp-doc video.demo-video {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 16px 0;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  background: var(--vp-c-bg-soft);
+}
