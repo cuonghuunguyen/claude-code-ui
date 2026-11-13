@@ -1,9 +1,10 @@
 import { expect, type Page } from "@playwright/test";
 import { join } from "node:path";
 import { Given, Then, When } from "./fixtures.ts";
+import { cssStr } from "../support/css.ts";
 
 // GH-515: names and icons of projects and machines.
-const row = (page: Page, path: string) => page.locator(`[data-testid="group-toggle"][title="${path}"]`).locator("xpath=ancestor::h3");
+const row = (page: Page, path: string) => page.locator(`[data-testid="group-toggle"][title="${cssStr(path)}"]`).locator("xpath=ancestor::h3");
 const second = new WeakMap<Page, Page>();
 const dialog = (page: Page) => page.getByTestId("label-dialog");
 

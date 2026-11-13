@@ -13,6 +13,7 @@ import { createProjects } from "../src/projects.ts";
 import { createSettings } from "../src/settings.ts";
 import { createDaemon } from "../src/server.ts";
 import { mcpName, type Rule } from "../src/opencode-engine.ts";
+import { visualizePluginDir, visualizeSystem } from "../src/visualize.ts";
 import { fakeQuery } from "./fake-query.ts";
 
 const BIN = fileURLToPath(new URL("./fixtures/opencode/fake-opencode-bin.mjs", import.meta.url));
@@ -141,8 +142,8 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     await s.prompt("two");
     await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 2);
     const [on, off] = d.requests("POST", `/session/${s.id}/prompt_async`).map((r) => r.body);
-    expect(on.system).toContain("Draw a chart, diagram");
-    expect(on.system).toContain("```visualize");
+    expect(on.system).toEqual(expect.stringMatching(/\S/));
+    expect(on.system).toBe(visualizeSystem(visualizePluginDir()));
     expect(off.system).toBeUndefined();
   });
 

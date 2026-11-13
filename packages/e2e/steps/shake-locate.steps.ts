@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { openSettings } from "../support/ui.ts";
 import { Given, Then, When } from "./fixtures.ts";
+import { endsWithPath } from "../support/css.ts";
 
 // GH-517. Playwright mouse moves are pointerType "mouse" with buttons 0, as a real mouse.
 const strokes = async (page: Page, xs: number[], gap = 0) => {
@@ -34,7 +35,7 @@ Given("the scratch project has {int} files in the folder {string}", async ({ pro
 
 When("I open every file of the folder {string} in its own tab", async ({ page, project }, dir: string) => {
   for (const f of readdirSync(join(project.path, dir)).sort()) {
-    await page.locator(`[data-testid="tree-entry"][data-path$="/${dir}/${f}"]`).first().click({ button: "right" });
+    await page.locator(`[data-testid="tree-entry"]${endsWithPath("data-path", `${dir}/${f}`)}`).first().click({ button: "right" });
     await page.getByRole("menuitem", { name: "Open in tab", exact: true }).click();
     await expect(page.locator(`[data-testid="tab"][data-tab-id^="file:"]`).filter({ hasText: f })).toBeVisible();
   }

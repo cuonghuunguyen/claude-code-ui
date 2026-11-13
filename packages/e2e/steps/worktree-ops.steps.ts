@@ -7,13 +7,14 @@ import { fakeJira } from "../support/fake-jira.ts";
 import { git, makeRepoWithOrigin } from "../support/git-fixture.ts";
 import { projectsRoot, runDir } from "../support/paths.ts";
 import { Given, Then, When, type Project } from "./fixtures.ts";
+import { cssStr } from "../support/css.ts";
 
 const TOKEN = "e2e-jira-token";
 const wtDir = (p: Project, name: string) => join(p.path, ".claude", "worktrees", name);
 const phone = (page: Page) => page.viewportSize()!.width < 500;
 // Rows of earlier scenarios stay in the shared daemon's sidebar: a row is always looked up by the scratch project's folder.
 const worktreeRow = (page: Page, project: Project, branch: string | RegExp) =>
-  page.locator(`[data-testid="worktree-row"][data-path^="${join(project.path, ".claude", "worktrees")}"]`).filter({ hasText: branch });
+  page.locator(`[data-testid="worktree-row"][data-path^="${cssStr(join(project.path, ".claude", "worktrees"))}"]`).filter({ hasText: branch });
 
 // ---- GH-452 -------------------------------------------------------------------------------------------------------
 Given("a fake Jira with a ticket with a long summary and a ticket whose summary holds fix-123", async ({ jira }) => {
@@ -181,12 +182,12 @@ async function openProjectMenu(page: Page, project: Project, entry: "cleanup") {
   if (phone(page)) {
     await expect(page.getByTestId("new-session-tab")).toBeVisible({ timeout: 60_000 });
     await page.getByTestId("open-drawer").click();
-    const r = page.locator(`[data-testid="group-toggle"][title="${project.path}"]`).locator("xpath=ancestor::h3");
+    const r = page.locator(`[data-testid="group-toggle"][title="${cssStr(project.path)}"]`).locator("xpath=ancestor::h3");
     await expect(r.getByTestId("project-menu")).toBeInViewport({ timeout: 60_000 });
     await r.getByTestId("project-menu").click();
     await page.getByTestId(`project-menu-${entry}`).click();
   } else {
-    await page.locator(`[data-testid="group-toggle"][title="${project.path}"]`).click({ button: "right", timeout: 60_000 });
+    await page.locator(`[data-testid="group-toggle"][title="${cssStr(project.path)}"]`).click({ button: "right", timeout: 60_000 });
     await page.getByTestId(`group-menu-${entry}`).click();
   }
 }
@@ -261,7 +262,10 @@ Then("the Clean up row {string} mentions {string}", async ({ page }, branch: str
 });
 
 When("I tick the Clean up row {string}", async ({ page }, branch: string) => {
-  await cleanupRow(page, branch).getByTestId("cleanup-check").check();
+  // The checkbox is disabled while the row's status resolves (slow on Windows); a click before it is enabled is dropped.
+  const box = cleanupRow(page, branch).getByTestId("cleanup-check");
+  await expect(box).toBeEnabled({ timeout: 60_000 });
+  await box.check();
 });
 
 When("I also delete the branch of the Clean up row {string}", async ({ page }, branch: string) => {
@@ -372,7 +376,7 @@ Then("the Remove worktree dialog closes at once", async ({ page }) => {
 
 Then("the row of {string} showed Removing… dimmed before it disappeared", async ({ page, project }, branch: string) => {
   const path = join(project.path, ".claude", "worktrees", branch);
-  await expect(page.locator(`[data-testid="worktree-row"][data-path="${path}"]`)).toHaveCount(0, { timeout: 60_000 });
+  await expect(page.locator(`[data-testid="worktree-row"][data-path="${cssStr(path)}"]`)).toHaveCount(0, { timeout: 60_000 });
   const tl = await rmTimeline(page);
   const mine = tl.map((s) => s.rows.find((r) => r.path === path));
   const i = mine.findIndex((r) => r?.removing && r.dim);
@@ -382,7 +386,7 @@ Then("the row of {string} showed Removing… dimmed before it disappeared", asyn
 
 Then("the sidebar rows of {string} and {string} showed Removing… at the same time", async ({ page, project }, a: string, b: string) => {
   const paths = [a, b].map((n) => join(project.path, ".claude", "worktrees", n));
-  for (const p of paths) await expect(page.locator(`[data-testid="worktree-row"][data-path="${p}"]`)).toHaveCount(0, { timeout: 60_000 });
+  for (const p of paths) await expect(page.locator(`[data-testid="worktree-row"][data-path="${cssStr(p)}"]`)).toHaveCount(0, { timeout: 60_000 });
   const tl = await rmTimeline(page);
   const both = tl.some((s) => paths.every((p) => s.rows.some((r) => r.path === p && r.removing && r.dim)));
   expect(both, "one moment where both rows showed Removing… dimmed").toBe(true);
@@ -438,7 +442,8 @@ Then("nothing of the worktree {string} was deleted", async ({ project }, name: s
   expect(existsSync(dir), "folder exists").toBe(true);
   expect(existsSync(join(dir, ".git")), ".git file exists").toBe(true);
   expect(git(project.path, "branch", "--list", name)).toContain(name);
-  expect(git(project.path, "worktree", "list", "--porcelain")).toContain(dir);
+  // git prints forward slashes whatever the OS.
+  expect(git(project.path, "worktree", "list", "--porcelain")).toContain(dir.replaceAll("\\", "/"));
   expect(readFileSync(join(dir, "README.md"), "utf8").length).toBeGreaterThan(0);
 });
 

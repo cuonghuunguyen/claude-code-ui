@@ -109,7 +109,8 @@ When("I move the subagent Bash call {string} to the background", async ({ page, 
     if (await allowBtn.isVisible()) await allowBtn.click();
     // The subagent group is collapsed: its nested Bash card is not in the page until opened.
     const head = page.getByTestId("subagent").first().locator('button[aria-expanded="false"]').first();
-    if (await head.isVisible()) await head.click();
+    // The group may expand between a visibility check and the click: click only while it is still collapsed.
+    await head.click({ timeout: 500 }).catch(() => {});
     await page.waitForTimeout(500);
   }
   await expect(b.first()).toBeVisible({ timeout: 1_000 });

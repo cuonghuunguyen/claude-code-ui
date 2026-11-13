@@ -1,8 +1,9 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, type Locator, type Page } from "@playwright/test";
-import { git } from "../support/git-fixture.ts";
+import { git, initRepo } from "../support/git-fixture.ts";
 import { Given, Then, When } from "./fixtures.ts";
+import { cssStr } from "../support/css.ts";
 
 const panel = (page: Page): Locator => page.getByTestId("find-in-files");
 const query = (page: Page): Locator => page.getByTestId("find-query");
@@ -23,7 +24,7 @@ Given("the scratch project has the search files", async ({ project }) => {
 });
 
 Given("the scratch project is a git repository", async ({ project }) => {
-  git(project.path, "init", "-b", "main");
+  initRepo(project.path);
   git(project.path, "add", ".gitignore", "src");
   git(project.path, "commit", "-m", "initial");
 });
@@ -51,21 +52,21 @@ When("I click Include ignored files in Find in files", async ({ page }) => {
 });
 
 Then("Find in files lists the file {string}", async ({ page }, path: string) => {
-  await expect(page.locator(`[data-testid="find-file"][data-path="${path}"]`)).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator(`[data-testid="find-file"][data-path="${cssStr(path)}"]`)).toBeVisible({ timeout: 15_000 });
 });
 
 Then("Find in files does not list the file {string}", async ({ page }, path: string) => {
-  await expect(page.locator(`[data-testid="find-file"][data-path="${path}"]`)).toHaveCount(0);
+  await expect(page.locator(`[data-testid="find-file"][data-path="${cssStr(path)}"]`)).toHaveCount(0);
 });
 
 Then("Find in files lists only the files {string}", async ({ page }, paths: string) => {
   const want = paths.split(",");
   await expect(page.getByTestId("find-file")).toHaveCount(want.length, { timeout: 15_000 });
-  for (const p of want) await expect(page.locator(`[data-testid="find-file"][data-path="${p}"]`)).toBeVisible();
+  for (const p of want) await expect(page.locator(`[data-testid="find-file"][data-path="${cssStr(p)}"]`)).toBeVisible();
 });
 
 Then("Find in files marks the hits and shows the lines around line {int} of {string}", async ({ page }, line: number, path: string) => {
-  const match = page.locator(`[data-testid="find-match"][data-path="${path}"][data-line="${line}"]`);
+  const match = page.locator(`[data-testid="find-match"][data-path="${cssStr(path)}"][data-line="${line}"]`);
   await expect(match).toBeVisible({ timeout: 15_000 });
   await expect(match.locator("mark").first()).toBeVisible();
   // Two context lines before and after: the gutter shows their numbers.
@@ -74,7 +75,7 @@ Then("Find in files marks the hits and shows the lines around line {int} of {str
 });
 
 Then("Find in files marks {string} on line {int} of {string}", async ({ page }, hit: string, line: number, path: string) => {
-  const match = page.locator(`[data-testid="find-match"][data-path="${path}"][data-line="${line}"]`);
+  const match = page.locator(`[data-testid="find-match"][data-path="${cssStr(path)}"][data-line="${line}"]`);
   await expect(match.locator("mark").first()).toHaveText(hit, { timeout: 15_000 });
 });
 

@@ -2,10 +2,11 @@ import { join } from "node:path";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { memoWorktreePath } from "../support/copy-path.ts";
 import { Given, Then, When, type Project } from "./fixtures.ts";
+import { cssStr } from "../support/css.ts";
 
 // Rows of this scenario's project (the daemon is shared by the run: match the path exactly).
-const projectRow = (page: Page, p: Project): Locator => page.locator(`[data-testid="group-toggle"][title="${p.path}"]`).locator("xpath=ancestor::h3");
-const worktreeRow = (page: Page, path: string): Locator => page.locator(`[data-testid="worktree-row"][data-path="${path}"]`).getByTestId("worktree-toggle");
+const projectRow = (page: Page, p: Project): Locator => page.locator(`[data-testid="group-toggle"][title="${cssStr(p.path)}"]`).locator("xpath=ancestor::h3");
+const worktreeRow = (page: Page, path: string): Locator => page.locator(`[data-testid="worktree-row"][data-path="${cssStr(path)}"]`).getByTestId("worktree-toggle");
 const wtPath = (p: Project, name: string) => join(p.path, ".claude", "worktrees", name);
 const MENUS = '[data-testid="group-menu"], [data-testid="worktree-context-menu"], [role="menu"]';
 const menu = (page: Page): Locator => page.locator(MENUS).locator("visible=true").last();
@@ -72,7 +73,7 @@ When("I open the kebab menu of the scratch project row", async ({ page, project 
 When("I open the kebab menu of the scratch worktree row", async ({ page, project, memo }) => {
   await page.keyboard.press("Escape");
   await expect(page.locator('[role="menu"]').locator("visible=true")).toHaveCount(0);
-  const row = page.locator(`[data-testid="worktree-row"][data-path="${wtPath(project, memoWorktreePath(memo))}"]`);
+  const row = page.locator(`[data-testid="worktree-row"][data-path="${cssStr(wtPath(project, memoWorktreePath(memo)))}"]`);
   await expect(row.getByTestId("worktree-menu")).toBeVisible({ timeout: 60_000 });
   await row.getByTestId("worktree-menu").click();
   await expect(menu(page)).toBeVisible();

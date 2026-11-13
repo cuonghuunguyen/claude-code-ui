@@ -4,6 +4,7 @@ import { REMOTE_PROJECT } from "../support/ssh-host.ts";
 import { openApp, openProject, sendPrompt } from "../support/flow.ts";
 import { openSettings, pickPane } from "../support/ui.ts";
 import { Given, Then, When } from "./fixtures.ts";
+import { endsWithPath } from "../support/css.ts";
 
 const settingsStart = (page: import("@playwright/test").Page, alias: string) => page.getByTestId(`settings-side-start-ssh:${alias}`);
 
@@ -60,7 +61,7 @@ Then("the Files pane lists {string}", async ({ page }, name: string) => {
   // pickPane does not wait: the side panel renders a moment after the project opens.
   await expect(page.locator('[role="tab"][data-testid="pane-files"]:visible, [data-testid="pane-overflow"]:visible').first()).toBeVisible({ timeout: 30_000 });
   await pickPane(page, "files");
-  await expect(page.locator(`[data-testid="tree-entry"][data-path$="/${name}"]`).first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator(`[data-testid="tree-entry"]${endsWithPath("data-path", name)}`).first()).toBeVisible({ timeout: 60_000 });
 });
 
 Then("the Changes pane lists {string}", async ({ page }, name: string) => {

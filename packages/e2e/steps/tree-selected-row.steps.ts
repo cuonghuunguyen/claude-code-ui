@@ -1,7 +1,8 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 import { Then, When } from "./fixtures.ts";
+import { endsWithPath } from "../support/css.ts";
 
-const entry = (page: Page, rel: string): Locator => page.locator(`[data-testid="tree-entry"][data-path$="/${rel}"]`).first();
+const entry = (page: Page, rel: string): Locator => page.locator(`[data-testid="tree-entry"]${endsWithPath("data-path", rel)}`).first();
 const bg = (row: Locator) => row.evaluate((e) => getComputedStyle(e).backgroundColor);
 
 When("I click the tree row {string}", async ({ page }, rel: string) => void (await entry(page, rel).click()));

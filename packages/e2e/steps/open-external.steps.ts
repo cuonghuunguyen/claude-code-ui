@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { openLog, runDir } from "../support/paths.ts";
 import { Then, When } from "./fixtures.ts";
+import { endsWithPath } from "../support/css.ts";
 
 const ids = (list: string): string[] => list.split(",").map((x) => x.trim());
 /** The visible menu: the last role=menu popup. */
@@ -31,7 +32,7 @@ When("I choose the open-in-app item {string}", async ({ page }, how: string) => 
 });
 
 When("I open the menu of the Changes row {string}", async ({ page }, name: string) => {
-  await page.getByTestId("changed-file").and(page.locator(`[data-path$="/${name}"]`)).first().click({ button: "right" });
+  await page.getByTestId("changed-file").and(page.locator(`${endsWithPath("data-path", name)}`)).first().click({ button: "right" });
   await expect(page.getByTestId("row-open")).toBeVisible();
 });
 

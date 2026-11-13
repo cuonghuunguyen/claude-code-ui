@@ -8,9 +8,10 @@ import { sendPrompt } from "../support/flow.ts";
 import { openSettings } from "../support/ui.ts";
 import { daemonConfigDir, runDir } from "../support/paths.ts";
 import { Given, Then, When } from "./fixtures.ts";
+import { cssStr } from "../support/css.ts";
 
 const modal = (page: Page) => page.getByTestId("create-worktree");
-const row = (page: Page, path: string) => page.locator(`[data-testid="group-toggle"][title="${path}"]`).locator("xpath=ancestor::h3");
+const row = (page: Page, path: string) => page.locator(`[data-testid="group-toggle"][title="${cssStr(path)}"]`).locator("xpath=ancestor::h3");
 const worktreeDir = (project: string, folder: string) => join(project, ".claude", "worktrees", folder);
 const TOKEN = "e2e-jira-token";
 

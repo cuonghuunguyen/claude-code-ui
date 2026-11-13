@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -23,13 +23,36 @@ it("a side install finds the plugin next to its cli.js", () => {
   expect(visualizePluginDir(pathToFileURL(join(dist, "cli.js")).href)).toBe(join(dist, "plugins/visualize"));
 });
 
-it("visualizeSystem is the description and the body of the skill, without frontmatter", () => {
-  const s = visualizeSystem(visualizePluginDir())!;
-  expect(s.startsWith("Draw a ```visualize fence")).toBe(true);
-  expect(s).toContain("```visualize");
-  expect(s).not.toMatch(/^---$|^name:/m);
+// A fixture skill: the shipped wording is the skill author's to change, the parsing is ours.
+const pluginWith = (skill: string | undefined): string => {
+  const dir = mkdtempSync(join(tmpdir(), "viz-skill-"));
+  if (skill !== undefined) {
+    mkdirSync(join(dir, "skills/visualize"), { recursive: true });
+    writeFileSync(join(dir, "skills/visualize/SKILL.md"), skill);
+  }
+  return dir;
+};
+
+it("visualizeSystem is the description, a blank line and the body, without frontmatter", () => {
+  expect(visualizeSystem(pluginWith("---\nname: visualize\ndescription: WHEN-TEXT\n---\n\nBODY-TEXT\n"))).toBe("WHEN-TEXT\n\nBODY-TEXT");
+});
+
+it("visualizeSystem reads a CRLF skill file (a Windows checkout with autocrlf)", () => {
+  expect(visualizeSystem(pluginWith("---\r\nname: visualize\r\ndescription: WHEN-TEXT\r\n---\r\nBODY-TEXT\r\n"))).toBe("WHEN-TEXT\n\nBODY-TEXT");
+});
+
+it("visualizeSystem is undefined without a description, a frontmatter, a file, a folder or a dir", () => {
+  expect(visualizeSystem(pluginWith("---\nname: visualize\n---\nBODY-TEXT\n"))).toBeUndefined();
+  expect(visualizeSystem(pluginWith("BODY-TEXT\n"))).toBeUndefined();
+  expect(visualizeSystem(pluginWith(undefined))).toBeUndefined();
   expect(visualizeSystem(undefined)).toBeUndefined();
   expect(visualizeSystem(join(tmpdir(), "no-such-plugin"))).toBeUndefined();
+});
+
+it("the shipped skill has a description and yields a non-empty system text", () => {
+  const dir = visualizePluginDir()!;
+  expect(readFileSync(join(dir, "skills/visualize/SKILL.md"), "utf8")).toMatch(/^description:\s*\S/m);
+  expect(visualizeSystem(dir)).toEqual(expect.stringMatching(/\S/));
 });
 
 it("the shell script is valid and renders only a render message from the parent", () => {

@@ -3,8 +3,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { Then, When } from "./fixtures.ts";
+import { endsWithPath } from "../support/css.ts";
 
-const row = (page: Page, rel: string): Locator => page.locator(`[data-testid="tree-entry"][data-path$="/${rel}"]`).first();
+const row = (page: Page, rel: string): Locator => page.locator(`[data-testid="tree-entry"]${endsWithPath("data-path", rel)}`).first();
 const clash = (page: Page) => page.getByTestId("paste-clash-dialog");
 const drop = (page: Page) => page.getByTestId("tree-drop-dialog");
 
@@ -21,7 +22,7 @@ Then("the tree lists the row {string}", async ({ page }, rel: string) => {
 Then("the tree lists no row {string}", async ({ page, project }, rel: string) => {
   const tail = `/${project.name}/${rel}`;
   await expect
-    .poll(() => page.locator('[data-testid="tree-entry"]').evaluateAll((els, t) => els.filter((e) => (e as HTMLElement).dataset.path?.endsWith(t)).length, tail), { timeout: 30_000 })
+    .poll(() => page.locator('[data-testid="tree-entry"]').evaluateAll((els, t) => els.filter((e) => (e as HTMLElement).dataset.path?.replaceAll("\\", "/").endsWith(t)).length, tail), { timeout: 30_000 })
     .toBe(0);
 });
 
