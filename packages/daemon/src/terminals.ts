@@ -250,6 +250,7 @@ export function createTerminals(root = nodePtyRoot(), platform = process.platfor
     const t: Terminal = {
       id: randomUUID(),
       title: command?.title ?? `Terminal ${n}`,
+      ...(command && { login: true as const }),
       cwd,
       owner,
       pty,
@@ -421,6 +422,8 @@ export function createTerminals(root = nodePtyRoot(), platform = process.platfor
       return t && open(t) ? t : undefined;
     },
     list: (cwd: string): TerminalInfo[] => [...terminals.values()].filter((t) => t.cwd === cwd && open(t)).map(({ id, title }) => ({ id, title })),
+    /** Every open terminal with its start folder (the agent's terminal tools, agent-terminals.ts, filter by project). */
+    all: () => [...terminals.values()].filter(open).map((t) => ({ id: t.id, title: t.title, cwd: t.cwd, login: !!t.login })),
     close: closeTerminal,
     /** A running terminal started in a cwd `inside` accepts. */
     any: (inside: (cwd: string) => boolean) => [...terminals.values()].some((t) => open(t) && inside(t.cwd)),

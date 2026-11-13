@@ -24,7 +24,7 @@ import { keyText } from "./shortcuts.ts";
 import { fileSize } from "./files.ts";
 import { BackgroundShellContext, PlanTabContext, ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
 import { ArtifactLinkMenu, ArtifactPreview, usePreviewOpen } from "./artifact-preview.tsx";
-import { ARTIFACT_TOOLS, artifactPreviewable, artifactSummary, artifactTitle, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, todoItems, todoSummary, toolSummary } from "./tools.ts";
+import { ARTIFACT_TOOLS, artifactPreviewable, artifactSummary, artifactTitle, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, terminalResult, terminalSummary, terminalTool, todoItems, todoSummary, toolSummary } from "./tools.ts";
 import { t as tr, useT } from "./i18n.ts";
 import { AddonBlock } from "./addon-render.tsx";
 import { AddonsContext, rendererFor } from "./addons.ts";
@@ -95,6 +95,7 @@ export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; res
   const range = call.tool === "Read" ? readRange(call.input, result?.output) : "";
   const stats = useMemo(() => diffStats(call.tool, call.input), [call.tool, call.input]);
   const artifact = ARTIFACT_TOOLS.has(call.tool);
+  const terminal = terminalTool(call.tool);
   // An Artifact publish names the long scratchpad file_path: the row shows the title instead.
   const todos = call.tool === "TodoWrite" ? todoItems(call.input) : [];
   const path = artifact ? "" : field(call.input, "file_path") || field(call.input, "notebook_path");
@@ -115,7 +116,7 @@ export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; res
       statusLabel={awaiting ? undefined : label(call.status)}
       // Next to the tool name, which is never truncated like the summary.
       title={call.editedByUser ? t("session.toolCard.editedByYou", { tool: call.tool }) : decided ? t("session.toolCard.titleDecided", { tool: call.tool, decision: decided }) : undefined}
-      summary={path ? <FileSummary path={path} range={range} /> : todos.length ? todoSummary(todos) : artifact ? artifactSummary(call.tool, call.input) : toolSummary(call.input)}
+      summary={path ? <FileSummary path={path} range={range} /> : todos.length ? todoSummary(todos) : artifact ? artifactSummary(call.tool, call.input) : terminal ? terminalSummary(terminal, call.input, result?.output) : toolSummary(call.input)}
       tooltip={path || undefined}
       meta={
         stats && (
@@ -273,6 +274,26 @@ export function ToolBody(props: { call: ToolCall; result?: ToolResult; plan?: st
 function BuiltinToolBody({ call, result, plan: folded, tail }: { call: ToolCall; result?: ToolResult; /** An ExitPlanMode call's plan (planOfPart). */ plan?: string; /** The shells list: the output's cut keeps its last lines. */ tail?: boolean }) {
   const t = useT();
   const output = result && <Lines id={call.id} text={text(result.output)} error={result.isError} plain={call.tool === "Bash"} tail={tail} />;
+  const terminal = terminalTool(call.tool);
+  const done = terminal && result && !result.isError ? terminalResult(result.output) : undefined;
+  if (terminal && done) {
+    // The terminal tools (GH-709): the same box as a shell command; a read shows the text, a list one line per terminal.
+    const r = done as Record<string, unknown>;
+    const body = terminal === "terminal_list" ? (Array.isArray(done) ? (done as { title?: string; cwd?: string }[]) : []).map((x) => `${x.title ?? ""}  ${x.cwd ?? ""}`).join("\n") || t("session.toolCard.noTerminals") : String(r.output ?? r.text ?? "");
+    const notes = [r.truncated === true && t("session.toolCard.terminalTruncated"), typeof r.redacted === "number" && r.redacted > 0 && t("session.toolCard.terminalRedacted", { count: r.redacted }), terminal === "terminal_run" && r.quiet === false && t("session.toolCard.terminalStillRunning"), typeof r.exited === "number" && t("session.toolCard.terminalExited", { code: r.exited })].filter(Boolean);
+    return (
+      <div data-testid="terminal-result" className="max-h-60 space-y-2 overflow-auto rounded-md border p-3">
+        {terminal === "terminal_run" && (
+          <pre data-testid="terminal-command" className="whitespace-pre-wrap font-mono text-xs">
+            <span className="select-none text-muted-foreground">$ </span>
+            {field(call.input, "command")}
+          </pre>
+        )}
+        <Lines id={call.id} text={body} error={false} plain tail={terminal === "terminal_read"} />
+        {notes.length > 0 && <p className="text-muted-foreground text-xs">{notes.join(" · ")}</p>}
+      </div>
+    );
+  }
   switch (call.tool) {
     case "Bash":
       // OpenCode shell anatomy: `$ command` and the output as plain text in one bordered box.

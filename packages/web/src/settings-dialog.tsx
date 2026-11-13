@@ -820,6 +820,12 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
     ],
   },
   {
+    id: "terminalAccess",
+    rows: [
+      { key: "enabled", kind: "switch" },
+    ],
+  },
+  {
     id: "usageLimit",
     rows: [
       { key: "autoContinue", kind: "switch" },
@@ -1022,6 +1028,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const chrome = daemonGroup("chrome");
   const focus = daemonGroup("focus");
   const chat = daemonGroup("chat");
+  const terminalAccess = daemonGroup("terminalAccess");
   const sessions = daemonGroup("sessions");
   const git = daemonGroup("git");
   const launcher = daemonGroup("launcher");
@@ -1062,6 +1069,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     ...(sessions ? [{ id: "sessions", title: sectionTitle(sessions.id), category: "Sessions" as const, body: daemonSection(sessions) }] : []),
     ...(focus ? [{ id: "focus", title: sectionTitle(focus.id), category: "Sessions" as const, body: daemonSection(focus) }] : []),
     ...(chat ? [{ id: "chat", title: sectionTitle(chat.id), category: "Sessions" as const, body: daemonSection(chat) }] : []),
+    ...(terminalAccess ? [{ id: "terminalAccess", title: sectionTitle(terminalAccess.id), category: "Sessions" as const, body: daemonSection(terminalAccess) }] : []),
     ...(usageLimit
       ? [
           {

@@ -148,7 +148,7 @@ describe("permission blocks", () => {
   });
 
   it("config: a new-session block has no tool rules; a later one re-applies the agent's rules after every earlier block", () => {
-    expect(modeBlock("config", [], [], { agent: "build" }).map((r) => `${r.permission}:${r.pattern}`)).toEqual(["claude-ui:mode:config", "claude-ui:agent:build", "orchestration-*:*", "claude-ui:always"]);
+    expect(modeBlock("config", [], [], { agent: "build" }).map((r) => `${r.permission}:${r.pattern}`)).toEqual(["claude-ui:mode:config", "claude-ui:agent:build", "claude-ui-*:*", "orchestration-*:*", "claude-ui:always"]);
     const last = (rules: { permission: string; pattern: string; action: string }[], perm: string, pat: string) => [...rules].reverse().find((r) => (r.permission === "*" || r.permission === perm) && (r.pattern === "*" || r.pattern === pat))?.action ?? "ask";
     const A = [rule("*", "*"), rule("external_directory", "*", "ask")];
     const after = (earlier: ReturnType<typeof modeBlock>, cfg = A) => [...cfg, ...earlier, ...modeBlock("config", [], [], { agent: "build", config: cfg })];
@@ -168,6 +168,15 @@ describe("permission blocks", () => {
     expect(modeBlock("default", [], [], { mcp: "orchestration-abcdefghij" }).slice(-4, -1)).toEqual([rule("orchestration-*", "*", "deny"), rule("orchestration-abcdefghij_*", "*"), rule("orchestration-abcdefghij_worker_start", "*", "ask")]);
     expect(modeBlock("bypassPermissions", [], [], { mcp: "orchestration-abcdefghij" }).slice(-3, -1)).toEqual([rule("orchestration-*", "*", "deny"), rule("orchestration-abcdefghij_*", "*")]);
     expect(mapTool("orchestration-abcdefghij_worker_list", { tree: true })).toEqual({ tool: "mcp__orchestration__worker_list", input: { tree: true } });
+  });
+
+  it("claude-ui rules: every block hides all claude-ui servers; an attached one gets its own rules before the orchestration ones", () => {
+    expect(modeBlock("default", [], [])).toContainEqual(rule("claude-ui-*", "*", "deny"));
+    const own = [rule("claude-ui-abcdefghij_terminal_list", "*"), rule("claude-ui-abcdefghij_terminal_run", "*", "ask")];
+    const block = modeBlock("default", [], [], { daemon: own });
+    const at = block.findIndex((r) => r.permission === "claude-ui-*");
+    expect(block.slice(at, at + 4)).toEqual([rule("claude-ui-*", "*", "deny"), ...own, rule("orchestration-*", "*", "deny")]);
+    expect(mapTool("claude-ui-abcdefghij_terminal_run", { command: "ls" })).toEqual({ tool: "mcp__claude-ui__terminal_run", input: { command: "ls" } });
   });
 });
 

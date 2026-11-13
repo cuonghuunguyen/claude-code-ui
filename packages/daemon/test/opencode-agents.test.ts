@@ -52,6 +52,7 @@ describe("OpenCode agents", () => {
       "webfetch:*:ask",
       "websearch:*:ask",
       "edit:*:deny",
+      "claude-ui-*:*:deny",
       "orchestration-*:*:deny",
       "claude-ui:always:allow",
     ]);
