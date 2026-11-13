@@ -70,6 +70,18 @@ describe("terminal_read", () => {
     expect(r.text).toContain("[redacted]");
     expect(r.redacted).toBe(1);
   });
+  it("hides a value that echo prints alone after an export of it, in a read and in a run", async () => {
+    const { call, listeners } = setup([term("a", "Terminal 1", ROOT, { buffer: "$ export DEMO_TOKEN=abcd1234efgh5678\r\n$ echo $DEMO_TOKEN\r\nabcd1234efgh5678\r\n" })]);
+    const r = await call("terminal_read", { terminal: "a" });
+    expect(r.text).not.toContain("abcd1234");
+    vi.useFakeTimers();
+    const p = call("terminal_run", { terminal: "a", command: "echo $DEMO_TOKEN" });
+    await vi.advanceTimersByTimeAsync(0);
+    listeners.get("a")!.output("abcd1234efgh5678\r\n");
+    await vi.advanceTimersByTimeAsync(QUIET_MS);
+    expect((await p).output).toBe("[redacted]\n");
+    vi.useRealTimers();
+  });
   it("keeps the tail of an over-long text and says truncated", async () => {
     const { call } = setup([term("a", "Terminal 1", ROOT, { buffer: `${"x".repeat(RESULT_CHARS)}END\n` })]);
     const r = await call("terminal_read", { terminal: "a", lines: 1000 });

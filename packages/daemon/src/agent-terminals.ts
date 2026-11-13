@@ -98,8 +98,8 @@ export function createAgentTerminals(deps: AgentTerminalsDeps): DaemonToolGroup 
     if (!hits[0]) throw new ToolError(scope.terminals.length ? `No terminal ${ref}. terminal_list lists them.` : `No terminal ${ref}: none is open in this project. Ask the user to open one in the Terminal panel.`);
     return { ...scope, term: hits[0] };
   }
-  const clean = (raw: string) => {
-    const r = redactSecrets(plainText(raw), deps.known());
+  const clean = (raw: string, context = "") => {
+    const r = redactSecrets(plainText(raw), deps.known(), context);
     return { ...r, ...cap(r.text) };
   };
   const guard = () => {
@@ -181,7 +181,7 @@ export function createAgentTerminals(deps: AgentTerminalsDeps): DaemonToolGroup 
           const err = deps.terminals.write(term.id, `${a.command}\r`);
           if (err) throw new ToolError(WRITE_ERRORS[err]);
           const why = await done;
-          const { text, count, truncated } = clean(raw);
+          const { text, count, truncated } = clean(raw, plainText(deps.terminals.buffer(term.id) ?? ""));
           return { title: term.title, output: text, quiet: why === "quiet", truncated, redacted: count, ...(exited !== undefined && { exited }) };
         } finally {
           detach?.();

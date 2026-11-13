@@ -43,10 +43,13 @@ const PATTERNS: { re: RegExp; keep?: number }[] = [
 ];
 
 /** `text` with secrets replaced by `[redacted]`: the exact `known` values (8+ chars), then common token formats. Pattern-based, not exhaustive. */
-export function redactSecrets(text: string, known: string[]): { text: string; count: number } {
+export function redactSecrets(text: string, known: string[], context = ""): { text: string; count: number } {
   let count = 0;
   let out = text;
-  for (const k of known) {
+  // A value assigned to a secret-looking name (`export TOKEN=abc12345`) is hidden wherever it appears later, also alone on a line (`echo $TOKEN`).
+  // `context`: more terminal text to learn such values from (the scrollback, for the output of one run).
+  const learned = [...`${context}\n${text}`.matchAll(new RegExp(String.raw`\b${NAME}\s*[=:]\s*(\S+)`, "gi"))].map((m) => m[1]!.replace(/^["']+|["',;]+$/g, ""));
+  for (const k of [...known, ...learned]) {
     if (k.length < 8 || !out.includes(k)) continue;
     const parts = out.split(k);
     count += parts.length - 1;

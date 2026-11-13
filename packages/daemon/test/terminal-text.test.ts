@@ -18,7 +18,7 @@ describe("plainText", () => {
 });
 
 describe("redactSecrets", () => {
-  const r = (t: string, known: string[] = []) => redactSecrets(t, known);
+  const r = (t: string, known: string[] = [], context = "") => redactSecrets(t, known, context);
   it("replaces known exact values of 8+ chars, not shorter ones", () => {
     expect(r("x supersecretvalue y", ["supersecretvalue"])).toEqual({ text: "x [redacted] y", count: 1 });
     expect(r("x abc y", ["abc"])).toEqual({ text: "x abc y", count: 0 });
@@ -51,6 +51,13 @@ describe("redactSecrets", () => {
   });
   it("redacts the value of env-style assignments", () => {
     expect(r("export DEMO_TOKEN=abcd1234efgh5678\nMY_PASSWORD: hunter2\napi_key = xyz").text).toBe("export DEMO_TOKEN=[redacted]\nMY_PASSWORD: [redacted]\napi_key = [redacted]");
+  });
+  it("hides a value assigned to a secret name wherever it appears later, alone on a line too", () => {
+    const out = r("export DEMO_TOKEN=abcd1234efgh5678\nabcd1234efgh5678\n$ echo done");
+    expect(out.text).toBe("export DEMO_TOKEN=[redacted]\n[redacted]\n$ echo done");
+    expect(out.count).toBe(2);
+    expect(r("only abcd1234efgh5678 here", [], "export MY_SECRET=abcd1234efgh5678").text).toBe("only [redacted] here");
+    expect(r("x short y", [], "export A_TOKEN=short").text).toBe("x short y");
   });
   it("does not redact a word that only ends in sk-", () => {
     expect(r("risk-assessment-report-2026-final").count).toBe(0);
