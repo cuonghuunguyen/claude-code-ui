@@ -37,7 +37,7 @@ import { blameEntries, type BlameEntry } from "./blame.ts";
 import { TimelinePanel } from "./timeline-panel.tsx";
 import { ListResizer, loadListWidth, saveListWidth } from "./changes-panel.tsx";
 import { usePanelAsk } from "./panel-ask.ts";
-import { docText, fileSize, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, pin, fileMention, replaceDoc, saveMdView, selectionMention, selectionQuote, type MdView } from "./files.ts";
+import { docText, fileSize, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, pin, entryMention, replaceDoc, saveMdView, selectionMention, selectionQuote, type MdView } from "./files.ts";
 import { createEditorStore, useEditorStore, useEditorSync, type EditorStore } from "./editor-store.ts";
 
 type Client = ReturnType<typeof connect>;
@@ -300,7 +300,7 @@ export function FilesPanel({
             onFindInFiles={onFindInFiles}
             repos={repos}
             onShowGraph={onShowGraph}
-            onMention={(p) => onSend(fileMention(p, cwd))}
+            onMention={(es) => onSend(entryMention(es, cwd))}
             onReload={() => setTreeKey((k) => k + 1)}
             onChanged={store.nudge}
             onMoved={store.moved}

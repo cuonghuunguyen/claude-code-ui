@@ -162,6 +162,9 @@ const mentionRel = (path: string, cwd: string) => (isWinPath(path) ? relPath(pat
 /** "Add to prompt" from the file tree: `@path` of the file, relative to `cwd`. */
 export const fileMention = (path: string, cwd: string) => mentionPath(mentionRel(path, cwd));
 
+/** GH-707: Add to prompt and a tree drag: `@rel` per entry (a folder ends with "/"), joined by a space. Relative to `cwd`; without `cwd` absolute. */
+export const entryMention = (entries: { path: string; isDir: boolean }[], cwd: string) => entries.map((e) => mentionPath(mentionRel(e.path, cwd) + (e.isDir ? "/" : ""))).join(" ");
+
 /**
  * "Add to chat" (Alt+K): `@path#Lstart-end` of the main selection, path relative to `cwd`; the file alone when nothing is selected.
  * The SDK attaches only the range for `#L…` (`#start-end` attaches the whole file), and a quoted path needs the range inside the quotes.

@@ -1666,3 +1666,51 @@ it("GH-656: without rewind the button is aria-disabled with the reason, opens no
   await act(async () => btn.click());
   expect(el.querySelector('[data-testid="rewind-panel"]')).toBeNull();
 });
+
+// ---- rows dragged from the Files tab (GH-707) ----
+const ENTRIES = "application/x-claude-ui-entries";
+const treeDrop = (target: Element, entries: { path: string; isDir: boolean }[], type: "dragover" | "drop" = "drop") =>
+  act(async () => {
+    const e = new Event(type, { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown };
+    e.dataTransfer = { types: [ENTRIES], getData: (k: string) => (k === ENTRIES ? JSON.stringify(entries) : ""), files: [], items: [], dropEffect: "" };
+    target.dispatchEvent(e);
+    return e;
+  });
+const dropped = [
+  { path: "/tmp/src/a.ts", isDir: false },
+  { path: "/tmp/lib", isDir: true },
+];
+
+it("GH-707: rows dropped on the prompt box insert @mentions at the caret and keep the text", async () => {
+  const d = await render();
+  await type(d.box, "see");
+  await treeDrop(d.$("prompt-box")!, dropped);
+  expect(d.box.value).toBe("see @src/a.ts @lib/ ");
+});
+
+it("GH-707: rows dropped on the timeline go to this pane's prompt box, once", async () => {
+  const onInserted = vi.fn();
+  const d = await render({ onInserted });
+  await treeDrop(d.el.querySelector('[data-testid="session-header"]') ?? d.el.firstElementChild!, dropped);
+  expect(d.box.value).toBe("@src/a.ts @lib/ ");
+  await treeDrop(d.$("prompt-box")!, [{ path: "/tmp/b.ts", isDir: false }]);
+  expect(d.box.value).toBe("@src/a.ts @lib/ @b.ts ");
+  expect(onInserted).not.toHaveBeenCalled();
+});
+
+it("GH-707: dragging rows over the pane rings the prompt box; the drop clears it", async () => {
+  const d = await render();
+  await treeDrop(d.el.firstElementChild!, dropped, "dragover");
+  expect(d.$("prompt-box")!.className).toContain("ring-ring ");
+  await treeDrop(d.el.firstElementChild!, dropped);
+  expect(d.$("prompt-box")!.className).not.toMatch(/(^| )ring-ring( |$)/);
+});
+
+it("GH-707: a drop on the prompt box inside the pane clears the ring and inserts once", async () => {
+  const d = await render();
+  await treeDrop(d.$("prompt-box")!, dropped, "dragover");
+  expect(d.$("prompt-box")!.className).toMatch(/(^| )ring-ring( |$)/);
+  await treeDrop(d.$("prompt-box")!, dropped);
+  expect(d.$("prompt-box")!.className).not.toMatch(/(^| )ring-ring( |$)/);
+  expect(d.box.value).toBe("@src/a.ts @lib/ ");
+});

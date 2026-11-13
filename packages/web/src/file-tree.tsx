@@ -23,6 +23,7 @@ const nameProblemText = (name: string, windows: boolean) => {
 };
 import { isImeKey } from "./ime.ts";
 import { isWinPath, joinPath, relPath, repoDir } from "./paths.ts";
+import { dragEntries, ENTRIES_DRAG_TYPE } from "./tree-drag.ts";
 import { setRepoChoice, type RepoList } from "./repo-choice.ts";
 import { RepoIcon } from "./repo-selector.tsx";
 import { ConfirmDialog, ITEM, POPUP } from "./session-actions.tsx";
@@ -234,8 +235,8 @@ export function FileTree({
   repos?: RepoList;
   /** Show graph (a repository folder; hidden when unset). */
   onShowGraph?: () => void;
-  /** Add to prompt. */
-  onMention?: (path: string) => void;
+  /** Add to prompt (GH-707): the row, or every selected row when the row is in a selection of 2 or more. */
+  onMention?: (entries: { path: string; isDir: boolean }[]) => void;
   /** Refresh (the header's reload). */
   onReload?: () => void;
   /** A file or folder was renamed: open tabs below `from` follow to `to`. */
@@ -257,6 +258,9 @@ export function FileTree({
   const [query, setQuery] = useState("");
   const [found, setFound] = useState<{ query: string; paths: string[] }>();
   const [focused, setFocused] = useState<string>();
+  /** GH-707: the rows picked with Ctrl/Cmd+click and Shift+click (mouse only), and the row a Shift range starts from. */
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
+  const anchor = useRef<string>(undefined);
   const [marks, setMarks] = useState<ReturnType<typeof gitMarks>>();
   const [, tick] = useState(0);
   const root = useRef<HTMLDivElement>(null);
@@ -412,6 +416,15 @@ export function FileTree({
   }, [missed]);
   const entries = rows.flatMap((r, i) => (r.kind === "entry" ? [{ r, i }] : []));
   const rowAt = (path: string) => rows.findIndex((r) => r.kind === "entry" && r.entry.path === path);
+  const visibleEntries = entries.map(({ r }) => ({ path: r.entry.path, isDir: r.entry.isDir }));
+  // A path that is no longer listed (collapsed, deleted, filtered) leaves the selection.
+  const pickedKey = visibleEntries.map((e) => e.path).join("\0");
+  useEffect(() => {
+    if (picked.size === 0) return;
+    const shown = new Set(visibleEntries.map((e) => e.path));
+    const next = [...picked].filter((p) => shown.has(p));
+    if (next.length !== picked.size) setPicked(new Set(next));
+  }, [pickedKey]);
   const tabPath = [focused, activePath].find((p) => p !== undefined && rowAt(p) >= 0) ?? entries[0]?.r.entry.path;
 
   // Scroll and focus a revealed or moved-to row once it renders.
@@ -754,7 +767,7 @@ export function FileTree({
         choose(t.repo.rel);
         return onShowGraph?.();
       case "mention":
-        return onMention?.(path);
+        return entry && onMention?.(dragEntries(entry.path, picked, visibleEntries));
       case "copyPath":
         onCopy?.(path, "path");
         return void tipOpenInFileManager(!!external, () => reopenMenu(rowEl(root.current, path), '[data-testid$="ext-menu-reveal"]'));
@@ -772,7 +785,33 @@ export function FileTree({
     return path === undefined ? -1 : rowAt(path);
   };
 
+  /** Ctrl/Cmd+click toggles, Shift+click picks the visible range from the anchor; true: the click was a selection click. Ctrl+click on macOS is the context menu. */
+  function selectClick(e: Pick<globalThis.MouseEvent, "ctrlKey" | "metaKey" | "shiftKey" | "altKey">, path: string) {
+    const mod = MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+    if (mod && !e.shiftKey && !e.altKey) {
+      setPicked((p) => {
+        const n = new Set(p);
+        if (!n.delete(path)) n.add(path);
+        return n;
+      });
+      anchor.current = path;
+      return true;
+    }
+    if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const paths = visibleEntries.map((x) => x.path);
+      const [a, b] = [paths.indexOf(anchor.current ?? ""), paths.indexOf(path)];
+      const from = a < 0 ? b : a;
+      setPicked(new Set(paths.slice(Math.min(from, b), Math.max(from, b) + 1)));
+      if (a < 0) anchor.current = path;
+      return true;
+    }
+    if (picked.size) setPicked(new Set());
+    anchor.current = path;
+    return false;
+  }
+
   function onKeyDown(e: KeyboardEvent) {
+    if (e.key === "Escape" && picked.size && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) return (e.stopPropagation(), e.preventDefault(), setPicked(new Set()));
     const i = rowOf(e.target);
     const row = rows[i];
     if (!row || row.kind !== "entry") return;
@@ -861,7 +900,7 @@ export function FileTree({
         onTouchStartCapture={(e) => captureTarget(e.target)}
         onContextMenu={(e) => swallowKeyFollowup(e, keyOpenedAt)}
       >
-      <div role="tree" id="file-tree-rows" aria-label={tr("files.title")} ref={root} onKeyDown={onKeyDown}>
+      <div role="tree" id="file-tree-rows" aria-multiselectable="true" aria-label={tr("files.title")} ref={root} onKeyDown={onKeyDown}>
         {rows.map((r, i) => {
           const pad = { paddingLeft: `${8 + r.depth * 12}px` };
           if (r.kind === "status")
@@ -903,7 +942,8 @@ export function FileTree({
           const dirMark = entry.isDir && !mark ? marks?.dirs.get(pathKey(entry.path)) : undefined;
           const repo = entry.isDir ? folders.get(pathKey(entry.path)) : undefined;
           const repoText = repo && repoIconText(repo, entry.name);
-          const selected = entry.path === activePath;
+          const inPick = picked.has(entry.path);
+          const selected = entry.path === activePath || inPick;
           const marked = selected || entry.path === focused; // focus state outlives pointer hover and blur
           return (
             <Fragment key={entry.path}>
@@ -921,15 +961,18 @@ export function FileTree({
               aria-busy={busyPath === entry.path || undefined}
               draggable={!r.renaming}
               onDragStart={(e) => {
-                e.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ path: entry.path, name: entry.name, isDir: entry.isDir, side }));
-                e.dataTransfer.setData("text/plain", entry.path);
+                // GH-707: the entries for a prompt box; the tree's own move/copy drop takes one row only.
+                const carried = dragEntries(entry.path, picked, visibleEntries);
+                e.dataTransfer.setData(ENTRIES_DRAG_TYPE, JSON.stringify(carried));
+                if (carried.length === 1) e.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ path: entry.path, name: entry.name, isDir: entry.isDir, side }));
+                e.dataTransfer.setData("text/plain", carried.map((c) => c.path).join("\n"));
                 e.dataTransfer.effectAllowed = "copyMove";
               }}
               onDragEnd={() => setDropDir(undefined)}
               className={`flex h-7 w-full cursor-pointer items-center gap-1 pr-2 text-left outline-none select-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring ${coarse} ${marked ? "bg-secondary text-foreground" : "hover:bg-muted"} ${busyPath === entry.path || (clip?.op === "cut" && clip.side === side && clip.path === entry.path) ? "opacity-60" : ""} ${dropDir === entry.path ? "ring-2 ring-inset ring-ring" : ""}`}
               style={pad}
               onFocus={() => setFocused(entry.path)}
-              onClick={() => (entry.isDir ? toggle(entry) : onOpen(entry.path, {}))}
+              onClick={(e) => !selectClick(e, entry.path) && (entry.isDir ? toggle(entry) : onOpen(entry.path, {}))}
               onDoubleClick={() => !entry.isDir && onOpen(entry.path, { pinned: true })}
               onMouseDown={(e) => e.button === 1 && !entry.isDir && onOpenTab && e.preventDefault()}
               onAuxClick={(e) => e.button === 1 && !entry.isDir && onOpenTab && (e.preventDefault(), onOpenTab(entry.path))}
