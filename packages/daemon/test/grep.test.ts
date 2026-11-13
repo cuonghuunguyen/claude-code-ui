@@ -86,6 +86,24 @@ describe("matcher, rangesOf, cutLine, parseGlobs", () => {
     expect(cutLine("short", [[0, 2]], 300)).toEqual({ text: "short", ranges: [[0, 2]], cut: false });
     expect(cutLine("x".repeat(400), undefined, 300).text).toBe("x".repeat(300) + "…");
   });
+  it("never cuts inside a surrogate pair", () => {
+    const ok = (t: string) => !/(^[\uDC00-\uDFFF])|([\uD800-\uDBFF]$)/.test(t.replace(/^…/, "").replace(/…$/, ""));
+    // The window start (700 - 147 = 553 .. 853) and end fall inside emoji.
+    for (const shift of [0, 1]) {
+      const text = "a".repeat(552 + shift) + "😀" + "a".repeat(147) + "needle" + "😀".repeat(200);
+      const first = text.indexOf("needle");
+      const c = cutLine(text, [[first, first + 6]], 300);
+      expect(c.cut).toBe(true);
+      expect(ok(c.text)).toBe(true);
+      const [a, b] = c.ranges![0]!;
+      expect(c.text.slice(a, b)).toBe("needle");
+    }
+    const emoji = cutLine("😀".repeat(400), undefined, 301);
+    expect(emoji.text.endsWith("…")).toBe(true);
+    expect(ok(emoji.text)).toBe(true);
+    const tail = cutLine("x".repeat(100) + "😀".repeat(200), [[0, 1]], 101);
+    expect(ok(tail.text)).toBe(true);
+  });
   it("globs", () => {
     expect(parseGlobs("*.ts, *.tsx")).toEqual(["*.ts", "*.tsx"]);
     expect(parseGlobs("  ")).toEqual([]);
@@ -205,6 +223,17 @@ describe("findInFiles", () => {
     expect(r.matches).toBe(2);
     expect(r.files[0]!.lines.map((l) => l.ranges)).toEqual([[], []]);
     expect(ticks).toBeGreaterThan(5);
+  });
+
+  it("the highlight shares the search deadline", async () => {
+    const d = tmp();
+    init(d);
+    put(d, "r.txt", `x ${"a".repeat(298)}\nx ${"a".repeat(21)}c\n`);
+    const t0 = Date.now();
+    const r = await run(d, "x|(a+)+b", { regex: true }, { limits: { ms: 600, highlightMs: 60_000 } });
+    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(r.ms).toBeLessThan(1500);
+    expect(r.files[0]!.lines.map((l) => l.ranges)).toEqual([[], []]);
   });
 
   it("a regex highlight within the time is kept", async () => {
