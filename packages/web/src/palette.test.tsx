@@ -2,7 +2,7 @@
 import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { CommandPalette, type PaletteItem } from "./palette.tsx";
+import { CommandPalette, matchItems, type PaletteItem } from "./palette.tsx";
 
 Element.prototype.scrollIntoView ??= () => {};
 
@@ -339,4 +339,13 @@ it("a message hit whose snippet holds pasted_content tags shows them without the
   await act(async () => (m.calls[0]!.onResult(hit), m.calls[0]!.done(DONE)));
   const row = rows().find((r) => r.dataset.id === "msg:sx:m1")!;
   expect(row.querySelector('[data-testid="palette-snippet"]')!.textContent).toBe("…aaa bbb the Zebra crossing ccc and");
+});
+
+it("the commands group is never cut: every command stays listed, other groups stop at 50", () => {
+  const commands: PaletteItem[] = Array.from({ length: 80 }, (_, i) => ({ id: `c${i}`, groupId: "app.palette.groupCommands", group: "Commands", title: `Command ${i}`, run: noop }));
+  const sessions: PaletteItem[] = Array.from({ length: 80 }, (_, i) => ({ id: `s${i}`, groupId: "app.palette.groupSessions", group: "Sessions", title: `Task ${i}`, run: noop }));
+  const all = [...commands, ...sessions];
+  expect(matchItems(all, "").filter((i) => i.id.startsWith("c"))).toHaveLength(80);
+  expect(matchItems(all, "").filter((i) => i.id.startsWith("s"))).toHaveLength(50);
+  expect(matchItems(all, "command 7").map((i) => i.id)).toEqual(["c7", ...Array.from({ length: 10 }, (_, i) => `c${70 + i}`)]);
 });
