@@ -7,6 +7,8 @@ import llmstxt from "vitepress-plugin-llms";
 const repo = "https://github.com/cuonghuunguyen/claude-code-ui";
 const site = "https://claudecodeui.cuonghuunguyen.app/";
 const ogImage = `${site}og.png`;
+// The promo video (public/promo.mp4) and its poster; the watch page (`video: true` in its frontmatter) describes it as a VideoObject.
+const promoVideo = { contentUrl: `${site}promo.mp4`, thumbnailUrl: `${site}promo-poster.jpg`, uploadDate: "2026-10-19T22:41:59+07:00", duration: "PT40S" };
 const srcDir = fileURLToPath(new URL("..", import.meta.url));
 
 // A page without a `description:` in its frontmatter gets the first plain paragraph under its H1,
@@ -55,7 +57,7 @@ const nav = (prefix: string, l: Labels): DefaultTheme.NavItem[] => [
   { text: l["Changelog"] ?? "Changelog", link: `${repo}/blob/main/CHANGELOG.md` },
 ];
 const SIDEBAR: [string, [string, string][]][] = [
-  ["Getting started", [["Install & first run", "/guide/install"], ["A quick tour", "/guide/tour"], ["FAQ", "/guide/faq"], ["How it compares", "/guide/compare"]]],
+  ["Getting started", [["Install & first run", "/guide/install"], ["A quick tour", "/guide/tour"], ["Video demo", "/demo"], ["FAQ", "/guide/faq"], ["How it compares", "/guide/compare"]]],
   ["Working in a session", [["The prompt box", "/features/prompt-box"], ["Permissions & modes", "/features/permissions"], ["Reading a session", "/features/timeline"], ["Usage & context", "/features/usage"], ["Ask an aside (/btw)", "/features/aside"], ["Background shells", "/features/background-shells"]]],
   ["Many sessions", [["Projects & worktrees", "/features/projects"], ["Focus page", "/features/focus"], ["Notifications", "/features/notifications"], ["Orchestration (workers)", "/features/orchestration"]]],
   ["Workspace & layout", [["Sessions & tabs", "/features/sessions"], ["Panes & layout", "/features/panes"], ["Split view", "/features/split-view"], ["Context menus", "/features/context-menus"], ["Clean up", "/features/clean-up"], ["Command palette", "/features/palette"], ["Keep screen awake", "/features/keep-awake"]]],
@@ -73,6 +75,7 @@ const VI: Labels = {
   "Getting started": "Bắt đầu",
   "Install & first run": "Cài đặt và chạy lần đầu",
   "A quick tour": "Tham quan nhanh",
+  "Video demo": "Video demo",
   FAQ: "Hỏi đáp",
   "How it compares": "So sánh với công cụ khác",
   "Working in a session": "Làm việc trong một phiên",
@@ -247,6 +250,20 @@ export default defineConfig({
             name: q,
             acceptedAnswer: { "@type": "Answer", text: a },
           })),
+        }),
+      ]);
+    }
+    if (fm.video) {
+      head.push([
+        "script",
+        { type: "application/ld+json" },
+        JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "VideoObject",
+          name: fm.title ?? pageData.title,
+          description,
+          inLanguage: siteConfig.site.locales[pageData.relativePath.startsWith("vi/") ? "vi" : "root"]?.lang,
+          ...promoVideo,
         }),
       ]);
     }
