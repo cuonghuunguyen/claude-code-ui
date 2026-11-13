@@ -10,10 +10,10 @@ Các nhóm nằm dưới bốn đề mục:
 | --- | --- |
 | Ứng dụng | Giao diện, Chung, Bố cục, Thông báo, Bàn phím |
 | Phiên | Điều phối, Focus, Phiên mới, Giới hạn mức dùng, Lịch sử cục bộ |
-| Tích hợp | Git, Jira, Tài khoản Claude, Mở bằng ứng dụng |
-| Hệ thống | Môi trường, Hiệu năng, Trợ giúp & giới thiệu ||
+| Tích hợp | Git, Jira, Tài khoản Claude, OpenCode, Mở bằng ứng dụng |
+| Hệ thống | Môi trường, Trình khởi chạy, Hiệu năng, Trợ giúp & giới thiệu ||
 
-Phần lớn cài đặt chỉ **được lưu trong trình duyệt này**. Điều phối, Focus, Phiên mới, Giới hạn mức dùng (trừ vòng mức dùng), Lịch sử cục bộ, Git, Jira, Tài khoản Claude, Môi trường, Hiệu năng và thông báo máy tính được lưu trong daemon và áp dụng cho mọi trình duyệt.
+Phần lớn cài đặt chỉ **được lưu trong trình duyệt này**. Điều phối, Focus, Phiên mới, Giới hạn mức dùng (trừ vòng mức dùng), Lịch sử cục bộ, Git, Jira, Tài khoản Claude, OpenCode, Môi trường, Trình khởi chạy, Hiệu năng và thông báo máy tính được lưu trong daemon và áp dụng cho mọi trình duyệt.
 
 ## Giao diện {#appearance}
 
@@ -169,6 +169,17 @@ Chọn tài khoản mà các tiến trình Claude CLI của daemon dùng. Danh s
 
 Với hai tài khoản trở lên bạn cũng có thể đổi từ đồng hồ gói (vòng mức dùng) hoặc bằng **Đổi tài khoản Claude…** trong [bảng lệnh](../features/palette). Khi môi trường daemon đặt nhà cung cấp đám mây (Bedrock, Vertex, Foundry), CLI dùng nhà cung cấp đó và tài khoản không có tác dụng.
 
+## OpenCode {#opencode}
+
+Cho [engine OpenCode](../features/opencode).
+
+| Cài đặt | Chức năng |
+| --- | --- |
+| Đường dẫn file chạy OpenCode | Nơi tìm `opencode`. Để trống: `opencode` trong PATH (trên Windows `opencode.exe` hoặc `opencode.cmd`, các hệ khác thì `~/.opencode/bin/opencode`). Lưu khi bạn rời khỏi ô. |
+| Trạng thái, **Kiểm tra lại** | Hiện phiên bản và OpenCode server có đang chạy không, hoặc "Not found", "Too old" (tối thiểu 1.18.0). |
+| **Khởi động lại OpenCode** | Khởi động lại server. Bị từ chối khi có phiên OpenCode đang chạy. |
+| **Nhà cung cấp** | Liệt kê các nhà cung cấp. **Kết nối** nhận API key, hoặc mở trang đăng nhập của nhà cung cấp trong trình duyệt. **Đăng xuất** xóa thông tin đăng nhập đã lưu. Nhà cung cấp đến từ biến môi trường hoặc cấu hình OpenCode hiện không có nút. **Hiện nhà cung cấp** khởi động server khi nó đang dừng. |
+
 ## Mở bằng ứng dụng {#open-in-app}
 
 **Lệnh trình soạn thảo** và **Tên trong menu** thêm chương trình của riêng bạn vào menu tệp (**Mở bằng** *tên*). Dùng `{path}` cho tệp hoặc thư mục và `{root}` cho thư mục phiên. Chỉ trình duyệt trên máy của daemon mới đổi được. Xem [Tệp](../features/files#open-in-the-file-manager-an-editor-or-the-default-app).
@@ -185,6 +196,22 @@ Hiện khi có một bản phân phối WSL, container hoặc máy chủ SSH tro
 | Cập nhật | Hiện khi Claude UI trên máy chủ SSH cũ hơn bản của bạn: chạy `claude-ui update` ở đó. |
 
 Xem [WSL, Docker & SSH](../features/wsl-docker).
+
+## Trình khởi chạy {#launcher}
+
+Tùy chọn khởi động của claude-ui trên máy của daemon. Áp dụng từ lần khởi động sau; cờ dòng lệnh hoặc biến môi trường của lần đó được ưu tiên (xem [Tham số CLI](cli)).
+
+| Cài đặt | Chức năng |
+| --- | --- |
+| Lối tắt khởi chạy | Thêm Claude UI vào Applications (macOS), menu ứng dụng (Linux) hoặc menu Start (Windows). Nhấp mở claude-ui trong trình duyệt khi nó đang chạy, nếu không thì chạy nó trong cửa sổ terminal. |
+| Cổng | Cổng của giao diện web. Mặc định 4280. |
+| Thư mục gốc | Các thư mục claude-ui được mở. Để trống: thư mục home. |
+| Mở trình duyệt khi khởi động | Mở giao diện web trong trình duyệt của máy này khi khởi động. |
+| Tailscale | Phục vụ trên tailnet và in liên kết https. |
+| LAN | Nghe thêm trên mạng cục bộ, HTTP thường. Đọc cảnh báo trong hộp thoại. |
+| Cho phép bỏ qua quyền | Cung cấp chế độ Bypass permissions. |
+| Kiểm tra cập nhật | Kiểm tra npm có phiên bản mới khi khởi động. |
+| Thông báo desktop trên máy này | Thông báo desktop khi không có trình duyệt nào bật push. |
 
 ## Hiệu năng {#performance}
 

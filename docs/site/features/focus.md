@@ -28,6 +28,7 @@ One page that shows, per session, what needs you, what is working and what finis
 - Answered requests shrink to one line until you leave the page.
 - Each request gets a **tier**. **Low** is a plain read (or, in some repos, an edit) inside the session's folder. Everything else is **high**. A high one shows **High tier · always asks** and has no **Allow always** here. Only you can answer it (see [Orchestration](orchestration)).
 - **Escalated by coordinator** marks a worker's request that its coordinator handed to you.
+- **Come back to** lists the replies you marked with [I'll be back](timeline#ill-be-back), with the note and the reminder time. A reminder that is due shows here too.
 - You can also open it with the link `#focus`.
 - Focus opens also while the bottom panel is maximized. The side and bottom panels stay while Focus shows, so the prompt box does not jump when you switch between Focus and a session.
 - With **Next for you** on (see [Settings › Focus](../reference/settings#focus)), a finished row has a chip with the predicted next prompt. Click it to put the text in that session's prompt box.

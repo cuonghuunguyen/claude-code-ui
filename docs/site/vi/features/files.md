@@ -68,6 +68,15 @@ Ba mục **Hiện trong…**, **Mở bằng** và **Mở bằng ứng dụng m�
 - <kbd>↑</kbd> và <kbd>↓</kbd> trong các ô gọi lại lần tìm trước; trong danh sách kết quả (<kbd>Tab</kbd>) chúng di chuyển giữa các kết quả.
 - Tìm kiếm dừng sau 5 giây, 200 tệp hoặc 2000 kết quả và sẽ báo. Tệp nhị phân bị bỏ qua.
 
+### Thay thế trong tệp {#replace-in-files}
+
+Mũi tên bên trái ô tìm kiếm (**Bật/tắt thay thế**) hiện ô **Thay thế**. Nhập văn bản mới; mỗi kết quả hiện bản cũ và bản mới.
+
+- Khi bật regex, `$1`, `$<name>`, `$&` và `$$` dùng được trong phần thay thế. Khi tắt regex, văn bản được dùng nguyên văn. Mẫu hoặc phần thay thế không hợp lệ báo lỗi và không ghi gì.
+- Bỏ chọn từng kết quả, hoặc cả tệp, để loại ra. **Thay thế tất cả** ghi mọi kết quả được chọn; **Thay thế trong tệp này** (<kbd>Ctrl</kbd>+<kbd>Enter</kbd> trong danh sách) ghi một tệp. Sau đó tìm kiếm chạy lại.
+- Một tệp bị bỏ qua, kèm lý do, khi nó đổi trên đĩa sau lần tìm, có thay đổi chưa lưu trong tab trình soạn thảo, không phải văn bản UTF-8 hoặc lớn hơn 8 MiB. Kiểu xuống dòng, BOM và dòng mới cuối tệp được giữ nguyên.
+- **Hoàn tác** dưới phần tóm tắt khôi phục các tệp trong một bước khi chúng chưa đổi từ đó. Nội dung cũ của mỗi tệp cũng nằm trong [Lịch sử cục bộ](timeline#local-history-file-timeline).
+
 ## Phím {#keys}
 
 | Phím | Ở đâu | Tác dụng |

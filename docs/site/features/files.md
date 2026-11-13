@@ -68,6 +68,15 @@ The three **Reveal**, **Open in** and **Open with Default App** items start a pr
 - <kbd>↑</kbd> and <kbd>↓</kbd> in the boxes recall earlier searches; in the result list (<kbd>Tab</kbd>) they move between matches.
 - A search stops after 5 s, 200 files or 2000 matches, and says so. Binary files are skipped.
 
+### Replace in files
+
+The arrow left of the query box (**Toggle replace**) shows a **Replace** box. Type the new text; each hit shows old and new.
+
+- With regex on, `$1`, `$<name>`, `$&` and `$$` work in the replacement. With regex off the text is literal. An invalid pattern or replacement shows an error and writes nothing.
+- Uncheck single hits, or whole files, to leave them out. **Replace all** writes every checked hit; **Replace in this file** (<kbd>Ctrl</kbd>+<kbd>Enter</kbd> in the list) writes one file. The search then runs again.
+- A file is skipped, and listed with the reason, when it changed on disk after the search, has unsaved changes in an editor tab, is not UTF-8 text or is over 8 MiB. Line endings, a BOM and the final newline stay as they were.
+- **Undo** under the summary restores the files in one step while they are unchanged since. Each file's old content is also in its [Local history](timeline#local-history-file-timeline).
+
 ## Keys
 
 | Key | Where | Does |

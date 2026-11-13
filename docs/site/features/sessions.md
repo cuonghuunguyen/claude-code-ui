@@ -58,6 +58,7 @@ On a phone, tap the tab switcher to see all tabs. Swipe a row left to close it. 
 
 ## Good to know
 
+- A session whose transcript file was deleted outside claude-ui leaves the list and its tab closes, as after **Delete…**.
 - `/clear` (or `/reset`, `/new`) starts a fresh session in the same tab and keeps what you typed.
 - **Idle close:** a session that no tab shows closes its Claude process after 10 minutes idle. It stays in the list. The next prompt resumes it. Change the time with [`CLAUDE_UI_IDLE_CLOSE_MINUTES`](../reference/cli#environment-variables).
 - Change how tabs group (by project, by worktree, or none) and turn on **Compact tabs** in [Settings › Layout › Tabs](../reference/settings#tabs).

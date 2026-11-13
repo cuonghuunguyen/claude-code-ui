@@ -17,6 +17,8 @@ Khung **Thay đổi** hiển thị những gì đã đổi, dưới dạng diff,
 
 3. Bấm một tệp trong danh sách, hoặc dùng <kbd>←</kbd> / <kbd>→</kbd> để chuyển đến tệp trước hoặc sau.
 
+Tab mở ở chế độ **Chưa commit** trừ khi bạn đã lưu mặc định khác trong [Cài đặt › Bố cục › Thay đổi](../reference/settings#changes).
+
 ## Kho mã {#repositories}
 
 Một thư mục dự án có thể chứa nhiều kho mã: kho lồng nhau, hoặc submodule. Trong các chế độ git, **bộ chọn kho mã** trên thanh công cụ hiển thị kho đang chọn (tên và nhánh). Nó mở ra một cây: kho mã của chính dự án, các submodule, rồi các kho mã lồng nhau. Chọn một kho để xem thay đổi của nó. Lựa chọn được lưu theo dự án trong trình duyệt này và dùng chung với [Đồ thị Git](git-graph).
