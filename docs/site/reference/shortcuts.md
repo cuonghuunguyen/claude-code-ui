@@ -74,6 +74,7 @@ Shortcuts work anywhere in the app, including the prompt box, except as noted un
 
 These commands are in the [command palette](../features/palette) and show as **Not set** in the **Keyboard shortcuts** dialog. Click **Edit** next to one to give it a key.
 
+- Replace in files
 - Open Focus
 - Toggle keep screen awake
 - Show guide

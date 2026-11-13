@@ -389,6 +389,7 @@ export default {
   "files.timeline.reason.restore": "Trước khi khôi phục",
   "files.timeline.reason.named": "Bản có tên",
   "files.timeline.reason.paste": "Trước khi dán",
+  "files.timeline.reason.replace": "Trước khi thay thế trong tệp",
   "files.timeline.actionsFor": "Thao tác cho {title}",
   // blame gutter (GH-564)
   "files.annotate.toggle": "Chú thích",

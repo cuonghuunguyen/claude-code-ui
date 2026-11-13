@@ -74,6 +74,7 @@ Phím tắt hoạt động ở mọi nơi trong ứng dụng, kể cả ô promp
 
 Các lệnh này nằm trong [bảng lệnh](../features/palette) và hiện **Chưa đặt** trong hộp thoại **Phím tắt**. Nhấn **Sửa** bên cạnh lệnh để gán phím.
 
+- Thay thế trong tệp
 - Mở Focus
 - Bật/tắt giữ màn hình sáng
 - Hiện hướng dẫn

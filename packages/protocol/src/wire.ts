@@ -248,6 +248,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "fs.search"; cwd: string; query: string }
   /** Find in files (docs/spec.md "Wire protocol"): git grep over the cwd's files, one reply FsGrepResult. A new one on the connection cancels the running one; a blank query only cancels. `includeIgnored` undefined: false in a git repository, true elsewhere. */
   | { type: "fs.grep"; cwd: string; query: string; regex?: boolean; globs?: string; includeIgnored?: boolean }
+  /** Replace in files (docs/spec.md "Editor"): rewrites the listed match lines of files under `cwd`. `dryRun`: nothing is written, the reply has each line's new text. Apply: `mtime`/`size` from the dry run are required; a file that differs is skipped `changed`. */
+  | { type: "fs.replace"; cwd: string; query: string; regex?: boolean; replace: string; dryRun?: boolean; files: { path: string; lines: number[]; mtime?: number; size?: number }[] }
+  /** Undo of one applied replace (`FsReplaceResult.undoId`); `unsaved`: relative paths left alone (unsaved editor tabs). */
+  | { type: "fs.replaceUndo"; cwd: string; id: string; unsaved?: string[] }
   /** Content search (docs/spec.md "Wire protocol"): streams `sessions.search.result`, then the reply SessionsSearchResult. A new search on the connection cancels the running one; a query under MIN_SEARCH_CHARS only cancels. */
   | { type: "sessions.search"; query: string; cwd?: string }
   /** Liveness probe: answered with `{}` by the daemon itself (never routed to a side). The page sends it after waking to find a zombie socket. */
@@ -777,6 +781,13 @@ export type GrepLine = { n: number; text: string; ranges?: [number, number][] };
 export type GrepFile = { path: string; lines: GrepLine[] };
 /** `path`: relative to the cwd, "/"-separated. `stopped`: why results are partial. `cut`: a line was shortened around its match. `includeIgnored`: the value used; `git`: the cwd is in a git work tree. */
 export type FsGrepResult = { files: GrepFile[]; matches: number; ms: number; includeIgnored: boolean; git: boolean; stopped?: "matches" | "files" | "bytes" | "time" | "canceled"; cut?: true };
+export const REPLACE_SKIPS = ["changed", "unsaved", "path_not_allowed", "too_large", "not_utf8", "not_found", "fs_error"] as const;
+export type ReplaceSkip = (typeof REPLACE_SKIPS)[number];
+/** `after`: the new line, cut like GrepLine (`ranges`: inserted text); `none`: the JS regex finds nothing on this line. */
+export type ReplaceLine = { n: number; after?: string; ranges?: [number, number][]; none?: true };
+export type ReplaceFile = { path: string; mtime?: number; size?: number; lines?: ReplaceLine[]; skipped?: ReplaceSkip; message?: string };
+/** Dry run: `files` with `lines`. Apply/undo: `changed` files and lines, `files` holds only skipped ones; `undoId` absent: cannot be undone. */
+export type FsReplaceResult = { files: ReplaceFile[]; changedFiles: number; changedLines: number; undoId?: string; cut?: true };
 export type FsReadResult = { content: string; mtime: number };
 /** `url`: same-origin path, valid while this connection is open and used within 10 min. */
 /** `unavailable`: published paths of supporting files named in the call that this preview does not serve (absent when none; GH-335). */
@@ -837,7 +848,7 @@ export type GitRefsResult = { refs: string | null };
 /** `status` null outside a git work tree. */
 export type GitStatusResult = { status: GitStatus | null };
 /** Why an entry exists: a write is about to replace the stored content. `save`: editor save; `agent`: Edit/Write of the agent; `rollback`, `checkout`, `reset`, `stash-drop`: a git write; `restore`: a restore from the Timeline; `named`: made by the user. `paste`: a paste replaced the file (GH-555). */
-export const HISTORY_REASONS = ["save", "agent", "rollback", "checkout", "reset", "stash-drop", "abort", "restore", "named", "paste"] as const;
+export const HISTORY_REASONS = ["save", "agent", "rollback", "checkout", "reset", "stash-drop", "abort", "restore", "named", "paste", "replace"] as const;
 export type HistoryReason = (typeof HISTORY_REASONS)[number];
 /** `time`: ms since epoch; `label`: set by `named` entries and renames; `size`: bytes. */
 export type HistoryEntry = { id: string; time: number; reason: HistoryReason; label?: string; size: number };

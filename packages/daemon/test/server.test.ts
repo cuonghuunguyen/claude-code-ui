@@ -6342,3 +6342,35 @@ describe("fs.grep", () => {
     }
   });
 });
+
+describe("fs.replace", () => {
+  it("dry run, apply, undo; refuses bad input and a cwd outside the roots", async () => {
+    const proj = join(webRoot, "replace proj");
+    mkdirSync(proj, { recursive: true });
+    writeFileSync(join(proj, "a.txt"), "hello Needle\nsecond\n");
+    const outside = mkdtempSync(join(tmpdir(), "outside-"));
+    const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const base = { type: "fs.replace" as const, cwd: proj, query: "needle", replace: "pin" };
+      const dry = (await c.request({ ...base, dryRun: true, files: [{ path: "a.txt", lines: [1] }] })) as { result: { files: { mtime: number; size: number; lines: unknown[] }[] } };
+      expect(dry).toMatchObject({ type: "reply", result: { files: [{ path: "a.txt", lines: [{ n: 1, after: "hello pin", ranges: [[6, 9]] }] }], changedFiles: 0 } });
+      expect(readFileSync(join(proj, "a.txt"), "utf8")).toBe("hello Needle\nsecond\n");
+      const { mtime, size } = dry.result.files[0]!;
+      const done = (await c.request({ ...base, files: [{ path: "a.txt", lines: [1], mtime, size }] })) as { result: { undoId: string } };
+      expect(done).toMatchObject({ type: "reply", result: { files: [], changedFiles: 1, changedLines: 1 } });
+      expect(readFileSync(join(proj, "a.txt"), "utf8")).toBe("hello pin\nsecond\n");
+      expect(await c.request({ type: "fs.replaceUndo", cwd: proj, id: done.result.undoId })).toMatchObject({ type: "reply", result: { changedFiles: 1 } });
+      expect(readFileSync(join(proj, "a.txt"), "utf8")).toBe("hello Needle\nsecond\n");
+      expect(await c.request({ type: "fs.replaceUndo", cwd: proj, id: done.result.undoId })).toMatchObject({ type: "error", code: "undo_gone" });
+      expect(await c.request({ ...base, cwd: outside, files: [{ path: "a.txt", lines: [1] }] })).toMatchObject({ type: "error", code: "cwd_not_allowed" });
+      expect(await c.request({ ...base, files: [] })).toMatchObject({ type: "error", code: "bad_request" });
+      expect(await c.request({ ...base, query: "a(", regex: true, files: [{ path: "a.txt", lines: [1] }] })).toMatchObject({ type: "error", code: "bad_regex" });
+      expect(await c.request({ ...base, query: "(n)", regex: true, replace: "$2", files: [{ path: "a.txt", lines: [1] }] })).toMatchObject({ type: "error", code: "bad_replacement" });
+      expect(await c.request({ ...base, files: [{ path: "../x", lines: [1], mtime: 1, size: 1 }] })).toMatchObject({ type: "reply", result: { files: [{ skipped: "path_not_allowed" }], changedFiles: 0 } });
+    } finally {
+      d.close();
+    }
+  });
+});

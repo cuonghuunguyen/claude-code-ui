@@ -37,14 +37,15 @@ export type PaletteItem = {
   keep?: boolean;
 } & ({ run: () => void } | { page: { placeholder: string; items: PaletteItem[] } });
 
-/** Rows per group, so a broad query over hundreds of sessions stays a short list (OpenCode asks the server for 50). */
+/** Rows per group, so a broad query over hundreds of sessions stays a short list (OpenCode asks the server for 50). The commands group is a finite catalog and is never cut: a command must not vanish when the catalog grows. */
 const GROUP_LIMIT = 50;
+const UNLIMITED_GROUP = "app.palette.groupCommands";
 
 export const matchItems = (items: PaletteItem[], query: string) => {
   const q = query.trim().toLowerCase();
   const count: Record<string, number> = {};
   return items.filter(
-    (i) => (q || !i.searchOnly) && `${i.title} ${i.description ?? ""}`.toLowerCase().includes(q) && (count[i.groupId] = (count[i.groupId] ?? 0) + 1) <= GROUP_LIMIT,
+    (i) => (q || !i.searchOnly) && `${i.title} ${i.description ?? ""}`.toLowerCase().includes(q) && (i.groupId === UNLIMITED_GROUP || (count[i.groupId] = (count[i.groupId] ?? 0) + 1) <= GROUP_LIMIT),
   );
 };
 
