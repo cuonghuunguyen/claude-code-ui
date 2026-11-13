@@ -65,6 +65,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Message, MessageAction, MessageActions, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { QueueChips } from "./queue-chips.tsx";
+import { followed } from "./follow.ts";
 import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
 import { PastedBlock, pastedBlockId, PasteChips } from "./pasted-text.tsx";
@@ -220,6 +221,8 @@ const card = "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border b
 const GraphTab = lazy(() => import("./graph-tab.tsx").then((m) => ({ default: m.GraphTab })));
 const GraphPane = lazy(() => import("./git-graph-panel.tsx").then((m) => ({ default: m.GraphPane })));
 const TerminalPanel = lazy(() => import("./terminal-panel.tsx").then((m) => ({ default: m.TerminalPanel })));
+/** Background views resubscribed at once after a reconnect. */
+const RESUBSCRIBE_CONCURRENCY = 4;
 const TERMINAL_KEY = "claude-ui.terminalOpen";
 const PANEL_HIDDEN_KEY = "claude-ui.sidePanelHidden";
 const FILE_TREE_HIDDEN_KEY = "claude-ui.fileTreeHidden";
@@ -817,6 +820,10 @@ export function App() {
       }
       setRecentProjects(recentProjects);
       setSides(sides);
+      // A side that became ready: its sessions that failed to follow are asked again.
+      const ready = new Set((sides ?? []).filter((x) => x.state === "ready").map((x) => x.id));
+      if ([...ready].some((id) => !readySides.current.has(id))) retryFailedFollows();
+      readySides.current = ready;
       setDocker(docker);
       setSsh(ssh);
       setCwdSides(cwdSides);
@@ -832,11 +839,22 @@ export function App() {
       }
       // Live sessions are followed so their unread markers update without opening them (background: no hold on the CLI).
       // ponytail: replays every live session's log into this tab; follow state only if that gets heavy.
+      // A restored or cached session (`live: false`, idle) has no CLI running: nothing new arrives, so it is not followed.
       for (const s of sessions)
-        if (s.state !== "closed" && (s.state !== "error" || isShown(s.id) || Date.now() - s.lastActivity <= FINISHED_MAX_AGE_MS) && !viewsRef.current[s.id] && !requested.current.has(s.id)) requested.current.add(s.id), void subscribe(s.id, false, false, !isShown(s.id));
+        if (followed(s) && (s.state !== "error" || isShown(s.id) || Date.now() - s.lastActivity <= FINISHED_MAX_AGE_MS) && !viewsRef.current[s.id] && !requested.current.has(s.id)) requested.current.add(s.id), void subscribe(s.id, false, false, !isShown(s.id));
     } catch (e) {
       if ((e as Error).message !== "disconnected") setError((e as Error).message);
     }
+  }
+
+  const failedBatch = useRef<string[]>([]);
+  const failedMessage = useRef("");
+  /** Sessions whose follow failed with side_not_ready: kept in `requested` so a list change does not ask again. */
+  const failedFollow = useRef(new Set<string>());
+  const readySides = useRef(new Set<string>());
+  function retryFailedFollows() {
+    for (const id of failedFollow.current) requested.current.delete(id);
+    failedFollow.current.clear();
   }
 
   // Replays events after the view's last seq, or everything when the daemon restarted (new logEpoch).
@@ -883,10 +901,21 @@ export function App() {
       // Gone from the daemon, e.g. never prompted before a daemon restart (no transcript): drop it from this tab.
       if ((e as RequestError).code === "unknown_session") return forget(sessionId);
       if ((e as Error).message !== "disconnected") {
-        setError((e as Error).message);
-        setFailedTabs((f) => (f.has(sessionId) ? f : new Set(f).add(sessionId)));
-        // Asked again by the next follow (a reconnect, another pane tab) instead of waiting on "Loading plan…" for good.
-        if (!viewsRef.current[sessionId]) requested.current.delete(sessionId);
+        // One toast and one state update for a burst of failures (a stopped side fails every one of its sessions at once).
+        failedBatch.current.push(sessionId);
+        failedMessage.current = (e as Error).message;
+        if (failedBatch.current.length === 1)
+          setTimeout(() => {
+            const ids = failedBatch.current.splice(0);
+            setError(failedMessage.current);
+            setFailedTabs((f) => (ids.every((x) => f.has(x)) ? f : new Set([...f, ...ids])));
+          });
+        // A stopped side (side_not_ready) fails the same way again: asked again only after a reconnect or when a side becomes ready, not by every list change.
+        // Another failure may be transient: asked again by the next follow instead of waiting on "Loading plan…" for good.
+        if (!viewsRef.current[sessionId]) {
+          if ((e as RequestError).code === "side_not_ready") failedFollow.current.add(sessionId);
+          else requested.current.delete(sessionId);
+        }
       } else if (!viewsRef.current[sessionId]) requested.current.delete(sessionId); // a dropped request: the next follow asks again; a view is resubscribed on reconnect
     } finally {
       resubscribing.current.delete(sessionId);
@@ -1379,7 +1408,8 @@ export function App() {
       // A view not replayed yet reads idle: the list state (running, needs input) still protects the tab.
       const busyList = item?.state === "running" || item?.state === "needs_input";
       // Not loaded in this daemon run: no queue, continue, request or attention seq exists; unread comes from the list's lastActivity.
-      const closed = !v && item?.state === "closed";
+      // A restored session that is idle and not live is not followed either: no view, same facts as a closed one.
+      const closed = !v && !!item && !followed(item);
       // A failed subscribe: no view, or one that may be of an earlier daemon run.
       const failed = failedTabsRef.current.has(id);
       // Disconnected or resubscribing: the view may be of an earlier daemon run, the new one is on its way.
@@ -1526,6 +1556,7 @@ export function App() {
         // A transient page failure (a side restarting) is retried after a reconnect.
         failedPage.current.clear();
         modelsRequested.current.clear();
+        retryFailedFollows();
         // Models first: the subscribe replays come before later replies, and the toolbar needs the model names and effort levels.
         c.request<ModelsResult>({ type: "models.list" }).then(
           (r) => setModels(r.models),
@@ -1537,7 +1568,23 @@ export function App() {
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
         held.current.clear();
         if (h && !viewsRef.current[h]) void subscribe(h);
-        Object.keys(viewsRef.current).forEach((id) => void subscribe(id, false, false, !isShown(id)));
+        // Shown sessions at once; background views through a small queue, so a restarted daemon is not asked to restore hundreds of transcripts in the same moment.
+        // A background view of a session that is no longer live (idle, not live) is dropped, unless it is unread: the list does not follow it either.
+        const live = (id: string) => {
+          const s = listRef.current.find((x) => x.id === id);
+          return !s || followed(s) || unreadRef.current.has(id);
+        };
+        const background: string[] = [];
+        for (const id of Object.keys(viewsRef.current)) {
+          if (isShown(id)) void subscribe(id);
+          else if (live(id)) background.push(id);
+          else drop(id, false);
+        }
+        const gen = connGen.current;
+        const worker = async () => {
+          for (let id = background.shift(); id !== undefined && gen === connGen.current; id = background.shift()) if (viewsRef.current[id]) await subscribe(id, false, false, true);
+        };
+        for (let i = 0; i < RESUBSCRIBE_CONCURRENCY; i++) void worker();
         void pushSubscription().then((sub) => {
           setPushOn(!!sub);
           if (sub) sendSubscription(c, sub).catch(() => {});
@@ -1647,7 +1694,7 @@ export function App() {
   useEffect(() => applyTheme(theme), [theme]);
 
   // GH-378: a view of another daemon run than the seen mark, and a tab of a session not loaded in this run (no view), also count output after the lastActivity this browser last showed.
-  const unread = new Set(list.filter((s) => (views[s.id] || (s.state === "closed" && tabs.includes(s.id))) && tabUnread(views[s.id], seen[s.id], s.lastActivity, shownActivity[s.id]) === true).map((s) => s.id));
+  const unread = new Set(list.filter((s) => (views[s.id] || (!followed(s) && tabs.includes(s.id))) && tabUnread(views[s.id], seen[s.id], s.lastActivity, shownActivity[s.id]) === true).map((s) => s.id));
   const unreadRef = useRef(unread);
   unreadRef.current = unread;
   // Focus (GH-159): every unanswered request; the sidebar row, the Focus tab, the browser tab and the status text all show the same number of sessions.

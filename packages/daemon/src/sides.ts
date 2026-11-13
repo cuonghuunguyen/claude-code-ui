@@ -1372,6 +1372,8 @@ export function createRouter(opts: {
   local: (msg: ClientMessage) => Promise<void>;
   localCall: LocalCall;
   isLocalSession: (id: string) => Promise<boolean>;
+  /** The local IDs of the cached transcript scan: session.list claims answer from it instead of one `isLocalSession` lookup per side ID. Absent: `isLocalSession`. */
+  localSessionIds?: () => Promise<Set<string>>;
   /** The browser runs on this machine: only then fs.openExternal goes on to a WSL side. Absent: no. */
   sameHost?: boolean;
   /** fs.media of a side's path: the hub serves it (server.ts sideMedia); `call` asks that side. Absent: refused with side_unsupported. */
@@ -1395,11 +1397,11 @@ export function createRouter(opts: {
    * A side owns a session ID only when it was told so by a reply to a request it was sent (or by its own /clear heir): never an
    * ID the local daemon has or another side owns. Returns whether `id` now belongs to `side`.
    */
-  async function claimSession(side: string, sessionId: string): Promise<boolean> {
+  async function claimSession(side: string, sessionId: string, isLocal: (id: string) => Promise<boolean> = opts.isLocalSession): Promise<boolean> {
     const owner = sides.sessionSide.get(sessionId);
     if (owner) return owner === side;
     if (sides.contested.has(sessionId)) return false;
-    if (await opts.isLocalSession(sessionId)) return sides.clash(side, sessionId), false;
+    if (await isLocal(sessionId)) return sides.clash(side, sessionId), false;
     // Another claim may have won while the local check ran.
     const now = sides.sessionSide.get(sessionId);
     if (now) return now === side;
@@ -1526,16 +1528,23 @@ export function createRouter(opts: {
    * contested; local and foreign IDs are left out. A side that fails its list leaves it out; its state shows in `sides`.
    */
   async function claimListed(answers: (readonly [string, ServerMessage])[], localIds: Set<string>): Promise<Map<string, ListLike>> {
+    // The scan starts on the first ID that needs a check, once: a list whose side IDs are all claimed already does not scan.
+    let scan: Promise<Set<string> | undefined> | undefined;
+    const isLocal = async (sid: string) => {
+      if (!opts.localSessionIds) return opts.isLocalSession(sid);
+      const ids = await (scan ??= opts.localSessionIds().catch(() => undefined));
+      return ids ? ids.has(sid) : opts.isLocalSession(sid);
+    };
     const valid = answers.filter((x): x is readonly [string, Extract<ServerMessage, { type: "reply" }>] => x[1].type === "reply" && Array.isArray((x[1].result as ListLike | null)?.sessions));
     const listedBy = new Map<string, string[]>();
     for (const [id, a] of valid) for (const sid of new Set((a.result as ListLike).sessions.map((s) => s.id))) if (!localIds.has(sid) && !sides.sessionSide.has(sid)) listedBy.set(sid, [...(listedBy.get(sid) ?? []), id]);
     // A local ID is never contested (a shared ~/.claude): each side's row is left out as a clash below (GH-328).
-    for (const [sid, ids] of listedBy) if (ids.length > 1 && !(await opts.isLocalSession(sid))) sides.contest(sid, ids);
+    for (const [sid, ids] of listedBy) if (ids.length > 1 && !(await isLocal(sid))) sides.contest(sid, ids);
     const out = new Map<string, ListLike>();
     for (const [id, a] of valid) {
       const r = a.result as ListLike;
       // A side lists its own sessions only: not an ID the local daemon lists or has, nor one of another side.
-      const owned = await Promise.all(r.sessions.map(async (s) => (localIds.has(s.id) ? (sides.clash(id, s.id), false) : await claimSession(id, s.id))));
+      const owned = await Promise.all(r.sessions.map(async (s) => (localIds.has(s.id) ? (sides.clash(id, s.id), false) : await claimSession(id, s.id, isLocal))));
       r.sessions = r.sessions.filter((_, i) => owned[i]);
       out.set(id, r);
     }
@@ -1600,7 +1609,7 @@ export function createRouter(opts: {
     // A saved side that is not ready keeps its last projects and sessions (not live) in the list, owned by that side.
     const cached = sides.cached().filter(([id]) => !conns.has(id)) as [string, ListLike][];
     const cachedIds = new Set(cached.map(([id]) => id));
-    const stale = cached.map(([id, l]) => [id, { type: "reply", reqId: msg.reqId, result: { ...l, sessions: l.sessions.map((s) => ({ ...s, live: false, state: "idle" })) } }] as const);
+    const stale = cached.map(([id, l]) => [id, { type: "reply", reqId: msg.reqId, result: { ...l, sessions: l.sessions.map((s) => ({ ...s, live: false, state: "closed" })) } }] as const);
     const lists = await claimListed([...answers.slice(1), ...stale], new Set((local.result as ListLike).sessions.map((s) => s.id)));
     const perSide = [(local.result as ListLike).projects];
     for (const [id, r] of lists) if (!cachedIds.has(id)) sides.remember(id, r);

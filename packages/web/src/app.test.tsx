@@ -2222,7 +2222,7 @@ describe("idle close: holds and background follows", () => {
   });
 
   it("a closed tab of an error session drops its view; the next list refresh follows it in the background again (GH-305)", async () => {
-    const restore = await remount({ "session.list": { sessions: [{ ...session, state: "error", lastActivity: Date.now() }], projects: ["/p/demo"] } });
+    const restore = await remount({ "session.list": { sessions: [{ ...session, state: "error", live: false, lastActivity: Date.now() }], projects: ["/p/demo"] } });
     try {
       await closeActive();
       expect(sent).toContainEqual({ type: "session.unsubscribe", sessionId: ID });
@@ -2236,7 +2236,7 @@ describe("idle close: holds and background follows", () => {
   });
 
   it("an error session without a tab is followed in the background after a load, so its unread state and Focus row are known (GH-305)", async () => {
-    const errored = { ...other, state: "error" as const, lastActivity: Date.now() };
+    const errored = { ...other, state: "error" as const, live: false as const, lastActivity: Date.now() };
     const restore = await remount({ "session.list": { sessions: [session, errored], projects: ["/p/demo", "/p/other"] } });
     try {
       expect(subscribes()).toContainEqual(expect.objectContaining({ sessionId: errored.id, background: true }));
@@ -2267,6 +2267,123 @@ describe("idle close: holds and background follows", () => {
       await act(async () => {});
       expect(subscribes().find((m) => m.sessionId === other.id)).not.toHaveProperty("background");
     } finally {
+      restore();
+    }
+  });
+
+  it("an idle session that is not live (live: false) without a tab is not followed, after a load or a list change", async () => {
+    const stale = { ...other, state: "idle" as const, live: false as const };
+    sent.length = 0;
+    const restore = await remount({ "session.list": { sessions: [session, stale], projects: ["/p/demo", "/p/other"] } });
+    try {
+      expect(subscribes().filter((m) => m.sessionId === stale.id)).toEqual([]);
+      sent.length = 0;
+      await act(async () => sessionsChanged({ type: "sessions.changed" }));
+      await act(async () => {});
+      expect(subscribes().filter((m) => m.sessionId === stale.id)).toEqual([]);
+    } finally {
+      sent.length = 0;
+      restore();
+    }
+  });
+
+  it("a background follow that fails with side_not_ready is not asked again by every list change; it is when its side becomes ready", async () => {
+    const running = { ...other, state: "running" as const };
+    const sideOff = [{ id: "wsl:X", label: "WSL: X", state: "off" }];
+    const subscribeReply = (m: { sessionId: string }) => {
+      if (m.sessionId === running.id) throw Object.assign(new Error("side is not running"), { code: "side_not_ready" });
+      return { logEpoch: "e1", session };
+    };
+    sent.length = 0;
+    const restore = await remount({ "session.list": { sessions: [session, running], projects: ["/p/demo", "/p/other"], sides: sideOff }, "session.subscribe": subscribeReply });
+    const toasts = () => document.querySelectorAll('[data-testid="toast"]').length;
+    try {
+      for (let i = 0; i < 3; i++) {
+        await act(async () => sessionsChanged({ type: "sessions.changed" }));
+        await act(async () => {});
+      }
+      expect(subscribes().filter((m) => m.sessionId === running.id)).toHaveLength(1);
+      expect(toasts()).toBeLessThanOrEqual(1);
+      replies["session.list"] = { sessions: [session, running], projects: ["/p/demo", "/p/other"], sides: [{ ...sideOff[0], state: "ready" }] };
+      await act(async () => sessionsChanged({ type: "sessions.changed" }));
+      await act(async () => {});
+      expect(subscribes().filter((m) => m.sessionId === running.id)).toHaveLength(2);
+    } finally {
+      sent.length = 0;
+      restore();
+    }
+  });
+
+  it("reconnect: the shown session resubscribes at once, background views through a queue of 4; every one is resubscribed in the end", async () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({ ...other, id: `${String(i).padStart(8, "0")}-2222-3333-4444-555555555555`, cwd: "/p/other", state: "running" as const }));
+    sent.length = 0;
+    const restore = await remount({ "session.list": { sessions: [session, ...many], projects: ["/p/demo", "/p/other"] } });
+    try {
+      expect(new Set(subscribes().map((m) => m.sessionId)).size).toBe(21);
+      sent.length = 0;
+      const open: (() => void)[] = [];
+      let inflight = 0;
+      let peak = 0;
+      replies["session.subscribe"] = () =>
+        new Promise((res) => {
+          peak = Math.max(peak, ++inflight);
+          open.push(() => (inflight--, res({ logEpoch: "e1", session })));
+        });
+      await act(async () => reconnect());
+      await act(async () => {});
+      expect(subscribes()[0]!.sessionId).toBe(ID);
+      expect(inflight).toBeLessThanOrEqual(5);
+      const done = () => new Set(subscribes().map((m) => m.sessionId)).size;
+      for (let i = 0; i < 40 && done() < 21; i++) {
+        await act(async () => open.splice(0).forEach((f) => f()));
+        await act(async () => {});
+      }
+      expect(peak).toBeLessThanOrEqual(5);
+      expect(done()).toBe(21);
+    } finally {
+      restoreSubscribe();
+      sent.length = 0;
+      restore();
+    }
+  });
+
+  it("a background view of a session that is no longer live is dropped at a reconnect; the list follows it again once it runs", async () => {
+    const restore = await remount({ "session.list": { sessions: [session, { ...other, state: "running" as const }], projects: ["/p/demo", "/p/other"] } });
+    try {
+      expect(subscribes().filter((m) => m.sessionId === other.id)).toHaveLength(1);
+      replies["session.list"] = { sessions: [session, { ...other, state: "idle" as const, live: false as const }], projects: ["/p/demo", "/p/other"] };
+      await act(async () => sessionsChanged({ type: "sessions.changed" }));
+      await act(async () => {});
+      sent.length = 0;
+      await act(async () => reconnect());
+      await act(async () => {});
+      expect(subscribes().filter((m) => m.sessionId === other.id)).toEqual([]);
+      replies["session.list"] = { sessions: [session, { ...other, state: "running" as const }], projects: ["/p/demo", "/p/other"] };
+      await act(async () => sessionsChanged({ type: "sessions.changed" }));
+      await act(async () => {});
+      expect(subscribes().filter((m) => m.sessionId === other.id)).toHaveLength(1);
+    } finally {
+      sent.length = 0;
+      restore();
+    }
+  });
+
+  it("reconnect: a background view of an idle not-live session is kept when it is unread, so its marker survives", async () => {
+    sent.length = 0;
+    const restore = await remount({ "session.list": { sessions: [session, { ...other, state: "running" as const }], projects: ["/p/demo", "/p/other"] } });
+    try {
+      expect(subscribes().filter((m) => m.sessionId === other.id)).toHaveLength(1);
+      // The turn ends while the session is in the background (attention it has not seen), and its CLI closes: idle, not live.
+      replies["session.list"] = { sessions: [session, { ...other, state: "idle" as const, live: false as const }], projects: ["/p/demo", "/p/other"] };
+      await act(async () => emit({ type: "event", sessionId: other.id, seq: 1, part: { type: "session_state", id: "session_state", state: "running" } }));
+      await act(async () => emit({ type: "event", sessionId: other.id, seq: 2, part: { type: "session_state", id: "session_state", state: "idle" } }));
+      await act(async () => {});
+      sent.length = 0;
+      await act(async () => reconnect());
+      await act(async () => {});
+      expect(subscribes().filter((m) => m.sessionId === other.id)).toEqual([expect.objectContaining({ background: true })]);
+    } finally {
+      sent.length = 0;
       restore();
     }
   });
@@ -3324,6 +3441,15 @@ describe("GH-378 clean up tabs", () => {
     expect(tabIds()).toEqual([ID, S2, S3, S4]);
   });
 
+  it("auto-close 1 hour closes a stale tab of a restored session (idle, not live) that is not followed, so it has no view", async () => {
+    const old = Date.now() - 3 * 3_600_000;
+    localStorage.setItem("claude-ui.tab-used", JSON.stringify({ [ID]: old, [S2]: old, [S3]: old }));
+    localStorage.setItem("claude-ui.tabAutoClose", "1h");
+    await remount([session, mk(S2, "Second"), mk(S3, "Third", { live: false })], [ID, S2, S3], S2);
+    await act(async () => {});
+    expect(tabIds()).toEqual([S2]);
+  });
+
   it("the Clean up tabs counts, kept line and closed set are the same whichever tab opens the menu (not the active one, not a stale render)", async () => {
     await remount([session, mk(S2, "Second"), mk(S3, "Third"), mk(S4, "Fourth", { state: "running" }), mk(S5, "Fifth")], [ID, S2, S3, S4, S5], S2);
     // A draft appears without any prop of a tab changing: a memoized tab does not render again.
@@ -3420,6 +3546,15 @@ describe("GH-378 clean up tabs", () => {
     await rule(S2, "unused1h");
     expect(tabIds()).toEqual([S2, S3]);
   });
+
+  for (const variant of ["closed", "idle-not-live"] as const)
+    it(`a background tab of a ${variant} session with output this browser never showed shows its unread marker`, async () => {
+      localStorage.setItem("claude-ui.shown-activity", JSON.stringify({ [ID]: 100 }));
+      const st = variant === "closed" ? { state: "closed" as const } : { state: "idle" as const, live: false as const };
+      await remount([mk(ID, "First", { ...st, lastActivity: Date.now() - 60_000 }), mk(S2, "Second")], [ID, S2], S2);
+      await act(async () => {});
+      expect(el.querySelector(`[data-tab-id="${ID}"] [aria-label]`)?.getAttribute("aria-label")).toContain("unread");
+    });
 
   it("after a reload, tabs of closed sessions (not loaded in this daemon run) are counted and closed by rules without a subscribe; one with output after this browser last showed it stays unread", async () => {
     const S6 = S(6);
