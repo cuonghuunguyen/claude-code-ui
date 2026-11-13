@@ -345,7 +345,7 @@ describe("cached lists of saved sides", () => {
     expect(state(s, "wsl:A")?.state).toBe("reconnecting");
     const r = await h.ask({ type: "session.list" });
     expect(r.result.projects).toEqual(["/w/p"]);
-    expect(r.result.sessions).toEqual([expect.objectContaining({ id: "s1", live: false, state: "idle" })]);
+    expect(r.result.sessions).toEqual([expect.objectContaining({ id: "s1", live: false, state: "closed" })]);
     expect(r.result.cwdSides["/w/p"]).toBe("wsl:A");
     // Unchanged list: not written again.
     expect(writes).toHaveLength(1);
