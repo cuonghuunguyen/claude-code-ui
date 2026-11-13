@@ -383,6 +383,18 @@ export default {
   "about.updates": "Cập nhật",
   "about.check": "Kiểm tra cập nhật",
   "about.autoCheck": "Được kiểm tra khi claude-ui khởi động và mỗi ngày một lần.",
+  "browserLogs.title": "Nhật ký trình duyệt",
+  "browserLogs.keep": "Lưu nhật ký trình duyệt",
+  "browserLogs.keepHint": "Lỗi, cảnh báo và thông báo của trình duyệt này, lưu trên thiết bị này 7 ngày (tối đa 5000 mục). Mã ghép nối được xóa. Không gửi đi đâu cả.",
+  "browserLogs.count": "{count} mục từ {oldest}",
+  "browserLogs.empty": "Chưa có mục nào.",
+  "browserLogs.off": "Tắt: không lưu gì.",
+  "browserLogs.unavailable": "Không dùng được nhật ký trình duyệt: trình duyệt này chặn lưu trữ.",
+  "browserLogs.export": "Xuất nhật ký trình duyệt",
+  "browserLogs.clear": "Xóa nhật ký trình duyệt",
+  "browserLogs.clearConfirm": "Xóa toàn bộ nhật ký trình duyệt của trình duyệt này?",
+  "browserLogs.clearYes": "Xóa",
+  "browserLogs.cancel": "Hủy",
 
   // pairing-form.tsx
   "pairing.invalid": "Đây không phải liên kết hoặc token ghép nối.",

@@ -381,6 +381,18 @@ export default {
   "about.updates": "Updates",
   "about.check": "Check for updates",
   "about.autoCheck": "Checked when claude-ui starts and once a day.",
+  "browserLogs.title": "Browser logs",
+  "browserLogs.keep": "Keep browser logs",
+  "browserLogs.keepHint": "Errors, warnings and messages of this browser, kept on this device for 7 days (at most 5000 entries). Pairing tokens are removed. Nothing is sent anywhere.",
+  "browserLogs.count": "{count} entries since {oldest}",
+  "browserLogs.empty": "No entries yet.",
+  "browserLogs.off": "Off: nothing is kept.",
+  "browserLogs.unavailable": "Browser logs are unavailable: this browser blocks storage.",
+  "browserLogs.export": "Export browser logs",
+  "browserLogs.clear": "Clear browser logs",
+  "browserLogs.clearConfirm": "Delete all browser logs of this browser?",
+  "browserLogs.clearYes": "Clear",
+  "browserLogs.cancel": "Cancel",
 
   // pairing-form.tsx
   "pairing.invalid": "That is not a pairing link or token.",
