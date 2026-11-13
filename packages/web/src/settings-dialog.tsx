@@ -858,6 +858,7 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
       { key: "ignoreSubmodules", kind: "switch" },
       { key: "openRepositoryInParentFolders", kind: "select", options: ["always", "never", "prompt"].map((value) => ({ value })) },
       { key: "commitMessageInstruction", kind: "text" },
+      { key: "commitMessageWarm", kind: "switch" },
     ],
   },
 ];

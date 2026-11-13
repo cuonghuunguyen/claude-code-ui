@@ -1054,6 +1054,8 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
     commitMessageInstruction: string;
     /** Per project (key: project cwd) instruction; wins over `commitMessageInstruction`. Value 1..COMMIT_INSTRUCTION_MAX chars. A patch replaces the whole map. */
     commitMessageInstructions: Record<string, string>;
+    /** GH-668: the daemon keeps one Haiku process ready for Generate (faster start, one idle process). Default off. */
+    commitMessageWarm: boolean;
   };
   /** Custom names and icons (GH-515), shared by every browser. Key: project cwd, or side id (`local`, `wsl:<distro>`, `docker:<name>`). A patch replaces the whole map. */
   labels: { projects: Record<string, Label>; sides: Record<string, Label> };

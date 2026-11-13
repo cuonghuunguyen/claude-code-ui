@@ -31,7 +31,7 @@ import { createJira, JiraError, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
 import { createWorktree, listBranches, pullRequestBranches, gitBlame, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitOperationOf, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, cachedStatuses, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
-import { generateCommitMessage, instructionFor, promptFor } from "./commit-message.ts";
+import { createWarmCommitMessage, generateCommitMessage, instructionFor, promptFor } from "./commit-message.ts";
 import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff, gitCommitFiles, gitCommitMenu, gitContinue, gitMergeRebase, gitRollback, gitRollbackHunk, gitRollbackPreview, gitStash, gitStashList, gitStashPush } from "./git-write.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
@@ -473,6 +473,8 @@ export function createDaemon(opts: {
   const projectsDir = opts.projectsDir ?? join(claudeDir, "projects");
   const projects = opts.projects ?? createProjects();
   const appSettings = opts.appSettings ?? createSettings();
+  /** GH-668: the ready Haiku process of Generate; used only while `git.commitMessageWarm` is on. */
+  const warmCommit = createWarmCommitMessage(opts.query);
   /** The OpenCode server: started on first use (docs/spec.md "OpenCode engine"), stopped with the daemon. */
   const openCode = createOpenCodeServer({ path: () => appSettings.get().opencode.path, ...opts.opencode });
   /** Directory and title of each OpenCode session this daemon listed, created or opened. */
@@ -2819,6 +2821,7 @@ export function createDaemon(opts: {
             const before = appSettings.get().claude.account;
             const openCodePath = appSettings.get().opencode.path;
             const settings = appSettings.set(msg.patch);
+            if (msg.patch?.git?.commitMessageWarm !== undefined) (settings.git.commitMessageWarm ? warmCommit.prewarm() : warmCommit.stop());
             if (settings.opencode.path !== openCodePath) void restartOpenCode().then(() => broadcast({ type: "opencode.providersChanged" }));
             if (settings.claude.account !== before) (setClaudeToken(accountToken()), claudeLoginChanged());
             const origin = jiraOrigin(settings.jira.url);
@@ -3350,7 +3353,7 @@ export function createDaemon(opts: {
             const d = await gitCommitDiff(cwd, { paths: msg.paths, allowed: (p) => inRoots(real(p) ?? p) });
             if (!d) return fail("not_git", NOT_TOP);
             const prompt = promptFor(instructionFor(appSettings.get().git, msg.project), d);
-            const message = await generateCommitMessage({ cwd, prompt, signal: ctl.signal, query: opts.query });
+            const message = await generateCommitMessage({ cwd, prompt, signal: ctl.signal, query: opts.query, ...(appSettings.get().git.commitMessageWarm && { warm: warmCommit }) });
             return reply({ message, ...(d.cut && { truncated: true }) });
           } catch (e) {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
@@ -3860,7 +3863,7 @@ export function createDaemon(opts: {
       .catch((e) => console.error("uploads: sweep failed:", e));
   const firstSweep = sweepMs > 0 ? setTimeout(() => void sweepUploads(), opts.uploadSweepFirstMs ?? 60_000).unref() : undefined;
   const sweeper = sweepMs > 0 ? setInterval(() => void sweepUploads(), sweepMs).unref() : undefined;
-  http.on("close", () => (clearInterval(sleepTimer), backReminders?.stop(), opts.keepAwake?.close(), orchestration.shutdown(), [...mcpRoutes.keys()].forEach(dropMcp), void openCode.close(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
+  http.on("close", () => (clearInterval(sleepTimer), backReminders?.stop(), opts.keepAwake?.close(), orchestration.shutdown(), [...mcpRoutes.keys()].forEach(dropMcp), void openCode.close(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close(), warmCommit.stop()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).
   return Object.assign(http, {
     accept,
