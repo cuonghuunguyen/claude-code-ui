@@ -154,7 +154,8 @@ import { baseName, inDir, joinPath, relPath } from "./paths.ts";
 import { EditorSync, FilesPanel, FileTab } from "./files-panel.tsx";
 import { FileDialog } from "./file-dialog.tsx";
 import { createEditorStore, useEditorStore } from "./editor-store.ts";
-import { fileMention, isDirty } from "./files.ts";
+import { entryMention, fileMention, isDirty } from "./files.ts";
+import { isEntriesDrag, readEntriesDrag } from "./tree-drag.ts";
 import { defaultRepo, useRepos } from "./repos.ts";
 import { repoProjectKey, setRepoChoice, type RepoList } from "./repo-choice.ts";
 import { focusCommit } from "./graph-focus.ts";
@@ -5590,6 +5591,26 @@ export function SessionPane({
   const [artifactOpened] = useState(() => new Set<string>()); // the card previews this session shows (ArtifactOpenedContext)
   const artifactUrls = useMemo(() => new Map(sessionArtifacts(view).flatMap((r) => (r.url && r.previewable ? [[r.url, r.partId] as const] : []))), [view.parts, view.aux]);
   const dockHidden = useHideOnScroll(card, phone, turnRunning || shellRunning || !!permission || !!question || !!current || dockFocused);
+  // GH-707: rows dragged from the Files tab onto the timeline or anywhere in the pane go to this pane's prompt box (none: not a drop target).
+  const promptable = !permission && !question && !current;
+  const [treeDrop, setTreeDrop] = useState<string>();
+  const [treeRing, setTreeRing] = useState(false);
+  const paneDrag = {
+    onDragOver: (e: DragEvent) => {
+      if (!promptable || !isEntriesDrag(e.dataTransfer)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      setTreeRing(true);
+    },
+    onDragLeave: (e: DragEvent) => !(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) && setTreeRing(false),
+    onDrop: (e: DragEvent) => {
+      setTreeRing(false);
+      if (!promptable || e.defaultPrevented || !isEntriesDrag(e.dataTransfer)) return;
+      e.preventDefault();
+      const entries = readEntriesDrag(e.dataTransfer);
+      if (entries) setTreeDrop(entryMention(entries, session.cwd));
+    },
+  };
 
   return (
     <MediaContext value={onMedia}>
@@ -5602,6 +5623,7 @@ export function SessionPane({
     <OpenRunContext value={onOpenRun}>
     <BackgroundShellContext value={onBackgroundShell && backgroundShellStable}>
     <AgentLinksContext value={agentCtx}>
+      <div className="contents" {...paneDrag}>
       {current ? (
         <SubagentBar view={view} run={current} onOpen={onOpenRun} />
       ) : (
@@ -5856,8 +5878,9 @@ export function SessionPane({
               onTaken={() => (setTakeBack(undefined), setDraft(undefined))}
               onBash={capabilitiesOf(session).shell ? onBash : undefined}
               onSearch={onSearch}
-              insert={insert}
-              onInserted={onInserted}
+              insert={treeDrop ?? insert}
+              onInserted={() => (treeDrop !== undefined ? setTreeDrop(undefined) : onInserted())}
+              treeRing={treeRing}
               draft={draft}
               state={connected ? (turnRunning ? (view.state as "running" | "needs_input") : shellRunning ? "running" : "idle") : "disconnected"}
               onInterrupt={onInterrupt}
@@ -5875,6 +5898,7 @@ export function SessionPane({
           </>
         )}
         <StatusBar view={view} git={onGitStatus} onShells={onShells} sessionId={session.id} />
+      </div>
       </div>
     </AgentLinksContext>
     </BackgroundShellContext>
@@ -5925,6 +5949,7 @@ function PromptBox({
   onSearch,
   insert,
   onInserted,
+  treeRing,
   draft,
   draftKey,
   pasteTag,
@@ -5985,6 +6010,8 @@ function PromptBox({
   onSearch: (query: string) => Promise<string[]>;
   insert?: string;
   onInserted?: () => void;
+  /** GH-707: rows of the Files tab are being dragged over the pane around this box. */
+  treeRing?: boolean;
   /** Replaces the text and images (rewind puts the original prompt back). */
   draft?: { text: string; images: string[] };
   /** Keeps the unsent text across a reload (drafts.ts); a `draft` above wins. */
@@ -6142,16 +6169,21 @@ function PromptBox({
     placeCaret.current = t.length;
     setCaret(t.length);
   };
-  useEffect(() => {
-    if (!insert) return;
+  /** Text from outside the box (Add to prompt, a tree drag): at the caret; a command first, a block as a paragraph. */
+  const [treeOver, setTreeOver] = useState(false);
+  const applyInsert = (s: string) => {
     // A quote (GH-56) is prompt text, never part of a shell command.
     // A diff block from the Changes tab (GH-611) or terminal output (GH-710) is a paragraph too.
-    const block = isBlockInsert(insert);
+    const block = isBlockInsert(s);
     if (block) setBash(false);
-    const r = block ? appendQuote(text, insert) : insert.startsWith("/") ? insertCommand(text, insert) : insertAtCaret(text, caret, insert);
+    const r = block ? appendQuote(text, s) : s.startsWith("/") ? insertCommand(text, s) : insertAtCaret(text, caret, s);
     edit(r.text, r.caret);
-    onInserted?.();
     input.current?.focus();
+  };
+  useEffect(() => {
+    if (!insert) return;
+    applyInsert(insert);
+    onInserted?.();
   }, [insert]);
   useEffect(() => {
     if (!takeBack) return;
@@ -6325,8 +6357,23 @@ function PromptBox({
     attachFrom(e.clipboardData);
   };
   const onDrop = (e: DragEvent) => {
+    setTreeOver(false);
+    // GH-707: rows dragged from the Files tab become @mentions; the pane around the box must not insert them again.
+    if (isEntriesDrag(e.dataTransfer)) {
+      e.preventDefault();
+      e.stopPropagation();
+      const entries = readEntriesDrag(e.dataTransfer);
+      if (entries) applyInsert(entryMention(entries, cwd ?? ""));
+      return;
+    }
     e.preventDefault();
     attachFrom(e.dataTransfer);
+  };
+  const onDragOverBox = (e: DragEvent) => {
+    e.preventDefault();
+    if (!isEntriesDrag(e.dataTransfer)) return;
+    e.dataTransfer.dropEffect = "copy";
+    setTreeOver(true);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Enter commits the composition, Esc cancels it, arrows pick IME candidates: never send, pick, dismiss or switch modes then.
@@ -6394,7 +6441,7 @@ function PromptBox({
   };
 
   return (
-    <div className="relative flex flex-col gap-2" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+    <div className="relative flex flex-col gap-2" onDragOver={onDragOverBox} onDragLeave={(e) => !(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) && setTreeOver(false)} onDrop={onDrop}>
     {todos && <TodoDock items={todos} className={lift ? "pb-9" : undefined} />}
     {blocked && (
       // OpenCode composer dock anatomy (followup dock): rounded-xl, hairline border, layer-01 background.
@@ -6484,7 +6531,7 @@ function PromptBox({
       </ul>
     )}
     <div
-      className={`relative flex flex-col rounded-xl border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring/50 ${lift ? "-mt-11" : ""}`}
+      className={`relative flex flex-col rounded-xl border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring/50 ${treeOver || treeRing ? "ring-2 ring-ring" : ""} ${lift ? "-mt-11" : ""}`}
       data-testid="prompt-box"
     >
       {!bash && <MarkdownToolbar input={input} disabled={disabled} />}

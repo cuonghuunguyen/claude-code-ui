@@ -29,7 +29,7 @@ export function treeMenuSections(t: TreeTarget, mac: boolean, viewer = true, gra
       [rename, item("duplicate", tr("files.menu.duplicate")), del],
     ];
   if (t.kind === "dir") {
-    const sections = [[item("newFile", tr("files.menu.newFile")), item("newFolder", tr("files.menu.newFolder"))], [cut, copyIt, paste], copy, ...ext, [rename, del], [item("collapse", tr("files.menu.collapse"), { disabled: !t.expanded })]];
+    const sections = [[item("newFile", tr("files.menu.newFile")), item("newFolder", tr("files.menu.newFolder"))], [cut, copyIt, paste], [item("mention", tr("files.menu.mention")), ...copy], ...ext, [rename, del], [item("collapse", tr("files.menu.collapse"), { disabled: !t.expanded })]];
     return t.repo ? [[item("repoChanges", tr("files.menu.showChanges")), ...(graph ? [item("repoGraph", tr("files.menu.showGraph"))] : [])], ...sections] : sections;
   }
   return [[item("newFile", tr("files.menu.newFile")), item("newFolder", tr("files.menu.newFolder"))], [paste], ...ext, [item("refresh", tr("files.menu.refresh"))]];

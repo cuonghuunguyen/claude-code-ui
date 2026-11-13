@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { inDir } from "./paths.ts";
-import { goneTab, restoredTab, mediaKind, pin, placeTab, readFailure, type Tab, diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention, selectionQuote, fileMention, moveTabs, dropTabs, movedPath } from "./files.ts";
+import { goneTab, restoredTab, mediaKind, pin, placeTab, readFailure, type Tab, diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention, selectionQuote, fileMention, entryMention, moveTabs, dropTabs, movedPath } from "./files.ts";
 
 const tab = opened("/p/a.ts", { content: "one", mtime: 1 });
 
@@ -243,5 +243,33 @@ describe("selectionQuote", () => {
   });
   it("an empty selection has no quote", () => {
     expect(selectionQuote(at("abc", 1))).toBeUndefined();
+  });
+});
+
+describe("entryMention (GH-707)", () => {
+  it("a file is @rel, a folder ends with /", () => {
+    expect(entryMention([{ path: "/p/src/a.ts", isDir: false }], "/p")).toBe("@src/a.ts");
+    expect(entryMention([{ path: "/p/lib", isDir: true }], "/p")).toBe("@lib/");
+  });
+  it("quotes spaces and keeps the slash inside the quotes", () => {
+    expect(entryMention([{ path: "/p/my dir", isDir: true }], "/p")).toBe('@"my dir/"');
+  });
+  it("Windows paths use /", () => {
+    expect(entryMention([{ path: "C:\\p\\src", isDir: true }], "C:\\p")).toBe("@src/");
+  });
+  it("a path outside cwd stays absolute; without cwd all are absolute", () => {
+    expect(entryMention([{ path: "/x/y.ts", isDir: false }], "/p")).toBe("@/x/y.ts");
+    expect(entryMention([{ path: "/p/a", isDir: true }], "")).toBe("@/p/a/");
+  });
+  it("several entries join with one space", () => {
+    expect(
+      entryMention(
+        [
+          { path: "/p/src/a.ts", isDir: false },
+          { path: "/p/lib", isDir: true },
+        ],
+        "/p",
+      ),
+    ).toBe("@src/a.ts @lib/");
   });
 });

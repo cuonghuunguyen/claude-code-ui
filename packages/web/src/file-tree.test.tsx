@@ -254,7 +254,7 @@ it("GH-360 right click opens the menu of the row under it: file, folder, empty s
   expect(menuItem("delete").className).toContain("text-destructive");
   await closeMenu();
   await ctxMenu(t.row("/p/src"));
-  expect(menuIds()).toEqual(["newFile", "newFolder", "cut", "copy", "paste", "copyPath", "copyRel", "rename", "delete", "collapse"]);
+  expect(menuIds()).toEqual(["newFile", "newFolder", "cut", "copy", "paste", "mention", "copyPath", "copyRel", "rename", "delete", "collapse"]);
   await closeMenu();
   await ctxMenu(t.el.querySelector('[data-testid="tree-empty-space"]')!);
   expect(menuIds()).toEqual(["newFile", "newFolder", "paste", "refresh"]);
@@ -295,7 +295,9 @@ it("GH-360 menu commands: Open pins and focuses the editor, copy, mention, viewe
   await run("/p/src/app.ts", "copyRel");
   expect(onCopy).toHaveBeenLastCalledWith("src/app.ts", "relative path");
   await run("/p/src/app.ts", "mention");
-  expect(onMention).toHaveBeenLastCalledWith("/p/src/app.ts");
+  expect(onMention).toHaveBeenLastCalledWith([{ path: "/p/src/app.ts", isDir: false }]);
+  await run("/p/src/lib", "mention");
+  expect(onMention).toHaveBeenLastCalledWith([{ path: "/p/src/lib", isDir: true }]);
   await run("/p/src/app.ts", "viewer");
   expect(onViewer).toHaveBeenLastCalledWith("/p/src/app.ts");
   await run("/p/src", "collapse");
@@ -330,7 +332,7 @@ it("GH-360 long press: touchstart on a row, 500 ms later the menu of that row op
     await t.render();
     await act(async () => void t.row("/p/src").dispatchEvent(Object.assign(new Event("touchstart", { bubbles: true, cancelable: true }), { touches: [{ clientX: 10, clientY: 10 }] })));
     await act(async () => void vi.advanceTimersByTime(600));
-    expect(menuIds()).toEqual(["newFile", "newFolder", "cut", "copy", "paste", "copyPath", "copyRel", "rename", "delete", "collapse"]);
+    expect(menuIds()).toEqual(["newFile", "newFolder", "cut", "copy", "paste", "mention", "copyPath", "copyRel", "rename", "delete", "collapse"]);
     t.unmount();
   } finally {
     vi.useRealTimers();
@@ -1121,4 +1123,111 @@ it("GH-722: the third Copy path offers Open in file manager when this machine ca
   setRecommendationHost(undefined);
   localStorage.clear();
   resetPageForTests();
+});
+
+// GH-707: multi-select and drag into the prompt box.
+const ENTRIES = "application/x-claude-ui-entries";
+const click = (el: Element, init: MouseEventInit = {}) => act(async () => void el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0, ...init })));
+const sel = (t: ReturnType<typeof setup>) => t.rows().filter((r) => r.getAttribute("aria-selected") === "true").map((r) => r.dataset.path);
+const dragStart = async (el: Element) => {
+  const data: Record<string, string> = {};
+  const e = new Event("dragstart", { bubbles: true }) as Event & { dataTransfer: unknown };
+  e.dataTransfer = { setData: (k: string, v: string) => (data[k] = v), effectAllowed: "" };
+  await act(async () => void el.dispatchEvent(e));
+  return data;
+};
+
+it("GH-707 Ctrl+click toggles a row into the selection without opening or expanding it", async () => {
+  const t = setup();
+  await t.render();
+  await click(t.row("/p/src"), { ctrlKey: true });
+  await click(t.row("/p/README.md"), { ctrlKey: true });
+  expect(sel(t)).toEqual(["/p/src", "/p/README.md"]);
+  expect(t.onOpen).not.toHaveBeenCalled();
+  expect(t.row("/p/src").getAttribute("aria-expanded")).toBe("false");
+  expect(t.el.querySelector("[role=tree]")!.getAttribute("aria-multiselectable")).toBe("true");
+  await click(t.row("/p/src"), { ctrlKey: true });
+  expect(sel(t)).toEqual(["/p/README.md"]);
+  t.unmount();
+});
+
+it("GH-707 Shift+click selects the visible range from the anchor", async () => {
+  const t = setup();
+  await t.render();
+  await click(t.row("/p/README.md"), { ctrlKey: true });
+  await click(t.row("/p/new.ts"), { shiftKey: true });
+  expect(sel(t)).toEqual(["/p/README.md", "/p/package.json", "/p/new.ts"]);
+  expect(t.onOpen).not.toHaveBeenCalled();
+  t.unmount();
+});
+
+it("GH-707 a plain click clears the selection and acts as before; Escape clears it", async () => {
+  const t = setup();
+  await t.render();
+  await click(t.row("/p/README.md"), { ctrlKey: true });
+  await click(t.row("/p/new.ts"), { ctrlKey: true });
+  await t.key(t.row("/p/new.ts"), "Escape");
+  expect(sel(t)).toEqual([]);
+  await click(t.row("/p/README.md"), { ctrlKey: true });
+  await click(t.row("/p/package.json"));
+  expect(sel(t)).toEqual([]);
+  expect(t.onOpen).toHaveBeenCalledWith("/p/package.json", {});
+  t.unmount();
+});
+
+it("GH-707 dragging a selected row carries every selected row and no single-row type", async () => {
+  const t = setup();
+  await t.render();
+  await click(t.row("/p/src"), { ctrlKey: true });
+  await click(t.row("/p/new.ts"), { ctrlKey: true });
+  const data = await dragStart(t.row("/p/new.ts"));
+  expect(JSON.parse(data[ENTRIES]!)).toEqual([
+    { path: "/p/src", isDir: true },
+    { path: "/p/new.ts", isDir: false },
+  ]);
+  expect(data[DRAG_TYPE]).toBeUndefined();
+  expect(data["text/plain"]).toBe("/p/src\n/p/new.ts");
+  t.unmount();
+});
+
+it("GH-707 dragging an unselected row carries that row, both types, and keeps the selection", async () => {
+  const t = setup();
+  await t.render();
+  await click(t.row("/p/src"), { ctrlKey: true });
+  await click(t.row("/p/new.ts"), { ctrlKey: true });
+  const data = await dragStart(t.row("/p/README.md"));
+  expect(JSON.parse(data[ENTRIES]!)).toEqual([{ path: "/p/README.md", isDir: false }]);
+  expect(JSON.parse(data[DRAG_TYPE]!).path).toBe("/p/README.md");
+  expect(sel(t)).toEqual(["/p/src", "/p/new.ts"]);
+  t.unmount();
+});
+
+it("GH-707 Add to prompt on a selected row sends every selected row; a drop of several rows inside the tree does nothing", async () => {
+  const onMention = vi.fn();
+  const t = setup({ onMention });
+  await t.render();
+  await click(t.row("/p/src"), { ctrlKey: true });
+  await click(t.row("/p/new.ts"), { ctrlKey: true });
+  await ctxMenu(t.row("/p/src"));
+  await act(async () => menuItem("mention").click());
+  expect(onMention).toHaveBeenLastCalledWith([
+    { path: "/p/src", isDir: true },
+    { path: "/p/new.ts", isDir: false },
+  ]);
+  await dropEv(t.row("/p/src"), { [ENTRIES]: JSON.stringify([{ path: "/p/a", isDir: false }, { path: "/p/b", isDir: false }]) });
+  expect(document.querySelector("[data-testid=tree-drop-dialog]")).toBeNull();
+  expect(t.request).not.toHaveBeenCalledWith(expect.objectContaining({ type: "fs.rename" }));
+  t.unmount();
+});
+
+it("GH-707 a selected path that is no longer visible leaves the selection", async () => {
+  const t = setup();
+  await t.render();
+  await click(t.row("/p/src")); // expand
+  await click(t.row("/p/src/app.ts"), { ctrlKey: true });
+  await click(t.row("/p/new.ts"), { ctrlKey: true });
+  await click(t.row("/p/src")); // collapse
+  const data = await dragStart(t.row("/p/new.ts"));
+  expect(JSON.parse(data[ENTRIES]!)).toEqual([{ path: "/p/new.ts", isDir: false }]);
+  t.unmount();
 });
