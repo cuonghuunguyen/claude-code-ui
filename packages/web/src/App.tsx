@@ -6358,10 +6358,9 @@ function PromptBox({
   };
   const onDrop = (e: DragEvent) => {
     setTreeOver(false);
-    // GH-707: rows dragged from the Files tab become @mentions; the pane around the box must not insert them again.
+    // GH-707: rows dragged from the Files tab become @mentions; the pane around the box sees the drop as handled (defaultPrevented) and only clears its ring.
     if (isEntriesDrag(e.dataTransfer)) {
       e.preventDefault();
-      e.stopPropagation();
       const entries = readEntriesDrag(e.dataTransfer);
       if (entries) applyInsert(entryMention(entries, cwd ?? ""));
       return;

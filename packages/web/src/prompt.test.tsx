@@ -1705,3 +1705,12 @@ it("GH-707: dragging rows over the pane rings the prompt box; the drop clears it
   await treeDrop(d.el.firstElementChild!, dropped);
   expect(d.$("prompt-box")!.className).not.toMatch(/(^| )ring-ring( |$)/);
 });
+
+it("GH-707: a drop on the prompt box inside the pane clears the ring and inserts once", async () => {
+  const d = await render();
+  await treeDrop(d.$("prompt-box")!, dropped, "dragover");
+  expect(d.$("prompt-box")!.className).toMatch(/(^| )ring-ring( |$)/);
+  await treeDrop(d.$("prompt-box")!, dropped);
+  expect(d.$("prompt-box")!.className).not.toMatch(/(^| )ring-ring( |$)/);
+  expect(d.box.value).toBe("@src/a.ts @lib/ ");
+});

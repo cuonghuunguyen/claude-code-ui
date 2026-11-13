@@ -33,6 +33,9 @@ Feature: Drag files and folders from the Files tree into the prompt box (GH-707)
     When I drag the tree row "lib" onto the timeline
     Then the prompt box text is "@lib/ @src/a.ts "
     And I capture "multi-select-drag-to-timeline"
+    When I drag the tree row "other" onto the prompt box
+    Then the prompt box text is "@lib/ @src/a.ts @other/ "
+    And the prompt box has no drop ring
     When I drag the tree row "moveme" onto the tree row "other"
     Then the drop confirm dialog says "Move “moveme” into “other”?"
     And I capture "tree-move-still-asks"

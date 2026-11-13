@@ -28,3 +28,7 @@ When("I drag the tree row {string} onto the timeline", async ({ page }, rel: str
 Then("the prompt box text is {string}", async ({ page }, text: string) => {
   await expect.poll(() => promptBox(page).inputValue()).toBe(text);
 });
+
+Then("the prompt box has no drop ring", async ({ page }) => {
+  await expect(page.getByTestId("prompt-box")).not.toHaveClass(/(^| )ring-ring( |$)/);
+});
