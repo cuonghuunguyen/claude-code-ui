@@ -234,7 +234,21 @@ describe("runInlineClaude permissions", () => {
   });
 });
 
+describe("runInlineClaude bare deny", () => {
+  it("a deny with interrupt reaches the CLI as a plain deny: the model sees it and the run goes on", async () => {
+    const ask = vi.fn<InlineClaudeDeps["canUseTool"]>(async () => ({ behavior: "deny", message: "rejected", interrupt: true }) as PermissionResult);
+    const x = setup({ messages: [result()], ask });
+    await runInlineClaude(x.deps, { ...SPEC, tools: ["Bash"] }, { signal: new AbortController().signal, toolUseId: "toolu_main" });
+    const res = await x.optionsSeen[0]!.canUseTool!("Bash", { command: "ls" }, { signal: new AbortController().signal, toolUseID: "t9" } as never);
+    expect(res).toEqual({ behavior: "deny", message: "rejected" });
+  });
+});
+
 describe("runInlineClaude result", () => {
+  it("turns never exceed maxTurns (the SDK counts the turn that hit the limit)", async () => {
+    const r = await run({ messages: [assistant("m1", [text("partial")]), result({ subtype: "error_max_turns", is_error: true, num_turns: 2 })] }, { maxTurns: 1 }).done;
+    expect(r).toMatchObject({ status: "limit", limit: "turns", turns: 1 });
+  });
   it("sums usage, takes the cost and turns from the result and the last assistant text", async () => {
     const { done } = run({
       messages: [

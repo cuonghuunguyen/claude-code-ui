@@ -76,7 +76,7 @@ import { ArtifactConnectedContext, ArtifactOpenedContext, ArtifactPreviewContext
 import { ArtifactTab } from "./artifact-tab.tsx";
 import { ArtifactsPane, forgetArtifactSelection, selectArtifact } from "./artifacts-pane.tsx";
 import { sessionArtifacts } from "./artifacts.ts";
-import { artifactTitle, inlineTaskTool } from "./tools.ts";
+import { artifactTitle, inlineTaskResult, inlineTaskTool } from "./tools.ts";
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
 import { count, offer, promptBusy, streak, seen as recSeen, setRecommendationHost } from "./recommendations.ts";
@@ -130,7 +130,7 @@ import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscript
 import { isUnread, loadSeen, loadShownActivity, pruneShownActivity, saveSeen, saveShownActivity, seenNow, tabTitle, tabUnread, type Seen } from "./unread.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
-import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withArtifacts, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
+import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withArtifacts, withEdits, withoutResultText, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { FILE_LINK_PROPS, FileLinkContext, resolveBareName } from "./file-links.tsx";
 import { BackgroundShellContext, PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type OpenViewer, type ViewerState } from "./viewer.ts";
 import { ViewerDialog } from "./viewer-dialog.tsx";
@@ -6755,8 +6755,12 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
       if (inlineTaskTool(part.tool)) {
         // GH-734: the inline task's steps are the child parts of its call.
         const items = timeline(view, part.toolUseId);
+        // The card shows the result text once: not also as the last assistant text step.
+        const res = resultOf(view, part);
+        const out = res && inlineTaskResult(res.output);
+        const shown = out?.text ? withoutResultText(items, out.text, out.truncated) : items;
         const stepCount = items.reduce((n, i) => n + (i.kind === "context" ? i.calls.length : i.part.type === "tool_call" ? 1 : 0), 0);
-        return <ToolCard call={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.toolUseId)} run={{ steps: <Timeline view={view} items={items} />, stepCount, hasParts: items.length > 0 }} />;
+        return <ToolCard call={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.toolUseId)} run={{ steps: <Timeline view={view} items={shown} />, stepCount, hasParts: items.length > 0 }} />;
       }
       return <ToolCard call={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.toolUseId)} plan={planOfPart(view, part)} />;
     case "subagent":

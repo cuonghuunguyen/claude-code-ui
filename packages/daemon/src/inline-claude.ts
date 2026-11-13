@@ -210,7 +210,15 @@ export async function runInlineClaude(deps: InlineClaudeDeps, spec: InlineSpec, 
       abort,
       env: withoutApiKeys(deps.env()),
       permissions,
-      canUseTool: (tool, input, o) => deps.canUseTool(tool, input, o, { adapter, emit }),
+      // A bare "No" replies with `interrupt` (it stops a main turn). Here it would end the whole query as an error: the step is denied, the model sees it and goes on.
+      canUseTool: async (tool, input, o) => {
+        const r = await deps.canUseTool(tool, input, o, { adapter, emit });
+        if (r.behavior === "deny" && r.interrupt) {
+          const { interrupt: _drop, ...plain } = r;
+          return plain;
+        }
+        return r;
+      },
     });
     q = deps.query({ prompt: spec.text, options });
     for await (const m of q) {
@@ -264,7 +272,8 @@ export async function runInlineClaude(deps: InlineClaudeDeps, spec: InlineSpec, 
     text: body.length > INLINE_TEXT_CHARS ? body.slice(-INLINE_TEXT_CHARS) : body,
     ...(body.length > INLINE_TEXT_CHARS && { truncated: true }),
     model: usedModel ?? model,
-    turns: typeof final?.num_turns === "number" ? final.num_turns : usages.size,
+    // The SDK counts the turn that hit the limit (num_turns 2 at maxTurns 1): shown as used of max, never above it.
+    turns: Math.min(typeof final?.num_turns === "number" ? final.num_turns : usages.size, spec.maxTurns),
     tokens,
     ...(typeof final?.total_cost_usd === "number" && { costUsd: final.total_cost_usd }),
     filesChanged: [...changed].map((f) => rel(parent.cwd, f)),

@@ -222,6 +222,18 @@ export function timeline(s: SessionView, parentId?: string): TimelineItem[] {
   return items;
 }
 
+/** A run card shows its result text once: the run's last assistant text step is dropped when it is that text (a truncated result keeps only the tail). */
+export function withoutResultText(items: TimelineItem[], result: string, truncated = false): TimelineItem[] {
+  const want = result.trim();
+  if (!want) return items;
+  let i = items.length - 1;
+  while (i >= 0 && !(items[i]!.kind === "part" && (items[i] as { part: Part }).part.type === "assistant_text")) i--;
+  const it = items[i];
+  if (!it || it.kind !== "part" || it.part.type !== "assistant_text") return items;
+  const got = it.part.text.trim();
+  return got === want || (truncated && got.endsWith(want)) ? items.filter((_, n) => n !== i) : items;
+}
+
 /** The assistant text of the turn up to and including item `index` (back to its prompt), blocks joined by a blank line; tool calls and reasoning are not text parts. */
 export function turnText(items: readonly (TimelineItem | { kind: "fold" })[], index: number): string {
   const texts: string[] = [];
