@@ -544,7 +544,9 @@ export function FileEditor({
   // The selection menu (Add to chat, Quote): shown 150 ms after the selection stops changing; the head is where the drag ended.
   const [sel, setSel] = useState<EditorSel>();
   useEffect(() => setSel(undefined), [path]);
-  const [menuShown, dismissMenu] = useMenuGate(sel ? `${path}:${sel.from}-${sel.to}` : "", !!sel);
+  // `seq` counts every report: selecting the same range again after Escape shows the menu again.
+  const [seq, setSeq] = useState(0);
+  const [menuShown, dismissMenu] = useMenuGate(`${path}:${seq}`, !!sel);
   const active = tabs[path];
   const [mdView, setMdView] = useState<MdView>(loadMdView);
   const narrow = useNarrow();
@@ -682,7 +684,7 @@ export function FileEditor({
                 doc={active.draft}
                 viewRef={viewRef}
                 onSend={(state) => onSend(selectionMention(state, path, cwd))}
-                onSelect={setSel}
+                onSelect={(s) => (setSel(s), setSeq((n) => n + 1))}
                 onChange={(draft) => update(path, (t) => ({ ...pin(t), draft }))}
                 goto={goto?.path === path ? goto : undefined}
                 onGoto={store.clearGoto}

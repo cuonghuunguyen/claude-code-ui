@@ -250,6 +250,17 @@ it("the editor has no Send selection button; a selection shows Add to chat and Q
   expect(menuBtn("add")).toBeNull();
 });
 
+it("Escape hides the menu; selecting the same range again shows it again", async () => {
+  const { store } = await setup({ startOpen: true });
+  await openTab(store, "/p/a.ts");
+  await selectLines23(dlg()!);
+  expect(menuBtn("add")).not.toBeNull();
+  await act(async () => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(menuBtn("add")).toBeNull();
+  await selectLines23(dlg()!);
+  expect(menuBtn("add")).not.toBeNull();
+});
+
 it("a file in the dialog: Add to chat hands @path#lines to onSend and closes the dialog; the drafts stay in the store", async () => {
   const onSend = vi.fn();
   const { store } = await setup({ startOpen: true, onSend });

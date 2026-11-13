@@ -1287,7 +1287,7 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
   );
 }
 
-/** The rect spanning the selected lines that are shown (pierre marks them `data-selected-line` inside its shadow root), at the x of the last one; undefined when none is inside `clip` (the diff's scroll box, else the viewport). */
+/** The rect spanning the selected lines that are fully inside `clip` (the diff's scroll box, else the viewport), at the x of the last one; pierre marks them `data-selected-line` inside its shadow root. undefined when none is: a row cut by the box edge would put the menu over the controls around the box. */
 function selectedLinesRect(box: HTMLElement | null, clip: HTMLElement | null | undefined): DOMRect | undefined {
   const lines = box?.querySelector("diffs-container")?.shadowRoot?.querySelectorAll("[data-selected-line]");
   if (!lines?.length) return undefined;
@@ -1299,7 +1299,7 @@ function selectedLinesRect(box: HTMLElement | null, clip: HTMLElement | null | u
   let first: DOMRect | undefined;
   for (const l of lines) {
     const r = l.getBoundingClientRect();
-    if (r.bottom <= top || r.top >= bottom) continue;
+    if (r.top < top || r.bottom > bottom) continue;
     if (!first || r.top < first.top) first = r;
     if (!last || r.bottom >= last.bottom) last = r;
   }
