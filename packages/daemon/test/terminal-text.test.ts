@@ -59,6 +59,15 @@ describe("redactSecrets", () => {
     expect(r("only abcd1234efgh5678 here", [], "export MY_SECRET=abcd1234efgh5678").text).toBe("only [redacted] here");
     expect(r("x short y", [], "export A_TOKEN=short").text).toBe("x short y");
   });
+  it("does not learn a plain word as a secret, and a name does not reach over a line break", () => {
+    expect(r("GITHUB_TOKEN: undefined\nvalue undefined here").text).toBe("GITHUB_TOKEN: [redacted]\nvalue undefined here");
+    expect(r("Password:\nlocalhost").text).toBe("Password:\nlocalhost");
+  });
+  it("a long hyphenated line is redacted in linear time", () => {
+    const t = Date.now();
+    r("a-".repeat(128 * 1024));
+    expect(Date.now() - t).toBeLessThan(2000);
+  });
   it("does not redact a word that only ends in sk-", () => {
     expect(r("risk-assessment-report-2026-final").count).toBe(0);
   });

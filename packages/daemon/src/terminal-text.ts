@@ -25,7 +25,8 @@ export function plainText(raw: string): string {
 }
 
 const MARK = "[redacted]";
-const NAME = String.raw`[\w.-]*(?:token|secret|passw(?:or)?d|api[_-]?key|access[_-]?key|private[_-]?key)[\w.-]*`;
+// Bounded: an unbounded `[\w.-]*` before the keyword is quadratic on a long hyphenated line.
+const NAME = String.raw`[\w.-]{0,64}(?:token|secret|passw(?:or)?d|api[_-]?key|access[_-]?key|private[_-]?key)[\w.-]{0,64}`;
 // Whole match replaced, unless `keep` (a capture group index of the part to keep).
 const PATTERNS: { re: RegExp; keep?: number }[] = [
   { re: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g },
@@ -39,7 +40,7 @@ const PATTERNS: { re: RegExp; keep?: number }[] = [
   { re: /AIza[\w-]{35}/g },
   { re: /eyJ[\w-]{10,}\.eyJ[\w-]{10,}\.[\w-]{10,}/g },
   { re: /\b((?:Authorization:\s*)?(?:Bearer|Basic)\s+)[\w.~+/=-]{6,}/gi, keep: 1 },
-  { re: new RegExp(String.raw`(\b${NAME}\s*[=:]\s*)\S+`, "gi"), keep: 1 },
+  { re: new RegExp(String.raw`(\b${NAME}[ \t]*[=:][ \t]*)\S+`, "gi"), keep: 1 },
 ];
 
 /** `text` with secrets replaced by `[redacted]`: the exact `known` values (8+ chars), then common token formats. Pattern-based, not exhaustive. */
@@ -48,7 +49,9 @@ export function redactSecrets(text: string, known: string[], context = ""): { te
   let out = text;
   // A value assigned to a secret-looking name (`export TOKEN=abc12345`) is hidden wherever it appears later, also alone on a line (`echo $TOKEN`).
   // `context`: more terminal text to learn such values from (the scrollback, for the output of one run).
-  const learned = [...`${context}\n${text}`.matchAll(new RegExp(String.raw`\b${NAME}\s*[=:]\s*(\S+)`, "gi"))].map((m) => m[1]!.replace(/^["']+|["',;]+$/g, ""));
+  const learned = [...`${context}\n${text}`.matchAll(new RegExp(String.raw`\b${NAME}[ \t]*[=:][ \t]*(\S+)`, "gi"))].map((m) => m[1]!.replace(/^["']+|["',;]+$/g, ""))
+    // A plain word (`undefined`, `localhost`) is no secret: hiding it everywhere would only damage the output.
+    .filter((v) => /[^a-zA-Z]/.test(v));
   for (const k of [...known, ...learned]) {
     if (k.length < 8 || !out.includes(k)) continue;
     const parts = out.split(k);
