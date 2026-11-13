@@ -110,7 +110,7 @@ import { displayTitle, resumeSearchText, byRow, inProject, keepsBranch, patchSes
 import { BLOCK_TEXT, ignoredText, summaryText, type CleanupScope } from "./cleanup.ts";
 import { CleanupDialog } from "./cleanup-dialog.tsx";
 import { CreateWorktreeDialog } from "./create-worktree-dialog.tsx";
-import { appendQuote } from "./quote.ts";
+import { appendQuote, isBlockInsert } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
 import { UserMarkdown } from "./user-markdown.tsx";
 import { clearSaved } from "./editor-persist.ts";
@@ -3607,7 +3607,7 @@ export function App() {
 
 
   // The terminal panel: the dock's (one) and each terminal tab's, built the same way.
-  type TermProps = { login?: boolean; onLoginStarted?: () => void; shown: boolean; quiet: boolean; ensure: boolean; onEnsured: () => void; newTick: number; focusReq: number; onEmpty: () => void; onTerminals?: (n: number) => void };
+  type TermProps = { login?: boolean; onLoginStarted?: () => void; shown: boolean; quiet: boolean; ensure: boolean; onEnsured: () => void; newTick: number; focusReq: number; onEmpty: () => void; onTerminals?: (n: number) => void; onSend?: (text: string) => void };
   const terminalSection = (cwd: string, p: TermProps, dock: string) => (
     <section className={p.shown || dock === "main" ? "flex min-h-0 flex-1 flex-col" : "hidden"} data-testid="terminal-panel" data-dock={dock}>
       <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">{tr("app.main.loadingTerminal")}</p>}>
@@ -3636,6 +3636,8 @@ export function App() {
           if (rest.length) setPane(rest[0]!);
           else openArea(a, false);
         },
+        // Add to chat (GH-710): into the shown session's prompt box, like the file editor's.
+        onSend: (text) => (setInsert(text), setPane("session")),
         newTick: terminalTick,
         shown: shows("terminal"),
         focusReq: termFocusReq,
@@ -3660,6 +3662,7 @@ export function App() {
           newTick: carry ? terminalTick : termReq[ref]?.add ?? 0,
           focusReq: carry ? termFocusReq : termReq[ref]?.focus ?? 0,
           onEmpty: () => close(ref),
+          onSend: (text) => (open(ownerOf(ref)), setInsert(text)),
         },
         "main",
       )
@@ -6142,8 +6145,8 @@ function PromptBox({
   useEffect(() => {
     if (!insert) return;
     // A quote (GH-56) is prompt text, never part of a shell command.
-    // A diff block from the Changes tab (GH-611) is a paragraph too.
-    const block = insert.startsWith(">") || /\n```+diff\n/.test(insert);
+    // A diff block from the Changes tab (GH-611) or terminal output (GH-710) is a paragraph too.
+    const block = isBlockInsert(insert);
     if (block) setBash(false);
     const r = block ? appendQuote(text, insert) : insert.startsWith("/") ? insertCommand(text, insert) : insertAtCaret(text, caret, insert);
     edit(r.text, r.caret);

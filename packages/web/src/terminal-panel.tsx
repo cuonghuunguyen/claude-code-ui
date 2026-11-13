@@ -6,13 +6,18 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import "./terminal-font.css";
-import { PlusIcon, XIcon } from "lucide-react";
+import { ContextMenu } from "@base-ui/react/context-menu";
+import { MessageSquarePlusIcon, PlusIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { connect, ConnectionStatus } from "./client.ts";
 import { TERMINAL_FONT, loadTerminalFont, terminalFontSettled } from "./terminal-font.ts";
 import { leavesTerminal, specOf } from "./keymap.ts";
 import { withKey } from "./shortcuts.ts";
 import { useT } from "./i18n.ts";
+import { SelectionMenu, useMenuGate } from "./selection-menu.tsx";
+import { ITEM, POPUP } from "./session-actions.tsx";
+import { openContextMenuFromKey } from "./tab-menu.ts";
+import { cellRect, terminalSnippet } from "./terminal-snippet.ts";
 import { IconButton } from "./tabs-bar.tsx";
 import { useColorTheme, useDark } from "./theme.ts";
 import { terminalTheme } from "./themes.ts";
@@ -62,6 +67,7 @@ export function TerminalPanel({
   onTerminals,
   login = false,
   onLoginStarted,
+  onSend,
 }: {
   client: Client;
   status: ConnectionStatus;
@@ -81,6 +87,8 @@ export function TerminalPanel({
   /** A level: start the Claude CLI login terminal once the list loaded (a request made before this mounted is not lost). */
   login?: boolean;
   onLoginStarted?: () => void;
+  /** Add to chat (GH-710): the selected output as a prompt block goes to the prompt box. Without it the menus have no such action. */
+  onSend?: (text: string) => void;
 }) {
   const tr = useT();
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
@@ -245,7 +253,7 @@ export function TerminalPanel({
         </p>
       )}
       {terminals.map((t) => (
-        <TerminalView key={t.id} client={client} status={status} id={t.id} active={t.id === activeId} focusShell={focusShell} focusTick={focusTick} onInputError={setError} />
+        <TerminalView key={t.id} client={client} status={status} id={t.id} title={t.title} cwd={cwd} onSend={onSend} active={t.id === activeId} focusShell={focusShell} focusTick={focusTick} onInputError={setError} />
       ))}
     </div>
   );
@@ -256,6 +264,9 @@ function TerminalView({
   client,
   status,
   id,
+  title,
+  cwd,
+  onSend,
   active,
   focusShell,
   focusTick,
@@ -264,6 +275,9 @@ function TerminalView({
   client: Client;
   status: ConnectionStatus;
   id: string;
+  title: string;
+  cwd: string;
+  onSend?: (text: string) => void;
   active: boolean;
   focusShell: RefObject<boolean>;
   focusTick: number;
@@ -277,6 +291,50 @@ function TerminalView({
   connected.current = status === "connected";
   const dark = useDark();
   const colorTheme = useColorTheme();
+  const tr = useT();
+  const wrap = useRef<HTMLDivElement>(null);
+  // Selection (GH-710): `selSeq` restarts the floating menu's delay on every change, `hasSel` mirrors xterm's, `tick` makes the menu read its anchor again after a scroll.
+  const [selSeq, setSelSeq] = useState(0);
+  const [hasSel, setHasSel] = useState(false);
+  const [, setTick] = useState(0);
+  const [menuOpen, setMenuOpen] = useState(false);
+  // xterm's selection when the context menu opened (a right click selects the word under it first).
+  const [ctxSel, setCtxSel] = useState(false);
+  const live = useRef({ title, cwd, onSend });
+  live.current = { title, cwd, onSend };
+  const [menuShown, dismissMenu] = useMenuGate(String(selSeq), hasSel && active && !!onSend && !menuOpen);
+  const sentFromMenu = useRef(false);
+  const canPaste = typeof navigator.clipboard?.readText === "function";
+
+  /** Rect of the cell `pos` (buffer coordinates) in the screen, undefined when its row is not visible. */
+  const cellAt = (t: Terminal, pos: { x: number; y: number }) => {
+    const screen = box.current?.querySelector(".xterm-screen")?.getBoundingClientRect();
+    const r = screen && cellRect({ x: Math.min(pos.x, t.cols - 1), y: pos.y }, screen, t.cols, t.rows, t.buffer.active.viewportY);
+    return r && new DOMRect(r.left, r.top, r.width, r.height);
+  };
+  const selectionEnd = () => {
+    const t = term.current?.t;
+    const end = t?.getSelectionPosition()?.end;
+    return t && end ? cellAt(t, end) : undefined;
+  };
+  const send = () => {
+    const t = term.current?.t;
+    const { title, cwd, onSend } = live.current;
+    const snippet = t && terminalSnippet(t.getSelection(), { title, cwd });
+    if (snippet) onSend?.(snippet);
+  };
+  const copy = () => {
+    const t = term.current?.t;
+    if (t?.hasSelection()) void navigator.clipboard?.writeText(t.getSelection()).catch(() => {});
+    t?.focus();
+  };
+  const paste = () => {
+    const t = term.current?.t;
+    void navigator.clipboard?.readText().then((text) => t?.paste(text), () => {});
+    t?.focus();
+  };
+  /** The right click stays with an app that tracks the mouse (vim, tmux), and with Shift it is the browser's own menu. */
+  const keepRightClick = (e: { shiftKey: boolean }) => e.shiftKey || (term.current?.t.modes.mouseTrackingMode ?? "none") !== "none";
 
   useEffect(() => {
     // OpenCode terminal.tsx options.
@@ -321,8 +379,21 @@ function TerminalView({
         );
     });
     t.onResize(({ cols, rows }) => connected.current && client.request({ type: "terminal.resize", terminalId: id, cols, rows }).catch(() => {}));
+    t.onSelectionChange(() => (setSelSeq((n) => n + 1), setHasSel(t.hasSelection())));
+    t.onScroll(() => setTick((n) => n + 1));
     t.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
+      // The ContextMenu key opens the menu next to the selection end, else the cursor. Shift+F10 stays the shell's.
+      if (e.key === "ContextMenu" && wrap.current) {
+        const sel = t.getSelectionPosition()?.end;
+        const at = sel ?? { x: t.buffer.active.cursorX, y: t.buffer.active.cursorY + t.buffer.active.baseY };
+        const r = cellAt(t, at);
+        const host = wrap.current;
+        // openContextMenuFromKey places the menu at the bottom-left of its target: a stand-in for the cell.
+        const anchor = { getBoundingClientRect: () => r ?? host.getBoundingClientRect(), dispatchEvent: (ev: Event) => host.dispatchEvent(ev) } as HTMLElement;
+        openContextMenuFromKey(e as unknown as KeyboardEvent<HTMLElement>, anchor);
+        return false;
+      }
       // Left to the app's shortcuts (Toggle terminal, tab keys, ...), not a NUL for the shell.
       if (leavesTerminal(e)) return false;
       const mod = e.ctrlKey || e.metaKey;
@@ -382,10 +453,60 @@ function TerminalView({
   // FitAddon sizes xterm from its parent's width, padding included: the padding goes on a wrapper, not on the box.
   // letter-spacing 0: xterm's DOM renderer adds the gap between its canvas and DOM measure of "W" (0.056px on Linux
   // Chromium), which pushed a 51-column row 3px past its clip and cut the last glyph; the glyphs' own advance is the cell width.
-  return (
-    <div className={`min-h-0 flex-1 px-3.5 py-2 ${active ? "" : "hidden"}`} data-testid="terminal-view">
+  const view = (
+    <div className={`min-h-0 flex-1 px-3.5 py-2 ${active ? "" : "hidden"}`} data-testid="terminal-view" ref={wrap} onContextMenuCapture={(e) => keepRightClick(e) && e.stopPropagation()}>
       <div ref={box} className="size-full [&_.xterm-rows]:[letter-spacing:0]!" />
     </div>
+  );
+  return (
+    <>
+      <ContextMenu.Root
+        onOpenChange={(open) => {
+          setMenuOpen(open);
+          if (open) return setCtxSel(!!term.current?.t.hasSelection());
+          // Closed (an item, Escape, a click elsewhere): the shell takes the focus back, except after Add to chat (the prompt box has it).
+          if (!sentFromMenu.current) requestAnimationFrame(() => term.current?.t.focus());
+          sentFromMenu.current = false;
+        }}
+      >
+        <ContextMenu.Trigger render={view} />
+        <ContextMenu.Portal>
+          <ContextMenu.Positioner className="z-50">
+            <ContextMenu.Popup className={POPUP} aria-label={tr("files.terminal.menu")} data-testid="terminal-menu" finalFocus={false}>
+              <ContextMenu.Item className={ITEM} disabled={!ctxSel} data-testid="terminal-menu-copy" onClick={copy}>
+                {tr("files.terminal.copy")}
+              </ContextMenu.Item>
+              <ContextMenu.Item className={ITEM} disabled={!canPaste} title={canPaste ? undefined : tr("files.terminal.pasteUnavailable")} data-testid="terminal-menu-paste" onClick={paste}>
+                {tr("files.terminal.paste")}
+              </ContextMenu.Item>
+              {onSend && (
+                <>
+                  <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+                  <ContextMenu.Item
+                    className={ITEM}
+                    disabled={!ctxSel}
+                    title={ctxSel ? undefined : tr("files.terminal.needsSelection")}
+                    data-testid="terminal-menu-add"
+                    onClick={() => ((sentFromMenu.current = true), send())}
+                  >
+                    {tr("common.selection.addToChat")}
+                  </ContextMenu.Item>
+                </>
+              )}
+            </ContextMenu.Popup>
+          </ContextMenu.Positioner>
+        </ContextMenu.Portal>
+      </ContextMenu.Root>
+      {menuShown && (
+        <SelectionMenu
+          testId="terminal-selection"
+          source={() => box.current}
+          onDismiss={dismissMenu}
+          anchor={selectionEnd}
+          actions={[{ id: "add", label: tr("common.selection.addToChat"), icon: <MessageSquarePlusIcon />, onSelect: send }]}
+        />
+      )}
+    </>
   );
 }
 

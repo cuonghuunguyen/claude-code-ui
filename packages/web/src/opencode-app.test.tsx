@@ -21,7 +21,7 @@ let opts: { onOpenCodeProviders?: () => void; onPlanUsage?: (u: unknown) => void
 /** Error messages the next OpenCode `models.list` replies reject with, in order. */
 const modelFailures: string[] = [];
 const sent: { type: string; [k: string]: unknown }[] = [];
-vi.mock("@xterm/xterm", () => ({ Terminal: class { options = {}; cols = 80; rows = 24; loadAddon() {} open() {} focus() {} write() {} reset() {} onData() {} onResize() {} attachCustomKeyEventHandler() {} dispose() {} } }));
+vi.mock("@xterm/xterm", () => ({ Terminal: class { options = {}; cols = 80; rows = 24; loadAddon() {} open() {} focus() {} write() {} reset() {} onData() {} onResize() {} onSelectionChange() {} onScroll() {} attachCustomKeyEventHandler() {} dispose() {} } }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),

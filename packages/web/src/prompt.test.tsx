@@ -709,6 +709,16 @@ it("bash mode: an inserted quote leaves bash mode first, so it is never run as a
   expect($("bash-mode")).toBeNull();
 });
 
+it("GH-710 terminal output inserted while typing in bash mode leaves bash mode and becomes its own paragraph", async () => {
+  const { $, box, rerender } = await render({ onBash: async () => {} });
+  await key(document.querySelector("textarea")!, { key: "!" });
+  await type(box, "ls");
+  const snippet = 'Output of terminal "Terminal 1" in `/p`:\n```text\nout\n```\n';
+  await rerender({ insert: snippet });
+  expect($("bash-mode")).toBeNull();
+  expect(box.value).toBe(`ls\n\n${snippet}`);
+});
+
 it("without CSS field-sizing the prompt box height follows its content and returns to the default after send", async () => {
   vi.stubGlobal("CSS", { supports: () => false });
   const desc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "scrollHeight");

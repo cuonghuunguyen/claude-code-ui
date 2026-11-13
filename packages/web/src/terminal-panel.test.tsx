@@ -17,6 +17,12 @@ type FakeTerm = {
   cols: number;
   rows: number;
   selection: string;
+  /** End of the selection in buffer coordinates (xterm: 0-based). */
+  selEnd?: { x: number; y: number };
+  viewportY: number;
+  mouse: string;
+  pasted: string[];
+  onSel?: () => void;
   data?: (d: string) => void;
   resize?: (s: { cols: number; rows: number }) => void;
   key?: (e: KeyboardEvent) => boolean;
@@ -30,7 +36,7 @@ type FakeTerm = {
 };
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
-    t: FakeTerm = { written: [], resets: 0, cols: 80, rows: 24, selection: "", disposed: false, focused: 0, fontSets: [], fits: 0 };
+    t: FakeTerm = { written: [], resets: 0, cols: 80, rows: 24, selection: "", viewportY: 0, mouse: "none", pasted: [], disposed: false, focused: 0, fontSets: [], fits: 0 };
     options: { fontFamily?: string };
     constructor(options: { fontFamily?: string } = {}) {
       this.t.options = options;
@@ -50,6 +56,8 @@ vi.mock("@xterm/xterm", () => ({
     loadAddon() {}
     open(parent: HTMLElement) {
       this.t.parent = parent;
+      // The element xterm draws in; the menu anchors to its rect.
+      if (!parent.querySelector(".xterm-screen")) parent.append(Object.assign(document.createElement("div"), { className: "xterm-screen" }));
     }
     focus() {
       // xterm 6: focus() before open() does nothing (no textarea yet).
@@ -61,6 +69,22 @@ vi.mock("@xterm/xterm", () => ({
     reset() {
       this.t.resets++;
       this.t.written = [];
+    }
+    get buffer() {
+      return { active: { viewportY: this.t.viewportY, cursorX: 2, cursorY: 1, baseY: 0 } };
+    }
+    get modes() {
+      return { mouseTrackingMode: this.t.mouse };
+    }
+    getSelectionPosition() {
+      return this.t.selection ? { start: { x: 0, y: 0 }, end: this.t.selEnd ?? { x: 5, y: 3 } } : undefined;
+    }
+    onSelectionChange(f: () => void) {
+      this.t.onSel = f;
+    }
+    onScroll() {}
+    paste(s: string) {
+      this.t.pasted.push(s);
     }
     getSelection() {
       return this.t.selection;
@@ -546,4 +570,148 @@ it("GH-501 a visible box of zero size is not opened or fitted; it fits once it h
   } finally {
     globalThis.ResizeObserver = RO;
   }
+});
+
+// GH-710: selected output goes to the chat.
+const SCREEN = { left: 10, top: 20, width: 800, height: 480, right: 810, bottom: 500, x: 10, y: 20, toJSON() {} } as DOMRect;
+const withSelectionApi = () => {
+  // jsdom has no layout: the xterm screen element is where the menu anchors.
+  Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", { configurable: true, value: () => SCREEN });
+};
+const select = async (t: (typeof xterm.all)[number], text: string, end?: { x: number; y: number }) => {
+  t.selection = text;
+  t.selEnd = end;
+  await act(async () => t.onSel!());
+};
+const later = (ms: number) => act(async () => void (await new Promise((r) => setTimeout(r, ms))));
+const sending = async (onSend?: (s: string) => void) => {
+  withSelectionApi();
+  const client = fakeClient([{ id: "t1", title: "Terminal 1" }]);
+  await act(async () => root.render(<TerminalPanel client={client} status="connected" cwd="/p" onEmpty={() => {}} onSend={onSend} />));
+  await flush();
+  return xterm.all[0]!;
+};
+const ctx = (target: Element, init: MouseEventInit = {}) => act(async () => void target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 40, clientY: 40, ...init })));
+const byId = (id: string) => document.body.querySelector(`[data-testid=${id}]`) as HTMLElement | null;
+const disabled = (id: string) => byId(id)!.hasAttribute("data-disabled") || byId(id)!.getAttribute("aria-disabled") === "true";
+
+it("GH-710 a selection shows Add to chat after 150 ms; it sends the snippet with the terminal title and folder", async () => {
+  const onSend = vi.fn();
+  const t = await sending(onSend);
+  await select(t, "\x1b[31mred-710\x1b[0m");
+  expect(byId("terminal-selection")).toBeNull();
+  await later(200);
+  expect(byId("terminal-selection")).not.toBeNull();
+  await act(async () => byId("terminal-selection-add")!.click());
+  expect(onSend).toHaveBeenCalledWith('Output of terminal "Terminal 1" in `/p`:\n```text\nred-710\n```\n');
+  expect(byId("terminal-selection")).toBeNull();
+});
+
+it("GH-710 no selection shows no floating menu; a cleared selection hides it", async () => {
+  const t = await sending(vi.fn());
+  await select(t, "");
+  await later(200);
+  expect(byId("terminal-selection")).toBeNull();
+  await select(t, "x");
+  await later(200);
+  expect(byId("terminal-selection")).not.toBeNull();
+  await select(t, "");
+  await later(10);
+  expect(byId("terminal-selection")).toBeNull();
+});
+
+it("GH-710 a selection end row scrolled out of the screen hides the menu", async () => {
+  const t = await sending(vi.fn());
+  t.viewportY = 100;
+  await select(t, "x", { x: 5, y: 3 });
+  await later(200);
+  expect(byId("terminal-selection")).toBeNull();
+});
+
+it("GH-710 without onSend there is no floating menu and the context menu has no Add to chat", async () => {
+  const t = await sending();
+  await select(t, "x");
+  await later(200);
+  expect(byId("terminal-selection")).toBeNull();
+  await ctx(el.querySelector("[data-testid=terminal-view]")!);
+  expect(byId("terminal-menu")).not.toBeNull();
+  expect(byId("terminal-menu-copy")).not.toBeNull();
+  expect(byId("terminal-menu-add")).toBeNull();
+});
+
+it("GH-710 the context menu: Add to chat and Copy are disabled without a selection, Add to chat has its reason", async () => {
+  const onSend = vi.fn();
+  await sending(onSend);
+  await ctx(el.querySelector("[data-testid=terminal-view]")!);
+  expect(byId("terminal-menu")).not.toBeNull();
+  expect(disabled("terminal-menu-add")).toBe(true);
+  expect(disabled("terminal-menu-copy")).toBe(true);
+  expect(byId("terminal-menu-add")!.title).toBe("Select text in the terminal first.");
+  await act(async () => byId("terminal-menu-add")!.click());
+  expect(onSend).not.toHaveBeenCalled();
+});
+
+it("GH-710 the context menu with a selection: Add to chat sends, Copy writes the clipboard, Paste pastes the clipboard text", async () => {
+  const writeText = vi.fn(async () => {});
+  Object.assign(navigator, { clipboard: { writeText, readText: vi.fn(async () => "pasted") } });
+  const onSend = vi.fn();
+  const t = await sending(onSend);
+  t.selection = "out";
+  const view = el.querySelector("[data-testid=terminal-view]")!;
+  await ctx(view);
+  expect(disabled("terminal-menu-add")).toBe(false);
+  await act(async () => byId("terminal-menu-copy")!.click());
+  expect(writeText).toHaveBeenCalledWith("out");
+  await ctx(view);
+  await act(async () => byId("terminal-menu-paste")!.click());
+  await flush();
+  expect(t.pasted).toEqual(["pasted"]);
+  await ctx(view);
+  await act(async () => byId("terminal-menu-add")!.click());
+  expect(onSend).toHaveBeenCalledWith('Output of terminal "Terminal 1" in `/p`:\n```text\nout\n```\n');
+});
+
+it("GH-710 Paste is disabled with a hint where the clipboard cannot be read", async () => {
+  Object.assign(navigator, { clipboard: { writeText: vi.fn() } });
+  await sending(vi.fn());
+  await ctx(el.querySelector("[data-testid=terminal-view]")!);
+  expect(disabled("terminal-menu-paste")).toBe(true);
+  expect(byId("terminal-menu-paste")!.title).toBe("Use Ctrl+V to paste here.");
+});
+
+it("GH-710 an app tracking the mouse, or Shift, keeps the right click: no context menu", async () => {
+  const t = await sending(vi.fn());
+  const view = el.querySelector("[data-testid=terminal-view]")!;
+  t.mouse = "any";
+  await ctx(view);
+  expect(byId("terminal-menu")).toBeNull();
+  t.mouse = "none";
+  await ctx(view, { shiftKey: true });
+  expect(byId("terminal-menu")).toBeNull();
+});
+
+it("GH-710 the ContextMenu key opens the menu and is not sent to the shell", async () => {
+  const t = await sending(vi.fn());
+  expect(t.key!(new KeyboardEvent("keydown", { key: "ContextMenu", cancelable: true }))).toBe(false);
+  await later(50);
+  expect(byId("terminal-menu")).not.toBeNull();
+});
+
+it("GH-710 the shell gets the focus back when the context menu closes, but not after Add to chat", async () => {
+  Object.assign(navigator, { clipboard: { writeText: vi.fn(async () => {}), readText: vi.fn(async () => "") } });
+  const t = await sending(vi.fn());
+  t.selection = "out";
+  const view = el.querySelector("[data-testid=terminal-view]")!;
+  await ctx(view);
+  const before = t.focused;
+  // Closed with Escape (no item that focuses by itself): the shell still gets the focus.
+  await act(async () => void byId("terminal-menu")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  await later(50);
+  expect(byId("terminal-menu")).toBeNull();
+  expect(t.focused).toBeGreaterThan(before);
+  await ctx(view);
+  const mid = t.focused;
+  await act(async () => byId("terminal-menu-add")!.click());
+  await later(50);
+  expect(t.focused).toBe(mid);
 });

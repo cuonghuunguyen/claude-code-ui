@@ -44,6 +44,8 @@ vi.mock("@xterm/xterm", () => ({
     reset() {}
     onData() {}
     onResize() {}
+    onSelectionChange() {}
+    onScroll() {}
     attachCustomKeyEventHandler() {}
     dispose() {}
   },

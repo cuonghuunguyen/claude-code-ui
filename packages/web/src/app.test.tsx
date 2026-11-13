@@ -55,6 +55,8 @@ vi.mock("@xterm/xterm", () => ({
     reset() {}
     onData() {}
     onResize() {}
+    onSelectionChange() {}
+    onScroll() {}
     attachCustomKeyEventHandler() {}
     dispose() {
       (globalThis as { __termDisposed?: number }).__termDisposed = ((globalThis as { __termDisposed?: number }).__termDisposed ?? 0) + 1;

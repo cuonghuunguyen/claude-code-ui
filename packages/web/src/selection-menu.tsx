@@ -78,7 +78,7 @@ export function SelectionMenu({ anchor, actions, source, onDismiss, onScroll = "
     <div
       ref={root}
       role="toolbar"
-      aria-label={t("files.selection.label")}
+      aria-label={t("common.selection.label")}
       data-testid={testId}
       className={`fixed z-50 flex rounded-lg bg-popover p-0.5 shadow-md ring-1 ring-border ${coarse ? "gap-2" : "gap-0.5"}`}
       style={place}
