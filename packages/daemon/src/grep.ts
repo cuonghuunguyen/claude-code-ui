@@ -49,8 +49,12 @@ export function cutLine(text: string, ranges: [number, number][] | undefined, ma
   if (text.length <= max) return { text, ranges, cut: false };
   const first = ranges?.[0];
   let s = first ? Math.max(0, first[0] - Math.floor((max - Math.min(max, first[1] - first[0])) / 2)) : 0;
-  const e = Math.min(text.length, s + max);
+  let e = Math.min(text.length, s + max);
   s = Math.max(0, e - max);
+  // Never cut inside a surrogate pair (an emoji): the start moves back onto its high half, the end before it.
+  const low = (i: number) => (text.charCodeAt(i) & 0xfc00) === 0xdc00;
+  if (s > 0 && low(s)) s--;
+  if (e < text.length && low(e)) e--;
   const lead = s > 0 ? 1 : 0;
   const shifted = ranges?.flatMap(([a, b]): [number, number][] => (a >= s && b <= e ? [[a - s + lead, b - s + lead]] : []));
   return { text: (s > 0 ? "…" : "") + text.slice(s, e) + (e < text.length ? "…" : ""), ranges: shifted, cut: true };
@@ -210,7 +214,7 @@ export async function findInFiles(
     }
   }
   const hits = files.flatMap((f) => f.lines.filter((l) => l.ranges));
-  const found = await highlights(q.query, q.regex, hits.map((l) => l.text), limits.highlightMs, signal);
+  const found = await highlights(q.query, q.regex, hits.map((l) => l.text), Math.max(0, Math.min(limits.highlightMs, deadline - Date.now())), signal);
   hits.forEach((l, i) => (l.ranges = found?.[i] ?? []));
   for (const f of files)
     f.lines = f.lines.map((l) => {
