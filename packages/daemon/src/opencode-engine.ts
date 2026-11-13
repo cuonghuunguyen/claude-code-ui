@@ -280,6 +280,8 @@ class OpenCodeSession implements EngineSession {
   private readonly inlines = new Map<string, { notify: (e: Payload) => void; ui: boolean }>();
   /** The `inline_task` calls an inline run already took. */
   private readonly inlineClaimed = new Set<string>();
+  /** Stop per running inline call id (the card's Stop agent): ends the run as stopped. */
+  private readonly inlineStops = new Map<string, () => void>();
 
   constructor(
     private readonly engine: OpenCodeEngineImpl,
@@ -767,8 +769,10 @@ class OpenCodeSession implements EngineSession {
     let col: InlineCollector | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let onAbort: (() => void) | undefined;
+    let callId: string | undefined;
+    let messageID: string | undefined;
     try {
-      const callId = await this.findInlineCall(hooks);
+      callId = await this.findInlineCall(hooks);
       if (callId) this.inlineClaimed.add(callId);
       const model = await this.inlineModel(spec, hooks);
       const agent = this.agentName();
@@ -793,10 +797,11 @@ class OpenCodeSession implements EngineSession {
         });
         timer = setTimeout(() => end({ status: "limit", limit: "time" }), INLINE_TIMEOUT_MS);
         onAbort = () => end({ status: "stopped" });
+        if (callId) this.inlineStops.set(callId, onAbort);
         if (hooks.signal.aborted) onAbort();
         else hooks.signal.addEventListener("abort", onAbort, { once: true });
       });
-      const messageID = ascending("msg");
+      messageID = ascending("msg");
       this.mapper.own.add(messageID);
       await this.server.streamReady();
       await this.server.request(`/session/${childId}/prompt_async`, {
@@ -815,7 +820,14 @@ class OpenCodeSession implements EngineSession {
     } finally {
       if (timer) clearTimeout(timer);
       if (onAbort) hooks.signal.removeEventListener("abort", onAbort);
-      if (childId) this.inlines.delete(childId);
+      if (childId) {
+        this.inlines.delete(childId);
+        this.mapper.release(childId);
+      }
+      if (callId) this.inlineStops.delete(callId);
+      // A claim stays while its call still runs (a second run must not take it); finished calls are dropped.
+      for (const id of this.inlineClaimed) if (!this.mapper.isRunning(id)) this.inlineClaimed.delete(id);
+      if (messageID) this.mapper.own.delete(messageID);
     }
   };
 
@@ -1175,6 +1187,8 @@ class OpenCodeSession implements EngineSession {
   bashCwdPinned = () => false;
   /** Stop agent: aborts the child session of the task call. */
   stopSubagent = async (callId: string) => {
+    const inline = this.inlineStops.get(callId);
+    if (inline) return inline(), true; // the run aborts its child and ends as stopped
     const child = this.mapper.childOf(callId);
     if (!child) return false;
     await this.server.request(`/session/${child}/abort`, { method: "POST", directory: this.cwd });

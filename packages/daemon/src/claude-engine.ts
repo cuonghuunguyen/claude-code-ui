@@ -816,8 +816,10 @@ export class ClaudeSession implements EngineSession {
         parent: () => {
           const dirs = [...(this.opts.uploadDir?.(this.id) ? [this.opts.uploadDir!(this.id)!] : []), ...sessionDirs(this.grants)];
           const rules = sessionRules(this.grants);
+          const disallowed = this.opts.disallowedTools?.(this.id);
           return {
             cwd: this.cwd,
+            ...(disallowed?.length && { disallowedTools: disallowed }),
             permissionMode: this.permissionMode as Exclude<PermissionMode, "config">,
             allowBypass: !!this.opts.allowBypass,
             ...(dirs.length && { additionalDirectories: dirs }),
@@ -825,6 +827,7 @@ export class ClaudeSession implements EngineSession {
           };
         },
         parentQuery: () => this.liveQuery(),
+        supportsAuto: (m) => !!this.opts.supportsAuto?.(m),
         defaultModel: () => "haiku", // server.ts fills spec.model from Settings.inlineTask.model
         emit: (p) => this.session.emit(p),
         canUseTool: (tool, input, o, bridge) => this.askPermission(tool, input, o, bridge),

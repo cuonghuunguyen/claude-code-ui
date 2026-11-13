@@ -22,6 +22,8 @@ type ParentState = {
   additionalDirectories?: string[];
   /** The parent's session grants as allow rules (`allowedTools`). */
   allowedTools?: string[];
+  /** The parent's deny list (a read-only Aside blocks Edit, Write, NotebookEdit): never granted, always disallowed. */
+  disallowedTools?: string[];
 };
 /** What ClaudeSession's own permission flow needs to run for a child step: the adapter that knows the step's call, and an emit that tags parts. */
 export type InlineBridge = { adapter: ReturnType<typeof createAdapter>; emit: (part: Part) => void };
@@ -31,6 +33,8 @@ export type InlineClaudeDeps = {
   parent: () => ParentState;
   /** The parent's live query: its MCP servers and effective settings. Undefined: none (grants are refused, rules fall back to grants + mode). */
   parentQuery: () => Query | undefined;
+  /** Whether a model supports auto mode (the parent's rule, claude-engine setModel): a parent in auto runs a model without it in default. */
+  supportsAuto?: (model: string) => boolean;
   /** Setting `inlineTask.model`. */
   defaultModel: () => string;
   /** Parent session log. */
@@ -124,15 +128,16 @@ export function inlineClaudeOptions(
   spec: InlineSpec,
   x: { model: string; mcpServers: Record<string, McpServerConfig>; disallowedTools: string[]; abort: AbortController; env: NodeJS.ProcessEnv; canUseTool: CanUseTool; permissions?: object },
 ): Options {
+  const disallowed = [...new Set([...(parent.disallowedTools ?? []), ...x.disallowedTools])];
   return {
     model: x.model,
     systemPrompt: INLINE_SYSTEM,
     settingSources: [],
     skills: [],
-    tools: [...spec.tools],
+    tools: spec.tools.filter((t) => !parent.disallowedTools?.includes(t)),
     mcpServers: x.mcpServers,
     strictMcpConfig: true,
-    ...(x.disallowedTools.length && { disallowedTools: x.disallowedTools }),
+    ...(disallowed.length && { disallowedTools: disallowed }),
     maxTurns: spec.maxTurns,
     persistSession: false,
     cwd: parent.cwd,
@@ -198,7 +203,7 @@ export async function runInlineClaude(deps: InlineClaudeDeps, spec: InlineSpec, 
     const permissions = await parentPermissions(parentQuery);
     before = await deps.gitDirty(parent.cwd);
     if (why) throw new Halt();
-    const options = inlineClaudeOptions(parent, spec, {
+    const options = inlineClaudeOptions(parent.permissionMode === "auto" && !deps.supportsAuto?.(model) ? { ...parent, permissionMode: "default" } : parent, spec, {
       model,
       mcpServers: granted.servers,
       disallowedTools: granted.disallowed,

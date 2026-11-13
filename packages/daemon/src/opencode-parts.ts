@@ -94,6 +94,13 @@ export class OpenCodeMapper {
   isChild = (sessionId: string) => this.children.has(sessionId);
   /** An inline task's child session (GH-734): its parts show under the call `callId`. */
   adopt = (childId: string, callId: string) => void this.children.set(childId, callId);
+  /** Forgets an inline task's child session after its run ended. */
+  release = (childId: string) => void this.children.delete(childId);
+  /** Whether call `id` is still pending or running. */
+  isRunning = (id: string) => {
+    const c = this.calls.get(id);
+    return !!c && c.type === "tool_call" && (c.status === "running" || c.status === "pending");
+  };
   /** The newest running call of `tool` whose input equals `input` and is not in `skip` (the call an inline run belongs to). */
   runningCall(tool: string, input: Record<string, unknown> | undefined, skip: ReadonlySet<string>): string | undefined {
     const want = JSON.stringify(canon(input ?? {}));

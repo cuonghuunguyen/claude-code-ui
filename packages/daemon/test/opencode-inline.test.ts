@@ -18,6 +18,7 @@ const toolPart = (id: string, tool: string, input: Record<string, unknown>) => (
 
 function rig(o: { smallModel?: string; script?: (path: string, body: any, emit: (p: Payload) => void) => void } = {}) {
   const calls: Call[] = [];
+  let abortHook: (() => void) | undefined;
   const handlers = new Set<{ event: (d: string | undefined, p: Payload) => void; resync: () => void }>();
   const emit = (p: Payload) => handlers.forEach((h) => h.event("/p", p));
   const server = {
@@ -25,6 +26,7 @@ function rig(o: { smallModel?: string; script?: (path: string, body: any, emit: 
       const method = r.method ?? "GET";
       calls.push({ method, path, body: r.body });
       if (method === "POST" && path === "/session") return { id: "ses_child" };
+      if (method === "POST" && path.endsWith("/abort")) return abortHook?.(), true;
       if (method === "POST" && path.endsWith("/prompt_async")) return o.script?.(path, r.body, emit), undefined;
       if (path === "/config") return o.smallModel ? { small_model: o.smallModel } : {};
       if (path === "/agent") return [{ name: "build", permission: [] }];
@@ -42,7 +44,7 @@ function rig(o: { smallModel?: string; script?: (path: string, body: any, emit: 
   /** The running inline_task call of the parent, as OpenCode reports it. */
   const callRunning = (id = "call_1", input: Record<string, unknown> = INPUT) =>
     emit({ type: "message.part.updated", properties: { part: { id: `prt_${id}`, type: "tool", sessionID: "ses_parent", messageID: "msg_p", callID: id, tool: TOOL, state: { status: "running", input, time: { start: 1 } } } } });
-  return { run, calls, emit, emitted, callRunning, sent: (suffix: string) => calls.filter((c) => c.method === "POST" && c.path.endsWith(suffix)) };
+  return { run, calls, emit, emitted, callRunning, onAbort: (f: () => void) => (abortHook = f), sent: (suffix: string) => calls.filter((c) => c.method === "POST" && c.path.endsWith(suffix)) };
 }
 const asst = (emit: (p: Payload) => void, id = "msg_a1", extra: Record<string, unknown> = {}) => emit({ type: "message.updated", properties: { info: { id, sessionID: "ses_child", role: "assistant", providerID: "acme", modelID: "small", ...extra } } });
 const part = (emit: (p: Payload) => void, p: object) => emit({ type: "message.part.updated", properties: { part: p } });
@@ -200,6 +202,33 @@ describe("OpenCode inline task", () => {
     ac.abort();
     expect(await p).toMatchObject({ status: "stopped", text: "half" });
     expect(r.sent("/abort")).toHaveLength(1);
+  });
+
+  it("Stop from the card (stopSubagent) ends as stopped with the partial text, even when OpenCode answers the abort with an error and idle", async () => {
+    const r = rig({ script: (_p, _b, emit) => queueMicrotask(() => (asst(emit), part(emit, text("prt_t", "half")))) });
+    r.callRunning();
+    const p = r.run.inlineTask!(spec(), hooks());
+    await new Promise((x) => setTimeout(x, 20));
+    // OpenCode reports the abort as MessageAbortedError, then idle.
+    const abortReply = () => queueMicrotask(() => (r.emit({ type: "session.error", properties: { sessionID: "ses_child", error: { name: "MessageAbortedError", data: { message: "aborted" } } } }), idle(r.emit)));
+    r.onAbort(abortReply);
+    expect(await r.run.stopSubagent("call_1")).toBe(true);
+    expect(await p).toMatchObject({ status: "stopped", text: "half" });
+    expect(r.sent("/abort").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("after a finished run stopSubagent is false (no abort POSTed) and the child and message ids are released, and a finished call's claim is dropped", async () => {
+    const r = rig({ script: (_p, _b, emit) => queueMicrotask(() => (asst(emit), part(emit, text("prt_t", "x")), part(emit, step("prt_s1", { reason: "stop" })), idle(emit))) });
+    r.callRunning();
+    expect(await r.run.inlineTask!(spec(), hooks())).toMatchObject({ status: "done" });
+    const aborts = r.sent("/abort").length;
+    expect(await r.run.stopSubagent("call_1")).toBe(false);
+    expect(r.sent("/abort")).toHaveLength(aborts);
+    expect(r.run.owns!("ses_child")).toBe(false);
+    r.emit({ type: "message.part.updated", properties: { part: { id: "prt_call_1", type: "tool", sessionID: "ses_parent", messageID: "msg_p", callID: "call_1", tool: TOOL, state: { status: "completed", input: INPUT, output: "x", time: { start: 1, end: 2 } } } } });
+    expect((r.run as any).inlineClaimed.size).toBe(1); // the call still ran when the run ended
+    await r.run.inlineTask!(spec(), hooks());
+    expect((r.run as any).inlineClaimed.size).toBe(0);
   });
 
   it("a session error of the child is status error with its text", async () => {

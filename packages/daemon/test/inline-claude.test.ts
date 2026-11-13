@@ -26,7 +26,8 @@ type Setup = {
   dirty?: (Map<string, string> | undefined)[];
   ask?: InlineClaudeDeps["canUseTool"];
   limits?: InlineClaudeDeps["limits"];
-  mode?: "default" | "bypassPermissions";
+  mode?: "default" | "bypassPermissions" | "auto";
+  supportsAuto?: (model: string) => boolean;
 };
 function setup(s: Setup = {}) {
   const emitted: Part[] = [];
@@ -60,6 +61,7 @@ function setup(s: Setup = {}) {
             },
           } as never),
     defaultModel: () => "haiku",
+    ...(s.supportsAuto && { supportsAuto: s.supportsAuto }),
     emit: (p) => emitted.push(p),
     canUseTool: s.ask ?? (async () => ({ behavior: "allow", updatedInput: {} })),
     gitDirty: async () => dirty.shift(),
@@ -100,6 +102,17 @@ describe("runInlineClaude options", () => {
     expect((o.systemPrompt as string).length).toBeLessThanOrEqual(600);
     expect(o.abortController).toBeInstanceOf(AbortController);
     expect(typeof o.canUseTool).toBe("function");
+  });
+  it("parent mode auto falls back to default when the inline model does not support auto", async () => {
+    const no = run({ messages: [result()], mode: "auto", supportsAuto: (m) => m !== "haiku" });
+    await no.done;
+    expect(no.optionsSeen[0]!.permissionMode).toBe("default");
+    const yes = run({ messages: [result()], mode: "auto", supportsAuto: (m) => m !== "haiku" }, { model: "sonnet" });
+    await yes.done;
+    expect(yes.optionsSeen[0]!.permissionMode).toBe("auto");
+    const none = run({ messages: [result()], mode: "auto" });
+    await none.done;
+    expect(none.optionsSeen[0]!.permissionMode).toBe("default");
   });
   it("model: the input first, then the setting", async () => {
     const a = run({ messages: [result()] }, { model: "sonnet" });
@@ -360,6 +373,26 @@ describe("ClaudeSession inline runs", () => {
     );
   const hooks = (toolUseId: string) => ({ signal: new AbortController().signal, toolUseId });
 
+  it("a read-only parent's disallowedTools stay blocked in the inline run: not granted, listed as disallowed", async () => {
+    const { Session } = await import("../src/session.ts");
+    let n = 0;
+    let seen: Options | undefined;
+    const query = ({ options }: { options: Options }) => {
+      if (n++ > 0) {
+        seen = options;
+        return Object.assign((async function* () { yield result(); })(), { close: () => {} }) as never;
+      }
+      let end!: () => void;
+      return Object.assign((async function* () { await new Promise<void>((r) => (end = r)); })(), { supportedCommands: async () => [], mcpServerStatus: async () => [], getSettings: async () => ({}), close: () => end?.() }) as never;
+    };
+    const s = new Session("/tmp", { query: query as never, disallowedTools: () => ["Edit", "Write", "NotebookEdit"] } as never);
+    s.prompt("hi");
+    await vi.waitFor(() => expect((s.run as unknown as { liveQuery(): unknown }).liveQuery()).toBeDefined());
+    await s.run.inlineTask!({ ...SPEC, tools: ["Read", "Write", "Edit"] }, hooks("toolu_x"));
+    expect(seen!.tools).toEqual(["Read"]);
+    expect(seen!.disallowedTools).toEqual(expect.arrayContaining(["Edit", "Write", "NotebookEdit"]));
+    await s.close();
+  });
   it("stopSubagent(toolUseId) aborts the inline run: result stopped", async () => {
     const s = await parentSession(hanging);
     const p = s.run.inlineTask!(SPEC, hooks("toolu_a"));
@@ -406,6 +439,31 @@ describe("ClaudeSession inline runs", () => {
     expect(r.text).toBe("allow");
     expect(seen.permissionMode).toBe("default");
     expect(seen.settings).toEqual({ permissions: { allow: ["Read(*)"] }, disableAllHooks: true });
+    await s.close();
+  });
+  it("allow_always on a bridged step request appends the session grant to the parent: the next inline query allows the rule", async () => {
+    const suggestion = { type: "addRules", rules: [{ toolName: "Bash", ruleContent: "ls:*" }], behavior: "allow", destination: "session" };
+    const seen: Options[] = [];
+    const s = await parentSession((o) => {
+      seen.push(o);
+      return Object.assign(
+        (async function* () {
+          if (seen.length === 1) await o.canUseTool!("Bash", { command: "ls" }, { signal: new AbortController().signal, toolUseID: "t1", suggestions: [suggestion] } as never);
+          yield result();
+        })(),
+        { close: () => {} },
+      );
+    });
+    const events: import("@claude-ui/protocol").Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    const p = s.run.inlineTask!({ ...SPEC, tools: ["Bash"] }, hooks("toolu_main"));
+    await vi.waitFor(() => expect(events.some((e) => e.part.type === "permission_request")).toBe(true));
+    const req = events.find((e) => e.part.type === "permission_request")!.part as { requestId: string };
+    s.respond(req.requestId, { decision: "allow_always" } as never);
+    await p;
+    expect(seen[0]!.allowedTools ?? []).not.toContain("Bash(ls:*)");
+    await s.run.inlineTask!(SPEC, hooks("toolu_next"));
+    expect(seen[1]!.allowedTools).toContain("Bash(ls:*)");
     await s.close();
   });
 });

@@ -49,7 +49,7 @@ The card sits under the tool call. It shows the status, the task, and `model · 
 
 - Tools: `Read`, `Grep` and `Glob` by default. `Bash`, `Write`, `Edit` and MCP servers of the session (for example Playwright) only when the agent grants them.
 - Permissions: the mode and rules of the session apply to every tool call. The task never gets more than the session has.
-- No hooks, no CLAUDE.md, no memory, no skills. The task never starts other agents, and never gets the claude-ui or orchestration tools.
+- No hooks, no CLAUDE.md, no memory, no skills. PreToolUse and other hooks of the parent do not run inside an inline task. The task never starts other agents, and never gets the claude-ui or orchestration tools.
 - Account: the same as the session (subscription or API key). No separate key.
 
 ## Limits

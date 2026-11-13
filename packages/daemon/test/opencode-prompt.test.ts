@@ -14,7 +14,8 @@ import { createSettings } from "../src/settings.ts";
 import { createDaemon } from "../src/server.ts";
 import { mcpName, type Rule } from "../src/opencode-engine.ts";
 import { visualizePluginDir, visualizeSystem } from "../src/visualize.ts";
-import { fakeQuery } from "./fake-query.ts";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { calls, fakeQuery } from "./fake-query.ts";
 
 const BIN = fileURLToPath(new URL("./fixtures/opencode/fake-opencode-bin.mjs", import.meta.url));
 const turn = (name: string) => fileURLToPath(new URL(`./fixtures/opencode/turn-${name}.json`, import.meta.url));
@@ -1288,6 +1289,48 @@ describe("OpenCode claude-ui tools (GH-709)", { timeout: TEST_MS }, () => {
     await off.prompt("hi");
     await until(() => d.requests("POST", `/session/${off.id}/prompt_async`).length === 1);
     expect(d.requests("POST", "/mcp")).toHaveLength(0);
+  });
+
+  it("inline_task (GH-734): the route maps the call to this session's OpenCode runner; the model is the setting openCodeModel", async () => {
+    const d = await boot({ script: [] });
+    await d.ok({ type: "settings.set", patch: { terminalAccess: { enabled: false }, inlineTask: { enabled: true, openCodeModel: "acme/small" } } });
+    const s = await d.open();
+    const body = await attached(d, s.id, "claude-ui");
+    const c = await mcpClient(body.config.url, body.config.headers.authorization);
+    expect((await c.listTools()).tools.map((t) => t.name)).toContain("inline_task");
+    const call = c.callTool({ name: "inline_task", arguments: { title: "find foo", prompt: "find foo" } }, undefined, { timeout: 20_000 });
+    await until(() => d.requests("POST", /^\/session\/[^/]+\/prompt_async$/).some((r) => r.path !== `/session/${s.id}/prompt_async`));
+    const child = d.requests("POST", /^\/session\/[^/]+\/prompt_async$/).find((r) => r.path !== `/session/${s.id}/prompt_async`)!;
+    expect(d.requests("POST", "/session").at(-1)!.body).toMatchObject({ parentID: s.id, title: "Inline: find foo" });
+    expect(child.body.model).toEqual({ providerID: "acme", modelID: "small" });
+    expect(child.body.parts[0].text).toBe("find foo");
+    await d.fake("/__emit", { events: [{ type: "session.idle", properties: { sessionID: child.path.split("/")[2] } }] });
+    const r = JSON.parse(((await call) as any).content[0].text);
+    expect(r).toMatchObject({ status: "done" });
+  });
+
+  it("inline_task (GH-734): a Claude session's inline query takes its default model from the setting inlineTask.model; an explicit model wins", async () => {
+    const d = await boot();
+    await d.ok({ type: "settings.set", patch: { terminalAccess: { enabled: false }, inlineTask: { enabled: true, model: "sonnet" } } });
+    const id: string = (await d.ok({ type: "session.create", cwd: d.project, engine: "claude" })).session.id;
+    await d.ok({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+    calls.length = 0;
+    await d.ok({ type: "session.prompt", sessionId: id, text: "hi" });
+    await until(() => calls.some((o) => o.mcpServers?.["claude-ui"]));
+    const cfg = calls.find((o) => o.mcpServers?.["claude-ui"])!.mcpServers!["claude-ui"] as unknown as { instance: { connect(t: unknown): Promise<void> } };
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await cfg.instance.connect(b);
+    const c = new Client({ name: "test", version: "1" });
+    await c.connect(a);
+    cleanups.push(() => void c.close());
+    const modelOf = async (model?: string) => {
+      const before = calls.length;
+      void c.callTool({ name: "inline_task", arguments: { title: "t", prompt: "p", ...(model && { model }) } }, undefined, { timeout: 3000 }).catch(() => undefined);
+      await until(() => calls.length > before);
+      return calls[before]!.model;
+    };
+    expect(await modelOf()).toBe("sonnet");
+    expect(await modelOf("opus")).toBe("opus");
   });
 
   it("a terminal_run permission request shows as the claude-ui tool, with the \"always\" suggestion", async () => {
