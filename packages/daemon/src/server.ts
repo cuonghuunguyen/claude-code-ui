@@ -61,7 +61,9 @@ import { createRouter, type Sides } from "./sides.ts";
 import { createSessionSettings } from "./session-settings.ts";
 import { createUploads, SESSION_DIR } from "./uploads.ts";
 import { createUpdater, type Updater } from "./update.ts";
-import { createOrchestration } from "./orchestration.ts";
+import { createOrchestration, SERVER as ORCHESTRATION_SERVER } from "./orchestration.ts";
+import { createDaemonMcp, DAEMON_SERVER } from "./daemon-mcp.ts";
+import { createAgentTerminals, terminalPort } from "./agent-terminals.ts";
 import type { AddressInfo } from "node:net";
 import { serveAppIcon } from "./app-icon.ts";
 import { serveStatic } from "./static.ts";
@@ -456,12 +458,17 @@ export function createDaemon(opts: {
       broadcast({ type: "sessions.changed" });
     },
     worker: (id: string) => !!settings.get(id)?.coordinatorId,
-    mcpServers: (id: string) => orchestration.mcpServers(id),
+    mcpServers: (id: string) => {
+      const o = orchestration.mcpServers(id);
+      const d = daemonMcp.mcpServers(id);
+      return o || d ? { ...o, ...d } : undefined;
+    },
     agent: (id: string) => settings.get(id)?.agent,
     disallowedTools: (id: string) => asideDisallowed(settings.get(id)),
-    toolPolicy: (tool: string, mcpServer?: { name: string; source: string }) => orchestration.toolPolicy(tool, mcpServer),
+    daemonMcp: { openCodeRules: (name: string, ask: "ask" | "allow") => daemonMcp.openCodeRules(name, ask), timeoutMs: () => daemonMcp.timeoutMs() },
+    toolPolicy: (tool: string, mcpServer?: { name: string; source: string }) => orchestration.toolPolicy(tool, mcpServer) ?? daemonMcp.toolPolicy(tool, mcpServer),
     preflight: (id: string, tool: string, input: Record<string, unknown>, mcp?: { name: string; source: string }) => orchestration.preflight(id, tool, input, mcp),
-    permissionCard: (id: string, tool: string, input: Record<string, unknown>, mcp?: { name: string; source: string }) => orchestration.permissionCard(id, tool, input, mcp),
+    permissionCard: (id: string, tool: string, input: Record<string, unknown>, mcp?: { name: string; source: string }) => orchestration.permissionCard(id, tool, input, mcp) ?? daemonMcp.permissionCard(id, tool, input, mcp),
   });
   const restoring = new Map<string, Promise<Session | undefined>>();
   // Sessions whose delete is in progress (session.delete).
@@ -482,7 +489,7 @@ export function createDaemon(opts: {
    * Orchestration MCP of OpenCode sessions (docs/spec.md "Orchestration"): OpenCode connects to `/opencode-mcp` of this daemon with a
    * per-session bearer token (token -> session id); one stateful transport and server per token, a new `initialize` replaces both.
    */
-  const mcpRoutes = new Map<string, { id: string; live?: { transport: StreamableHTTPServerTransport; server: McpServer }; init?: Promise<boolean> }>();
+  const mcpRoutes = new Map<string, { id: string; server: typeof ORCHESTRATION_SERVER | typeof DAEMON_SERVER; live?: { transport: StreamableHTTPServerTransport; server: McpServer }; init?: Promise<boolean> }>();
   const dropMcp = (token: string) => {
     void mcpRoutes.get(token)?.live?.server.close().catch(() => {});
     mcpRoutes.delete(token);
@@ -500,10 +507,10 @@ export function createDaemon(opts: {
         const a = http.address();
         return a && typeof a === "object" ? `http://127.0.0.1:${a.port}/opencode-mcp` : undefined;
       },
-      token: (id) => {
-        for (const [t, r] of mcpRoutes) if (r.id === id) return t;
+      token: (id, server) => {
+        for (const [t, r] of mcpRoutes) if (r.id === id && r.server === server) return t;
         const t = randomBytes(32).toString("base64url");
-        mcpRoutes.set(t, { id });
+        mcpRoutes.set(t, { id, server });
         return t;
       },
       drop: (id) => {
@@ -538,7 +545,7 @@ export function createDaemon(opts: {
         // OpenCode connects again (its restart, a dispose): a new MCP session.
         void route.live?.server.close().catch(() => {});
         route.live = undefined;
-        const server = orchestration.mcpServerFor(route.id);
+        const server = route.server === DAEMON_SERVER ? daemonMcp.mcpServerFor(route.id) : orchestration.mcpServerFor(route.id);
         if (!server) return false;
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() });
         await server.connect(transport);
@@ -1246,6 +1253,22 @@ export function createDaemon(opts: {
     autoContinue.cancel(s.id);
   }
 
+  /** The claude-ui MCP server (CONTEXT.md "Daemon MCP server"): the tool groups every session's agent gets from the daemon. */
+  const daemonMcp = createDaemonMcp({
+    session: (id) => {
+      const s = sessions.get(id);
+      return s && { cwd: s.cwd };
+    },
+    groups: [
+      createAgentTerminals({
+        terminals: terminalPort(terminals),
+        worktrees: (cwd) => worktreesOf(cwd),
+        real: (p) => real(p) ?? p,
+        known: () => [opts.token, ...secrets.values()],
+        enabled: () => appSettings.get().terminalAccess.enabled,
+      }),
+    ],
+  });
   const orchestration = createOrchestration({
     links: settings,
     held: (id) => !!holds.get(id),

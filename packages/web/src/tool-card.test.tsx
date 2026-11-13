@@ -467,3 +467,39 @@ describe("popup viewer button", () => {
     expect(html(make("Bash", { command: "ls" }))).not.toContain('data-testid="viewer-open"');
   });
 });
+
+describe("terminal tools (GH-709)", () => {
+  const result = (value: unknown, isError = false) => ({ type: "tool_result", id: "r1", toolUseId: "t1", output: typeof value === "string" ? value : JSON.stringify(value), isError }) as never;
+  const run = done("mcp__claude-ui__terminal_run", { terminal: "t-id", command: "echo gh709-$((6*7))" });
+
+  it("header of a run shows the terminal's title from the result and the command", () => {
+    expect(renderToStaticMarkup(<ToolCard call={run} result={result({ title: "Terminal 1", output: "gh709-42\n", quiet: true, truncated: false, redacted: 0 })} />)).toContain("Terminal 1 $ echo gh709-$((6*7))");
+    // No result yet: the input's terminal reference.
+    expect(renderToStaticMarkup(<ToolCard call={run} />)).toContain("t-id $ echo gh709-");
+  });
+
+  it("body of a run shows the command and the output; notes say redacted, cut, still running, exited", () => {
+    const html = renderToStaticMarkup(<ToolBody call={run} result={result({ title: "Terminal 1", output: "gh709-42\n", quiet: false, truncated: true, redacted: 2, exited: 1 })} />);
+    expect(html).toContain('data-testid="terminal-command"');
+    expect(html).toContain("gh709-42");
+    expect(html).toContain("2 secret(s) hidden");
+    expect(html).toContain("Output cut to the last part");
+    expect(html).toContain("Still printing");
+    expect(html).toContain("exited with code 1");
+  });
+
+  it("body of a read shows the text; of a list one line per terminal, or that none is open", () => {
+    const read = done("mcp__claude-ui__terminal_read", { terminal: "Terminal 1" });
+    expect(renderToStaticMarkup(<ToolBody call={read} result={result({ title: "Terminal 1", text: "line one\nline two", lines: 2, truncated: false, redacted: 0 })} />)).toContain("line two");
+    const list = done("mcp__claude-ui__terminal_list", {});
+    const html = renderToStaticMarkup(<ToolBody call={list} result={result([{ terminal: "a", title: "Terminal 1", cwd: ".", running: true }])} />);
+    expect(html).toContain("Terminal 1");
+    expect(renderToStaticMarkup(<ToolBody call={list} result={result([])} />)).toContain("No terminal is open in this project");
+  });
+
+  it("a tool error falls back to the generic body", () => {
+    const html = renderToStaticMarkup(<ToolBody call={run} result={result("No terminal x: none is open.", true)} />);
+    expect(html).not.toContain('data-testid="terminal-result"');
+    expect(html).toContain("No terminal x");
+  });
+});

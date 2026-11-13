@@ -173,6 +173,8 @@ const claudeDir = mkdtempSync(join(tmpdir(), "orch-claude-"));
 writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({ permissions: { defaultMode: "acceptEdits" } }));
 mkdirSync(join(claudeDir, "sessions"));
 const appSettings = createSettings();
+// Terminal access (GH-709) gives every session the claude-ui server too: off here, so these tests see orchestration's server alone; "claude-ui server" turns it on.
+appSettings.set({ terminalAccess: { enabled: false } });
 const history = { listSessions: async () => [], getSessionInfo: async () => undefined, getSessionMessages: async () => [] };
 
 /** A fresh links file for a second daemon in a test: its workers must not appear in the shared one (closeAll). */
@@ -267,6 +269,34 @@ describe("orchestration", () => {
     await c.request({ type: "session.prompt", sessionId: plain, text: "hi" });
     await until(() => runsOf(plain).length);
     expect(runsOf(plain)[0]!.options.mcpServers).toBeUndefined();
+  });
+
+  it("claude-ui server (GH-709): with terminal access on every session's query gets it, beside orchestration's when that is on; list needs no request, run is not allowed without one", async () => {
+    const perm = (tool: string, source = "sdk") => `perm ${JSON.stringify({ tool, input: {}, mcpServer: { name: "claude-ui", source } })}`;
+    const answered = (id: string, test: (t: string) => boolean) => until(() => c.inbox.some((m) => m.type === "event" && m.sessionId === id && m.part.type === "assistant_text" && test(m.part.text)));
+    appSettings.set({ orchestration: { enabled: false }, terminalAccess: { enabled: true } });
+    try {
+      const plain = await coordinator();
+      await until(async () => (await state(plain)) === "idle");
+      expect(Object.keys(runsOf(plain)[0]!.options.mcpServers ?? {})).toEqual(["claude-ui"]);
+      await c.request({ type: "session.prompt", sessionId: plain, text: perm("mcp__claude-ui__terminal_list") });
+      await answered(plain, (t) => t.startsWith("perm: {") && t.includes('"allow"'));
+      // A server of the same name that is not the host's gets no policy: the call waits for the user.
+      await c.request({ type: "session.prompt", sessionId: plain, text: perm("mcp__claude-ui__terminal_list", "project") });
+      await until(() => c.inbox.some((m) => m.type === "event" && m.sessionId === plain && m.part.type === "permission_request" && m.part.tool === "mcp__claude-ui__terminal_list"));
+      const pending = (tool: string) => (c.inbox.find((m) => m.type === "event" && m.sessionId === plain && m.part.type === "permission_request" && m.part.tool === tool) as { part: { requestId: string } }).part.requestId;
+      await c.request({ type: "permission.respond", requestId: pending("mcp__claude-ui__terminal_list"), decision: "deny" });
+      // terminal_run asks even from the host's server.
+      await c.request({ type: "session.prompt", sessionId: plain, text: perm("mcp__claude-ui__terminal_run") });
+      await until(() => c.inbox.some((m) => m.type === "event" && m.sessionId === plain && m.part.type === "permission_request" && m.part.tool === "mcp__claude-ui__terminal_run"));
+      await c.request({ type: "permission.respond", requestId: pending("mcp__claude-ui__terminal_run"), decision: "deny" });
+      // Both servers when orchestration is on.
+      enable();
+      const both = await coordinator();
+      expect(Object.keys(runsOf(both)[0]!.options.mcpServers ?? {}).sort()).toEqual(["claude-ui", "orchestration"]);
+    } finally {
+      appSettings.set({ terminalAccess: { enabled: false } });
+    }
   });
 
   it("on: every session gets the sdk server; turning orchestration off keeps it until the query restarts", async () => {
