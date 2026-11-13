@@ -9,7 +9,8 @@ import { scene as terminal } from "./scenes/terminal.ts";
 import { scene as permissions } from "./scenes/permissions.ts";
 import { scene as settings } from "./scenes/settings.ts";
 import { scene as git } from "./scenes/git.ts";
+import { scene as opencode } from "./scenes/opencode.ts";
 
-export const SCENES: Record<string, Scene> = { permissions, focus, "new-session": newSession, files, terminal, sessions: sessionsScene, "group-menu": groupMenu, settings, git };
+export const SCENES: Record<string, Scene> = { permissions, focus, "new-session": newSession, files, terminal, sessions: sessionsScene, "group-menu": groupMenu, settings, git, opencode };
 
 export { TIKTOK } from "./tiktok.ts";
