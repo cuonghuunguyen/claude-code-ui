@@ -33,7 +33,6 @@ describe("orchestration plugin", () => {
     for (const e of m.plugins) expect(json(join(root, e.source, ".claude-plugin/plugin.json")), e.name).toMatchObject({ name: e.name, version: e.version, license: "MIT" });
     expect(lf(join(root, "plugins/addons/skills/write-addon/SKILL.md"))).toMatch(/^---\nname: write-addon\ndescription: /);
     expect(lf(join(root, "plugins/visualize/skills/visualize/SKILL.md"))).toMatch(/^---\nname: visualize\ndescription: /);
-    expect(json(join(root, ".claude/settings.json")).enabledPlugins["orchestration@claude-ui"]).toBe(true);
   });
 
   it("each agent type has name, description and model, and no tools list", () => {

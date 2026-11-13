@@ -17,6 +17,8 @@ The **Changes** pane shows what changed, as diffs, file by file.
 
 3. Click a file in the list, or use <kbd>←</kbd> / <kbd>→</kbd> for the previous or next file.
 
+The tab opens in **Uncommitted** unless you saved another default in [Settings › Layout › Changes](../reference/settings#changes).
+
 ## Repositories
 
 A project folder can hold several repositories: nested ones, or submodules. In the git modes, the **repository selector** in the toolbar shows the selected one (name and branch). It opens a tree: the project's own repository, its submodules, then the nested repositories. Pick one to see its changes. The choice is kept per project in this browser and is shared with the [Git graph](git-graph).

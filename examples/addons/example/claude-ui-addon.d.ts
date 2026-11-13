@@ -19,7 +19,7 @@ export type Part = { parentId?: string } & (
   | { type: "bash"; id: string; command: string; stdout: string; stderr: string; status: "running" | "done" | "error" | "stopped"; exitCode?: number; shell?: "background" }
   | { type: "permission_request"; id: string; requestId: string; toolUseId: string; tool: string; input: unknown; plan?: string; title?: string; suggestions: unknown[]; settled: boolean; decision?: "allow" | "allow_always" | "deny" | "cancelled"; message?: string; editedByUser?: boolean; by?: "coordinator"; escalated?: boolean; reason?: string; at?: number; tier?: "low" }
   | { type: "question"; id: string; requestId: string; toolUseId: string; questions: Question[]; settled: boolean; answers?: Record<string, string>; by?: "coordinator"; escalated?: boolean; reason?: string; at?: number }
-  | { type: "session_state"; id: string; state: SessionState; working?: true }
+  | { type: "session_state"; id: string; state: SessionState; working?: true; keepWarm?: true }
   | { type: "session_model"; id: string; model: string }
   | { type: "session_permission_mode"; id: string; mode: string }
   | { type: "session_effort"; id: string; effort: string }

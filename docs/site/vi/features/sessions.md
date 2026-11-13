@@ -58,6 +58,7 @@ Trên điện thoại, chạm vào bộ chuyển tab để xem mọi tab. Vuốt
 
 ## Cần biết {#good-to-know}
 
+- Phiên có tệp transcript bị xóa bên ngoài claude-ui sẽ rời khỏi danh sách và tab của nó đóng, như sau **Xóa…**.
 - `/clear` (hoặc `/reset`, `/new`) bắt đầu một phiên mới trong cùng tab và giữ lại những gì bạn đã gõ.
 - **Đóng khi rảnh:** phiên không có tab nào hiển thị sẽ đóng tiến trình Claude sau 10 phút rảnh. Phiên vẫn nằm trong danh sách. Prompt tiếp theo sẽ tiếp tục nó. Đổi thời gian bằng [`CLAUDE_UI_IDLE_CLOSE_MINUTES`](/vi/reference/cli#environment-variables).
 - Đổi cách nhóm tab (theo dự án, theo worktree, hoặc không nhóm) và bật **Tab gọn** trong [Cài đặt › Bố cục › Tab](/vi/reference/settings#tabs).

@@ -37,6 +37,17 @@ Tua lại đưa phiên về trạng thái trước một prompt của bạn. Ch�
 
 Bạn cũng có thể chạy “Tua lại” từ [bảng lệnh](palette). Không thể tua lại khi Claude đang làm việc.
 
+## Tôi sẽ quay lại {#ill-be-back}
+
+**Tôi sẽ quay lại** (nút cạnh **Copy response** dưới câu trả lời đã xong) đánh dấu câu trả lời để quay lại sau.
+
+1. Bấm nút. Phiên viết một bản tóm tắt ngắn về công việc (**Về**, **Tập trung vào**, **Tiếp theo**) dưới dạng một lượt hiện thành một dòng thu gọn, "Brief for your mark". Phiên đang bận viết nó sau lượt hiện tại.
+2. Trong bảng dưới câu trả lời, thêm **Ghi chú** (tối đa 280 ký tự) và **Nhắc tôi sau** (một số kèm m, h hoặc d, từ 1m đến 7d: `30m`, `2h`, `1d`). Lời nhắc chỉ kích hoạt một lần.
+3. Mở bản tóm tắt sau đó: nó cho biết đã qua bao nhiêu lượt kể từ khi viết, và **Làm mới tóm tắt** viết bản mới.
+4. **Xong** xóa dấu đánh dấu. Bấm nút lần nữa chỉ đưa tiêu điểm vào bảng.
+
+[Trang Focus](focus) liệt kê các dấu đánh dấu dưới **Quay lại**. Lời nhắc hiện dưới dạng thông báo push, hoặc thẻ trong trang đang mở với **Hoãn** và **Bỏ qua**. Lời nhắc đến hạn khi daemon tắt hiện ở lần khởi động sau.
+
 ## Lịch sử cục bộ (Dòng thời gian của tệp) {#local-history-file-timeline}
 
 Đừng nhầm với dòng thời gian của phiên ở trên: mục **Dòng thời gian** dưới cây tệp của [Tệp](files) thuộc về tệp đang mở trong trình soạn thảo. Nó liệt kê, mới nhất trước, các bản **Lịch sử cục bộ** và các commit **Lịch sử Git** của tệp. Menu lọc (**Lọc dòng thời gian**) hiển thị một loại hoặc cả hai, lưu trong trình duyệt này.

@@ -37,6 +37,17 @@ Rewind returns the session to before one of your prompts. Pick what to restore:
 
 You can also run "Rewind" from the [command palette](palette). Rewind is not available while Claude is working.
 
+## I'll be back
+
+**I'll be back** (the button next to **Copy response** under a finished reply) marks the reply to come back to later.
+
+1. Click it. The session writes a short brief of the work (**About**, **Focus now**, **Next**) as a turn shown as one collapsed row, "Brief for your mark". A busy session writes it after the current turn.
+2. In the panel under the reply, add a **Note** (up to 280 characters) and **Remind me in** (a number and m, h or d, from 1m to 7d: `30m`, `2h`, `1d`). The reminder fires once.
+3. Open the brief later: it says how many turns passed since it was written, and **Refresh brief** writes a new one.
+4. **Done** removes the mark. Clicking the button again only focuses the panel.
+
+The [Focus page](focus) lists the marks under **Come back to**. A reminder shows as a push notification, or as a card in an open page with **Snooze** and **Dismiss**. A reminder that came due while the daemon was off shows at the next start.
+
 ## Local history (file Timeline)
 
 Not to be confused with the session timeline above: the **Timeline** section under the file tree of [Files](files) belongs to the file open in the editor. It lists, newest first, its **Local history** entries and its **Git history** commits. The filter menu (**Filter timeline**) shows one kind or both, kept in this browser.

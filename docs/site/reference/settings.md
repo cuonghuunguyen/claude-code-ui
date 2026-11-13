@@ -10,10 +10,10 @@ The groups sit under four headings:
 | --- | --- |
 | App | Appearance, General, Layout, Notifications, Keyboard |
 | Sessions | Orchestration, Focus, Chat, New sessions, Usage limits, Local history |
-| Integrations | Git, Jira, Claude account, Open in app |
-| System | Sides, Performance, Help & about |
+| Integrations | Git, Jira, Claude account, OpenCode, Open in app |
+| System | Sides, Launcher, Performance, Help & about |
 
-Most settings are **kept in this browser** only. Orchestration, Focus, Chat, New sessions, Usage limits (except the ring), Local history, Git, Jira, Claude account, Sides, Performance and desktop notifications are saved in the daemon and apply to every browser.
+Most settings are **kept in this browser** only. Orchestration, Focus, Chat, New sessions, Usage limits (except the ring), Local history, Git, Jira, Claude account, OpenCode, Sides, Launcher, Performance and desktop notifications are saved in the daemon and apply to every browser.
 
 ## Appearance
 
@@ -169,6 +169,17 @@ Picks the account that the Claude CLI processes of the daemon use. The list hold
 
 With two or more accounts you can also switch from the plan meter (the usage ring) or with **Switch Claude account…** in the [command palette](../features/palette). With a cloud provider (Bedrock, Vertex, Foundry) in the daemon's environment the CLI uses it and the account has no effect.
 
+## OpenCode
+
+For the [OpenCode engine](../features/opencode).
+
+| Setting | Does |
+| --- | --- |
+| OpenCode binary path | Where to find `opencode`. Empty: `opencode` on the PATH (on Windows `opencode.exe` or `opencode.cmd`, then `~/.opencode/bin/opencode` elsewhere). Saved when you leave the field. |
+| Status, **Check again** | Shows the version and whether the OpenCode server runs, or "Not found" or "Too old" (minimum 1.18.0). |
+| **Restart OpenCode** | Restarts the server. Refused while an OpenCode session runs. |
+| **Providers** | Lists the providers. **Connect** takes an API key, or opens the login page of the provider in your browser. **Log out** removes a saved login. A provider that comes from an environment variable or the OpenCode config shows without a button. **Show providers** starts the server when it is stopped. |
+
 ## Open in app
 
 **Editor command** and **Name in the menu** add your own program to the file menus (**Open in** *name*). Use `{path}` for the file or folder and `{root}` for the session folder. Only a browser on the daemon's computer can change it. See [Files](../features/files#open-in-the-file-manager-an-editor-or-the-default-app).
@@ -185,6 +196,22 @@ Shown when a WSL distro, container or SSH host is listed. This computer is alway
 | Update | Shown when the Claude UI on an SSH host is older than yours: runs `claude-ui update` there. |
 
 See [WSL, Docker & SSH](../features/wsl-docker).
+
+## Launcher
+
+Start options of claude-ui on the daemon's computer. They apply from the next start; a command-line flag or an environment variable of that start wins (see [CLI flags](cli)).
+
+| Setting | Does |
+| --- | --- |
+| Launcher shortcut | Adds Claude UI to Applications (macOS), the app menu (Linux) or the Start menu (Windows). A click opens claude-ui in the browser when it runs, else starts it in a terminal window. |
+| Port | Port of the web UI. Default 4280. |
+| Roots | Directories claude-ui may open. Empty: the home directory. |
+| Open browser at start | Opens the web UI in this computer's browser at start. |
+| Tailscale | Serves on your tailnet and prints the https link. |
+| LAN | Also listens on the local network, plain HTTP. Read the warning in the dialog. |
+| Allow bypass permissions | Offers the Bypass permissions mode. |
+| Check for updates | Checks npm for a newer version at start. |
+| Desktop notification on this computer | A desktop notification when no browser has push on. |
 
 ## Performance
 

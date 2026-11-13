@@ -28,6 +28,7 @@ Một trang cho thấy, theo từng phiên, phiên nào cần phản hồi, phi�
 - Yêu cầu đã trả lời thu nhỏ thành một dòng cho đến khi bạn rời trang.
 - Mỗi yêu cầu có một **mức (tier)**. **Thấp** là thao tác đọc thông thường (hoặc, ở một số kho mã, một thao tác sửa) trong thư mục của phiên. Mọi thứ khác là **cao**. Yêu cầu mức cao hiện **Mức cao · luôn hỏi** và không có **Luôn cho phép** ở đây. Chỉ bạn trả lời được (xem [Điều phối](/vi/features/orchestration)).
 - **Điều phối viên chuyển lên** đánh dấu yêu cầu của worker mà coordinator của nó đã chuyển cho bạn.
+- **Quay lại** liệt kê các câu trả lời bạn đã đánh dấu bằng [Tôi sẽ quay lại](timeline#ill-be-back), kèm ghi chú và giờ nhắc. Lời nhắc đến hạn cũng hiện ở đây.
 - Bạn cũng có thể mở trang bằng liên kết `#focus`.
 - Focus cũng mở được khi bảng dưới đang phóng to. Bảng bên và bảng dưới vẫn giữ nguyên khi Focus hiện, nên hộp prompt không nhảy khi bạn chuyển giữa Focus và một phiên.
 - Khi bật **Tiếp theo cho bạn** (xem [Cài đặt › Focus](/vi/reference/settings#focus)), dòng đã xong có một chip với prompt tiếp theo được dự đoán. Bấm vào chip để đưa văn bản vào hộp prompt của phiên đó.
