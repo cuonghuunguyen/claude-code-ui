@@ -63,6 +63,7 @@ const within = (root: string, p: string) => {
   const r = relative(root, p);
   return r === "" || (!r.startsWith("..") && !isAbsolute(r));
 };
+const MARK = "[redacted]";
 const cap = (text: string) => (text.length > RESULT_CHARS ? { text: text.slice(-RESULT_CHARS), truncated: true } : { text, truncated: false });
 const WRITE_ERRORS = { unknown_terminal: "The terminal was closed.", input_backlog: "The terminal has too much input it has not read yet; wait, then try again.", write_failed: "Writing to the terminal failed." };
 
@@ -127,11 +128,13 @@ export function createAgentTerminals(deps: AgentTerminalsDeps): DaemonToolGroup 
       const { term } = await resolve(cwd, a.terminal);
       const buffer = deps.terminals.buffer(term.id);
       if (buffer === undefined) throw new ToolError("The terminal was closed.");
-      const all = plainText(buffer).split("\n");
+      // Redacted before the line window: a window that starts inside a private key would miss its BEGIN line.
+      const whole = redactSecrets(plainText(buffer), deps.known());
+      const all = whole.text.split("\n");
       if (all.at(-1) === "") all.pop();
       const picked = all.slice(-(a.lines ?? READ_LINES_DEFAULT));
-      const { text, count, truncated } = clean(picked.join("\n"));
-      return { title: term.title, text, lines: picked.length, truncated, redacted: count };
+      const { text, truncated } = cap(picked.join("\n"));
+      return { title: term.title, text, lines: picked.length, truncated, redacted: text.split(MARK).length - 1 };
     },
   } satisfies DaemonTool<{ terminal: z.ZodString; lines: z.ZodOptional<z.ZodNumber> }>;
 
@@ -164,23 +167,24 @@ export function createAgentTerminals(deps: AgentTerminalsDeps): DaemonToolGroup 
         const onAbort = () => finish("deadline");
         if (signal?.aborted) finish("deadline");
         signal?.addEventListener("abort", onAbort, { once: true });
-        const detach = deps.terminals.attach(term.id, {
-          output: (d) => {
-            raw = (raw + d).slice(-RAW_MAX);
-            clearTimeout(quiet);
-            quiet = setTimeout(finish, QUIET_MS, "quiet");
-          },
-          exit: (code) => ((exited = code), finish("quiet")),
-        });
-        if (!detach) throw new ToolError("The terminal was closed.");
+        let detach: (() => void) | undefined;
         try {
+          detach = deps.terminals.attach(term.id, {
+            output: (d) => {
+              raw = (raw + d).slice(-RAW_MAX);
+              clearTimeout(quiet);
+              quiet = setTimeout(finish, QUIET_MS, "quiet");
+            },
+            exit: (code) => ((exited = code), finish("quiet")),
+          });
+          if (!detach) throw new ToolError("The terminal was closed.");
           const err = deps.terminals.write(term.id, `${a.command}\r`);
           if (err) throw new ToolError(WRITE_ERRORS[err]);
           const why = await done;
           const { text, count, truncated } = clean(raw);
           return { title: term.title, output: text, quiet: why === "quiet", truncated, redacted: count, ...(exited !== undefined && { exited }) };
         } finally {
-          detach();
+          detach?.();
           clearTimeout(deadline);
           clearTimeout(quiet);
           signal?.removeEventListener("abort", onAbort);

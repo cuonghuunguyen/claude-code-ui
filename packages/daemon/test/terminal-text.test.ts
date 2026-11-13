@@ -52,6 +52,9 @@ describe("redactSecrets", () => {
   it("redacts the value of env-style assignments", () => {
     expect(r("export DEMO_TOKEN=abcd1234efgh5678\nMY_PASSWORD: hunter2\napi_key = xyz").text).toBe("export DEMO_TOKEN=[redacted]\nMY_PASSWORD: [redacted]\napi_key = [redacted]");
   });
+  it("does not redact a word that only ends in sk-", () => {
+    expect(r("risk-assessment-report-2026-final").count).toBe(0);
+  });
   it("does not touch a plain hash, a git SHA or ordinary text", () => {
     const sha = "a".repeat(20) + "0123456789".repeat(2);
     expect(r(`commit ${sha}\nhello world`)).toEqual({ text: `commit ${sha}\nhello world`, count: 0 });

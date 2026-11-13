@@ -29,12 +29,12 @@ const NAME = String.raw`[\w.-]*(?:token|secret|passw(?:or)?d|api[_-]?key|access[
 // Whole match replaced, unless `keep` (a capture group index of the part to keep).
 const PATTERNS: { re: RegExp; keep?: number }[] = [
   { re: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g },
-  { re: /sk-ant-[\w-]{20,}/g },
-  { re: /sk-[A-Za-z0-9_-]{20,}/g },
+  { re: /\bsk-ant-[\w-]{20,}/g },
+  { re: /\bsk-[A-Za-z0-9_-]{20,}/g },
   { re: /gh[pousr]_[A-Za-z0-9]{36,}/g },
   { re: /github_pat_\w{40,}/g },
-  { re: /glpat-[\w-]{20,}/g },
-  { re: /xox[abprs]-[\w-]{10,}/g },
+  { re: /\bglpat-[\w-]{20,}/g },
+  { re: /\bxox[abprs]-[\w-]{10,}/g },
   { re: /AKIA[0-9A-Z]{16}/g },
   { re: /AIza[\w-]{35}/g },
   { re: /eyJ[\w-]{10,}\.eyJ[\w-]{10,}\.[\w-]{10,}/g },

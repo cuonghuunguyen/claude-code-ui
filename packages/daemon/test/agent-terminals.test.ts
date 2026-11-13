@@ -62,6 +62,14 @@ describe("terminal_read", () => {
     expect(r.text).not.toContain("pairing-token-value");
     expect(r.redacted).toBe(2);
   });
+  it("redacts a private key even when the line window starts inside it", async () => {
+    const key = "-----BEGIN RSA PRIVATE KEY-----\r\nAAAA\r\nBBBB\r\n-----END RSA PRIVATE KEY-----\r\nafter\r\n";
+    const { call } = setup([term("a", "Terminal 1", ROOT, { buffer: key })]);
+    const r = await call("terminal_read", { terminal: "a", lines: 3 });
+    expect(r.text).not.toContain("BBBB");
+    expect(r.text).toContain("[redacted]");
+    expect(r.redacted).toBe(1);
+  });
   it("keeps the tail of an over-long text and says truncated", async () => {
     const { call } = setup([term("a", "Terminal 1", ROOT, { buffer: `${"x".repeat(RESULT_CHARS)}END\n` })]);
     const r = await call("terminal_read", { terminal: "a", lines: 1000 });
