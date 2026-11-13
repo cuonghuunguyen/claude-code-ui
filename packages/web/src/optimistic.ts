@@ -100,9 +100,13 @@ export function movePending(all: Record<string, Pending[]>, to: string): Record<
   return list ? { ...rest, [to]: list } : all;
 }
 
-/** One pass, early exit: a prompt of the user is in the view, and neither a turn end nor an error. */
+/**
+ * One pass, early exit: a prompt of the user is in the view, a turn is running (or waits for input), and no turn end is seen.
+ * A view rebuilt from a transcript has no turn_result parts, so an idle view never counts.
+ */
 function firstTurnUnderway(v: SessionView): boolean {
-  if (v.state === "error" || v.state === "closed") return false;
+  const state = shownState(v);
+  if (state !== "running" && state !== "needs_input") return false;
   let prompted = false;
   for (const id of v.order) {
     const p = v.parts.get(id)!;
@@ -114,7 +118,7 @@ function firstTurnUnderway(v: SessionView): boolean {
 
 /**
  * Session ids whose first turn is under way: a pending prompt (also the NEW_TAB one's created session), or a user_text in the view
- * with no turn end yet and no error. Their placeholder title is about to be replaced; once the turn is over or failed it is final.
+ * with no turn end yet and a running turn (not idle: a restored transcript has no turn end). Their placeholder title is about to be replaced; once the turn is over or failed it is final.
  */
 export function promptedIds(all: Record<string, Pending[]>, views: Record<string, SessionView | undefined>): Set<string> {
   const ids = new Set<string>();
