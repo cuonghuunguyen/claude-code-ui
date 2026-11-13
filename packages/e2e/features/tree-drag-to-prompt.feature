@@ -39,9 +39,7 @@ Feature: Drag files and folders from the Files tree into the prompt box (GH-707)
 
   Scenario: The Files tab with a selection does not scroll the page sideways on a phone
     Given the viewport is 390x844
-    And the app is open
-    And I open the scratch project
-    And I start a new Haiku session
+    And a Haiku session with one finished reply
     When I open the Files tab of the side panel
     And I ControlOrMeta-click the tree row "src"
     And I ControlOrMeta-click the tree row "lib"
