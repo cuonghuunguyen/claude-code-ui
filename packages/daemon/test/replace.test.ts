@@ -239,6 +239,30 @@ describe("replaceInFiles", () => {
     expect(read(d, "a.txt")).toBe("foo\n");
     expect(read(d, "evil.txt")).toBe("a".repeat(40) + "b\n");
   });
+  it("regex replace over several files (one thread, several runs)", async () => {
+    const d = tmp();
+    for (const f of ["a", "b", "c"]) put(d, `${f}.txt`, "f(1)\nf(2)\n");
+    const s = setup(d);
+    const files = ["a", "b", "c"].map((f) => ({ path: `${f}.txt`, lines: [1, 2] }));
+    const dry = await s.dry("f\\((\\d)\\)", "g($1)", files, true);
+    expect(dry.files.map((f) => f.lines?.[1]?.after)).toEqual(["g(2)", "g(2)", "g(2)"]);
+    const r = await s.apply("f\\((\\d)\\)", "g($1)", files, true);
+    expect(r).toMatchObject({ changedFiles: 3, changedLines: 6 });
+    expect(read(d, "c.txt")).toBe("g(1)\ng(2)\n");
+  });
+  it("a file changed while later files were prepared is skipped, not overwritten", async () => {
+    const d = tmp();
+    put(d, "a.txt", "foo\n");
+    put(d, "b.txt", "foo\n");
+    const s = setup(d);
+    let n = 0;
+    // The second file's allowed() check runs after the first was read and before any write.
+    const opts = { ...s.opts, allowed: (p: string) => (n++ === 1 ? (writeFileSync(join(d, "a.txt"), "foo\nedited\n"), s.opts.allowed(p)) : s.opts.allowed(p)) };
+    const r = await replaceInFiles(d, { query: "foo", regex: false, replace: "x", dryRun: false, files: ["a.txt", "b.txt"].map((path) => ({ path, lines: [1], ...s.stamp(path) })) }, opts);
+    expect(r.files.map((f) => [f.path, f.skipped])).toEqual([["a.txt", "changed"]]);
+    expect(read(d, "a.txt")).toBe("foo\nedited\n");
+    expect(read(d, "b.txt")).toBe("x\n");
+  });
   it("a line whose JS regex finds nothing is none in the dry run", async () => {
     const d = tmp();
     put(d, "a.txt", "foo\n");

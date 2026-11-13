@@ -106,7 +106,7 @@ export default {
   "app.find.replace": "Replace",
   "app.find.replaceAll": "Replace all",
   "app.find.replaceFile": "Replace in this file",
-  "app.find.replaceFileTitle": "Replace in this file (Ctrl+Enter in the list)",
+  "app.find.replaceFileTitle": "Replace in this file (Ctrl/Cmd+Enter in the list)",
   "app.find.replaceFileCheck": "Include {path}",
   "app.find.replaceNone": "No replacement on this line",
   "app.find.replaceCount": "Will replace {matches} in {files}",

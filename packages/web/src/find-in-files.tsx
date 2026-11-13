@@ -98,7 +98,7 @@ export function FindInFiles({
       send({ query, regex, globs, includeIgnored: choice })
         .then((res) => {
           if (!current) return;
-          if (lastKey.current !== key) setExcluded(new Set());
+          if (lastKey.current !== key) (setExcluded(new Set()), setSummary(undefined));
           lastKey.current = key;
           lastDry.current = undefined;
           setFound({ key, res });

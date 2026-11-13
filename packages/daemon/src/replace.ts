@@ -126,7 +126,12 @@ export function replaceRunner(q: { source: string; literal: boolean; replace: st
         try {
           if (!w) {
             w = new Worker(REPLACE_THREAD, { eval: true });
-            w.on("message", (r: Replaced[] | undefined) => ((pending = undefined), resolve(r)));
+            // One listener for every run: it settles whichever run is pending.
+            w.on("message", (r: Replaced[] | undefined) => {
+              const p = pending;
+              pending = undefined;
+              p?.(r);
+            });
             w.on("error", () => stop());
           }
           w.postMessage({ source: q.source, replace: q.replace, bodies });
@@ -315,6 +320,12 @@ export async function replaceInFiles(
     let changedLines = 0;
     for (const p of prepared.splice(0)) {
       try {
+        // The file may have changed while later files were read and computed: the same check as at the read.
+        const st = fstatSync(p.fd);
+        if (st.mtimeMs !== p.mtime || st.size !== p.size) {
+          out.push(skipped(p.path, "changed", "Changed on disk during the replace"));
+          continue;
+        }
         p.picks.forEach((n, i) => (p.lines[n - 1]!.body = p.found[i]!.text));
         const data = Buffer.from(joinLines(p.lines));
         if (data.equals(p.before)) continue;

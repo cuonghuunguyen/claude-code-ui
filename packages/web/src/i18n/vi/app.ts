@@ -108,7 +108,7 @@ export default {
   "app.find.replace": "Thay thế",
   "app.find.replaceAll": "Thay thế tất cả",
   "app.find.replaceFile": "Thay thế trong tệp này",
-  "app.find.replaceFileTitle": "Thay thế trong tệp này (Ctrl+Enter trong danh sách)",
+  "app.find.replaceFileTitle": "Thay thế trong tệp này (Ctrl/Cmd+Enter trong danh sách)",
   "app.find.replaceFileCheck": "Bao gồm {path}",
   "app.find.replaceNone": "Không có gì để thay thế ở dòng này",
   "app.find.replaceCount": "Sẽ thay thế {matches} trong {files}",

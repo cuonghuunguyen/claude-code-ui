@@ -619,10 +619,10 @@ export function createDaemon(opts: {
       console.error("saving the last engine failed:", err);
     }
   };
-  /** Local history (local-history.ts): `before()` is the one entry point for every write that replaces file content (editor save, agent Edit/Write, git writes). */
-/** The undo records of applied `fs.replace` calls (docs/spec.md "Editor"), shared by every connection. */
+  /** The undo records of applied `fs.replace` calls (docs/spec.md "Editor"), shared by every connection. */
   const replaceUndo = createReplaceUndo();
-    const localHistory = createLocalHistory({ dir: opts.historyDir ?? join(tmpdir(), `claude-ui-history-${randomUUID()}`), settings: () => appSettings.get().history, allowed: (p) => allowed(p) });
+  /** Local history (local-history.ts): `before()` is the one entry point for every write that replaces file content (editor save, agent Edit/Write, git writes). */
+  const localHistory = createLocalHistory({ dir: opts.historyDir ?? join(tmpdir(), `claude-ui-history-${randomUUID()}`), settings: () => appSettings.get().history, allowed: (p) => allowed(p) });
   const secrets = opts.secrets ?? createSecrets();
   const jira = createJira({ config: () => appSettings.get().jira, token: (o) => secrets.jiraToken(o), ...(opts.jiraFetch && { fetch: opts.jiraFetch }) });
   /** `settings.get` / `settings.set` / `jira.token` reply: the settings, the daemon, whether a Jira token is saved (never the token). */
