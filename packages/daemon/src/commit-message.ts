@@ -60,7 +60,6 @@ export function createWarmCommitMessage(query: typeof sdkQuery = sdkQuery) {
     take(): Spare {
       const s = spare ?? spawn();
       spare = undefined;
-      on = true;
       return s;
     },
     /** Ends a taken process and starts the next ready one. */

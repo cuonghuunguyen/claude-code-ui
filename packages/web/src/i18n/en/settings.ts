@@ -263,9 +263,9 @@ export default {
   "settings.row.git.openRepositoryInParentFolders.label": "Open repository in parent folders",
   "settings.row.git.openRepositoryInParentFolders.hint": "Control whether a repository in parent folders of workspaces or open files should be opened. Default always (VS Code: prompt); prompt behaves as always here until a prompt exists.",
   "settings.row.git.commitMessageInstruction.label": "Commit message instruction",
+  "settings.row.git.commitMessageInstruction.hint": "What Claude is asked when it writes a commit message for the checked files. Empty: the built-in instruction (shown grey).",
   "settings.row.git.commitMessageWarm.label": "Keep commit message generator warm",
   "settings.row.git.commitMessageWarm.hint": "Keeps one Claude Haiku process ready on the daemon so Generate in the commit box starts faster. Costs one idle process while on. Off: one process per click.",
-  "settings.row.git.commitMessageInstruction.hint": "What Claude is asked when it writes a commit message for the checked files. Empty: the built-in instruction (shown grey).",
   "settings.git.projectInstruction.label": "Commit message instruction for {project}",
   "settings.git.projectInstruction.hint": "Only for this project; wins over the instruction above. Empty: use the instruction above.",
 

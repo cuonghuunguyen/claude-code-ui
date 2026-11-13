@@ -735,6 +735,9 @@ export function createDaemon(opts: {
     known = [];
     for (const s of sessions.values()) if (!s.releaseQuery()) s.staleLogin = true;
     void plan.reset();
+    // GH-668: the ready Haiku process holds the old login (token in its env).
+    warmCommit.stop();
+    if (appSettings.get().git.commitMessageWarm) warmCommit.prewarm();
     broadcast({ type: "config.changed", kind: "models", cwd: "" });
   };
   const supportsAuto = (model: string) => known.some((m) => m.value === model && m.supportsAutoMode);
