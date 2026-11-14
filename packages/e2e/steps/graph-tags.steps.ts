@@ -2,7 +2,7 @@ import { expect } from "@playwright/test";
 import { git } from "../support/git-fixture.ts";
 import { Given, Then, When } from "./fixtures.ts";
 
-const dialog = (page: import("@playwright/test").Page) => page.getByTestId("git-new-tag").or(page.getByTestId("git-remove-tag"));
+const dialog = (page: import("@playwright/test").Page) => page.getByTestId("git-new-tag-dialog").or(page.getByTestId("git-remove-tag-dialog"));
 const originOf = (path: string) => git(path, "remote", "get-url", "origin");
 const hasTag = (repo: string, name: string) => git(repo, "tag", "--list", name) === name;
 const hasRemoteTag = (path: string, name: string) => git(originOf(path), "tag", "--list", name) === name;
@@ -26,12 +26,12 @@ Then("the tag dialog shows the command {string}", async ({ page }, text: string)
 });
 
 When("I confirm the tag dialog", async ({ page }) => {
-  await dialog(page).getByRole("button", { name: /^(Create|Remove Tag|Remove)$/ }).last().click();
+  await dialog(page).getByTestId(/^git-(new|remove)-tag-confirm$/).click();
   await expect(dialog(page)).toHaveCount(0);
 });
 
 When("I cancel the tag dialog", async ({ page }) => {
-  await dialog(page).getByRole("button", { name: "Cancel" }).click();
+  await dialog(page).getByTestId(/^git-(new|remove)-tag-cancel$/).click();
   await expect(dialog(page)).toHaveCount(0);
 });
 
@@ -59,24 +59,24 @@ When("I open the context menu on the tag chip {string}", async ({ page }, tag: s
 When("I pick {string} in the tag chip menu", async ({ page }, name: string) => {
   expect(name).toBe("Remove Tag…");
   await page.getByTestId("tag-remove").click();
-  await expect(page.getByTestId("git-remove-tag")).toBeVisible();
+  await expect(page.getByTestId("git-remove-tag-dialog")).toBeVisible();
 });
 
 Then("the Remove Tag dialog has no remote option", async ({ page }) => {
-  const d = page.getByTestId("git-remove-tag");
+  const d = page.getByTestId("git-remove-tag-dialog");
   // The remote check ends before the verdict: wait for its "Checking" text to go.
   await expect(d.getByText(/^Checking /)).toHaveCount(0, { timeout: 30_000 });
   await expect(d.locator('input[type="checkbox"]')).toHaveCount(0);
 });
 
 Then("the Remove Tag dialog offers {string} unchecked", async ({ page }, label: string) => {
-  const box = page.getByTestId("git-remove-tag").getByLabel(label);
+  const box = page.getByTestId("git-remove-tag-dialog").getByLabel(label);
   await expect(box).toBeVisible({ timeout: 30_000 });
   await expect(box).not.toBeChecked();
 });
 
 When("I check {string} in the Remove Tag dialog", async ({ page }, label: string) => {
-  await page.getByTestId("git-remove-tag").getByLabel(label).check();
+  await page.getByTestId("git-remove-tag-dialog").getByLabel(label).check();
 });
 
 Then("the project has no tag {string}", async ({ project }, name: string) => {
@@ -89,5 +89,18 @@ Then("the origin has no tag {string}", async ({ project }, name: string) => {
 
 When("I start New Tag from the commit menu", async ({ page }) => {
   await page.getByTestId("tag-new").click();
-  await expect(page.getByTestId("git-new-tag")).toBeVisible();
+  await expect(page.getByTestId("git-new-tag-dialog")).toBeVisible();
+});
+
+// The row's author column is hidden on a phone: right click the subject text.
+When("I open the commit menu on the visible row {string}", async ({ page }, subject: string) => {
+  await page.getByTestId("graph-panel").getByTestId("commit-row").filter({ hasText: subject }).first().locator("span.truncate", { hasText: subject }).first().click({ button: "right" });
+  await expect(page.getByTestId("branch-menu")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("tag-new")).toBeVisible({ timeout: 30_000 });
+});
+
+Then("the tag dialog command is shown whole", async ({ page }) => {
+  const m = await dialog(page).getByTestId("git-command").evaluate((el) => ({ scroll: el.scrollHeight, client: el.clientHeight, lines: el.textContent ?? "" }));
+  expect(m.scroll).toBeLessThanOrEqual(m.client);
+  expect(m.lines).toContain("git tag -d v1");
 });

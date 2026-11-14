@@ -18,7 +18,7 @@ export type TagRequest =
 const short7 = (h: string) => h.slice(0, 7);
 /** Menu items shown for the tags of one commit: the chip menu covers the rest. */
 export const MAX_TAG_ITEMS = 5;
-const PRE = "max-h-24 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] rounded bg-secondary p-2 font-mono text-muted-foreground text-xs";
+const PRE = "max-h-48 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] rounded bg-secondary p-2 font-mono text-muted-foreground text-xs";
 
 /** Name field, optional message and the live command; mounted only while open, so each open starts blank. */
 export function NewTagDialog({ cwd, exact = false, repoName, hash, onRun, onClose }: { cwd: string; exact?: boolean; repoName?: string; hash: string; onRun: Run; onClose: () => void }) {
