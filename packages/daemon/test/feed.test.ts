@@ -129,6 +129,25 @@ describe("send feeds", () => {
     expect(order.slice(200, 250)).toEqual(Array(50).fill("other"));
   });
 
+  it("orders the shown feeds by the order of the request, not by the order follow() is called in", () => {
+    const [first, second, third] = [new FakeSource(), new FakeSource(), new FakeSource()];
+    const { c, sent, send } = conn(1000);
+    const feeds = createFeeds(c, send);
+    c.bufferedAmount = FEED_HIGH + 1;
+    for (const src of [first, second, third]) for (let i = 0; i < 100; i++) src.emit();
+    const named = (src: FakeSource, id: string): FeedSource => ({ eventsAfter: function* (n) { for (const e of src.eventsAfter(n)) yield { ...e, sessionId: id }; }, subscribe: (since, l) => src.subscribe(since, l) });
+    // Requested first, second, third; the lookups finished third, first, second.
+    feeds.follow(named(third, "third"), 0, true, 3);
+    feeds.follow(named(first, "first"), 0, true, 1);
+    feeds.follow(named(second, "second"), 0, true, 2);
+    c.bufferedAmount = 0;
+    vi.advanceTimersByTime(60);
+    const order = sent.map((e) => e.sessionId);
+    expect(order.slice(0, 100)).toEqual(Array(100).fill("first"));
+    expect(order.slice(100, 150)).toEqual(Array(50).fill("second"));
+    expect(order.slice(150, 200)).toEqual(Array(50).fill("third"));
+  });
+
   it("writes a long replay in pieces: never more than HIGH + one event above the buffer, and every event arrives once", () => {
     const s = new FakeSource();
     for (let i = 0; i < 2000; i++) s.emit();

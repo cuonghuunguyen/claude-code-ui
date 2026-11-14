@@ -2157,6 +2157,7 @@ export function createDaemon(opts: {
     const unsubscribes = new Map<string, () => void>();
     /** This connection's session feeds: events go to the socket while its buffer allows, else from the log later (feed.ts). */
     const feeds = createFeeds(ws, (e) => send(ws, e));
+    let subscribeOrder = 0;
     // fs.watch: watched path as the client gave it → canonical path and its stat listener.
     // fs.media: key (canonical path, "blob\0cwd\0hash\0path", "<side>\0cwd\0hash\0path") -> nonce issued to this connection.
     const mediaNonces = new Map<string, string>();
@@ -2472,6 +2473,8 @@ export function createDaemon(opts: {
           }
         }
         case "session.subscribe": {
+          // Before the first await: the page's order of asking, for the feed order (the lookups below finish in any order).
+          const order = ++subscribeOrder;
           const span = perfMon.span("session.open");
           try {
             const s = await find(msg.sessionId, msg.background === true);
@@ -2508,11 +2511,11 @@ export function createDaemon(opts: {
             }
             if (snap) {
               reply({ logEpoch, seq: snap.seq, session: s.info(), title: title!, snapshot: snap.snapshot, ...planDirsOf(s) });
-              const stop = feeds.follow(s, snap.seq, shown);
+              const stop = feeds.follow(s, snap.seq, shown, order);
               return keep(stop, mirror(s));
             }
             reply({ logEpoch, seq: s.seq(), session: s.info(), title: title!, ...planDirsOf(s) });
-            const stop = feeds.follow(s, since, shown);
+            const stop = feeds.follow(s, since, shown, order);
             return keep(stop, mirror(s));
           } finally {
             span.end();

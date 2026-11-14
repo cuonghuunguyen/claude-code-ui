@@ -39,6 +39,8 @@ interface Feed {
   paused: boolean;
   /** A shown tab (plain subscribe): resumes before the background feeds. */
   held: boolean;
+  /** Smaller goes first among the shown feeds: the order the page asked in (the daemon handles subscribes concurrently, they finish in any order). */
+  order: number;
   stop: () => void;
 }
 
@@ -48,6 +50,7 @@ export function createFeeds(conn: FeedConn, send: (e: Event) => void, o: FeedOpt
   const feeds = new Set<Feed>();
   let timer: NodeJS.Timeout | undefined;
   let turn = 0;
+  let count = 0;
 
   /** Sends the events after the feed's seq until the buffer is above HIGH (`paused`), `max` events were sent, or none are left. Returns whether the feed is caught up. */
   function pump(f: Feed, max = Infinity): boolean {
@@ -92,7 +95,7 @@ export function createFeeds(conn: FeedConn, send: (e: Event) => void, o: FeedOpt
     if (conn.bufferedAmount >= low) return;
     const paused = [...feeds].filter((f) => f.paused);
     // The first shown feed is the visible tab (the page subscribes it first): it catches up before the others get a turn.
-    const shown = paused.filter((f) => f.held);
+    const shown = paused.filter((f) => f.held).sort((a, b) => a.order - b.order);
     if (shown[0] && conn.bufferedAmount <= high) pump(shown[0]);
     rounds(shown.slice(1), 0);
     rounds(paused.filter((f) => !f.held), turn++);
@@ -100,9 +103,9 @@ export function createFeeds(conn: FeedConn, send: (e: Event) => void, o: FeedOpt
   }
 
   return {
-    /** Sends the events of `source` after `since` as the buffer allows, then follows it. Returns the stop: ends the feed, the subscription and the timer when no feed is paused. */
-    follow(source: FeedSource, since: number, held: boolean): () => void {
-      const f: Feed = { source, sentSeq: since, paused: false, held, stop: () => {} };
+    /** `order`: the place of the request among this connection's subscribes (feed order of the shown tabs); absent: the call order. Sends the events of `source` after `since` as the buffer allows, then follows it. Returns the stop: ends the feed, the subscription and the timer when no feed is paused. */
+    follow(source: FeedSource, since: number, held: boolean, order = ++count): () => void {
+      const f: Feed = { source, sentSeq: since, paused: false, held, order, stop: () => {} };
       feeds.add(f);
       // The replay goes through the feed, not the subscription: a long gap is written in pieces.
       const unsubscribe = source.subscribe(since, (e) => {

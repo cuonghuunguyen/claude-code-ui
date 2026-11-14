@@ -231,6 +231,8 @@ page.on("console", (m) => {
 const cls: Record<string, { n: number; b: number }> = {};
 const pageSeq = new Map<string, number>();
 let listReplyAt = 0;
+/** Sessions in the order their first event reached the page after the cut: the daemon's feed order (the shown tab should come first). */
+const firstSeen: string[] = [];
 const add = (k: string, b: number) => ((cls[k] ??= { n: 0, b: 0 }).n++, (cls[k].b += b));
 page.on("websocket", (w) => {
   const reqType = new Map<string, string>();
@@ -262,6 +264,7 @@ page.on("websocket", (w) => {
       return add(`reply ${t}`, b);
     }
     if (m.sessionId && typeof m.seq === "number") {
+      if (!firstSeen.includes(m.sessionId)) firstSeen.push(m.sessionId);
       pageSeq.set(m.sessionId, Math.max(pageSeq.get(m.sessionId) ?? 0, m.seq));
       return add(m.seq <= (seen.get(m.sessionId) ?? 0) ? "event replay" : "event live", b);
     }
@@ -304,6 +307,7 @@ async function reconnect(n: number, phase: Row["phase"]) {
   const t0 = Date.now();
   const target = shownId ? (daemonSeq.get(shownId) ?? 0) : 0;
   listReplyAt = 0;
+  firstSeen.length = 0;
   proxy.cut();
   // shownMs: the list reply arrived and the shown tab holds every event the daemon had at the cut.
   let shownMs = -1;
@@ -321,6 +325,8 @@ async function reconnect(n: number, phase: Row["phase"]) {
   rows.push(row);
   const sec = (ms: number) => (ms < 0 ? ">90s" : `${(ms / 1000).toFixed(1)}s`);
   console.log(`reconnect ${n} (${phase}): shown ${sec(shownMs)}, settled ${sec(settledMs)}, ${MB(row.bytesDown)}MB down, drops ${row.drops}, kept ${row.kept}`);
+  const rank = shownId ? firstSeen.indexOf(shownId) : -1;
+  console.log(`  feed order: shown tab is ${rank < 0 ? "not seen" : `#${rank + 1}`} of ${firstSeen.length} sessions with events`);
   console.log(`  live generation (harness client, all ${liveIds.length} live sessions): ${row.genKBps.toFixed(0)} KB/s; link ${opt.kbps / 8} KB/s`);
   for (const [k, v] of Object.entries(row.classes).sort((a, b) => b[1].b - a[1].b)) console.log(`  ${k.padEnd(40)} ${String(v.n).padStart(6)} msgs ${MB(v.b).padStart(7)} MB`);
 }
