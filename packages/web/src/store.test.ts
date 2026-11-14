@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Event, Part } from "@claude-ui/protocol";
-import { applyEvent, emptySession, hitKey, partOf, shownState, wholeParts, withoutResultText, lastTextOf, stepCountOf, withArtifacts, withEdits, withPage, withSubscribe, type SessionView } from "./store.ts";
+import { partHash, type Event, type Part } from "@claude-ui/protocol";
+import { applyEvent, emptySession, hitKey, partOf, shownState, wholeParts, withoutResultText, lastTextOf, stepCountOf, withArtifacts, withEdits, withPage, withSubscribe, knownOf, MISSING_REFS, type SessionView } from "./store.ts";
 import type { SessionInfo, Snapshot } from "@claude-ui/protocol";
 
 const ev = (seq: number, part: Part): Event => ({ type: "event", sessionId: "s", seq, part });
@@ -449,5 +449,101 @@ describe("run card helpers (GH-718)", () => {
     const group = { kind: "context" as const, id: "g", calls: [call("x"), call("y")] as never };
     expect(stepCountOf([part(call("c")), group, part(text("b", "t", false))])).toBe(3);
     expect(stepCountOf([])).toBe(0);
+  });
+});
+
+describe("withSubscribe with refs (GH-771)", () => {
+  const info: SessionInfo = { id: "s", cwd: "/", state: "idle", model: "sonnet", permissionMode: "acceptEdits", effort: "high", permissionModes: [] };
+  const user = (id: string): Part => ({ type: "user_text", id, text: id, images: [] });
+  const asst = (id: string): Part => ({ type: "assistant_text", id, text: id, streaming: false });
+  const img = "A".repeat(20_000);
+  /** A cached view: u1, a1 (holds a full image), u2; aux a0 older than the cursor. */
+  const cached = (): SessionView => {
+    const parts: Part[] = [user("u1"), { type: "user_text", id: "u2", text: "u2", images: [`data:image/png;base64,${img}`] }, asst("a1")];
+    const aux = { part: asst("a0"), pos: 3 };
+    return { ...emptySession(), logEpoch: "old", lastSeq: 50, order: parts.map((p) => p.id), parts: new Map(parts.map((p) => [p.id, p])), older: { before: "u1", pos: 10 }, aux: [aux] };
+  };
+  const reply = (page: (Part | { ref: string })[], over: object = {}) => ({
+    logEpoch: "new",
+    seq: 60,
+    session: info,
+    snapshot: { refs: true as const, heads: [], attentionSeq: 0, page: { parts: page, older: { before: "u2", pos: 7 } }, aux: [{ part: { ref: "a0" }, pos: 4 }], ...over },
+  });
+
+  it("refs resolve to the cached objects (full media kept); new parts follow in reply order; dropped parts are gone; older and aux pos come from the reply", () => {
+    const c = cached();
+    const fresh = asst("a2");
+    const v = withSubscribe(c, reply([{ ref: "u2" }, { ref: "a1" }, fresh])) as SessionView;
+    expect(v).not.toBe(MISSING_REFS);
+    expect(v.order).toEqual(["u2", "a1", "a2"]);
+    expect(v.parts.get("u2")).toBe(c.parts.get("u2"));
+    expect(v.parts.get("a1")).toBe(c.parts.get("a1"));
+    expect(JSON.stringify(v.parts.get("u2"))).toContain(img);
+    expect(v.parts.get("a2")).toBe(fresh);
+    expect(v.parts.has("u1")).toBe(false);
+    expect(v.older).toEqual({ before: "u2", pos: 7 });
+    expect(v.aux).toEqual([{ part: c.aux[0]!.part, pos: 4 }]);
+    expect(v.aux[0]!.part).toBe(c.aux[0]!.part);
+    expect(v).toMatchObject({ logEpoch: "new", lastSeq: 60 });
+    // The store never holds a RefPart.
+    expect([...v.parts.values()].some((p) => "ref" in p)).toBe(false);
+  });
+
+  it("a ref may point at a cached aux part that the new page now holds", () => {
+    const c = cached();
+    const v = withSubscribe(c, reply([{ ref: "a0" }, { ref: "u1" }], { aux: [] })) as SessionView;
+    expect(v.parts.get("a0")).toBe(c.aux[0]!.part);
+    expect(v.order).toEqual(["a0", "u1"]);
+  });
+
+  it("a ref the view does not hold returns MISSING_REFS, in the page or in aux", () => {
+    expect(withSubscribe(cached(), reply([{ ref: "zzz" }]))).toBe(MISSING_REFS);
+    expect(withSubscribe(cached(), reply([{ ref: "u1" }], { aux: [{ part: { ref: "nope" }, pos: 1 }] }))).toBe(MISSING_REFS);
+    expect(withSubscribe(emptySession(), reply([{ ref: "u1" }]))).toBe(MISSING_REFS);
+  });
+
+  it("a plain snapshot (no refs) still works and returns a view", () => {
+    const v = withSubscribe(cached(), { logEpoch: "n", seq: 1, session: info, snapshot: { heads: [], attentionSeq: 0, page: { parts: [user("x")] }, aux: [] } });
+    expect(v.order).toEqual(["x"]);
+  });
+});
+
+describe("knownOf (GH-771)", () => {
+  const asst = (id: string, t = id): Part => ({ type: "assistant_text", id, text: t, streaming: false });
+  const viewOf = (ids: string[], aux: string[] = []): SessionView => ({
+    ...emptySession(),
+    order: ids,
+    parts: new Map(ids.map((id) => [id, asst(id)])),
+    aux: aux.map((id, i) => ({ part: asst(id), pos: i })),
+  });
+
+  it("lists the loaded parts newest first, then the aux newest first, as [id, partHash of the stored part]", () => {
+    const v = viewOf(["a", "b", "c"], ["x", "y"]);
+    expect(knownOf(v)).toEqual([
+      ["c", partHash(v.parts.get("c")!)],
+      ["b", partHash(v.parts.get("b")!)],
+      ["a", partHash(v.parts.get("a")!)],
+      ["y", partHash(v.aux[1]!.part)],
+      ["x", partHash(v.aux[0]!.part)],
+    ]);
+  });
+
+  it("the hash ignores media: a part with a full image hashes like its omitted form", () => {
+    const full: Part = { type: "user_text", id: "u", text: "t", images: [`data:image/png;base64,${"A".repeat(20_000)}`] };
+    const v = { ...emptySession(), order: ["u"], parts: new Map([["u", full]]) };
+    expect(knownOf(v)[0]).toEqual(["u", partHash(full)]);
+  });
+
+  it("keeps at most 5000 entries, the newest", () => {
+    const ids = Array.from({ length: 5200 }, (_, i) => `p${i}`);
+    const k = knownOf(viewOf(ids, ["old"]));
+    expect(k).toHaveLength(5000);
+    expect(k[0]![0]).toBe("p5199");
+    expect(k[4999]![0]).toBe("p200");
+  });
+
+  it("an empty view gives no entries; an aux part also loaded is listed once", () => {
+    expect(knownOf(emptySession())).toEqual([]);
+    expect(knownOf(viewOf(["a"], ["a"]))).toHaveLength(1);
   });
 });

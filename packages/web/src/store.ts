@@ -1,5 +1,5 @@
 // Per-session client store keyed by part id; events apply idempotently by seq (docs/spec.md "Client state").
-import { isAttention, type AgentInfo, type ContextUsage, type Cursor, type Effort, type Event, type Part, type PermissionMode, type PosPart, type QueuedPrompt, type SearchHit, type SessionState, type SlashCommand, type SubscribeResult, type TimelinePage, type TodoItem } from "@claude-ui/protocol";
+import { isAttention, partHash, KNOWN_MAX, type AgentInfo, type ContextUsage, type Cursor, type Effort, type Event, type Part, type PermissionMode, type PosPart, type QueuedPrompt, type RefPart, type SearchHit, type SessionState, type SlashCommand, type Snapshot, type SubscribeResult, type TimelinePage, type TodoItem } from "@claude-ui/protocol";
 import { CONTEXT_TOOLS } from "./tools.ts";
 
 export type ToolCall = Extract<Part, { type: "tool_call" }>;
@@ -124,13 +124,57 @@ export function applyEvent(s: SessionView, e: Event): SessionView {
   return { ...s, lastSeq: e.seq, order, parts };
 }
 
+/** `withSubscribe` result for a reply that refers to a part the view does not hold: subscribe again with `fresh` (a plain snapshot, no `known`). */
+export const MISSING_REFS: unique symbol = Symbol("missing-refs");
+
+const hashes = new WeakMap<Part, string>();
+const hashOf = (p: Part): string => {
+  let h = hashes.get(p);
+  if (h === undefined) hashes.set(p, (h = partHash(p)));
+  return h;
+};
+
+/** `known` of a `session.subscribe`: [id, partHash] of the view's loaded parts, then of its aux, each newest first, at most KNOWN_MAX entries. */
+export function knownOf(s: SessionView): [string, string][] {
+  const out: [string, string][] = [];
+  for (let i = s.order.length - 1; i >= 0 && out.length < KNOWN_MAX; i--) {
+    const p = s.parts.get(s.order[i]!);
+    if (p) out.push([p.id, hashOf(p)]);
+  }
+  for (let i = s.aux.length - 1; i >= 0 && out.length < KNOWN_MAX; i--) {
+    const p = s.aux[i]!.part;
+    if (!s.parts.has(p.id)) out.push([p.id, hashOf(p)]);
+  }
+  return out;
+}
+
+const isRef = (p: Part | RefPart): p is RefPart => "ref" in p;
+
 /**
  * Call with the `session.subscribe` reply before its events: a different logEpoch empties the view for the full replay.
  * The reply's model, mode and effort are current; the replay must not override them with older values (e.g. a long log
  * replays an old plan mode for seconds).
  */
-export function withSubscribe(s: SessionView, { logEpoch, seq, session, snapshot, planDirs }: Omit<SubscribeResult, "title">): SessionView {
-  if (snapshot) {
+export function withSubscribe(s: SessionView, reply: Omit<SubscribeResult, "title" | "snapshot"> & { snapshot?: Snapshot }): SessionView;
+export function withSubscribe(s: SessionView, reply: Omit<SubscribeResult, "title">): SessionView | typeof MISSING_REFS;
+export function withSubscribe(s: SessionView, { logEpoch, seq, session, snapshot: wire, planDirs }: Omit<SubscribeResult, "title">): SessionView | typeof MISSING_REFS {
+  if (wire) {
+    // A reply with refs: each {ref} is the view's own part (same object, it may hold media the snapshot omits).
+    let missing = false;
+    const held = (id: string) => s.parts.get(id) ?? s.aux.find((a) => a.part.id === id)?.part;
+    const resolve = (p: Part | RefPart): Part => {
+      if (!isRef(p)) return p;
+      const have = held(p.ref);
+      if (!have) missing = true;
+      return have as Part;
+    };
+    const snapshot = {
+      heads: wire.heads,
+      attentionSeq: wire.attentionSeq,
+      page: { parts: wire.page.parts.map(resolve), ...(wire.page.older && { older: wire.page.older }) },
+      aux: wire.aux.map((a) => ({ part: resolve(a.part), pos: a.pos })),
+    };
+    if (missing) return MISSING_REFS;
     // A snapshot is authoritative as of `seq`: heads give the state, the page the parts. Nothing is replayed after it.
     let v: SessionView = { ...emptySession(), logEpoch };
     for (const h of snapshot.heads) v = applyEvent(v, h);
