@@ -53,6 +53,14 @@ it("shows Always allow next to Allow and retry, only with a handler, on a classi
   expect(q("allow-and-retry")?.textContent).toBe("Allowed once");
 });
 
+it("shows no Allow and retry or Always allow on a step inside an inline task, only the denial reason (GH-791)", async () => {
+  const h = async () => {};
+  await render(call({ parentId: "inline-1" }), h);
+  expect(q("allow-and-retry")).toBeNull();
+  expect(q("always-allow")).toBeNull();
+  expect(el.textContent).toContain("[Git Destructive]");
+});
+
 it("opens an inline panel with the exact rule, and Cancel closes it", async () => {
   await render(call(), async () => {});
   expect(q("always-allow-panel")).toBeNull();

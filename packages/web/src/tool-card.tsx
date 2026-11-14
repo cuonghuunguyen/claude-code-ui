@@ -115,7 +115,8 @@ function PlainToolCard({ call, result, awaiting, plan }: { call: ToolCall; resul
   const [moving, setMoving] = useState<{ error?: string }>();
   const allowDenied = use(AllowDeniedContext);
   const autoDenied = call.status === "denied" && call.denial?.by === "classifier" ? call.denial : undefined;
-  const canAllow = !!allowDenied && !!autoDenied;
+  // A step inside an inline task (GH-791): its call is not in the main session and the run takes no follow-up message, so no retry.
+  const canAllow = !!allowDenied && !!autoDenied && !call.parentId;
   const [allowing, setAllowing] = useState<{ error?: string }>();
   // Always allow (GH-756): the inline panel, its pending scope and last error.
   const alwaysAllow = use(AlwaysAllowDeniedContext);
