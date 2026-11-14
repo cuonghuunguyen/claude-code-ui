@@ -844,7 +844,11 @@ describe("OpenCode rewind", { timeout: TEST_MS }, () => {
     await d.ok({ type: "session.list" });
     const sub = await d.ok({ type: "session.subscribe", sessionId: "ses_rw", sinceSeq: 0, paged: true });
     const parts = () => d.inbox.filter((m): m is Extract<ServerMessage, { type: "event" }> => m.type === "event" && m.sessionId === "ses_rw").map((m) => m.part);
-    return { d, sub, parts, preview: (id: string) => d.ok({ type: "session.rewindPreview", sessionId: "ses_rw", userMessageId: id }), rewind: (id: string, mode: string) => d.request({ type: "session.rewind", sessionId: "ses_rw", userMessageId: id, mode }) };
+    // session.subscribe awaits the local settings files before its snapshot (GH-763): the read after the stream connected may end in that wait, and its parts are then in the snapshot, not in events.
+    const snapshotParts: Part[] = [...sub.snapshot.heads.map((e: { part: Part }) => e.part), ...sub.snapshot.page.parts];
+    /** What the page has: the snapshot, then the events. */
+    const seen = () => [...snapshotParts, ...parts()];
+    return { d, sub, parts, seen, preview: (id: string) => d.ok({ type: "session.rewindPreview", sessionId: "ses_rw", userMessageId: id }), rewind: (id: string, mode: string) => d.request({ type: "session.rewind", sessionId: "ses_rw", userMessageId: id, mode }) };
   }
 
   it("the preview sums the files of the message's turn and every later one; modes are both with files, conversation without", async () => {
@@ -884,7 +888,7 @@ describe("OpenCode rewind", { timeout: TEST_MS }, () => {
 
   it("/undo, /undo, /redo and /redo walk the revert point; each is local: no echo, no prompt, reply local", async () => {
     const r = await restored();
-    await until(() => r.parts().some((p) => p.type === "user_text" && p.id === "msg_u4"));
+    await until(() => r.seen().some((p) => p.type === "user_text" && p.id === "msg_u4"));
     const run = (text: string) => r.d.ok({ type: "session.prompt", sessionId: "ses_rw", text });
     const reverts = () => r.d.requests("POST", "/session/ses_rw/revert").map((q) => q.body.messageID);
     expect(await run("/undo")).toEqual({ local: true });
@@ -931,15 +935,15 @@ describe("OpenCode rewind", { timeout: TEST_MS }, () => {
 
   it("the commands list has /compact, /undo and /redo first, before the server's", async () => {
     const r = await restored();
-    await until(() => r.parts().some((p) => p.type === "commands"));
-    const names = (r.parts().filter((p) => p.type === "commands").at(-1) as { commands: { name: string }[] }).commands.map((c) => c.name);
+    await until(() => r.seen().some((p) => p.type === "commands"));
+    const names = (r.seen().filter((p) => p.type === "commands").at(-1) as { commands: { name: string }[] }).commands.map((c) => c.name);
     expect(names.slice(0, 3)).toEqual(["compact", "undo", "redo"]);
     expect(names).toContain("review");
   });
 
   it("a revert made in OpenCode shows as a rewind; its unrevert brings the messages back", async () => {
     const r = await restored();
-    await until(() => r.parts().some((p) => p.type === "user_text" && p.id === "msg_u4")); // the read after the stream connected is done
+    await until(() => r.seen().some((p) => p.type === "user_text" && p.id === "msg_u4")); // the read after the stream connected is done
     await r.d.fake("/__revert", { sessionId: "ses_rw", messageID: "msg_u3" });
     await until(() => r.parts().some((p) => p.type === "rewind" && p.userMessageId === "msg_u3"));
     const cut = () => r.parts().filter((p) => p.id === "msg_u3").length;
