@@ -4,13 +4,15 @@ import { lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { worktreeSettings } from "./git.ts";
-import { mainCheckoutOf } from "./risk-tier.ts";
+import { denied, gitControl, mainCheckoutOf } from "./risk-tier.ts";
 
 export type SharedDir = {
   /** The entry as the settings name it, `/` separated: the link is `<cwd>/<rel>`. */
   rel: string;
   /** The real folder in the main checkout. */
   real: string;
+  /** Its path relative to the main checkout, `/` separated (the entry itself may be a symlink in the main checkout). */
+  target: string;
 };
 
 const defaultClaudeDir = () => process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
@@ -42,8 +44,14 @@ export function sharedLinks(cwd: string, claudeDir = defaultClaudeDir()): Shared
         const rel = relative(realMain, real);
         if (!rel || rel.startsWith("..") || isAbsolute(rel)) continue;
         if (realpathSync(link) !== real) continue;
+        // The entry name and the real target both: a link `cfg` to `<main>/.claude` must not share the agent config. A target that
+        // holds the worktree itself (`.claude`) would share every worktree.
+        const names = [...d.split(/[\\/]/), ...rel.split(sep)];
+        if (names.some((seg) => denied(seg) || gitControl(seg))) continue;
+        const inner = relative(real, realCwd);
+        if (inner === "" || (!inner.startsWith("..") && !isAbsolute(inner))) continue;
         const entry = d.split(/[\\/]/).filter(Boolean).join("/");
-        if (!out.some((o) => o.real === real)) out.push({ rel: entry, real });
+        if (!out.some((o) => o.real === real)) out.push({ rel: entry, real, target: rel.split(sep).join("/") });
       } catch {}
     }
     return out;

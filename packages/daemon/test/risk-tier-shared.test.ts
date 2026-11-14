@@ -85,6 +85,18 @@ describe.skipIf(!canSymlink)(`shared folder of a worker (${canSymlink ? "symlink
     expect(write(wt, "development-docs/K/out")).toBe("high");
   });
 
+  it("an entry whose real target is agent config, or holds the worktree, is not shared (review)", () => {
+    const f = sharedFixture({ list: ["cfg"], link: "none" });
+    symlinkSync(join(f.main, ".claude"), join(f.main, "cfg"));
+    symlinkSync(join(f.main, "cfg"), join(f.wt, "cfg"));
+    expect(sharedDirs(f.wt)).toEqual([]);
+    expect(write(f.wt, "cfg/settings.local.json")).toBe("high");
+    const g = sharedFixture({ list: ["wtl"], link: "none" });
+    symlinkSync(join(g.main, ".claude", "worktrees"), join(g.main, "wtl"));
+    symlinkSync(join(g.main, "wtl"), join(g.wt, "wtl"));
+    expect(sharedDirs(g.wt)).toEqual([]);
+  });
+
   it("a nested repository in the shared folder is high", () => {
     const { wt, shared } = sharedFixture();
     mkdirSync(join(shared, "clone"));

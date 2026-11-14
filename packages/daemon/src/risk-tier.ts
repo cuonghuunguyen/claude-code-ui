@@ -41,7 +41,7 @@ export const deniedName = (seg: string, revision = false) => {
   // `revision`: a git revision token, where HEAD is the usual name (those four names matter for writes: a bare repo layout).
   return DENY_DIRS.has(s) || (DENY_NAMES.has(s) && !(revision && GIT_LAYOUT.has(s))) || s.startsWith(".env") || s.endsWith(".pem") || s.endsWith(".key");
 };
-const denied = (seg: string) => deniedName(seg) || aliased(seg);
+export const denied = (seg: string) => deniedName(seg) || aliased(seg);
 /**
  * Reads: `.claude/skills/**` below a root (those first two segments) and CLAUDE.md / AGENTS.md as the last segment are agent
  * docs; every other segment, and the aliasing rules for every segment, hold as for writes. `nameOnly`: skip the aliasing
@@ -99,7 +99,7 @@ export function pathLow(p: unknown, cwd: string, write: boolean, cwdOk = !write,
   // Reads may lie in more than one root (the cwd, then the main checkout); the first root that holds the path decides. Writes: the
   // cwd, then the shared folders of a worker (shared-dirs.ts): its scratch files in the main checkout, never a tracked folder.
   let facts = safety;
-  const links = write ? sharedLinks(cwd).filter((d) => !d.rel.split("/").some((seg) => denied(seg) || gitControl(seg))) : [];
+  const links = write ? sharedLinks(cwd) : [];
   for (const root of write ? [cwd, ...links.map((d) => d.real)] : roots) {
     const realRoot = realpathSync(root);
     const link = links.find((d) => d.real === root);
@@ -156,7 +156,7 @@ function treeHasDenied(dir: string): boolean {
  * Git's own control files and hook folders, by name at any depth: .gitmodules, .gitattributes, .gitconfig, .gitignore, .githooks*,
  * .husky*, hooks, .lfsconfig. `.github` and `.gitlab*` hold CI files, not git's: a push (high) is what runs them.
  */
-const gitControl = (seg: string) => {
+export const gitControl = (seg: string) => {
   const g = seg.toLowerCase();
   return g === "hooks" || g.startsWith(".husky") || g === ".lfsconfig" || (g.startsWith(".git") && g !== ".github" && !g.startsWith(".gitlab"));
 };

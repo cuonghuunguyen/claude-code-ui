@@ -353,7 +353,7 @@ const listing = (s: Scan, text: string) => {
     if (rec.slice(0, sp) === "160000") s.flag("a submodule (gitlink) in the index");
     const path = rec.slice(sp + 1);
     if (deniedRead(path.split("/"))) denied = true;
-    for (const d of s.shared) if (path === d.rel || path.startsWith(`${d.rel}/`)) tracked.add(d.rel);
+    for (const d of s.shared) if ([d.rel, d.target].some((n) => path === n || path.startsWith(`${n}/`))) tracked.add(d.rel);
   }
   s.out.trackedDenied = denied;
   s.out.trackedShared = [...tracked];
