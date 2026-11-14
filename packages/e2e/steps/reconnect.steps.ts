@@ -1,6 +1,7 @@
 import type { Page, WebSocketRoute } from "@playwright/test";
-import { prepareHaikuSession } from "../support/flow.ts";
-import { Given, When } from "./fixtures.ts";
+import { expect } from "@playwright/test";
+import { TURN_MS } from "../support/ui.ts";
+import { Given, Then, When } from "./fixtures.ts";
 
 /** The page's daemon sockets of a scenario: `offline` refuses new ones, `open` are the ones a cut closes. */
 type Cut = { offline: boolean; open: Set<WebSocketRoute> };
@@ -33,9 +34,34 @@ When("the connection to the daemon is back", async ({ page }) => {
 
 When("I open a second new session tab", async ({ page, project }) => {
   await page.getByTestId("tab-new").first().click();
-  await prepareHaikuSession(page, project.name);
+  // The first session's header is still in the page: the choices are scoped to the new-session tab.
+  const tab = page.getByTestId("new-session-tab");
+  await expect(tab).toBeVisible();
+  await expect(tab.getByTestId("project-chip")).toContainText(project.name);
+  const model = tab.getByTestId("session-model");
+  await model.click();
+  await page.getByRole("option", { name: "Haiku" }).click();
+  await expect(model).toContainText("Haiku");
 });
 
-When("I switch to the first session tab", async ({ page }) => {
-  await page.getByTestId("tab-strip").getByRole("tab").first().click();
+// Tab 0 is Focus; session tabs follow in the order they were opened.
+When("I switch to session tab {int}", async ({ page }, n: number) => {
+  await page.getByTestId("tab-strip").getByRole("tab").nth(n).click();
+});
+
+// Two sessions are mounted: the shared steps expect one, so these look at the shown one only.
+When("I send {string} in the new session tab", async ({ page }, text: string) => {
+  const tab = page.getByTestId("new-session-tab");
+  await tab.getByRole("combobox", { name: /^First prompt$/ }).fill(text);
+  await tab.getByTestId("send").click();
+  // Sent: the tab became the session. A cut before that would fail the send instead of changing a session while offline.
+  await expect(tab).toHaveCount(0, { timeout: 30_000 });
+});
+
+Then("the shown session has a reply from Claude", async ({ page }) => {
+  await expect(page.locator('[data-testid="assistant-text"]:visible').first()).toHaveText(/\S/, { timeout: TURN_MS });
+});
+
+Then("the shown session's turn has finished", async ({ page }) => {
+  await expect(page.locator('[data-testid="send"][data-state="idle"]:visible')).toBeVisible({ timeout: TURN_MS });
 });

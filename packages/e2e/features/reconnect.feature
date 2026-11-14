@@ -31,13 +31,15 @@ Feature: Reconnect after the page was offline
     When I send "Count from 1 to 40, one number per line, then write the word done."
     And I see a reply from Claude
     And I open a second new session tab
-    And I send "Reply with exactly: OK"
+    And I send "Reply with exactly: OK" in the new session tab
     And the connection to the daemon is cut
     And I wait 5 seconds
     And the connection to the daemon is back
     Then the app is connected
-    And the turn has finished
-    When I switch to the first session tab
-    Then I see a reply from Claude
-    And the turn has finished
+    When I switch to session tab 2
+    Then the shown session has a reply from Claude
+    And the shown session's turn has finished
+    When I switch to session tab 1
+    Then the shown session has a reply from Claude
+    And the shown session's turn has finished
     And I capture "reconnect-background-tab"
