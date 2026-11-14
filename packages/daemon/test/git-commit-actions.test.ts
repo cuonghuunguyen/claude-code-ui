@@ -207,7 +207,7 @@ describe("blocked states", () => {
     const r = repo();
     run(r.dir, "checkout", "-q", "--detach");
     const m = await menu(r, head(r.dir));
-    expect(m.why).toEqual({ undo: "HEAD is detached", revert: "HEAD is detached", cherryPick: "HEAD is detached", reset: "HEAD is detached" });
+    expect(m.why).toEqual({ undo: "HEAD is detached", revert: "HEAD is detached", cherryPick: "HEAD is detached", reset: "HEAD is detached", reword: "HEAD is detached" });
     expect(m.reset).toBeUndefined();
   });
   it("an operation in progress without conflicts", async () => {

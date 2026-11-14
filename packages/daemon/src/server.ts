@@ -33,7 +33,7 @@ import { createSecrets, type Secrets } from "./secrets.ts";
 import { createWorktree, listBranches, pullRequestBranches, gitBlame, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitOperationOf, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, cachedStatuses, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush, gitTagDelete, gitTagRemote } from "./git-remote.ts";
 import { createWarmCommitMessage, generateCommitMessage, instructionFor, promptFor } from "./commit-message.ts";
-import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff, gitCommitFiles, gitCommitMenu, gitContinue, gitMergeRebase, gitRollback, gitRollbackHunk, gitRollbackPreview, gitStash, gitStashList, gitStashPush, gitTag, gitTagCreate, gitTagSigning } from "./git-write.ts";
+import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff, gitCommitFiles, gitCommitMenu, gitContinue, gitMergeRebase, gitReword, gitRollback, gitRollbackHunk, gitRollbackPreview, gitStash, gitStashList, gitStashPush, gitTag, gitTagCreate, gitTagSigning } from "./git-write.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
@@ -2152,6 +2152,8 @@ export function createDaemon(opts: {
     let generating: AbortController | undefined;
     /** The signed `git.tagCreate` of this connection, aborted by `git.tagCancel` and when the connection closes. */
     let tagging: AbortController | undefined;
+    /** The `git.reword` of this connection, aborted by `git.rewordCancel` and when the connection closes. */
+    let rewording: AbortController | undefined;
     /** Clean up scans (`worktree.status` with `scan`) of this connection: aborted by `worktree.cancel` and when it closes. */
     const scans = new Map<string, AbortController>();
     const unwatchAll = () => {
@@ -2174,6 +2176,7 @@ export function createDaemon(opts: {
       replacing?.abort();
       generating?.abort();
       tagging?.abort();
+      rewording?.abort();
       scans.forEach((a) => a.abort());
       scans.clear();
       focused.delete(ws);
@@ -3304,6 +3307,26 @@ export function createDaemon(opts: {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
           }
         }
+        case "git.reword": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          // Output is never logged. A hook may have changed files even when the run failed.
+          const ctl = (rewording = new AbortController());
+          try {
+            const written = await gitReword(cwd, { hash: msg.hash, message: msg.message, headRef: msg.headRef, headHash: msg.headHash, argv: msg.argv, signal: ctl.signal, allowed: (p) => inRoots(real(p) ?? p) });
+            markRepoStale(cwd);
+            return reply({ written });
+          } catch (e) {
+            if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          } finally {
+            if (rewording === ctl) rewording = undefined;
+          }
+        }
+        case "git.rewordCancel":
+          rewording?.abort();
+          return reply({});
         case "git.branchCreate":
         case "git.checkout": {
           const cwd = allowed(msg.cwd);

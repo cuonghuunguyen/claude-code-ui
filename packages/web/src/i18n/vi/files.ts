@@ -326,6 +326,11 @@ export default {
   "files.graph.submodule": "Submodule {path}",
   "files.graph.showGraphOf": "Xem đồ thị của {target}",
   "files.graph.commit": "Commit",
+  "files.graph.compareTitle": "{hash} ↔ Local",
+  "files.graph.compareBeforeTitle": "Trước {hash} ({parent}) ↔ Local",
+  "files.graph.compareEmpty": "Không có khác biệt",
+  "files.graph.compareLoading": "Đang tải thay đổi…",
+  "files.graph.untracked": "chưa theo dõi",
   // image-diff.tsx, images.tsx, media-notice.tsx, media-view.tsx, media.ts
   "files.imageDiff.before": "Trước",
   "files.imageDiff.after": "Sau",

@@ -1,6 +1,6 @@
 // Graph tab (docs/spec.md "Layout"): the commit history of the selected repository: lanes, filters, Fetch, details, per-file diff.
 import { cloneElement, memo, useCallback, type ReactElement, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import type { GitCommit, GitRepo, GitCommitDetail, GitCommitResult, GitFileChange, GitLogResult, GitRefsResult, FsReadResult } from "@claude-ui/protocol";
+import type { GitCommit, GitRepo, GitCommitDetail, GitCommitResult, GitDiff, GitDiffResult, GitFileChange, GitLogResult, GitRefsResult, FsReadResult } from "@claude-ui/protocol";
 import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import { MultiFileDiff } from "@pierre/diffs/react";
 import { ArchiveIcon, ArrowLeftIcon, CloudDownloadIcon, GitCommitHorizontalIcon, LoaderCircleIcon, RotateCwIcon, SearchIcon, TagIcon } from "lucide-react";
@@ -10,6 +10,8 @@ import type { connect, RequestError } from "./client.ts";
 import { KindBadge, StatsText, useNarrow } from "./changes-panel.tsx";
 import { FileIcon } from "./file-icon.tsx";
 import { pathKey } from "./file-tree-model.ts";
+import { repoRoot } from "./diff-mode.ts";
+import { gitEol } from "./git-changes.ts";
 import { readFailure } from "./files.ts";
 import { dateFormat, useT } from "./i18n.ts";
 import { emptyGraph, layoutPage, type GraphRow, type GraphState } from "./git-graph.ts";
@@ -293,6 +295,10 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
   const [detail, setDetail] = useState<GitCommitDetail>();
   const [detailError, setDetailError] = useState<string>();
   const [file, setFile] = useState<GitFileChange>();
+  // Compare with Local: shown in the details pane in place of the commit's details; Back, another selected commit or a repository switch (remount) ends it.
+  const [compare, setCompare] = useState<{ hash: string; base: string; before: boolean }>();
+  const onCompare = (hash: string, base: string, before: boolean) => (setSelected(hash), setCompare({ hash, base, before }));
+  useEffect(() => setCompare((c) => (c && c.hash === selected ? c : undefined)), [selected]);
   useEffect(() => {
     setDetail(undefined);
     setDetailError(undefined);
@@ -344,7 +350,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
               </p>
             )}
             {!error && !commits.length && !loading && <p className="m-auto p-4 text-muted-foreground">{filtered || (ref !== ALL && ref !== HEAD) ? tr("files.graph.noMatch") : tr("files.graph.noCommits")}</p>}
-            <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} hash={() => selected} tagsOf={(h) => commits.find((c) => c.hash === h)?.refs ?? []}>
+            <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} hash={() => selected} tagsOf={(h) => commits.find((c) => c.hash === h)?.refs ?? []} onCompare={onCompare}>
             <div
               ref={scroller}
               role="listbox"
@@ -366,10 +372,11 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
             {loading && <p className="absolute right-3 bottom-2 rounded bg-card px-2 text-muted-foreground text-xs">{tr("files.graph.loading")}</p>}
           </div>
           {selected && (
-            <div className={cn("flex min-h-0 min-w-0 flex-col overflow-auto @max-2xl:border-t @2xl:border-l", file ? "@max-2xl:max-h-3/4 @2xl:w-3/5" : "@max-2xl:max-h-1/2 @2xl:w-80", "shrink-0")} data-testid="commit-details">
-              {detailError && <p className="p-3 text-destructive">{detailError}</p>}
-              {!detail && !detailError && <p className="p-3 text-muted-foreground">{tr("files.graph.loading")}</p>}
-              {detail && (file ? <FileView detail={detail} file={file} client={client} cwd={cwd} ex={ex} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details showRepo={(f) => repos?.find((r) => !r.outsideRoots && pathKey(r.path) === pathKey(joinPath(cwd, f.path)))?.rel} onShowRepo={onShowRepo} wrap={(el, refs) => <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} hash={() => detail.hash} tagsOf={() => refs}>{cloneElement(el, { "data-hash": detail.hash } as object)}</BranchMenu>} detail={detail} refs={commits.find((c) => c.hash === detail.hash)?.refs ?? detail.refs} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
+            <div className={cn("flex min-h-0 min-w-0 flex-col overflow-auto @max-2xl:border-t @2xl:border-l",  file || compare ? "@max-2xl:max-h-3/4 @2xl:w-3/5" : "@max-2xl:max-h-1/2 @2xl:w-80", "shrink-0")} data-testid="commit-details">
+              {compare && <CompareView key={`${compare.base}`} client={client} cwd={cwd} ex={ex} compare={compare} reload={reload} dark={dark} narrow={narrow} onBack={() => setCompare(undefined)} />}
+              {!compare && detailError && <p className="p-3 text-destructive">{detailError}</p>}
+              {!compare && !detail && !detailError && <p className="p-3 text-muted-foreground">{tr("files.graph.loading")}</p>}
+              {!compare && detail && (file ? <FileView file={file} load={() => commitSides(client, cwd, ex, detail, file)} loadKey={detail.hash} back={tr("files.graph.commit")} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details showRepo={(f) => repos?.find((r) => !r.outsideRoots && pathKey(r.path) === pathKey(joinPath(cwd, f.path)))?.rel} onShowRepo={onShowRepo} wrap={(el, refs) => <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} hash={() => detail.hash} tagsOf={() => refs} onCompare={onCompare}>{cloneElement(el, { "data-hash": detail.hash } as object)}</BranchMenu>} detail={detail} refs={commits.find((c) => c.hash === detail.hash)?.refs ?? detail.refs} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
             </div>
           )}
         </div>
@@ -480,22 +487,22 @@ function Details({ detail: d, refs, loaded, onSelect, onFile, wrap, showRepo, on
   );
 }
 
-/** The diff of one file of a commit: parent side and commit side from git.fileAt (an added file asks only the commit side). */
-function FileView({ detail: d, file: f, client, cwd, ex, dark, narrow, onBack }: { detail: GitCommitDetail; file: GitFileChange; client: Client; cwd: string; ex: { exact?: true }; dark: boolean; narrow: boolean; onBack: () => void }) {
+type Sides = { before: string; after: string };
+/** The diff of one file: both sides come from `load` (read again when `loadKey` changes); `back` names the view the Back button returns to. */
+function FileView({ file: f, load, loadKey, back, dark, narrow, onBack }: { file: GitFileChange; load: () => Promise<Sides>; loadKey: string; back: string; dark: boolean; narrow: boolean; onBack: () => void }) {
   const tr = useT();
   const colorTheme = useColorTheme();
-  const [sides, setSides] = useState<{ before: string; after: string }>();
+  const [sides, setSides] = useState<Sides>();
   const [err, setErr] = useState<{ text: string; notice: boolean }>();
   const [drawn, setDrawn] = useState(false);
   useEffect(() => {
     let live = true;
-    const read = (hash: string, path: string) => client.request<FsReadResult>({ type: "git.fileAt", cwd, ...ex, hash, path }).then((r) => r.content);
-    Promise.all([f.status === "A" || !d.parents[0] ? "" : read(d.parents[0], f.oldPath ?? f.path), f.status === "D" ? "" : read(d.hash, f.path)]).then(
-      ([before, after]) => live && setSides({ before, after }),
+    load().then(
+      (x) => live && setSides(x),
       (e: RequestError) => live && setErr(readFailure(e)),
     );
     return () => void (live = false);
-  }, [d.hash, f.path]);
+  }, [loadKey, f.path]);
   // Stable file objects: @pierre/diffs re-parses and re-highlights the whole file on a new object (seconds on a big file).
   const files = useMemo(
     () => sides && { old: { name: f.oldPath ?? f.path, contents: sides.before }, new: { name: f.path, contents: sides.after } },
@@ -509,7 +516,7 @@ function FileView({ detail: d, file: f, client, cwd, ex, dark, narrow, onBack }:
     <div className="flex min-h-0 flex-1 flex-col" data-testid="commit-file-diff">
       <div className="flex shrink-0 items-center gap-2 border-b px-2 py-1">
         <Button size="sm" variant="ghost" className="max-md:h-11" onClick={onBack} data-testid="commit-back">
-          <ArrowLeftIcon /> {tr("files.graph.commit")}
+          <ArrowLeftIcon /> {back}
         </Button>
         <KindBadge kind={f.status} />
         <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground text-xs" title={f.path}>
@@ -525,6 +532,96 @@ function FileView({ detail: d, file: f, client, cwd, ex, dark, narrow, onBack }:
           <MultiFileDiff oldFile={files!.old} newFile={files!.new} options={options} />
         )}
       </div>
+    </div>
+  );
+}
+
+/** Both sides of one commit file: the first parent's content and the commit's (an added file asks only the commit side). */
+const commitSides = (client: Client, cwd: string, ex: { exact?: true }, d: GitCommitDetail, f: GitFileChange): Promise<Sides> => {
+  const read = (hash: string, path: string) => client.request<FsReadResult>({ type: "git.fileAt", cwd, ...ex, hash, path }).then((r) => r.content);
+  return Promise.all([f.status === "A" || !d.parents[0] ? "" : read(d.parents[0], f.oldPath ?? f.path), f.status === "D" ? "" : read(d.hash, f.path)]).then(([before, after]) => ({ before, after }));
+};
+
+/**
+ * Compare with Local (docs/spec.md "Layout", Graph tab): the work tree (tracked and untracked files) against `base` (a commit, or the first parent of one),
+ * as a file list; a file opens its diff (base side from git.fileAt, work tree side from fs.read). Read again on Refresh and on every graph reload.
+ */
+function CompareView({ client, cwd, ex, compare, reload, dark, narrow, onBack }: { client: Client; cwd: string; ex: { exact?: true }; compare: { hash: string; base: string; before: boolean }; reload: number; dark: boolean; narrow: boolean; onBack: () => void }) {
+  const tr = useT();
+  const { hash, base, before } = compare;
+  const [state, setState] = useState<{ diff?: GitDiff; error?: string }>({});
+  const [again, setAgain] = useState(0);
+  const [file, setFile] = useState<GitFileChange>();
+  useEffect(() => {
+    let live = true;
+    client.request<GitDiffResult>({ type: "git.diff", cwd, ...ex, base: "commit", ref: base }).then(
+      (r) => live && setState(r.diff ? { diff: r.diff } : { error: tr("files.changes.notRepo") }),
+      (e: RequestError) => live && setState((p) => ({ diff: p.diff, error: e.message })),
+    );
+    return () => void (live = false);
+  }, [client, cwd, base, reload, again]);
+  const title = before ? tr("files.graph.compareBeforeTitle", { hash: hash.slice(0, 7), parent: base.slice(0, 7) }) : tr("files.graph.compareTitle", { hash: hash.slice(0, 7) });
+  const { diff, error } = state;
+  if (file && diff)
+    return (
+      <FileView
+        file={file}
+        load={async () => {
+          const read = (path: string) => client.request<FsReadResult>({ type: "git.fileAt", cwd, ...ex, hash: base, path }).then((r) => r.content);
+          const [b, raw] = await Promise.all([file.status === "A" ? "" : read(file.oldPath ?? file.path), file.status === "D" ? "" : client.request<FsReadResult>({ type: "fs.read", path: joinPath(repoRoot(cwd, diff.prefix), file.path) }).then((r) => r.content)]);
+          return { before: b, after: gitEol(b, raw) };
+        }}
+        loadKey={`${base}:${again}:${reload}`}
+        back={tr("files.graph.commit")}
+        dark={dark}
+        narrow={narrow}
+        onBack={() => setFile(undefined)}
+      />
+    );
+  return (
+    <div className="flex flex-col gap-2 p-3 text-sm" data-testid="git-compare">
+      <div className="flex items-center gap-2">
+        <Button size="sm" variant="ghost" className="max-md:h-11" onClick={onBack} data-testid="compare-back">
+          <ArrowLeftIcon /> {tr("files.graph.commit")}
+        </Button>
+        <span className="min-w-0 flex-1 truncate font-medium" title={title} data-testid="compare-title">
+          {title}
+        </span>
+        <Button size="icon-sm" variant="ghost" className="max-md:size-11" onClick={() => setAgain((n) => n + 1)} aria-label={tr("files.graph.refresh")} title={tr("files.graph.refresh")} data-testid="compare-refresh">
+          <RotateCwIcon />
+        </Button>
+      </div>
+      {error && (
+        <p role="alert" className="whitespace-pre-wrap text-destructive [overflow-wrap:anywhere]" data-testid="compare-error">
+          {error}
+        </p>
+      )}
+      {!diff && !error && <p className="text-muted-foreground">{tr("files.graph.compareLoading")}</p>}
+      {diff && diff.files.length === 0 && <p className="text-muted-foreground">{tr("files.graph.compareEmpty")}</p>}
+      {diff && diff.files.length > 0 && (
+        <ul className="flex flex-col">
+          {diff.files.map((f) => (
+            <li key={f.path}>
+              {f.submodule ? (
+                <div className="flex min-h-11 items-center gap-1.5 px-1 md:min-h-7" title={f.path} data-testid="compare-submodule">
+                  <KindBadge kind={f.status} />
+                  <ArchiveIcon className="size-4 shrink-0" aria-hidden />
+                  <span className="min-w-0 flex-1 truncate">{tr("files.graph.submodule", { path: f.path })}</span>
+                </div>
+              ) : (
+                <button onClick={() => setFile(f)} className="flex min-h-11 w-full cursor-pointer items-center gap-1.5 rounded-md px-1 text-left hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset md:min-h-7" title={f.path} data-testid="compare-file">
+                  <KindBadge kind={f.status} untracked={f.untracked} />
+                  <FileIcon path={f.path} className="size-4 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">{f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}</span>
+                  {f.untracked && <span className="shrink-0 text-muted-foreground text-xs">{tr("files.graph.untracked")}</span>}
+                  {f.added !== undefined && <StatsText stats={{ added: f.added, removed: f.removed ?? 0 }} />}
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {diff?.truncated && <p className="text-muted-foreground text-xs">{tr("files.changes.listCut")}</p>}
     </div>
   );
 }

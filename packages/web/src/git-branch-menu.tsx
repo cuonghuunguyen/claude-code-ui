@@ -5,6 +5,7 @@ import { ContextMenu } from "@base-ui/react/context-menu";
 import type { GitBranchInfo, GitBranchResult, GitCommitMenu } from "@claude-ui/protocol";
 import { MAX_TAG_ITEMS, NewTagDialog, RemoveTagDialog, TagItems, type TagRequest } from "./git-tag.tsx";
 import { CommitItems, ResetDialog, type CommitActionRequest } from "./git-commit-menu.tsx";
+import { RewordDialog, type RewordRequest } from "./git-reword.tsx";
 import type { OpReply } from "./git-remote-ops.ts";
 import { cn } from "@/lib/utils";
 import type { connect, RequestError } from "./client.ts";
@@ -12,7 +13,7 @@ import { ConfirmDialog, ITEM, POPUP } from "./session-actions.tsx";
 import { t, useT } from "./i18n.ts";
 
 type Client = ReturnType<typeof connect>;
-export type RemoteRequest = { type: "git.fetch"; cwd: string; exact?: true } | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string; tracking?: string; exact?: true } | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[]; tracking?: string; exact?: true } | { type: "git.merge" | "git.rebase"; cwd: string; ref: string; local: string; headRef: string; headHash: string; argv: string[]; exact?: true } | CommitActionRequest | { type: "git.checkout"; cwd: string; ref: string; smart?: boolean; exact?: true } | { type: "git.branchCreate"; cwd: string; name: string; at?: string; checkout?: boolean; smart?: boolean; exact?: true } | TagRequest;
+export type RemoteRequest = { type: "git.fetch"; cwd: string; exact?: true } | { type: "git.push"; cwd: string; ref: string; local: string; argv: string[]; lease?: string; tracking?: string; exact?: true } | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[]; tracking?: string; exact?: true } | { type: "git.merge" | "git.rebase"; cwd: string; ref: string; local: string; headRef: string; headHash: string; argv: string[]; exact?: true } | CommitActionRequest | { type: "git.checkout"; cwd: string; ref: string; smart?: boolean; exact?: true } | { type: "git.branchCreate"; cwd: string; name: string; at?: string; checkout?: boolean; smart?: boolean; exact?: true } | TagRequest | RewordRequest;
 export type Kind = "push" | "force" | "pull" | "merge" | "rebase";
 type Done = string | ((r: OpReply) => string);
 /** A checkout or create the daemon refused with `local_changes`: Smart checkout resends it with `smart`. */
@@ -47,6 +48,7 @@ export function useBranchHost({ client, cwd, exact = false, repoName, busy, onRu
   const [fresh, setFresh] = useState<{ at?: string; label?: string }>();
   const [smart, setSmart] = useState<Smart>();
   const [reset, setReset] = useState<GitCommitMenu>();
+  const [reword, setReword] = useState<GitCommitMenu>();
   const [newTag, setNewTag] = useState<{ hash: string }>();
   const [removeTag, setRemoveTag] = useState<{ name: string }>();
   const ex = exact ? { exact: true as const } : {};
@@ -84,12 +86,13 @@ export function useBranchHost({ client, cwd, exact = false, repoName, busy, onRu
         </pre>
       </ConfirmDialog>
       {newTag && <NewTagDialog client={client} cwd={cwd} exact={exact} repoName={repoName} hash={newTag.hash} onRun={onRun} onClose={() => setNewTag(undefined)} />}
+      {reword && <RewordDialog client={client} cwd={cwd} exact={exact} repoName={repoName} target={reword} onRun={onRun} onClose={() => setReword(undefined)} />}
       {removeTag && <RemoveTagDialog client={client} cwd={cwd} exact={exact} repoName={repoName} name={removeTag.name} onRun={onRun} onClose={() => setRemoveTag(undefined)} />}
       <BranchDialog dialog={dialog} cwd={cwd} exact={exact} repoName={repoName} onRun={onRun} onClose={() => setDialog(undefined)} />
       <ResetDialog client={client} cwd={cwd} exact={exact} repoName={repoName} target={reset} onRun={onRun} onClose={() => setReset(undefined)} />
     </>
   );
-  return { busy, checkout, pick: (kind: Kind, info: GitBranchInfo) => setDialog({ kind, info }), newBranch: (at?: string, label?: string) => setFresh({ at, label }), reset: setReset, newTag: (hash: string) => setNewTag({ hash }), removeTag: (name: string) => setRemoveTag({ name }), dialogs };
+  return { busy, checkout, pick: (kind: Kind, info: GitBranchInfo) => setDialog({ kind, info }), newBranch: (at?: string, label?: string) => setFresh({ at, label }), reset: setReset, reword: setReword, newTag: (hash: string) => setNewTag({ hash }), removeTag: (name: string) => setRemoveTag({ name }), dialogs };
 }
 export type BranchHost = ReturnType<typeof useBranchHost>;
 
@@ -98,7 +101,7 @@ export type BranchHost = ReturnType<typeof useBranchHost>;
  * that branch's actions (the popup's submenu); a press on a row (or a tag or HEAD chip) opens the commit's actions.
  * Keyboard (Shift+F10): the selected row's commit.
  */
-export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, hash, tagsOf, children }: { client: Client; cwd: string; exact?: boolean; repoName?: string; busy: boolean; onRun: OnRun; /** The keyboard's commit (the selected row). */ hash?: () => string | undefined; /** The refs of a commit that are tags (`refs/tags/x`): its Remove Tag items. */ tagsOf?: (hash: string) => string[]; children: ReactElement<{ onContextMenuCapture?: (e: React.MouseEvent) => void; onPointerDownCapture?: (e: React.SyntheticEvent) => void; onTouchStartCapture?: (e: React.SyntheticEvent) => void; onKeyDownCapture?: (e: React.SyntheticEvent) => void }> }) {
+export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, hash, tagsOf, onCompare, children }: { client: Client; cwd: string; exact?: boolean; repoName?: string; busy: boolean; onRun: OnRun; /** Compare with Local and Compare Before with Local of a commit (`base`: the commit or its first parent); absent: no such items. */ onCompare?: (hash: string, base: string, before: boolean) => void; /** The keyboard's commit (the selected row). */ hash?: () => string | undefined; /** The refs of a commit that are tags (`refs/tags/x`): its Remove Tag items. */ tagsOf?: (hash: string) => string[]; children: ReactElement<{ onContextMenuCapture?: (e: React.MouseEvent) => void; onPointerDownCapture?: (e: React.SyntheticEvent) => void; onTouchStartCapture?: (e: React.SyntheticEvent) => void; onKeyDownCapture?: (e: React.SyntheticEvent) => void }> }) {
   const t = useT();
   const host = useBranchHost({ client, cwd, exact, repoName, busy, onRun });
   const [target, setTarget] = useState<Target>({});
@@ -138,7 +141,7 @@ export function BranchMenu({ client, cwd, exact = false, repoName, busy, onRun, 
                   {target.tag && <TagItems name={target.tag.replace(/^refs\/tags\//, "")} busy={busy} onRemove={() => host.removeTag(target.tag!.replace(/^refs\/tags\//, ""))} Item={CtxItem} Sep={CtxSep} />}
                   {commit && (
                   <>
-                  <CommitItems key={commit} client={client} cwd={cwd} exact={exact} repoName={repoName} hash={commit} busy={busy} onRun={onRun} onReset={host.reset} />
+                  <CommitItems key={commit} client={client} cwd={cwd} exact={exact} repoName={repoName} hash={commit} busy={busy} onRun={onRun} onReset={host.reset} onReword={host.reword} onCompare={onCompare} />
                   <CtxSep />
                   <CtxItem className="max-md:min-h-11" disabled={busy} onClick={() => host.newBranch(commit, short7(commit))} data-testid="branch-new">
                     {t("sidebar.git.newBranch")}
