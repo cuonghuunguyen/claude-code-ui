@@ -487,7 +487,7 @@ class OpenCodeSession implements EngineSession {
       const url = route?.url();
       // `mcpServers` binds the tools to this session; its keys say which servers apply. An unkept Aside gets no orchestration.
       const noWorkers = !!this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_WORKERS.includes(t));
-      const keys = url ? Object.keys(this.opts.mcpServers?.(this.id) ?? {}).filter((k): k is McpServerKey => (MCP_KEYS as string[]).includes(k) && !(k === "orchestration" && noWorkers)) : [];
+      const keys = url ? Object.keys(this.opts.mcpServers?.(this.id, "opencode") ?? {}).filter((k): k is McpServerKey => (MCP_KEYS as string[]).includes(k) && !(k === "orchestration" && noWorkers)) : [];
       this.mcpOn = new Set(keys);
       if (!keys.length) return;
       // These wait for OpenCode's MCP load of the folder: never cut off (see brokenState); a folder whose load was cut off earlier is reloaded.

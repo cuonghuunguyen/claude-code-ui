@@ -461,9 +461,9 @@ export function createDaemon(opts: {
       broadcast({ type: "sessions.changed" });
     },
     worker: (id: string) => !!settings.get(id)?.coordinatorId,
-    mcpServers: (id: string) => {
+    mcpServers: (id: string, engine?: "claude" | "opencode") => {
       const o = orchestration.mcpServers(id);
-      const d = daemonMcp.mcpServers(id);
+      const d = daemonMcp.mcpServers(id, engine);
       return o || d ? { ...o, ...d } : undefined;
     },
     agent: (id: string) => settings.get(id)?.agent,

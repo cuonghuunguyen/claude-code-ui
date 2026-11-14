@@ -49,6 +49,8 @@ describe("createDaemonMcp", () => {
     const alone = make([only]);
     expect(await instructions(alone.mcpServers("s")![DAEMON_SERVER]!.instance as never)).toBe("Fork rules.");
     expect(alone.mcpServerFor("s")).toBeUndefined();
+    // OpenCode asks which servers to attach: a Claude-only group alone gives it none.
+    expect(alone.mcpServers("s", "opencode")).toBeUndefined();
     const mixed = make([group(), only]);
     expect(await instructions(mixed.mcpServers("s")![DAEMON_SERVER]!.instance as never)).toContain("Fork rules.");
     expect(await instructions(mixed.mcpServerFor("s") as never)).toBe("Demo tools.");

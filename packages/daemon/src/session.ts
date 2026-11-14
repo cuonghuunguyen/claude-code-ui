@@ -79,7 +79,8 @@ export type SessionOpts = Partial<Omit<SessionSettings, "agent">> & {
   /** The transcript's size and last main-chain record, read cheaply for the stale-turn check (GH-239). */
   transcriptEnd?: (id: string, cwd: string) => Promise<TranscriptEnd>;
   /** MCP servers of each new query of session `id` (orchestration.ts: a coordinator's server); read at every query start. */
-  mcpServers?: (id: string) => Options["mcpServers"];
+  /** `engine`: the OpenCode engine asks which servers its route attaches (a tool group may be Claude-only); default Claude. */
+  mcpServers?: (id: string, engine?: "claude" | "opencode") => Options["mcpServers"];
   /** The claude-ui MCP server's OpenCode side (daemon-mcp.ts): rules of the session's own server in a mode block, and the MCP client timeout. */
   daemonMcp?: { openCodeRules: (name: string, ask: "ask" | "allow") => { permission: string; pattern: string; action: "allow" | "ask" | "deny" }[]; timeoutMs: () => number };
   /** Tools removed from session `id`'s CLI (Aside: no edits while read-only, no orchestration tools); read at every query start. */

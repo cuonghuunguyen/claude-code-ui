@@ -70,9 +70,9 @@ export function createDaemonMcp(deps: { groups: DaemonToolGroup[]; session: (id:
   };
 
   return {
-    /** The server for a new query of session `id`; undefined while no group is enabled. */
-    mcpServers(id: string): Record<string, McpSdkServerConfigWithInstance> | undefined {
-      const server = build(id, "claude");
+    /** The server for a new query of session `id` (`engine`: whose groups; OpenCode only asks whether to attach); undefined while no group of that engine is enabled. */
+    mcpServers(id: string, engine: "claude" | "opencode" = "claude"): Record<string, McpSdkServerConfigWithInstance> | undefined {
+      const server = build(id, engine);
       return server && { [DAEMON_SERVER]: server };
     },
     /** A new server instance for session `id`'s OpenCode route (one per MCP client session). */
