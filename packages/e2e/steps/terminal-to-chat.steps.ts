@@ -25,6 +25,29 @@ Given("I start a Haiku session with the terminal docked", async ({ page, project
   await expect(view(page).locator(".xterm")).toBeVisible({ timeout: 30_000 });
 });
 
+// Not "I type ... in the terminal": it waits for the echoed command, which scrolls off screen once a long output ends.
+When("I run {string} in the terminal and wait for its output to end with {string}", async ({ page }, cmd: string, last: string) => {
+  await expect(view(page).locator(".xterm")).toBeVisible({ timeout: 30_000 });
+  await view(page).locator(".xterm").click();
+  await page.keyboard.type(cmd);
+  await page.keyboard.press("Enter");
+  // Exact row: the echoed command also contains the last line's text and renders before any output.
+  await expect(rows(page).filter({ hasText: new RegExp(`^\\s*${last}\\s*$`) }).first()).toBeVisible({ timeout: 30_000 });
+  // The prompt redraws after the output (git status segment) and scrolls the view to the bottom: wait until the rows stop changing.
+  let seen = "";
+  let since = Date.now();
+  await expect
+    .poll(
+      async () => {
+        const now = await view(page).locator(".xterm-rows").innerText();
+        if (now !== seen) (seen = now), (since = Date.now());
+        return Date.now() - since >= 1500;
+      },
+      { timeout: 30_000, intervals: [250] },
+    )
+    .toBe(true);
+});
+
 When("I select the terminal output line {string}", async ({ page }, text: string) => {
   const { box, cell } = await rowBox(page, text);
   const y = box.y + box.height / 2;
@@ -104,17 +127,27 @@ Then("the terminal menu offers Add to chat enabled", async ({ page }) => {
   await expect(page.getByTestId("terminal-menu-add")).not.toHaveAttribute("aria-disabled", "true");
 });
 
-When("I select the terminal output from the last visible row to the top of its scrollback", async ({ page }) => {
-  await expect(rows(page).filter({ hasText: "5000" }).first()).toBeVisible({ timeout: 15_000 });
+// The menu anchors at the selection end and is not rendered when that row is scrolled out of view: select from far up down to the last row.
+When("I select the terminal output over the cap down to the last visible row", async ({ page }) => {
   const screen = (await view(page).locator(".xterm-screen").boundingBox())!;
   const x = screen.x + 4;
-  await page.mouse.click(x, screen.y + screen.height - 8);
+  const top = () => rows(page).first().innerText().then((t) => Number.parseInt(t, 10));
+  const wheel = async (dy: number) => {
+    for (let k = 0; k < 20; k++) await page.mouse.wheel(0, dy);
+  };
+  // 8000-character cap; `seq 1 5000` is ~24000 characters, so from line ~3000 on is over the cap.
+  await page.mouse.move(x, screen.y + screen.height / 2);
+  await expect.poll(async () => (await wheel(-3_000), await top()), { timeout: 60_000, intervals: [100] }).toBeLessThanOrEqual(3000);
   await page.mouse.move(x, screen.y + 10);
-  await page.mouse.wheel(0, -200_000);
-  await page.waitForTimeout(500);
-  await page.keyboard.down("Shift");
-  await page.mouse.click(x, screen.y + 8);
-  await page.keyboard.up("Shift");
+  await page.mouse.down();
+  await page.mouse.move(x, screen.y + screen.height - 8, { steps: 8 });
+  await expect
+    .poll(async () => (await wheel(3_000), await page.mouse.move(x, screen.y + screen.height - 8 - (Date.now() % 2)), await top()), { timeout: 60_000, intervals: [100] })
+    .toBeGreaterThanOrEqual(4990);
+  // A wheel scroll dismisses the selection menu, and it returns only when the selection changes: move across rows before releasing.
+  await page.mouse.move(x, screen.y + screen.height - 40, { steps: 4 });
+  await page.mouse.move(x, screen.y + screen.height - 8, { steps: 4 });
+  await page.mouse.up();
 });
 
 Then("the session tab is the selected tab", async ({ page }) => {
