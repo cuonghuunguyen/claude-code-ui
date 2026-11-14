@@ -492,7 +492,7 @@ describe("auto mode denial (GH-711)", () => {
 });
 
 describe("adapter commands", () => {
-  const cmd =(name: string, argumentHint = "") => ({ name, description: `${name} desc`, argumentHint });
+  const cmd = (name: string, argumentHint = "") => ({ name, description: `${name} desc`, argumentHint });
   const init = (terminal?: string[]) => ({ type: "system", subtype: "init", terminal_slash_commands: terminal }) as never;
   const changed = (names: string[]) => ({ type: "system", subtype: "commands_changed", commands: names.map((n) => cmd(n)) }) as never;
   const names = (parts: Part[]) => parts.flatMap((p) => (p.type === "commands" ? [p.commands.map((c) => c.name)] : []));

@@ -3187,6 +3187,16 @@ describe("Allow and retry (GH-711)", () => {
     await s.close();
   });
 
+  it("a refused follow-up (rewinding) leaves the call retryable", async () => {
+    const { s } = await open();
+    const run = (s as unknown as { run: { rewinding: boolean } }).run;
+    run.rewinding = true;
+    expect(() => s.allowDenied("dn-1")).toThrow(expect.objectContaining({ code: "session_busy" }));
+    run.rewinding = false;
+    expect(() => s.allowDenied("dn-1")).not.toThrow();
+    await s.close();
+  });
+
   it("interrupt drops an armed approval", async () => {
     const { s, events } = await open();
     s.allowDenied("dn-1");

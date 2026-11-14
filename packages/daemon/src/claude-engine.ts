@@ -378,6 +378,8 @@ export class ClaudeSession implements EngineSession {
   allowDenied(toolUseId: string): string | undefined {
     if (!this.session.isLive()) throw new DeniedRetryError("session_not_live", `session ${this.id} is not live (${this.session.currentState()})`);
     if (this.bashRun) throw new DeniedRetryError("bash_running", "a shell command is running: stop it first");
+    // Before allowRetry marks the call: prompt() refuses a rewind, and a marked call would keep a dead button.
+    if (this.rewinding) throw new DeniedRetryError("session_busy", "session is rewinding");
     const r = this.adapter.allowRetry(toolUseId);
     if (!r) throw new DeniedRetryError("unknown_call", "no call denied by auto mode with that ID, or it is allowed already");
     const id = this.prompt(followUp(r.call.tool, r.call.input));
