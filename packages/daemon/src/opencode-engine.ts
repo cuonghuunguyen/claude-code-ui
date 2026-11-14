@@ -6,8 +6,11 @@ import { ASIDE_NO_EDIT, ASIDE_NO_WORKERS } from "./aside.ts";
 import { COORDINATOR_DENIED } from "./claude-engine.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 import { MAX_WAIT_MS } from "./orchestration.ts";
+import { DAEMON_SERVER } from "./daemon-mcp.ts";
 import { errorKey, errorText, firstLine } from "./opencode-errors.ts";
 import { ascending } from "./opencode-id.ts";
+import { INLINE_SYSTEM, InlineCollector, clip, inlineTools, lastAssistantText } from "./opencode-inline.ts";
+import { INLINE_TIMEOUT_MS, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
 import { mapTool, openCodeParts, OpenCodeMapper, type OpenCodeMessage, type OpenCodeTodo } from "./opencode-parts.ts";
 import { OpenCodeHttpError, type OpenCodeServer } from "./opencode-server.ts";
 import { StopControl } from "./opencode-stop.ts";
@@ -58,8 +61,12 @@ const SELF_ABORT = "OpenCode ended this turn on its own before the model answere
 const MCP_RELOADED = "OpenCode's MCP servers for this folder had failed to load, so claude-ui reloaded the folder in OpenCode. Send the prompt again.";
 const MCP_HEALTHY = "OpenCode's MCP servers for this folder work again. Send the prompt again.";
 const MCP_BROKEN_BUSY = "OpenCode's MCP servers for this folder failed to load; claude-ui reloads the folder when the turn running in it ends. Send the prompt again then.";
-/** The name of a session's orchestration MCP server in OpenCode; its tool keys are `<name>_<tool>` (fit OpenCode's tool name limit). */
-export const mcpName = (id: string) => `orchestration-${id.slice(-10)}`;
+/** The daemon's MCP servers a session attaches to OpenCode: orchestration, and `claude-ui` (daemon-mcp.ts). */
+export type McpServerKey = "orchestration" | typeof DAEMON_SERVER;
+const MCP_KEYS: McpServerKey[] = ["orchestration", DAEMON_SERVER];
+const sameKeys = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every((k) => b.has(k));
+/** The name of a session's MCP server in OpenCode; its tool keys are `<name>_<tool>` (fit OpenCode's tool name limit). */
+export const mcpName = (id: string, server: McpServerKey = "orchestration") => `${server}-${id.slice(-10)}`;
 const WORKER_START = "mcp__orchestration__worker_start";
 const ORCHESTRATION = { name: "orchestration", source: "sdk" };
 
@@ -71,7 +78,7 @@ const ORCHESTRATION = { name: "orchestration", source: "sdk" };
  * `config` has no tool rules of its own: OpenCode's config and the agent decide (GH-705).
  * shortcut: every mode change appends one block; fine for hundreds of switches.
  */
-export function modeBlock(mode: PermissionMode, always: Rule[], agentRules: Rule[], { readOnly = false, mcp, agent, config }: { /** `config` mode: the agent's whole ruleset, re-applied to undo an earlier block's tool rules; absent on create. */ config?: Rule[]; readOnly?: boolean; /** The session's own orchestration MCP server name, when attached. */ mcp?: string; /** The agent the block was written for. */ agent?: string } = {}): Rule[] {
+export function modeBlock(mode: PermissionMode, always: Rule[], agentRules: Rule[], { readOnly = false, mcp, daemon, agent, config }: { /** The session's own claude-ui server's rules (`DaemonMcp.openCodeRules`), when attached. */ daemon?: Rule[]; /** `config` mode: the agent's whole ruleset, re-applied to undo an earlier block's tool rules; absent on create. */ config?: Rule[]; readOnly?: boolean; /** The session's own orchestration MCP server name, when attached. */ mcp?: string; /** The agent the block was written for. */ agent?: string } = {}): Rule[] {
   const asks = [star("webfetch", "ask"), star("websearch", "ask")];
   const rules =
     mode === "config" ? (config ?? [])
@@ -79,7 +86,8 @@ export function modeBlock(mode: PermissionMode, always: Rule[], agentRules: Rule
     : mode === "acceptEdits" ? [star("bash", "ask"), star("edit", "allow"), ...asks]
     : [star("bash", "ask"), star("edit", "ask"), ...asks];
   // Orchestration MCP servers are attached per folder: hide every session's tools but the own ones; worker_start asks (the user's gate on new workers).
-  const orchestration = [star("orchestration-*", "deny"), ...(mcp ? [star(`${mcp}_*`, "allow"), ...(mode === "bypassPermissions" ? [] : [star(`${mcp}_worker_start`, "ask")])] : [])];
+  // The claude-ui servers are per session too: every session's tools are hidden but the own ones.
+  const orchestration = [star(`${DAEMON_SERVER}-*`, "deny"), ...(daemon ?? []), star("orchestration-*", "deny"), ...(mcp ? [star(`${mcp}_*`, "allow"), ...(mode === "bypassPermissions" ? [] : [star(`${mcp}_worker_start`, "ask")])] : [])];
   // A read-only Aside: the last matching rule hides edit, write and apply_patch, whatever the mode allows.
   return [marker(`mode:${mode}`), ...(agent ? [marker(`agent:${agent}`)] : []), ...rules, ...agentRules, ...orchestration, ...(readOnly ? [star("edit", "deny")] : []), marker("always"), ...always, ...denialTail(always, agentRules, readOnly)];
 }
@@ -234,9 +242,9 @@ class OpenCodeSession implements EngineSession {
   /** Names of the commands last listed: `/name` of one of them runs it. */
   private commandNames = new Set<string>();
   private usage: { tokens: NonNullable<OpenCodeMessage["info"]["tokens"]>; providerID: string; modelID: string } | undefined;
-  /** The orchestration MCP server is attached (orchestration on, no unkept Aside); `writtenMcp`: the last block written allows its tools. */
-  private mcpOn = false;
-  private writtenMcp: boolean;
+  /** The MCP servers attached to OpenCode: orchestration (on, no unkept Aside) and claude-ui (a tool group enabled); `writtenMcp`: those the last block written has rules for. */
+  private mcpOn = new Set<McpServerKey>();
+  private writtenMcp: Set<McpServerKey>;
   private attaching: Promise<void> | undefined;
   /** The assistant message OpenCode aborted on its own in this turn (no Stop, no `session.error`). */
   private selfAbort: string | undefined;
@@ -268,6 +276,12 @@ class OpenCodeSession implements EngineSession {
   private turnAssistant: { id: string; model?: string } | undefined;
   /** The errors the turn showed (`errorKey`): OpenCode 1.19.5 sends a model-not-found error twice. */
   private errorKeys = new Set<string>();
+  /** Running inline tasks (GH-734) by child session id: `ui` = the child's parts show under the parent's call. */
+  private readonly inlines = new Map<string, { notify: (e: Payload) => void; ui: boolean }>();
+  /** The `inline_task` calls an inline run already took. */
+  private readonly inlineClaimed = new Set<string>();
+  /** Stop per running inline call id (the card's Stop agent): ends the run as stopped. */
+  private readonly inlineStops = new Map<string, () => void>();
 
   constructor(
     private readonly engine: OpenCodeEngineImpl,
@@ -288,7 +302,11 @@ class OpenCodeSession implements EngineSession {
     this.writtenAgent = history ? agentOf(history.permission) : (this.chosen ?? "build");
     this.always = history ? alwaysOf(history.permission) : [];
     this.revertAt = history?.revert;
-    this.writtenMcp = !!history && lastBlock(history.permission).some((r) => r.permission === `${mcpName(session.id)}_*` && r.action === "allow");
+    this.writtenMcp = new Set(
+      history
+        ? MCP_KEYS.filter((k) => lastBlock(history.permission).some((r) => (k === "orchestration" ? r.permission === `${mcpName(session.id)}_*` && r.action === "allow" : r.permission.startsWith(`${mcpName(session.id, k)}_`))))
+        : [],
+    );
   }
 
   private get server() {
@@ -300,7 +318,7 @@ class OpenCodeSession implements EngineSession {
   private get cwd() {
     return this.session.cwd;
   }
-  owns = (sessionId: string) => sessionId === this.id || this.mapper.isChild(sessionId);
+  owns = (sessionId: string) => sessionId === this.id || this.mapper.isChild(sessionId) || this.inlines.has(sessionId);
 
   begin() {
     this.engine.add(this);
@@ -445,10 +463,12 @@ class OpenCodeSession implements EngineSession {
 
   /** Writes a block for `mode` and `agent` (the agent's denials come from `GET /agent`). */
   private async writeBlock(mode: PermissionMode, agent = this.agentName()) {
-    const mcp = this.mcpOn;
+    const mcp = new Set(this.mcpOn);
     const own = await this.agentPermission(agent);
+    // The claude-ui tools that ask follow the mode's bash action (`config` too: OpenCode would allow an MCP tool by default).
+    const daemon = mcp.has(DAEMON_SERVER) ? this.opts.daemonMcp?.openCodeRules(mcpName(this.id, DAEMON_SERVER), mode === "bypassPermissions" ? "allow" : "ask") : undefined;
     // shortcut: a config block copies the agent's rules as GET /agent gave them (cached 60 s), so later opencode.json edits reach this session after the next block write; upgrade: track whether the session ruleset has anything to undo.
-    const permission = modeBlock(mode, this.always, denialsOf(own), { agent, readOnly: this.readOnly(), ...(mcp && { mcp: mcpName(this.id) }), ...(mode === "config" && { config: own }) });
+    const permission = modeBlock(mode, this.always, denialsOf(own), { agent, readOnly: this.readOnly(), ...(mcp.has("orchestration") && { mcp: mcpName(this.id) }), ...(daemon && { daemon }), ...(mode === "config" && { config: own }) });
     await this.server.request(`/session/${this.id}`, { method: "PATCH", directory: this.cwd, body: { permission } });
     this.written = mode;
     this.writtenAgent = agent;
@@ -461,20 +481,28 @@ class OpenCodeSession implements EngineSession {
    * session is no unkept Aside; `mcpServers` binds the tools to this session, as at a Claude query start.
    */
   private attach(): Promise<void> {
+    let attaching: McpServerKey = "orchestration";
     return (this.attaching ??= (async () => {
       const route = this.engine.mcp;
       const url = route?.url();
-      this.mcpOn = !!url && !this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_WORKERS.includes(t)) && this.opts.mcpServers?.(this.id) !== undefined;
-      if (!this.mcpOn) return;
-      const name = mcpName(this.id);
+      // `mcpServers` binds the tools to this session; its keys say which servers apply. An unkept Aside gets no orchestration.
+      const noWorkers = !!this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_WORKERS.includes(t));
+      const keys = url ? Object.keys(this.opts.mcpServers?.(this.id, "opencode") ?? {}).filter((k): k is McpServerKey => (MCP_KEYS as string[]).includes(k) && !(k === "orchestration" && noWorkers)) : [];
+      this.mcpOn = new Set(keys);
+      if (!keys.length) return;
       // These wait for OpenCode's MCP load of the folder: never cut off (see brokenState); a folder whose load was cut off earlier is reloaded.
       const read = () => this.server.request<Record<string, { status: string }>>("/mcp", { directory: this.cwd, timeoutMs: 0 });
       const status = await read().catch(async (err) => (brokenState(err) && (await this.engine.repairFolder(this.cwd)) ? read() : Promise.reject(err)));
-      if (status[name]?.status === "connected") return;
-      const config = { type: "remote", url, headers: { authorization: `Bearer ${route!.token(this.id)}` }, oauth: false, timeout: MAX_WAIT_MS + 60_000 };
-      await this.server.request("/mcp", { method: "POST", directory: this.cwd, timeoutMs: 0, body: { name, config } });
+      for (const key of keys) {
+        attaching = key;
+        const name = mcpName(this.id, key);
+        if (status[name]?.status === "connected") continue;
+        const timeout = key === "orchestration" ? MAX_WAIT_MS + 60_000 : (this.opts.daemonMcp?.timeoutMs() ?? 120_000);
+        const config = { type: "remote", url, headers: { authorization: `Bearer ${route!.token(this.id, key)}` }, oauth: false, timeout };
+        await this.server.request("/mcp", { method: "POST", directory: this.cwd, timeoutMs: 0, body: { name, config } });
+      }
     })()
-      .catch((err) => this.occurrence("mcp_failed", `Could not attach the orchestration tools to OpenCode: ${(err as Error).message}`))
+      .catch((err) => this.occurrence("mcp_failed", `Could not attach the ${attaching} tools to OpenCode: ${(err as Error).message}`))
       .finally(() => (this.attaching = undefined)));
   }
 
@@ -588,7 +616,7 @@ class OpenCodeSession implements EngineSession {
       if (!(await run.prepare(Promise.all([this.server.streamReady(), this.attach(), this.stale])))) return;
       // A block of a mode or agent the session was restored with (or the first one) goes in before the turn.
       let agent = this.agentName();
-      if ((this.written !== this.permissionMode || this.writtenAgent !== agent || this.writtenMcp !== this.mcpOn) && !(await run.prepare(this.writeBlock(this.permissionMode)))) return;
+      if ((this.written !== this.permissionMode || this.writtenAgent !== agent || !sameKeys(this.writtenMcp, this.mcpOn)) && !(await run.prepare(this.writeBlock(this.permissionMode)))) return;
       // An agent the config no longer has: this prompt runs as build (the chosen agent stays, it may come back). The list is cached per folder.
       const known = this.engine.agents(this.cwd);
       if (!(await run.prepare(known))) return;
@@ -720,6 +748,107 @@ class OpenCodeSession implements EngineSession {
    *   without showing it, and a prompt sent after Stop waits for it (never joins it).
    * Until the turn ended, a prompt sent after Stop waits for it (prompt(): `afterStop`).
    */
+  /**
+   * Inline task (GH-734): a child session of this one runs the prompt on a small model with only the granted tools. Its parts show under the running
+   * `inline_task` call; permission asks go to this session's UI (`owns`). Ends at the child's idle, error, a cap (turns, output tokens, time) or `hooks.signal`.
+   */
+  inlineTask = async (spec: InlineSpec, hooks: InlineHooks): Promise<InlineResult> => {
+    const t0 = Date.now();
+    const fallback = this.model !== "default" ? this.model : "default";
+    const result = (r: Partial<InlineResult> & Pick<InlineResult, "status">, col?: InlineCollector): InlineResult => ({
+      text: "",
+      model: col?.modelName(fallback) ?? fallback,
+      turns: col?.turns ?? 0,
+      tokens: col?.tokens() ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      ...(col && col.cost() > 0 && { costUsd: col.cost() }),
+      filesChanged: col?.filesChanged() ?? [],
+      durationMs: Date.now() - t0,
+      ...r,
+    });
+    let childId: string | undefined;
+    let col: InlineCollector | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    let callId: string | undefined;
+    let messageID: string | undefined;
+    try {
+      callId = await this.findInlineCall(hooks);
+      if (callId) this.inlineClaimed.add(callId);
+      const model = await this.inlineModel(spec, hooks);
+      const agent = this.agentName();
+      const own = await this.agentPermission(agent).catch(() => [] as Rule[]);
+      // The parent's mode, agent denials and "always" rules; no claude-ui or orchestration tools (modeBlock hides both without own rules): no recursion.
+      const permission = modeBlock(this.permissionMode, this.always, denialsOf(own), { agent, readOnly: this.readOnly(), ...(this.permissionMode === "config" && { config: own }) });
+      const row = await this.server.request<{ id: string }>("/session", { method: "POST", directory: this.cwd, timeoutMs: 0, body: { parentID: this.id, title: `Inline: ${spec.title}`.slice(0, 80), permission } });
+      childId = row.id;
+      const collector = (col = new InlineCollector(childId));
+      if (callId) this.mapper.adopt(childId, callId);
+      const outcome = new Promise<{ status: InlineResult["status"]; limit?: InlineResult["limit"]; error?: string }>((resolve) => {
+        const end = (o: Parameters<typeof resolve>[0]) => resolve(o);
+        this.inlines.set(childId!, {
+          ui: !!callId,
+          notify: (e) => {
+            collector.feed(e);
+            const cap = collector.cap(spec.maxTurns);
+            if (cap) end({ status: "limit", limit: cap });
+            else if (collector.error) end({ status: "error", error: collector.error });
+            else if (collector.idle) end({ status: "done" });
+          },
+        });
+        timer = setTimeout(() => end({ status: "limit", limit: "time" }), INLINE_TIMEOUT_MS);
+        onAbort = () => end({ status: "stopped" });
+        if (callId) this.inlineStops.set(callId, onAbort);
+        if (hooks.signal.aborted) onAbort();
+        else hooks.signal.addEventListener("abort", onAbort, { once: true });
+      });
+      messageID = ascending("msg");
+      this.mapper.own.add(messageID);
+      await this.server.streamReady();
+      await this.server.request(`/session/${childId}/prompt_async`, {
+        method: "POST",
+        directory: this.cwd,
+        timeoutMs: 0,
+        body: { messageID, ...(model && { model }), system: INLINE_SYSTEM, tools: inlineTools(spec), parts: [{ id: ascending("prt"), type: "text", text: spec.text }] },
+      });
+      const end = await outcome;
+      if (end.status !== "done" && end.status !== "error") await this.server.request(`/session/${childId}/abort`, { method: "POST", directory: this.cwd }).catch(() => undefined);
+      let text = collector.text();
+      if (!text && end.status === "done") text = lastAssistantText(await this.server.request<OpenCodeMessage[]>(`/session/${childId}/message`, { directory: this.cwd }).catch(() => []));
+      return result({ ...end, ...clip(text) }, collector);
+    } catch (err) {
+      return result({ status: "error", error: (err as Error).message, ...(col && clip(col.text())) }, col);
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (onAbort) hooks.signal.removeEventListener("abort", onAbort);
+      if (childId) {
+        this.inlines.delete(childId);
+        this.mapper.release(childId);
+      }
+      if (callId) this.inlineStops.delete(callId);
+      // A claim stays while its call still runs (a second run must not take it); finished calls are dropped.
+      for (const id of this.inlineClaimed) if (!this.mapper.isRunning(id)) this.inlineClaimed.delete(id);
+      if (messageID) this.mapper.own.delete(messageID);
+    }
+  };
+
+  /** The running `inline_task` call this run belongs to: the newest one with an equal input that no run took. Its event may come after the tool request, so it is awaited a moment. */
+  private async findInlineCall(hooks: InlineHooks) {
+    for (let i = 0; i < 20; i++) {
+      const id = this.mapper.runningCall(`mcp__${DAEMON_SERVER}__inline_task`, hooks.input, this.inlineClaimed);
+      if (id || i === 19) return id;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
+  /** Model of the child: the input, else setting `openCodeModel`, else OpenCode's `small_model`, else the parent's (none: OpenCode's default). */
+  private async inlineModel(spec: InlineSpec, hooks: InlineHooks) {
+    let value = spec.model || hooks.openCodeModel || undefined;
+    value ??= (await this.server.request<{ small_model?: string }>("/config", { directory: this.cwd }).catch(() => undefined))?.small_model || undefined;
+    value ??= this.model !== "default" ? this.model : undefined;
+    const [providerID, ...rest] = (value ?? "").split("/");
+    return value && rest.length ? { providerID: providerID!, modelID: rest.join("/") } : undefined;
+  }
+
   async interrupt() {
     if (this.session.currentState() === "idle") return;
     this.stopped = true;
@@ -820,7 +949,14 @@ class OpenCodeSession implements EngineSession {
   /** One event of the server for this session or one of its subagent sessions. */
   event(payload: Payload) {
     const p = payload.properties;
-    const root = (p.sessionID ?? p.part?.sessionID ?? p.info?.sessionID ?? p.info?.id) === this.id;
+    const sid = p.sessionID ?? p.part?.sessionID ?? p.info?.sessionID ?? p.info?.id;
+    const root = sid === this.id;
+    const inline = sid && sid !== this.id ? this.inlines.get(sid) : undefined;
+    if (inline) {
+      inline.notify(payload);
+      // A run without a call to hang under shows nothing; its permission asks still reach the user.
+      if (!inline.ui && ["message.updated", "message.part.updated", "message.part.delta", "todo.updated"].includes(payload.type)) return;
+    }
     switch (payload.type) {
       case "message.updated": {
         const info = p.info;
@@ -934,6 +1070,13 @@ class OpenCodeSession implements EngineSession {
       at: Date.now(),
     };
     const reply = (r: Reply) => this.answerPermission(e.id, r);
+    // The claude-ui tools that ask (terminal_run): the card title names the terminal and the command; "always" suggestions stay.
+    if (tool.startsWith(`mcp__${DAEMON_SERVER}__`)) {
+      void Promise.resolve(this.opts.permissionCard?.(this.id, tool, input, { name: DAEMON_SERVER, source: "sdk" }))
+        .catch(() => undefined)
+        .then((card) => this.reqs.has(e.id) && this.session.request({ part: { ...part, ...(card && { title: card.title }) }, reply }));
+      return;
+    }
     if (!start) return this.session.request({ part, reply });
     // Over a limit: no card, the call runs and the tool repeats the refusal (orchestration.ts preflight).
     if (this.opts.preflight?.(this.id, tool, input, ORCHESTRATION) !== undefined) return (this.reqs.delete(e.id), this.post(`/permission/${e.id}/reply`, { reply: "once" }));
@@ -1044,6 +1187,8 @@ class OpenCodeSession implements EngineSession {
   bashCwdPinned = () => false;
   /** Stop agent: aborts the child session of the task call. */
   stopSubagent = async (callId: string) => {
+    const inline = this.inlineStops.get(callId);
+    if (inline) return inline(), true; // the run aborts its child and ends as stopped
     const child = this.mapper.childOf(callId);
     if (!child) return false;
     await this.server.request(`/session/${child}/abort`, { method: "POST", directory: this.cwd });
@@ -1086,7 +1231,7 @@ class OpenCodeSession implements EngineSession {
     this.engine.remove(this);
     this.engine.mcp?.drop(this.id);
     // The disconnect reads the folder's MCP state too: never cut off, and close does not wait for it.
-    if (this.mcpOn && this.server.running()) void this.server.request(`/mcp/${mcpName(this.id)}/disconnect`, { method: "POST", directory: this.cwd, timeoutMs: 0 }).catch(() => {});
+    if (this.server.running()) for (const key of this.mcpOn) void this.server.request(`/mcp/${mcpName(this.id, key)}/disconnect`, { method: "POST", directory: this.cwd, timeoutMs: 0 }).catch(() => {});
   };
   activity = () => ({ received: 0, at: 0, progress: 0 });
   live = () => this.server.running();
@@ -1246,6 +1391,6 @@ class OpenCodeEngineImpl implements Engine {
 }
 
 /** The daemon's `/opencode-mcp` route (server.ts): its URL (undefined while the daemon does not listen), the bearer token of a session (made on first use), dropped at close. */
-export type OpenCodeMcpRoute = { url: () => string | undefined; token: (id: string) => string; drop: (id: string) => void };
+export type OpenCodeMcpRoute = { url: () => string | undefined; token: (id: string, server: McpServerKey) => string; drop: (id: string) => void };
 export type OpenCodeEngine = OpenCodeEngineImpl;
 export const createOpenCodeEngine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; mcp?: OpenCodeMcpRoute } = {}): OpenCodeEngine => new OpenCodeEngineImpl(server, o.onTitle, o.mcp);

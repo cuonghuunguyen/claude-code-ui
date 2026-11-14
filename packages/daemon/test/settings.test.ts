@@ -8,7 +8,7 @@ const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, reposito
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, launcher: DEFAULTS.launcher, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, launcher: DEFAULTS.launcher, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
@@ -422,4 +422,29 @@ it("chat.visualize defaults to on (also for a settings.json without chat), saves
   expect(s.get().chat).toEqual({ visualize: true });
   expect(s.set({ chat: { visualize: false } }).chat).toEqual({ visualize: false });
   expect(() => s.set({ chat: { visualize: "yes" as never } })).toThrow("Inline visualizations must be on or off");
+});
+
+it("terminalAccess.enabled defaults to on, saves, refuses a non-boolean (GH-709)", () => {
+  const s = createSettings({ file: file() });
+  expect(s.get().terminalAccess).toEqual({ enabled: true });
+  expect(s.set({ terminalAccess: { enabled: false } }).terminalAccess).toEqual({ enabled: false });
+  expect(() => s.set({ terminalAccess: { enabled: 1 as never } })).toThrow("Let sessions use open terminals must be on or off");
+});
+
+it("inlineTask defaults, saves and refuses bad values (GH-734)", () => {
+  const s = createSettings({ file: file() });
+  expect(s.get().inlineTask).toEqual({ enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 });
+  expect(s.set({ inlineTask: { maxTurns: 20, model: "sonnet", openCodeModel: "deepseek/flash" } }).inlineTask).toEqual({ enabled: true, model: "sonnet", openCodeModel: "deepseek/flash", maxTurns: 20 });
+  expect(() => s.set({ inlineTask: { maxTurns: 0 } })).toThrow("Inline task maximum turns must be a whole number from 1 to 30");
+  expect(() => s.set({ inlineTask: { maxTurns: 31 } })).toThrow("from 1 to 30");
+  expect(() => s.set({ inlineTask: { model: "" } })).toThrow("Inline task model must be");
+  expect(() => s.set({ inlineTask: { openCodeModel: "nomodel" } })).toThrow("Inline task OpenCode model must be");
+  expect(() => s.set({ inlineTask: { enabled: 1 as never } })).toThrow("Inline tasks must be on or off");
+});
+
+it("fork.enabled defaults to on, saves, refuses a non-boolean (GH-718)", () => {
+  const s = createSettings({ file: file() });
+  expect(s.get().fork).toEqual({ enabled: true });
+  expect(s.set({ fork: { enabled: false } }).fork).toEqual({ enabled: false });
+  expect(() => s.set({ fork: { enabled: 1 as never } })).toThrow("Fork subagents must be on or off");
 });

@@ -12,8 +12,8 @@ const SUBAGENT_TOOLS = new Set(["Agent", "Task"]);
 /** `startedAt`: a subagent run's start (ms), kept from an earlier part of the same call. */
 function callPart(id: string, tool: string, input: unknown, status: ToolStatus, startedAt: number): Call {
   if (!SUBAGENT_TOOLS.has(tool)) return { type: "tool_call", id, toolUseId: id, tool, input, status };
-  const description = (input as { description?: unknown }).description;
-  return { type: "subagent", id, toolUseId: id, description: typeof description === "string" ? description : "", status, startedAt };
+  const { description, subagent_type: agentType } = input as { description?: unknown; subagent_type?: unknown };
+  return { type: "subagent", id, toolUseId: id, description: typeof description === "string" ? description : "", status, startedAt, ...(typeof agentType === "string" && agentType && { agentType }) };
 }
 
 /** Start of the tool_result text of a call the auto mode classifier denied (Claude Code transcripts; GH-711). */

@@ -148,6 +148,10 @@ The file state saved before a user prompt's turn edits files; one per user promp
 Returning a session to a checkpoint: code only, conversation only, or both. Same modes as Claude Code's `/rewind`.
 _Avoid_: undo, revert
 
+**Daemon MCP server**:
+The `claude-ui` MCP server the daemon gives each session (an SDK server for Claude, a `/opencode-mcp` route for OpenCode). Tool groups register into it; the first is the agent's access to the open terminals.
+_Avoid_: built-in MCP, internal tools
+
 **Tool card**:
 The UI rendering of a `tool_call` merged with its `tool_result`, grouped by `toolUseId`.
 
@@ -309,3 +313,11 @@ _Avoid_: bookmark, pin, reminder (a mark's optional part)
 **Brief turn**:
 The turn claude-ui sends to a marked session when the mark is made (or refreshed or retried), asking the session itself for a brief (About / Focus now / Next). A normal turn in the transcript, recognised by its tag line; the timeline shows it as one collapsed row.
 _Avoid_: summary turn, recap
+
+**Inline task**:
+A mid-size task run as one `inline_task` call by a small model with minimized context (no CLAUDE.md, memory or skills; only the prompt, files and granted tools). Only its result enters the parent context. Not a session: no entry in the session list, no transcript of its own.
+_Avoid_: mini agent, sub-session. Not a Fork run.
+
+**Fork run**:
+A Subagent run started with `subagent_type: "fork"` (Claude Code only): it inherits the parent conversation, runs on the parent's model in its own context and only its result returns to the parent. Shown as a run card labelled Fork. OpenCode has none: its subagents always start fresh.
+_Avoid_: fork session (that is `forkSession`: Aside, the git graph), forked session. Not an Aside, not an Inline task.

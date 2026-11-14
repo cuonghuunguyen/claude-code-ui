@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Event, Part } from "@claude-ui/protocol";
-import { applyEvent, emptySession, hitKey, partOf, shownState, wholeParts, withArtifacts, withEdits, withPage, withSubscribe, type SessionView } from "./store.ts";
+import { applyEvent, emptySession, hitKey, partOf, shownState, wholeParts, withoutResultText, lastTextOf, stepCountOf, withArtifacts, withEdits, withPage, withSubscribe, type SessionView } from "./store.ts";
 import type { SessionInfo, Snapshot } from "@claude-ui/protocol";
 
 const ev = (seq: number, part: Part): Event => ({ type: "event", sessionId: "s", seq, part });
@@ -416,5 +416,38 @@ describe("paging, review fixes", () => {
   it("a rewind of an unknown message clears the todo list in an unpaged view too", () => {
     const s = applyEvent({ ...emptySession(), todos: [{ content: "x", status: "pending" }] }, ev(1, { type: "rewind", id: "rw", userMessageId: "nope" }));
     expect(s.todos).toEqual([]);
+  });
+});
+
+describe("withoutResultText", () => {
+  const part = (p: Part) => ({ kind: "part" as const, part: p });
+  const call = { type: "tool_call", id: "c", toolUseId: "c", tool: "Grep", input: {}, status: "done" } as Part;
+  it("drops the last assistant text step equal to the result, keeps intermediate texts", () => {
+    const items = [part(text("a", "looking", false)), part(call), part(text("b", "The answer\n", false))];
+    expect(withoutResultText(items, "The answer").map((i) => (i.kind === "part" ? i.part.id : i.id))).toEqual(["a", "c"]);
+  });
+  it("keeps a last text that differs from the result; keeps the step of a truncated result (only its tail is the result)", () => {
+    const items = [part(text("b", "tail of it", false))];
+    expect(withoutResultText(items, "other")).toBe(items);
+    expect(withoutResultText(items, "other")).toHaveLength(1);
+    expect(withoutResultText([part(text("b", "head tail", false))], "tail", true)).toHaveLength(1);
+    expect(withoutResultText([part(text("b", "tail", false))], "tail", true)).toHaveLength(1);
+    expect(withoutResultText(items, "")).toBe(items);
+  });
+});
+
+describe("run card helpers (GH-718)", () => {
+  const part = (p: Part) => ({ kind: "part" as const, part: p });
+  const call = (id: string) => ({ type: "tool_call", id, toolUseId: id, tool: "Grep", input: {}, status: "done" }) as Part;
+  it("lastTextOf: the last finished assistant text step of the run, empty while it streams or when there is none", () => {
+    expect(lastTextOf([part(text("a", "first", false)), part(call("c")), part(text("b", "The answer", false))])).toBe("The answer");
+    expect(lastTextOf([part(text("a", "so far", true))])).toBe("");
+    expect(lastTextOf([part(call("c"))])).toBe("");
+    expect(lastTextOf([])).toBe("");
+  });
+  it("stepCountOf: tool calls, also those inside a context group; texts do not count", () => {
+    const group = { kind: "context" as const, id: "g", calls: [call("x"), call("y")] as never };
+    expect(stepCountOf([part(call("c")), group, part(text("b", "t", false))])).toBe(3);
+    expect(stepCountOf([])).toBe(0);
   });
 });
