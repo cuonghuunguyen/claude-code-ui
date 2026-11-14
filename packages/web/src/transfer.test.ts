@@ -127,7 +127,8 @@ describe("runTransfer (GH-555)", () => {
     const w = world({ a: { "/a/d": { kind: "dir" }, "/a/d/1": file("1"), "/a/d/2": file("2") }, b: { "/b": { kind: "dir" } } });
     w.failOn((m) => m.type === "fs.writeChunk" && String(m.path).endsWith("/2"));
     const r = await runTransfer({ send: w.send, items: [dmn("a", "/a/d", true)], target: { side: "b", dir: "/b", names: [] }, op: "cut", resolve: keep });
-    expect(r.error).toMatchObject({ code: "fs_error", name: "d" });
+    expect(r.error).toBeUndefined();
+    expect(r.failed).toMatchObject([{ code: "fs_error", name: "d" }]);
     expect(r.done).toEqual([]);
     expect(staging(w, "b")).toEqual([]);
     expect(w.fs.b!.has("/b/d")).toBe(false);
@@ -231,6 +232,62 @@ describe("OS files (GH-555)", () => {
     expect(r.done).toEqual(["/b/h.txt", "/b/dir"]);
     expect(Buffer.from((w.fs.b!.get("/b/h.txt") as { data: string }).data, "base64").toString()).toBe("hello");
     expect(w.fs.b!.get("/b/dir/e.txt")).toEqual(file(""));
+  });
+});
+
+describe("runTransfer per-item failure (GH-757)", () => {
+  it("same Daemon cut of 3: the 2nd rename rejects, 1st and 3rd are moved, no error", async () => {
+    const w = world({ a: { "/p/1": file("1"), "/p/2": file("2"), "/p/3": file("3"), "/p/d": { kind: "dir" } } });
+    w.failOn((m) => m.type === "fs.rename" && m.path === "/p/2");
+    const r = await runTransfer({ send: w.send, items: [dmn("a", "/p/1"), dmn("a", "/p/2"), dmn("a", "/p/3")], target: { side: "a", dir: "/p/d", names: [] }, op: "cut", resolve: keep });
+    expect(r.error).toBeUndefined();
+    expect(r.done).toEqual(["/p/d/1", "/p/d/3"]);
+    expect(r.moved).toEqual([
+      { from: "/p/1", to: "/p/d/1" },
+      { from: "/p/3", to: "/p/d/3" },
+    ]);
+    expect(r.failed).toMatchObject([{ name: "2", code: "fs_error" }]);
+    expect(w.fs.a!.has("/p/2")).toBe(true);
+  });
+
+  it("cross Daemon copy: the 2nd item's fs.walk fails, 1st and 3rd are done, nothing is written for the 2nd", async () => {
+    const w = world({ a: { "/a/1": file("1"), "/a/3": file("3") }, b: { "/b": { kind: "dir" } } });
+    const r = await runTransfer({ send: w.send, items: [dmn("a", "/a/1"), dmn("a", "/a/2"), dmn("a", "/a/3")], target: { side: "b", dir: "/b", names: [] }, op: "copy", resolve: keep });
+    expect(r.error).toBeUndefined();
+    expect(r.done).toEqual(["/b/1", "/b/3"]);
+    expect(r.failed).toMatchObject([{ name: "2", code: "not_found" }]);
+    expect(w.types("fs.writeChunk").some((m) => String(m.path).includes("/2"))).toBe(false);
+  });
+
+  it("copy: the 2nd item's chunk write fails, its staging is deleted, the 3rd still goes", async () => {
+    const w = world({ a: { "/a/1": file("1"), "/a/2": file("2"), "/a/3": file("3") }, b: { "/b": { kind: "dir" } } });
+    w.failOn((m) => m.type === "fs.writeChunk" && String(m.path).includes(".2.partial-"));
+    const r = await runTransfer({ send: w.send, items: [dmn("a", "/a/1"), dmn("a", "/a/2"), dmn("a", "/a/3")], target: { side: "b", dir: "/b", names: [] }, op: "copy", resolve: keep });
+    expect(r.done).toEqual(["/b/1", "/b/3"]);
+    expect(r.failed).toMatchObject([{ name: "2", code: "fs_error" }]);
+    expect(staging(w, "b")).toEqual([]);
+  });
+
+  it("limits stay a whole-batch error with no write", async () => {
+    const w = world({ a: { "/a/h": file("1") }, b: { "/b": { kind: "dir" } } });
+    const huge: Item = { kind: "browser", name: "h", isDir: false, items: [{ rel: "", kind: "file", size: 513 * 1024 * 1024 }] };
+    const r = await runTransfer({ send: w.send, items: [dmn("a", "/a/h"), huge], target: { side: "b", dir: "/b", names: [] }, op: "copy", resolve: keep });
+    expect(r.error).toMatchObject({ code: "too_large" });
+    expect(r.done).toEqual([]);
+    expect(w.types("fs.writeChunk")).toHaveLength(0);
+  });
+});
+
+describe("planPaste nested rows (GH-757)", () => {
+  const t = { side: "a", dir: "/p/dest" };
+  it("a row inside another carried folder is dropped without a refusal", () => {
+    const r = planPaste([dmn("a", "/p/lib", true), dmn("a", "/p/lib/b.ts"), dmn("a", "/p/src/a.ts")], t, "cut");
+    expect(r.items.map((i) => (i as { path: string }).path)).toEqual(["/p/lib", "/p/src/a.ts"]);
+    expect(r.refused).toEqual([]);
+  });
+  it("a row of another side is kept", () => {
+    const r = planPaste([dmn("a", "/p/lib", true), dmn("b", "/p/lib/b.ts")], t, "copy");
+    expect(r.items).toHaveLength(2);
   });
 });
 
