@@ -19,7 +19,7 @@ import { fakeQuery } from "./fake-query.ts";
 const webRoot = realpathSync(mkdtempSync(join(tmpdir(), "resync-")));
 writeFileSync(join(webRoot, "index.html"), "<h1>app</h1>");
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
-const daemon = createDaemon({ webRoot, roots: [webRoot], query: fakeQuery as never, token, replayMaxEvents: GAP, uploadDir: join(mkdtempSync(join(tmpdir(), "resync-up-")), "uploads") });
+const daemon = createDaemon({ webRoot, roots: [webRoot], query: fakeQuery as never, token, replayMaxEvents: GAP, modelListWaitMs: 0, opencode: { listWaitMs: 200 }, history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never }, uploadDir: join(mkdtempSync(join(tmpdir(), "resync-up-")), "uploads") });
 await new Promise<void>((r) => daemon.listen(0, "127.0.0.1", r));
 const { port } = daemon.address() as AddressInfo;
 afterAll(() => void daemon.close());

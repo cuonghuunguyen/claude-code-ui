@@ -78,7 +78,7 @@ export function createFeeds(conn: FeedConn, send: (e: Event) => void, o: FeedOpt
     const paused = [...feeds].filter((f) => f.paused);
     for (const f of paused.filter((x) => x.held)) if (conn.bufferedAmount <= high) pump(f);
     const background = paused.filter((f) => !f.held);
-    for (let more = background.length > 0; more && conn.bufferedAmount <= high; ) {
+    for (let more = background.length > 0; more && conn.readyState === conn.OPEN && conn.bufferedAmount <= high; ) {
       more = false;
       // The first feed of a round differs from tick to tick, so a slow link does not always serve the same one first.
       for (let i = 0; i < background.length && conn.bufferedAmount <= high; i++) {
