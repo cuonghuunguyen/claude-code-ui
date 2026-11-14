@@ -61,6 +61,19 @@ function indentedCodeRanges(text: string): Array<[number, number]> {
   return ranges;
 }
 
+/** Binary search in sorted, disjoint ranges. */
+function inRanges(ranges: Array<[number, number]>, at: number): boolean {
+  let lo = 0;
+  let hi = ranges.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (at < ranges[mid][0]) hi = mid - 1;
+    else if (at >= ranges[mid][1]) lo = mid + 1;
+    else return true;
+  }
+  return false;
+}
+
 /**
  * `\( x \)` and `\[ x \]` as `$$ x $$`, outside code (fences, code spans, indented code). Markdown eats the backslash of `\(`
  * as an escape, so remark-math never sees these forms; the source is rewritten before the parser runs. A `\[` and `\]` that
@@ -71,11 +84,13 @@ export function backslashMathToDollars(text: string): string {
   if (!text.includes("\\")) return text;
   const code = indentedCodeRanges(text);
   return text.replace(BACKSLASH_MATH, (m, fence, _f, _t, inline, block, offset: number) => {
-    if (fence !== undefined || code.some(([from, to]) => offset >= from && offset < to)) return m;
+    if (fence !== undefined || inRanges(code, offset)) return m;
     if (inline !== undefined) return `$$${inline}$$`;
     if (block === undefined) return m;
     const before = text.slice(text.lastIndexOf("\n", offset - 1) + 1, offset);
-    if (/^[ \t>]*$/.test(before) && /^[ \t]*\n/.test(block) && /\n[ \t>]*$/.test(block)) return `$$${block}$$`;
+    // Standalone: only blanks or `>` before `\[`, a line end after it, only blanks or `>` before `\]`, a line end after it.
+    const after = text.slice(offset + m.length, offset + m.length + 200);
+    if (/^[ \t>]*$/.test(before) && /^[ \t]*\n/.test(block) && /\n[ \t>]*$/.test(block) && /^[ \t]*(?:\r?\n|$)/.test(after)) return `$$${block}$$`;
     if (/^\s*\|/.test(before)) return `$$${String(block).replace(/\s*\n\s*/g, " ")}$$`;
     return `\n\n$$\n${String(block).trim()}\n$$\n\n`;
   });

@@ -84,6 +84,15 @@ describe("backslash math delimiters (GH-798)", () => {
     expect(backslashMathToDollars("1. Step:\n   \\[\n   x = 1\n   \\]\n2. Next")).toBe("1. Step:\n   $$\n   x = 1\n   $$\n2. Next");
     expect(backslashMathToDollars("> \\[\n> a^2\n> \\]")).toBe("> $$\n> a^2\n> $$");
   });
+  it("text after a closing \\] on its line: the block form, so the $$ still closes the formula", () => {
+    expect(backslashMathToDollars("\\[\nx\n\\] tail\n\nnext")).toBe("\n\n$$\nx\n$$\n\n tail\n\nnext");
+    expect(backslashMathToDollars("\\[\nx\n\\].\n")).toBe("\n\n$$\nx\n$$\n\n.\n");
+  });
+  it("many indented code blocks stay fast", () => {
+    const t = Date.now();
+    backslashMathToDollars("a\n\n    c\n\n".repeat(20000) + "\\(x\\)".repeat(20000));
+    expect(Date.now() - t).toBeLessThan(500);
+  });
   it("indented code stays literal; a list item's indented continuation is not code", () => {
     for (const t of ["    \\(a\\)", "text\n\n    \\[a\\]\n\n\tx \\(b\\)"]) expect(backslashMathToDollars(t)).toBe(t);
     expect(backslashMathToDollars("text\n\n    \\(a\\)\n\nafter \\(b\\)")).toBe("text\n\n    \\(a\\)\n\nafter $$b$$");
