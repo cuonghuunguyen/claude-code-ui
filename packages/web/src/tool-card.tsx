@@ -22,7 +22,7 @@ import { relPath } from "./paths.ts";
 import { specOf } from "./keymap.ts";
 import { keyText } from "./shortcuts.ts";
 import { fileSize } from "./files.ts";
-import { AllowDeniedContext, BackgroundShellContext, PlanTabContext, ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
+import { AllowDeniedContext, AlwaysAllowDeniedContext, BackgroundShellContext, PlanTabContext, ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
 import { ArtifactLinkMenu, ArtifactPreview, usePreviewOpen } from "./artifact-preview.tsx";
 import { ARTIFACT_TOOLS, artifactPreviewable, artifactSummary, artifactTitle, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, todoItems, todoSummary, toolSummary } from "./tools.ts";
 import { t as tr, useT } from "./i18n.ts";
@@ -109,6 +109,11 @@ export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; res
   const autoDenied = call.status === "denied" && call.denial?.by === "classifier" ? call.denial : undefined;
   const canAllow = !!allowDenied && !!autoDenied;
   const [allowing, setAllowing] = useState<{ error?: string }>();
+  // Always allow (GH-756): the inline panel, its pending scope and last error.
+  const alwaysAllow = use(AlwaysAllowDeniedContext);
+  const canAlways = canAllow && !!alwaysAllow && !autoDenied?.allowed;
+  const [always, setAlways] = useState<{ open: boolean; pending?: "session" | "local"; error?: string }>({ open: false });
+  const busy = (!!allowing && !allowing.error) || !!always.pending;
   const decided = call.coordinator && (call.coordinator.decision === "allow" ? t("session.toolCard.approvedByCoordinator") : t("session.toolCard.deniedByCoordinator"));
   const header = (
     <ToolHeader
@@ -137,16 +142,21 @@ export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; res
         <div className="group/head flex items-center gap-1">
           {header}
           {canAllow && (
+            autoDenied.always ? (
+              <AlwaysAllowedLabel scope={autoDenied.always} />
+            ) : (
             <AllowAndRetryButton
               allowed={!!autoDenied.allowed}
-              pending={!!allowing && !allowing.error}
+              pending={busy}
               onClick={() => {
                 setAllowing({});
                 // Success: the daemon re-emits the part with denial.allowed, which swaps the label.
                 allowDenied!(call.toolUseId).then(() => setAllowing(undefined), (e: Error) => setAllowing({ error: e.message }));
               }}
             />
+            )
           )}
+          {canAlways && !autoDenied.always && <AlwaysAllowButton open={always.open} disabled={busy} onClick={() => setAlways((a) => ({ open: !a.open, error: undefined, pending: a.pending }))} />}
           {canBackground && (
             <BackgroundButton
               pending={!!moving && !moving.error}
@@ -172,6 +182,27 @@ export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; res
         <p data-testid="auto-mode-denial" className="px-3 pb-2 text-xs text-muted-foreground">
           {autoDenied.reason ? t("session.toolCard.deniedByAutoModeReason", { reason: autoDenied.reason }) : t("session.toolCard.deniedByAutoMode")}
         </p>
+      )}
+      {canAlways && always.open && (
+        <AlwaysAllowPanel
+          call={call}
+          rule={autoDenied!.rule}
+          pending={always.pending}
+          error={always.error}
+          onCancel={() => setAlways({ open: false })}
+          onPick={(scope) => {
+            setAlways({ open: true, pending: scope });
+            // Success: the daemon re-emits the part with denial.always, which swaps the header and closes the panel.
+            alwaysAllow!(call.toolUseId, scope).then(
+              () => setAlways({ open: false }),
+              (e: Error & { code?: string }) =>
+                setAlways({
+                  open: true,
+                  error: e.code === "ignored_in_auto" ? tr("session.toolCard.alwaysAllowIgnored", { rule: autoDenied!.rule ?? "", why: e.message }) : tr("session.toolCard.alwaysAllowFailed", { error: e.message }),
+                }),
+            );
+          }}
+        />
       )}
       {canAllow && allowing?.error && (
         <p role="alert" data-testid="allow-and-retry-error" className="px-3 pb-2 text-xs text-destructive">
@@ -235,6 +266,86 @@ function AllowAndRetryButton({ allowed, pending, onClick }: { allowed: boolean; 
     >
       {allowed ? t("session.toolCard.allowedOnce") : t("session.toolCard.allowAndRetry")}
     </button>
+  );
+}
+
+/** Always allow (GH-756): a text button like Allow and retry; opens the panel under the reason line. */
+function AlwaysAllowButton({ open, disabled, onClick }: { open: boolean; disabled: boolean; onClick: () => void }) {
+  const t = useT();
+  return (
+    <button
+      type="button"
+      data-testid="always-allow"
+      aria-expanded={open}
+      disabled={disabled}
+      onClick={onClick}
+      className="flex h-7 shrink-0 cursor-pointer items-center rounded-md border px-2 text-xs font-medium text-foreground outline-none hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info disabled:cursor-default disabled:opacity-50 max-md:min-h-11 pointer-coarse:min-h-11"
+    >
+      {t("session.toolCard.alwaysAllow")}
+    </button>
+  );
+}
+
+/** What Always allow did, in place of both header buttons. */
+function AlwaysAllowedLabel({ scope }: { scope: "session" | "local" }) {
+  const t = useT();
+  return (
+    <button
+      type="button"
+      data-testid="always-allowed"
+      disabled
+      className="flex h-7 shrink-0 items-center rounded-md border px-2 text-xs font-medium text-foreground disabled:cursor-default disabled:opacity-50 max-md:min-h-11 pointer-coarse:min-h-11"
+    >
+      {scope === "session" ? t("session.toolCard.alwaysAllowedSession") : t("session.toolCard.alwaysAllowedLocal")}
+    </button>
+  );
+}
+
+const PANEL_BUTTON =
+  "flex h-7 cursor-pointer items-center rounded-md border px-2 text-xs font-medium text-foreground outline-none hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info disabled:cursor-default disabled:opacity-50 max-md:min-h-11 pointer-coarse:min-h-11";
+
+/** The rule that will be saved and the scope to save it for; a call with no rule gets the reason and Cancel only. */
+function AlwaysAllowPanel({ call, rule, pending, error, onCancel, onPick }: { call: ToolCall; rule?: string; pending?: "session" | "local"; error?: string; onCancel: () => void; onPick: (scope: "session" | "local") => void }) {
+  const t = useT();
+  const agent = call.tool === "Agent" || call.tool === "Task" || call.tool === "Monitor";
+  return (
+    <div data-testid="always-allow-panel" className="flex flex-col gap-2 px-3 pb-2 text-xs">
+      {rule ? (
+        <>
+          <p className="text-muted-foreground">
+            {t("session.toolCard.alwaysAllowRule")} <code data-testid="always-allow-rule" className="break-all font-mono text-foreground">{rule}</code>
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" data-testid="always-allow-session" disabled={!!pending} aria-busy={pending === "session"} onClick={() => onPick("session")} className={PANEL_BUTTON}>
+              {t("session.toolCard.alwaysAllowSession")}
+            </button>
+            <button type="button" data-testid="always-allow-local" disabled={!!pending} aria-busy={pending === "local"} onClick={() => onPick("local")} className={PANEL_BUTTON}>
+              {t("session.toolCard.alwaysAllowLocal")}
+            </button>
+            <button type="button" data-testid="always-allow-cancel" disabled={!!pending} onClick={onCancel} className={PANEL_BUTTON}>
+              {t("session.toolCard.alwaysAllowCancel")}
+            </button>
+          </div>
+          <p className="text-muted-foreground">{t("session.toolCard.alwaysAllowLocalHint")}</p>
+        </>
+      ) : (
+        <>
+          <p data-testid="always-allow-unavailable" className="text-muted-foreground">
+            {t(agent ? "session.toolCard.alwaysAllowUnavailableAgent" : "session.toolCard.alwaysAllowUnavailable", { tool: call.tool })}
+          </p>
+          <div>
+            <button type="button" data-testid="always-allow-cancel" onClick={onCancel} className={PANEL_BUTTON}>
+              {t("session.toolCard.alwaysAllowCancel")}
+            </button>
+          </div>
+        </>
+      )}
+      {error && (
+        <p role="alert" data-testid="always-allow-error" className="text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 

@@ -309,6 +309,11 @@ export class Session {
     if (!this.run.allowDenied) throw new DeniedRetryError("unsupported", "this session's engine has no auto mode");
     return this.run.allowDenied(toolUseId);
   }
+  /** Always allow (GH-756); `unsupported` without the Engine's support (OpenCode). */
+  alwaysAllowDenied(toolUseId: string, scope: "session" | "local") {
+    if (!this.run.alwaysAllowDenied) throw new DeniedRetryError("unsupported", "this session's engine has no auto mode");
+    return this.run.alwaysAllowDenied(toolUseId, scope);
+  }
   backgroundShell(toolUseId: string) {
     return this.run.backgroundShell(toolUseId);
   }

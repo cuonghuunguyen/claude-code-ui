@@ -2715,6 +2715,23 @@ export function createDaemon(opts: {
           queue.release(s.id);
           return reply({});
         }
+        case "session.alwaysAllowDenied": {
+          if (typeof msg.toolUseId !== "string") return fail("bad_request", "toolUseId required");
+          if (msg.scope !== "session" && msg.scope !== "local") return fail("bad_request", "scope must be session or local");
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
+          if (s.info().state === "idle") await s.sync();
+          if (s.externalTurnRunning()) return fail("external_turn", "A terminal CLI turn is running in this session");
+          try {
+            await s.alwaysAllowDenied(msg.toolUseId, msg.scope);
+          } catch (e) {
+            return e instanceof DeniedRetryError ? fail(e.code, e.message) : fail("prompt_failed", (e as Error).message);
+          }
+          autoContinue.cancel(s.id);
+          queue.release(s.id);
+          return reply({});
+        }
         case "session.shellOutput": {
           if (typeof msg.toolUseId !== "string") return fail("bad_request", "toolUseId required");
           const s = await find(msg.sessionId);

@@ -51,6 +51,8 @@ export interface EngineSession {
   backgroundShell(toolUseId: string): Promise<boolean>;
   /** Allow and retry (GH-711), Claude only: approves the classifier-denied call once and sends the follow-up message; throws DeniedRetryError. */
   allowDenied?(toolUseId: string): string | undefined;
+  /** Always allow (GH-756), Claude only: saves the call's allow rule for `scope`, then like allowDenied; throws DeniedRetryError. */
+  alwaysAllowDenied?(toolUseId: string, scope: "session" | "local"): Promise<string | undefined>;
   stopShell(id: string): Promise<boolean>;
   shellOutput(toolUseId: string): Promise<{ output: string; truncated: boolean } | undefined>;
   previewRewind(userMessageId: string): Promise<RewindPreview>;

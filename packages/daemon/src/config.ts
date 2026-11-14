@@ -1,15 +1,13 @@
 // Config dialogs (docs/spec.md "Config dialogs", same as the VS Code extension): live operations as control requests on the
 // session's query or a config query held open per project cwd; config writes through the SDK-bundled Claude Code CLI.
 import { execFile } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join, relative, isAbsolute } from "node:path";
 import { createRequire } from "node:module";
 import { query as sdkQuery, type McpServerStatus, type Query } from "@anthropic-ai/claude-agent-sdk";
 import type { ClientMessage, ConfigKind, ConfigScope, McpAddConfig, McpServerInfo, SkillHandles, SkillRow, SkillsResult, SkillsSetStateResult } from "@claude-ui/protocol";
 import { redact } from "./plugins.ts";
 import { claudeEnv } from "./claude-env.ts";
 import { openQuery, THROWAWAY_TIMEOUT_MS } from "./session.ts";
+import { SettingsFileError, updateSettingsFile } from "./local-settings.ts";
 
 /** One-shot CLI call in `cwd` (`stdin`: written to it, for `edit-skill-overrides`); resolves with its exit code and output (never rejects on a non-zero exit). */
 /** `timeoutMs`: default 30 s; `env`: replaces the active account's env (GH-627 token test); commands that fetch from git pass more. */
@@ -87,41 +85,17 @@ export const runCli: CliRunner = (args, cwd, stdin, timeoutMs = CLI_TIMEOUT_MS, 
  * Other keys stay; temp file + rename, so a crash leaves the old file.
  */
 function writeSkillOverride(cwd: string, name: string, state: string) {
-  const dir = join(cwd, ".claude");
-  const file = join(dir, "settings.local.json");
-  // A symlinked `.claude` must not take the write out of the project.
   try {
-    const rel = relative(realpathSync(cwd), realpathSync(dir));
-    if (rel.startsWith("..") || isAbsolute(rel)) throw new ConfigError("cli_failed", `${dir} points outside the project`);
+    updateSettingsFile(cwd, (settings) => {
+      const prev = settings.skillOverrides;
+      const overrides: Record<string, unknown> = prev && typeof prev === "object" && !Array.isArray(prev) ? { ...prev } : {};
+      if (state === "on") delete overrides[name];
+      else overrides[name] = state;
+      settings.skillOverrides = overrides;
+    });
   } catch (e) {
-    if (e instanceof ConfigError) throw e;
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw new ConfigError("cli_failed", `cannot read ${dir}: ${(e as Error).message}`);
-  }
-  let mode = 0o644;
-  let settings: Record<string, unknown> = {};
-  try {
-    const raw = JSON.parse(readFileSync(file, "utf8"));
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new ConfigError("cli_failed", `${file} is not a JSON object`);
-    settings = raw;
-    mode = statSync(file).mode & 0o777;
-  } catch (e) {
-    if (e instanceof ConfigError) throw e;
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw new ConfigError("cli_failed", `cannot read ${file}: ${(e as Error).message}`);
-  }
-  const prev = settings.skillOverrides;
-  const overrides: Record<string, unknown> = prev && typeof prev === "object" && !Array.isArray(prev) ? { ...prev } : {};
-  if (state === "on") delete overrides[name];
-  else overrides[name] = state;
-  settings.skillOverrides = overrides;
-  const tmp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
-  try {
-    mkdirSync(dir, { recursive: true });
-    // "wx": never writes through a path that already exists (a planted symlink).
-    writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n", { flag: "wx", mode });
-    renameSync(tmp, file);
-  } catch (e) {
-    rmSync(tmp, { force: true });
-    throw new ConfigError("cli_failed", `cannot write ${file}: ${(e as Error).message}`);
+    if (e instanceof SettingsFileError) throw new ConfigError("cli_failed", e.message);
+    throw e;
   }
 }
 

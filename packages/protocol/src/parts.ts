@@ -79,9 +79,9 @@ export type Part = { parentId?: string } & (
    * `startedAt`/`endedAt`: a Bash call the CLI ran as a task (shell set): its task registration (a restored moved shell: its placeholder result) and its end, daemon clock. `endedAt` alone on a done Artifact call (GH-176): its publish time (the result's transcript timestamp; absent without one).
    * `exitCode`: from the end notification's summary ("... exit code N"); none when killed or unknown.
    * `denial` (GH-711): the auto mode classifier denied this main-thread call (`reason` e.g. "[Git Destructive]"); `allowed`: Allow and retry
-   * was used for it (daemon-emitted, in memory only: not restored). Absent for calls denied by the user, a coordinator, a rule, a mode or inside a subagent.
+   * was used for it (daemon-emitted, in memory only: not restored); `rule` (GH-756): the allow rule Always allow would save (absent when no rule fits); `always`: Always allow saved it for that scope (memory only, with `allowed`). Absent for calls denied by the user, a coordinator, a rule, a mode or inside a subagent.
    */
-  | { type: "tool_call"; id: string; toolUseId: string; tool: string; input: unknown; status: ToolStatus; editedByUser?: boolean; coordinator?: { decision: "allow" | "deny"; reason: string }; denial?: { by: "classifier"; reason?: string; allowed?: true }; shell?: "foreground" | "background"; startedAt?: number; endedAt?: number; exitCode?: number }
+  | { type: "tool_call"; id: string; toolUseId: string; tool: string; input: unknown; status: ToolStatus; editedByUser?: boolean; coordinator?: { decision: "allow" | "deny"; reason: string }; denial?: { by: "classifier"; reason?: string; rule?: string; allowed?: true; always?: "session" | "local" }; shell?: "foreground" | "background"; startedAt?: number; endedAt?: number; exitCode?: number }
   /**
    * `id` = `<toolUseId>:result`. `original`: the file before this call, on the first Edit/Write of a path in a live
    * query (null = the call created it); absent in a restored transcript, which does not keep it.

@@ -1,6 +1,7 @@
 // Adapter: converts raw SDK messages into parts (CONTEXT.md "Adapter").
 // One adapter instance per session; it holds the accumulated text of streaming blocks and the known tool calls.
 import type { SDKMessage, SlashCommand as SDKSlashCommand } from "@anthropic-ai/claude-agent-sdk";
+import { alwaysRuleString } from "./always-rule.ts";
 import type { Part, TodoItem, ToolStatus } from "./parts.ts";
 
 type Call = Extract<Part, { type: "tool_call" | "subagent" }>;
@@ -183,7 +184,14 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   }
 
   // Classifier denials of main-thread calls (GH-711), by tool_use_id; also kept for a denial that arrives before its tool_use.
-  const denials = new Map<string, { by: "classifier"; reason?: string; allowed?: true }>();
+  type Denial = NonNullable<Extract<Part, { type: "tool_call" }>["denial"]>;
+  const denials = new Map<string, Denial>();
+
+  /** The denial with the allow rule Always allow would save (GH-756), when one fits the call. */
+  const withRule = (call: Extract<Part, { type: "tool_call" }>, d: Denial): Denial => {
+    const rule = alwaysRuleString(call.tool, call.input);
+    return rule ? { ...d, rule } : d;
+  };
 
   /** `denial`: the auto mode classifier's (main thread only); the call keeps it with its status. */
   function deny(toolUseId: string, denial?: { by: "classifier"; reason?: string }): Part[] {
@@ -191,17 +199,24 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
     if (denial) denials.set(toolUseId, denial);
     const before = calls.get(toolUseId);
     const info = denials.get(toolUseId);
-    if (before?.type === "tool_call" && info && !before.parentId && !before.denial) calls.set(toolUseId, { ...before, denial: info });
+    if (before?.type === "tool_call" && info && !before.parentId && !before.denial) calls.set(toolUseId, { ...before, denial: withRule(before, info) });
     const parts = setStatus(toolUseId, "denied");
     const after = calls.get(toolUseId);
     return parts.length || !after || after === before ? parts : [after];
   }
 
-  /** Allow and retry: the classifier-denied main-thread call `toolUseId`, once; marks its part allowed. */
-  function allowRetry(toolUseId: string): { call: Extract<Part, { type: "tool_call" }>; parts: Part[] } | undefined {
+  /** The classifier-denied main-thread call `toolUseId` that is not allowed yet; marks nothing. */
+  function deniedCall(toolUseId: string): Extract<Part, { type: "tool_call" }> | undefined {
     const call = calls.get(toolUseId);
     if (call?.type !== "tool_call" || call.status !== "denied" || call.parentId || call.denial?.by !== "classifier" || call.denial.allowed) return undefined;
-    const next = { ...call, denial: { ...call.denial, allowed: true as const } };
+    return call;
+  }
+
+  /** Allow and retry: the classifier-denied main-thread call `toolUseId`, once; marks its part allowed (and `always` for Always allow). */
+  function allowRetry(toolUseId: string, always?: "session" | "local"): { call: Extract<Part, { type: "tool_call" }>; parts: Part[] } | undefined {
+    const call = deniedCall(toolUseId);
+    if (!call?.denial) return undefined;
+    const next = { ...call, denial: { ...call.denial, allowed: true as const, ...(always && { always }) } };
     calls.set(toolUseId, next);
     denials.set(toolUseId, next.denial);
     return { call: next, parts: [next] };
@@ -288,7 +303,7 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
           if (block.type === "tool_use") {
             const call = callPart(block.id, block.name, block.input, denied.has(block.id) ? "denied" : "running", startOf(block.id));
             const early = denials.get(block.id);
-            if (early && call.type === "tool_call" && !m.parent_tool_use_id) call.denial = early;
+            if (early && call.type === "tool_call" && !m.parent_tool_use_id) call.denial = withRule(call, early);
             calls.set(block.id, call);
             const todos = (block.input as { todos?: TodoItem[] }).todos;
             if (block.name !== "TodoWrite" || m.parent_tool_use_id || !Array.isArray(todos)) return [call];
@@ -518,5 +533,5 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   const outputFile = (toolUseId: string) => outputs.get(toolUseId);
 
   /** deny: marks a tool call denied now; its later tool_result keeps status denied. */
-  return { allowRetry, byCoordinator, convert, commands, deny, edit, endCalls, openCalls, outputFile, taskCall };
+  return { allowRetry, deniedCall, byCoordinator, convert, commands, deny, edit, endCalls, openCalls, outputFile, taskCall };
 }

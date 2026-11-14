@@ -1,4 +1,5 @@
 export * from "./parts.ts";
+export * from "./always-rule.ts";
 export * from "./wire.ts";
 export { CLASSIFIER_DENIAL_PREFIX, createAdapter, bashRecords, escapeBash } from "./adapter.ts";
 export { imageBlock, isPromptImage, MEDIA_INLINE_MAX, omitMedia, omittedImage, parseOmitted, type ImageBlock, type OmittedSource } from "./images.ts";

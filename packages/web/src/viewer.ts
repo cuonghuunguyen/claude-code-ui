@@ -88,6 +88,8 @@ export type OpenViewer = (t: ViewerTarget, opener?: HTMLElement | null) => void;
 export const BackgroundShellContext = createContext<((toolUseId: string) => Promise<unknown>) | undefined>(undefined);
 /** Allow and retry (GH-711) of a tool card the auto mode classifier denied: the session view's request for that call; absent = no button. */
 export const AllowDeniedContext = createContext<((toolUseId: string) => Promise<unknown>) | undefined>(undefined);
+/** Always allow (GH-756): saves the allow rule of that denied call for the scope, then retries it; absent = no button. */
+export const AlwaysAllowDeniedContext = createContext<((toolUseId: string, scope: "session" | "local") => Promise<unknown>) | undefined>(undefined);
 export const ViewerContext = createContext<OpenViewer | undefined>(undefined);
 
 export type ViewerState = { target: ViewerTarget; sessionId: string; cwd: string; opener: HTMLElement | null };

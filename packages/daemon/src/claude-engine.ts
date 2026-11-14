@@ -21,9 +21,11 @@ import {
   ALL_CAPABILITIES,
   bashRecords,
   escapeBash,
+  alwaysRule,
   createAdapter,
   imageBlock,
   permissionModesFor,
+  ruleString,
   type Effort,
   type Part,
   type PermissionMode,
@@ -36,7 +38,8 @@ import { claudeEnv } from "./claude-env.ts";
 import { runBash, type BashResult, type BashRun } from "./bash.ts";
 import { readTail, taskDirs } from "./shell-output.ts";
 import { perf, type PerfSpanHandle } from "./perf.ts";
-import { DeniedRetryError, followUp, OneShots, retryKey } from "./denied-retry.ts";
+import { DeniedRetryError, followUp, followUpAlways, OneShots, retryKey } from "./denied-retry.ts";
+import { addLocalAllowRule, localSettingsFile, SettingsFileError } from "./local-settings.ts";
 import { interleaveRuns, type TranscriptEnd } from "./transcript.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
@@ -168,7 +171,17 @@ export async function withQuery<T>(fn: (q: Query) => Promise<T>, query: typeof s
 
 /** A query with no prompt, for control requests only (withQuery, config queries); the caller closes it. */
 export const openQuery = (query: typeof sdkQuery = sdkQuery, options: Options = {}): Query =>
-  query({ prompt: new InputQueue(), options: { settingSources: SETTING_SOURCES, env: claudeEnv(), settings: { disableAllHooks: true }, ...options } });
+  query({
+    prompt: new InputQueue(),
+    options: {
+      settingSources: SETTING_SOURCES,
+      env: claudeEnv(),
+      ...(process.env.CLAUDE_UI_E2E_CLAUDE_CLI && { pathToClaudeCodeExecutable: process.env.CLAUDE_UI_E2E_CLAUDE_CLI }),
+      ...options,
+      // Merged: a caller's settings must not drop disableAllHooks.
+      settings: typeof options.settings === "object" ? { disableAllHooks: true, ...options.settings } : (options.settings ?? { disableAllHooks: true }),
+    },
+  });
 
 /** withQuery() in the daemon-wide throwaway queue. */
 export const queuedQuery = <T,>(fn: (q: Query) => Promise<T>, query: typeof sdkQuery = sdkQuery, options: Options = {}): Promise<T> => queued(() => withQuery(fn, query, options));
@@ -176,9 +189,24 @@ export const queuedQuery = <T,>(fn: (q: Query) => Promise<T>, query: typeof sdkQ
 export const listModels = (query: typeof sdkQuery = sdkQuery): Promise<ModelInfo[]> => withQuery((q) => q.supportedModels(), query);
 
 
-/** The CLI's rule string of a rule value: `\`, `(` and `)` in the content are escaped with `\` (probed in the CLI 2.1.x binary). */
-const ruleString = ({ toolName, ruleContent }: { toolName: string; ruleContent?: string }) =>
-  ruleContent ? `${toolName}(${ruleContent.replace(/[\\()]/g, "\\$&")})` : toolName;
+/** Why auto mode ignores the allow rule of a denied `tool` call (user-facing). */
+const ignoredWhy = (tool: string) =>
+  tool === "Bash" || tool === "PowerShell"
+    ? "Auto mode sends this command to its classifier anyway: autoMode.classifyAllShell is on, or the command starts an interpreter or shell."
+    : "Claude Code drops this kind of rule in auto mode.";
+
+/**
+ * Whether auto mode keeps the allow rule `rule`: a throwaway auto mode CLI with only that rule as a flag rule lists the rules it
+ * applies (it omits the ones auto mode ignores). Not the session's CLI: the session may not run in auto mode when the user clicks.
+ */
+export async function autoModeKeeps(cwd: string, rule: string, query?: typeof sdkQuery): Promise<{ kept: boolean; managedOnly: boolean }> {
+  const { state } = await queuedQuery(
+    (q) => (q as unknown as { listPermissionRules(): Promise<{ state: { rules: { behavior: string; source: string }[]; managedOnly: boolean } }> }).listPermissionRules(),
+    query,
+    { cwd, permissionMode: "auto", persistSession: false, settings: { permissions: { allow: [rule] } } },
+  );
+  return { managedOnly: state.managedOnly, kept: state.rules.some((r) => r.behavior === "allow" && r.source === "flagSettings") };
+}
 
 const sessionRules = (g: PermissionUpdate[]) => g.flatMap((u) => (u.type === "addRules" && u.behavior === "allow" ? u.rules.map(ruleString) : []));
 
@@ -251,6 +279,8 @@ export class ClaudeSession implements EngineSession {
   private readonly oneShots = new OneShots();
   /** Message IDs of Allow and retry follow-ups the CLI did not take yet; `retryRan`: one was taken, so the next idle drops the unused approvals. */
   private readonly retryEchoes = new Set<string>();
+  /** Always allow (GH-756) saves that run: a second click on the same call is refused. */
+  private readonly savingAlways = new Set<string>();
   private retryRan = false;
   /** Converts transcript messages (restore and sync); the live adapter converts the query's stream. */
   private readonly transcript = createAdapter();
@@ -389,6 +419,57 @@ export class ClaudeSession implements EngineSession {
     this.retryEchoes.add(id);
     for (const p of r.parts) this.session.emit(p);
     return id;
+  }
+
+  /**
+   * Always allow (GH-756): saves the allow rule of the classifier-denied call `toolUseId` for `scope`, then asks Claude to run it
+   * again. Nothing is saved when a throwaway auto mode CLI would ignore the rule. Throws DeniedRetryError.
+   */
+  async alwaysAllowDenied(toolUseId: string, scope: "session" | "local"): Promise<string | undefined> {
+    this.guardRetry();
+    if (this.savingAlways.has(toolUseId)) throw new DeniedRetryError("session_busy", "a save for this call is running");
+    const call = this.adapter.deniedCall(toolUseId);
+    if (!call) throw new DeniedRetryError("unknown_call", "no call denied by auto mode with that ID, or it is allowed already");
+    const rule = call.denial?.rule;
+    if (!rule) throw new DeniedRetryError("no_rule", `no allow rule fits this ${call.tool} call`);
+    this.savingAlways.add(toolUseId);
+    try {
+      const check = await autoModeKeeps(this.cwd, rule, this.opts.query).catch((e: Error) => {
+        throw new DeniedRetryError("check_failed", `Could not check the rule against auto mode: ${e.message}`);
+      });
+      if (check.managedOnly) throw new DeniedRetryError("managed_only", "Your organization allows managed permission rules only.");
+      if (!check.kept) throw new DeniedRetryError("ignored_in_auto", ignoredWhy(call.tool));
+      // The state may have changed while the check ran.
+      this.guardRetry();
+      if (!this.adapter.deniedCall(toolUseId)) throw new DeniedRetryError("unknown_call", "no call denied by auto mode with that ID, or it is allowed already");
+      if (scope === "local") {
+        try {
+          addLocalAllowRule(await localSettingsFile(this.cwd), rule);
+        } catch (e) {
+          if (e instanceof SettingsFileError) throw new DeniedRetryError("settings_write_failed", e.message);
+          throw new DeniedRetryError("settings_write_failed", `cannot save the rule: ${(e as Error).message}`);
+        }
+      }
+      // Both scopes: re-applied as allowedTools at each query start, and live now.
+      const value = alwaysRule(call.tool, call.input);
+      if (!("toolName" in value)) throw new DeniedRetryError("no_rule", `no allow rule fits this ${call.tool} call`);
+      this.grants.push({ type: "addRules", rules: [value], behavior: "allow", destination: "session" });
+      await this.query?.applyFlagSettings({ permissions: { allow: sessionRules(this.grants) } });
+      this.guardRetry();
+      const r = this.adapter.allowRetry(toolUseId, scope);
+      if (!r) throw new DeniedRetryError("unknown_call", "no call denied by auto mode with that ID, or it is allowed already");
+      const id = this.prompt(followUpAlways(r.call.tool, r.call.input, rule, scope));
+      for (const p of r.parts) this.session.emit(p);
+      return id;
+    } finally {
+      this.savingAlways.delete(toolUseId);
+    }
+  }
+
+  private guardRetry() {
+    if (!this.session.isLive()) throw new DeniedRetryError("session_not_live", `session ${this.id} is not live (${this.session.currentState()})`);
+    if (this.bashRun) throw new DeniedRetryError("bash_running", "a shell command is running: stop it first");
+    if (this.rewinding) throw new DeniedRetryError("session_busy", "session is rewinding");
   }
 
   bashCwdPinned() {
