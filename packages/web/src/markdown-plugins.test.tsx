@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { loadMarkdownPlugin, markdownNeeds, resetMarkdownPlugins, useMarkdownPlugins, type MarkdownPlugins } from "./markdown-plugins.ts";
+
+const sheet = vi.hoisted(() => ({ loaded: 0 }));
 
 beforeAll(() => void ((globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true));
 afterEach(resetMarkdownPlugins);
@@ -56,5 +58,19 @@ describe("useMarkdownPlugins", () => {
     const { seen, root } = await render("$$x$$");
     expect(seen[0].math).toBeDefined();
     await act(async () => root.unmount());
+  });
+});
+
+describe("math plugin stylesheet (GH-790)", () => {
+  it("loading the math plugin loads the KaTeX stylesheet, the other plugins do not", async () => {
+    vi.resetModules();
+    sheet.loaded = 0;
+    vi.doMock("katex/dist/katex.min.css", () => ((sheet.loaded += 1), {}));
+    const fresh = await import("./markdown-plugins.ts");
+    await fresh.loadMarkdownPlugin("code");
+    await fresh.loadMarkdownPlugin("mermaid");
+    expect(sheet.loaded).toBe(0);
+    await fresh.loadMarkdownPlugin("math");
+    expect(sheet.loaded).toBe(1);
   });
 });
