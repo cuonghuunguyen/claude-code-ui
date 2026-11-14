@@ -53,7 +53,7 @@ async function turn(user) {
   const prompt = textOf(user);
   const retry = prompt.startsWith("Auto mode denied your");
   // DENY-PROBE-IGNORED: its command holds IGNORED-PROBE, the text the fake `list_permission_rules` leaves out (stands in for auto mode dropping a rule).
-  if (prompt.includes("DENY-PROBE")) command = prompt.includes("DENY-PROBE-IGNORED") ?`${COMMAND} IGNORED-PROBE` : COMMAND;
+  if (prompt.includes("DENY-PROBE")) command = prompt.includes("DENY-PROBE-IGNORED") ? `${COMMAND} IGNORED-PROBE` : COMMAND;
   if (prompt.includes("DENY-PROBE") || retry) await bashCall(n, retry, usage);
   const suggestion = await released();
   out({ type: "assistant", uuid: randomUUID(), session_id: sessionId, parent_tool_use_id: null, message: { id: `msg_fake_${n}`, type: "message", role: "assistant", model: "claude-haiku-4-5", content: [{ type: "text", text: "Done." }], stop_reason: "end_turn", stop_sequence: null, usage } });

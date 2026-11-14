@@ -449,17 +449,22 @@ export class ClaudeSession implements EngineSession {
           throw new DeniedRetryError("settings_write_failed", `cannot save the rule: ${(e as Error).message}`);
         }
       }
-      // Both scopes: re-applied as allowedTools at each query start, and live now.
-      const value = alwaysRule(call.tool, call.input);
-      if (!("toolName" in value)) throw new DeniedRetryError("no_rule", `no allow rule fits this ${call.tool} call`);
-      this.grants.push({ type: "addRules", rules: [value], behavior: "allow", destination: "session" });
-      await this.query?.applyFlagSettings({ permissions: { allow: sessionRules(this.grants) } });
-      this.guardRetry();
-      const r = this.adapter.allowRetry(toolUseId, scope);
-      if (!r) throw new DeniedRetryError("unknown_call", "no call denied by auto mode with that ID, or it is allowed already");
-      const id = this.prompt(followUpAlways(r.call.tool, r.call.input, rule, scope));
-      for (const p of r.parts) this.session.emit(p);
-      return id;
+      // The rule is saved from here on (grants re-apply it at each CLI start): a failure below says so.
+      try {
+        // Both scopes: re-applied as allowedTools at each query start, and live now.
+        const value = alwaysRule(call.tool, call.input);
+        if (!("toolName" in value)) throw new Error(`no allow rule fits this ${call.tool} call`);
+        this.grants.push({ type: "addRules", rules: [value], behavior: "allow", destination: "session" });
+        await this.query?.applyFlagSettings({ permissions: { allow: sessionRules(this.grants) } });
+        this.guardRetry();
+        const r = this.adapter.allowRetry(toolUseId, scope);
+        if (!r) throw new Error("the call is gone or allowed already");
+        const id = this.prompt(followUpAlways(r.call.tool, r.call.input, rule, scope));
+        for (const p of r.parts) this.session.emit(p);
+        return id;
+      } catch (e) {
+        throw new DeniedRetryError("rule_saved", e instanceof DeniedRetryError ? e.message : (e as Error).message);
+      }
     } finally {
       this.savingAlways.delete(toolUseId);
     }

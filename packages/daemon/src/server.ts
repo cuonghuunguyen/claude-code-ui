@@ -1,6 +1,7 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
 import { planDirs } from "./plan-dirs.ts";
 import { DeniedRetryError } from "./denied-retry.ts";
+import { localSettingsFile } from "./local-settings.ts";
 import { closeSync, createReadStream, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
 import { homedir, hostname as osHostname, tmpdir } from "node:os";
@@ -2714,6 +2715,11 @@ export function createDaemon(opts: {
           autoContinue.cancel(s.id);
           queue.release(s.id);
           return reply({});
+        }
+        case "session.localSettingsFile": {
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          return reply({ file: await localSettingsFile(s.cwd) });
         }
         case "session.alwaysAllowDenied": {
           if (typeof msg.toolUseId !== "string") return fail("bad_request", "toolUseId required");

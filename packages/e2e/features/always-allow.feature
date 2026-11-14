@@ -13,6 +13,7 @@ Feature: Always allow
     And the turn has finished
     And I click Always allow
     Then the Always allow panel shows the rule "Bash(git push --force origin main)"
+    And the Always allow hint names a file ending ".claude/settings.local.json"
     And I capture "panel"
     When I pick the "session" scope in the Always allow panel
     And the fake CLI ends the turn with the suggestion ""

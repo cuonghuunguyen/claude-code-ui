@@ -40,3 +40,7 @@ Then("the Always allow scope buttons are at least 44px high", async ({ page }) =
     expect(box?.height ?? 0, id).toBeGreaterThanOrEqual(44);
   }
 });
+
+Then("the Always allow hint names a file ending {string}", async ({ page }, tail: string) => {
+  await expect(page.getByTestId("always-allow-local-hint").first()).toHaveText(new RegExp(`^This project saves to /.*${tail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`), { timeout: TURN_MS });
+});

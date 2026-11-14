@@ -3234,7 +3234,7 @@ describe("Always allow (GH-756)", () => {
   const open = async (cwd = tmp) => {
     hookResults.length = 0;
     controlCalls.length = 0;
-    Object.assign(ruleCheck, { omit: false, managedOnly: false, fail: false, seen: [] });
+    Object.assign(ruleCheck, { omit: false, managedOnly: false, fail: false, failApply: false, seen: [] });
     const s = new Session(cwd, { query: deniedQuery as never });
     const events: Event[] = [];
     s.subscribe(0, (e) => events.push(e));
@@ -3304,6 +3304,16 @@ describe("Always allow (GH-756)", () => {
     writeFileSync(join(tmp, ".claude"), "not a directory");
     await expect(s.alwaysAllowDenied("dn-1", "local")).rejects.toMatchObject({ code: "settings_write_failed" });
     expect(sentText(events)).toBeUndefined();
+    await s.close();
+  });
+
+  it("a failure after the rule is saved is rule_saved, says what failed, and keeps the card retryable", async () => {
+    const { s, events } = await open();
+    ruleCheck.failApply = true;
+    await expect(s.alwaysAllowDenied("dn-1", "local")).rejects.toMatchObject({ code: "rule_saved", message: expect.stringContaining("CLI closed") });
+    expect(JSON.parse(readFileSync(join(tmp, ".claude", "settings.local.json"), "utf8"))).toEqual({ permissions: { allow: ["Bash(git push --force)"] } });
+    expect(sentText(events)).toBeUndefined();
+    expect(lastPart(events, "dn-1")).not.toMatchObject({ denial: { allowed: true } });
     await s.close();
   });
 

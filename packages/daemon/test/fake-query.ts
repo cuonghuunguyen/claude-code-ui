@@ -577,7 +577,7 @@ export function limitQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserM
 /** PreToolUse hook answers of deniedQuery, in call order. */
 export const hookResults: unknown[] = [];
 /** deniedQuery's listPermissionRules(): `omit` hides the flag rules (auto mode ignores them), `managedOnly`, `fail`; `seen`: the options of each asking query. */
-export const ruleCheck = { omit: false, managedOnly: false, fail: false, seen: [] as Options[] };
+export const ruleCheck = { omit: false, managedOnly: false, fail: false, failApply: false, seen: [] as Options[] };
 
 /**
  * Fake query() for Allow and retry (GH-711), shapes of live SDK 0.3.285: the first prompt makes Bash call `dn-1` that the auto mode
@@ -625,7 +625,10 @@ export function deniedQuery({ prompt, options }: { prompt: AsyncIterable<SDKUser
     supportedCommands: async () => [],
     getContextUsage: async () => fakeUsage,
     interrupt: async () => {},
-    applyFlagSettings: async (settings: object) => void controlCalls.push({ applyFlagSettings: settings }),
+    applyFlagSettings: async (settings: object) => {
+      if (ruleCheck.failApply) throw new Error("CLI closed");
+      controlCalls.push({ applyFlagSettings: settings });
+    },
     listPermissionRules: async () => {
       ruleCheck.seen.push(options ?? {});
       if (ruleCheck.fail) throw new Error("CLI did not start");

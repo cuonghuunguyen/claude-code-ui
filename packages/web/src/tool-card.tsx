@@ -8,7 +8,7 @@ import { useColorTheme, useDark } from "./theme.ts";
 import { DIFF_THEMES, diffThemes } from "./code-palette.ts";
 import "./code-theme.ts"; // registers the diff themes before any diff renders
 import type { ToolUIPart } from "ai";
-import { createContext, use, useMemo, useState, type ReactNode } from "react";
+import { createContext, use, useEffect, useMemo, useState, type ReactNode } from "react";
 import { SendToBackIcon, Maximize2Icon, PanelsTopLeftIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
@@ -22,7 +22,7 @@ import { relPath } from "./paths.ts";
 import { specOf } from "./keymap.ts";
 import { keyText } from "./shortcuts.ts";
 import { fileSize } from "./files.ts";
-import { AllowDeniedContext, AlwaysAllowDeniedContext, BackgroundShellContext, PlanTabContext, ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
+import { AllowDeniedContext, AlwaysAllowDeniedContext, BackgroundShellContext, LocalSettingsFileContext, PlanTabContext, ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
 import { ArtifactLinkMenu, ArtifactPreview, usePreviewOpen } from "./artifact-preview.tsx";
 import { ARTIFACT_TOOLS, artifactPreviewable, artifactSummary, artifactTitle, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, todoItems, todoSummary, toolSummary } from "./tools.ts";
 import { t as tr, useT } from "./i18n.ts";
@@ -198,7 +198,11 @@ export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; res
               (e: Error & { code?: string }) =>
                 setAlways({
                   open: true,
-                  error: e.code === "ignored_in_auto" ? tr("session.toolCard.alwaysAllowIgnored", { rule: autoDenied!.rule ?? "", why: e.message }) : tr("session.toolCard.alwaysAllowFailed", { error: e.message }),
+                  error: e.code === "ignored_in_auto"
+                      ? tr("session.toolCard.alwaysAllowIgnored", { rule: autoDenied!.rule ?? "", why: e.message })
+                      : e.code === "rule_saved"
+                        ? tr("session.toolCard.alwaysAllowSavedNotRetried", { rule: autoDenied!.rule ?? "", error: e.message })
+                        : tr("session.toolCard.alwaysAllowFailed", { error: e.message }),
                 }),
             );
           }}
@@ -307,6 +311,14 @@ const PANEL_BUTTON =
 /** The rule that will be saved and the scope to save it for; a call with no rule gets the reason and Cancel only. */
 function AlwaysAllowPanel({ call, rule, pending, error, onCancel, onPick }: { call: ToolCall; rule?: string; pending?: "session" | "local"; error?: string; onCancel: () => void; onPick: (scope: "session" | "local") => void }) {
   const t = useT();
+  const fileOf = use(LocalSettingsFileContext);
+  const [file, setFile] = useState<string>();
+  useEffect(() => {
+    if (!rule || !fileOf) return;
+    let live = true;
+    fileOf().then((f) => live && setFile(f), () => {});
+    return () => void (live = false);
+  }, [rule, fileOf]);
   const agent = call.tool === "Agent" || call.tool === "Task" || call.tool === "Monitor";
   return (
     <div data-testid="always-allow-panel" className="flex flex-col gap-2 px-3 pb-2 text-xs">
@@ -326,7 +338,9 @@ function AlwaysAllowPanel({ call, rule, pending, error, onCancel, onPick }: { ca
               {t("session.toolCard.alwaysAllowCancel")}
             </button>
           </div>
-          <p className="text-muted-foreground">{t("session.toolCard.alwaysAllowLocalHint")}</p>
+          <p data-testid="always-allow-local-hint" className="break-all text-muted-foreground">
+            {file ? t("session.toolCard.alwaysAllowLocalHint", { file }) : t("session.toolCard.alwaysAllowLocalHintGeneric")}
+          </p>
         </>
       ) : (
         <>

@@ -67,7 +67,7 @@ export class OneShots {
 /** A refused Allow and retry; `code` is the wire error code. */
 export class DeniedRetryError extends Error {
   constructor(
-    readonly code: "unknown_call" | "unsupported" | "session_not_live" | "bash_running" | "session_busy" | "no_rule" | "ignored_in_auto" | "managed_only" | "check_failed" | "settings_write_failed",
+    readonly code: "unknown_call" | "unsupported" | "session_not_live" | "bash_running" | "session_busy" | "no_rule" | "ignored_in_auto" | "managed_only" | "check_failed" | "settings_write_failed" | "rule_saved",
     message: string,
   ) {
     super(message);
