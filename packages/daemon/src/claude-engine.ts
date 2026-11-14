@@ -176,7 +176,6 @@ export const openQuery = (query: typeof sdkQuery = sdkQuery, options: Options = 
     options: {
       settingSources: SETTING_SOURCES,
       env: claudeEnv(),
-      ...(process.env.CLAUDE_UI_E2E_CLAUDE_CLI && { pathToClaudeCodeExecutable: process.env.CLAUDE_UI_E2E_CLAUDE_CLI }),
       ...options,
       // Merged: a caller's settings must not drop disableAllHooks.
       settings: typeof options.settings === "object" ? { disableAllHooks: true, ...options.settings } : (options.settings ?? { disableAllHooks: true }),
@@ -203,7 +202,7 @@ export async function autoModeKeeps(cwd: string, rule: string, query?: typeof sd
   const { state } = await queuedQuery(
     (q) => (q as unknown as { listPermissionRules(): Promise<{ state: { rules: { behavior: string; source: string }[]; managedOnly: boolean } }> }).listPermissionRules(),
     query,
-    { cwd, permissionMode: "auto", persistSession: false, settings: { permissions: { allow: [rule] } } },
+    { cwd, permissionMode: "auto", persistSession: false, ...(process.env.CLAUDE_UI_E2E_CLAUDE_CLI && { pathToClaudeCodeExecutable: process.env.CLAUDE_UI_E2E_CLAUDE_CLI }), settings: { permissions: { allow: [rule] } } },
   );
   return { managedOnly: state.managedOnly, kept: state.rules.some((r) => r.behavior === "allow" && r.source === "flagSettings") };
 }
