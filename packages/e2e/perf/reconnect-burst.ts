@@ -1,10 +1,12 @@
 // Reconnect burst harness (GH-760): a phone that reconnects over a slow link to a daemon with hundreds of sessions and live turns.
 // Not part of `npm test` or the Cucumber suite (needs `npm run build` and takes minutes):
-//   npx tsx packages/e2e/perf/reconnect-burst.ts [--sessions 300 --live 40 --tabs 8 --cpu 6 --kbps 1000 --reconnects 10 --quiet 0 --stream --port 4321 --label base --report-dir <dir> --ping-ms 15000]
+//   npx tsx packages/e2e/perf/reconnect-burst.ts [--sessions 300 --live 40 --tabs 8 --cpu 6 --kbps 1000 --reconnects 10 --quiet 0 --reload 0 --stream --port 4321 --label base --report-dir <dir> --ping-ms 15000]
 // Starts its own daemon (temp XDG_CONFIG_HOME and CLAUDE_CONFIG_DIR, API key variables unset, fake query) behind a throttling TCP proxy,
 // opens a 390x844 Chromium page with CPU throttling, cuts the socket `--reconnects` times and counts what each resync costs.
 // Per reconnect: bytes down by message class, live generation rate, time until the shown tab caught up (shownMs) and until the link is idle (settledMs).
 // `--stream`: the fake turns emit text deltas (streamed parts). `--quiet N`: after the live reconnects, wait until the turns ended and the page caught up, then N more reconnects (nothing changed).
+// `--reload N`: after the quiet rows, N `page.reload()` rows (the socket is closed by the navigation, no proxy cut): WebSocket bytes down and up by class, HTTP bytes (CDP, info only),
+//   cachedMs (navigation start until the shown tab's timeline is in the DOM while the connection status is not "connected"; -1 = never, e.g. code without a view cache), shownMs, settledMs.
 // Exit code 1 when the daemon logs a "no pong ... dropped" line; 2 when the page's last seq of a followed live session differs from the harness client's after the last reconnect (missed events).
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -29,6 +31,7 @@ const opt = {
   reportDir: resolve(arg("report-dir", ".")),
   padKb: Number(arg("pad-kb", "100")),
   quiet: Number(arg("quiet", "0")),
+  reload: Number(arg("reload", "0")),
   stream: process.argv.includes("--stream"),
 };
 const repo = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
@@ -233,6 +236,8 @@ const pageSeq = new Map<string, number>();
 let listReplyAt = 0;
 /** Sessions in the order their first event reached the page after the cut: the daemon's feed order (the shown tab should come first). */
 const firstSeen: string[] = [];
+const clsUp: Record<string, { n: number; b: number }> = {};
+const addUp = (k: string, b: number) => ((clsUp[k] ??= { n: 0, b: 0 }).n++, (clsUp[k].b += b));
 const add = (k: string, b: number) => ((cls[k] ??= { n: 0, b: 0 }).n++, (cls[k].b += b));
 page.on("websocket", (w) => {
   const reqType = new Map<string, string>();
@@ -240,8 +245,11 @@ page.on("websocket", (w) => {
   w.on("framesent", (f) => {
     try {
       const m = JSON.parse(String(f.payload));
+      addUp(`up ${m.type}`, Buffer.byteLength(String(f.payload)));
       if (m.reqId) reqType.set(m.reqId, m.type + (m.type === "session.subscribe" ? `:${m.sessionId}${m.background ? ":bg" : ""}` : ""));
-    } catch {}
+    } catch {
+      addUp("up unparsed", Buffer.byteLength(String(f.payload)));
+    }
   });
   w.on("framereceived", (f) => {
     const b = Buffer.byteLength(String(f.payload));
@@ -279,6 +287,10 @@ for (const id of liveIds.slice(0, opt.tabs)) {
 }
 await sleep(3000);
 const cdp = await context.newCDPSession(page);
+// HTTP bytes (info only): encoded body bytes of every finished non-WebSocket request, from CDP.
+const http = { bytes: 0, n: 0 };
+cdp.on("Network.loadingFinished", (e: { encodedDataLength: number }) => ((http.bytes += e.encodedDataLength), http.n++));
+await cdp.send("Network.enable");
 await cdp.send("Emulation.setCPUThrottlingRate", { rate: opt.cpu });
 proxy.setKbps(opt.kbps);
 
@@ -294,7 +306,7 @@ const settled = async (since: number) => {
   }
   return -1;
 };
-type Row = { n: number; phase: "live" | "quiet"; settledMs: number; shownMs: number; bytesDown: number; genKBps: number; classes: Record<string, { n: number; b: number }>; drops: number; kept: number };
+type Row = { n: number; phase: "live" | "quiet" | "reload"; settledMs: number; shownMs: number; bytesDown: number; genKBps: number; classes: Record<string, { n: number; b: number }>; drops: number; kept: number; bytesUp?: number; wsDown?: number; httpBytes?: number; httpRequests?: number; cachedMs?: number; classesUp?: Record<string, { n: number; b: number }> };
 const rows: Row[] = [];
 const shownId = liveIds[Math.min(opt.tabs, liveIds.length) - 1];
 const MB = (n: number) => (n / 2 ** 20).toFixed(2);
@@ -303,12 +315,18 @@ async function reconnect(n: number, phase: Row["phase"]) {
   const down0 = proxy.stats.down;
   const lines0 = daemonLog.length;
   for (const k of Object.keys(cls)) delete cls[k];
+  for (const k of Object.keys(clsUp)) delete clsUp[k];
   const g0 = gen.bytes;
+  const http0 = { ...http };
+  const reload = phase === "reload";
+  if (reload) pageSeq.clear();
   const t0 = Date.now();
   const target = shownId ? (daemonSeq.get(shownId) ?? 0) : 0;
   listReplyAt = 0;
   firstSeen.length = 0;
-  proxy.cut();
+  if (reload) await page.evaluate(() => delete (window as unknown as { __cachedMs?: number }).__cachedMs).catch(() => {});
+  if (reload) void page.reload({ waitUntil: "commit" }).catch(() => {});
+  else proxy.cut();
   // shownMs: the list reply arrived and the shown tab holds every event the daemon had at the cut.
   let shownMs = -1;
   const shown = (async () => {
@@ -321,14 +339,19 @@ async function reconnect(n: number, phase: Row["phase"]) {
   await shown;
   const secs = (Date.now() - t0) / 1000;
   const fresh = daemonLog.slice(lines0);
+  const cachedMs = reload ? await page.evaluate(() => (window as unknown as { __cachedMs?: number }).__cachedMs ?? -1).catch(() => -1) : undefined;
+  const sum = (c: Record<string, { b: number }>) => Object.values(c).reduce((a, v) => a + v.b, 0);
   const row: Row = { n, phase, settledMs, shownMs, bytesDown: proxy.stats.down - down0, genKBps: (gen.bytes - g0) / secs / 1024, classes: structuredClone(cls), drops: fresh.filter((l) => /no pong .*dropped/.test(l)).length, kept: fresh.filter((l) => /no pong .*kept/.test(l)).length };
+  if (reload) Object.assign(row, { bytesUp: sum(clsUp), wsDown: sum(cls), httpBytes: http.bytes - http0.bytes, httpRequests: http.n - http0.n, cachedMs, classesUp: structuredClone(clsUp) });
   rows.push(row);
+  if (reload) console.log(`  reload: WebSocket ${MB(row.wsDown!)}MB down + ${MB(row.bytesUp!)}MB up, HTTP ${MB(row.httpBytes!)}MB (${row.httpRequests} requests, info only), cachedMs ${cachedMs! < 0 ? "-" : cachedMs}`);
   const sec = (ms: number) => (ms < 0 ? ">90s" : `${(ms / 1000).toFixed(1)}s`);
   console.log(`reconnect ${n} (${phase}): shown ${sec(shownMs)}, settled ${sec(settledMs)}, ${MB(row.bytesDown)}MB down, drops ${row.drops}, kept ${row.kept}`);
   const rank = shownId ? firstSeen.indexOf(shownId) : -1;
   console.log(`  feed order: shown tab is ${rank < 0 ? "not seen" : `#${rank + 1}`} of ${firstSeen.length} sessions with events`);
   console.log(`  live generation (harness client, all ${liveIds.length} live sessions): ${row.genKBps.toFixed(0)} KB/s; link ${opt.kbps / 8} KB/s`);
   for (const [k, v] of Object.entries(row.classes).sort((a, b) => b[1].b - a[1].b)) console.log(`  ${k.padEnd(40)} ${String(v.n).padStart(6)} msgs ${MB(v.b).padStart(7)} MB`);
+  for (const [k, v] of Object.entries(row.classesUp ?? {}).sort((a, b) => b[1].b - a[1].b)) console.log(`  ${k.padEnd(40)} ${String(v.n).padStart(6)} msgs ${MB(v.b).padStart(7)} MB`);
 }
 for (let n = 1; n <= opt.reconnects; n++) await reconnect(n, "live");
 if (opt.quiet > 0) {
@@ -343,6 +366,31 @@ if (opt.quiet > 0) {
   console.log(`harness: turns ${idle >= 10 ? "ended" : "still running"}, ${opt.quiet} quiet reconnects`);
   for (let n = 1; n <= opt.quiet; n++) await reconnect(opt.reconnects + n, "quiet");
 }
+if (opt.reload > 0) {
+  // Reload rows need the turns ended too (a reload row measures what a reload costs, not live traffic).
+  if (opt.quiet === 0) {
+    let last = gen.bytes;
+    let idle = 0;
+    for (let t = 0; t < 600 && idle < 10; t++) {
+      await sleep(500);
+      idle = gen.bytes === last ? idle + 1 : 0;
+      last = gen.bytes;
+    }
+    console.log(`harness: turns ${idle >= 10 ? "ended" : "still running"}, ${opt.reload} reloads`);
+  } else console.log(`harness: ${opt.reload} reloads`);
+  // First time the shown tab's timeline is in the DOM while the status is not "connected" (performance.now() is relative to the navigation start).
+  await context.addInitScript(() => {
+    const w = window as unknown as { __cachedMs?: number };
+    const tick = () => {
+      if (w.__cachedMs !== undefined) return;
+      const st = document.querySelector('[data-testid="connection-status"]')?.getAttribute("data-status");
+      if (st !== "connected" && document.querySelector('[data-testid="user-message"]:not([data-pending]), [data-testid="assistant-text"]')) w.__cachedMs = Math.round(performance.now());
+      else requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  for (let n = 1; n <= opt.reload; n++) await reconnect(opt.reconnects + opt.quiet + n, "reload");
+}
 
 // Missed events: after the last reconnect the page's last seq of every followed live session equals the harness client's (turns must have ended).
 await sleep(3000);
@@ -354,6 +402,7 @@ const report = { label: opt.label, opts: opt, rows, missed, drops: drops.length,
 mkdirSync(opt.reportDir, { recursive: true });
 writeFileSync(join(opt.reportDir, `perf-${opt.label}.json`), JSON.stringify(report, null, 2));
 console.log(`\n n | phase | shown s | settled s | MB down | gen KB/s | drops | kept\n${rows.map((r) => `${String(r.n).padStart(2)} | ${r.phase.padEnd(5)} | ${(r.shownMs / 1000).toFixed(1).padStart(7)} | ${(r.settledMs / 1000).toFixed(1).padStart(9)} | ${MB(r.bytesDown).padStart(7)} | ${r.genKBps.toFixed(0).padStart(8)} | ${String(r.drops).padStart(5)} | ${r.kept}`).join("\n")}\ntotal drops: ${drops.length}`);
+if (rows.some((r) => r.phase === "reload")) console.log(`\nreload rows\n n | cachedMs | shown s | settled s | WS KB down | WS KB up | HTTP KB (info)\n${rows.filter((r) => r.phase === "reload").map((r) => `${String(r.n).padStart(2)} | ${(r.cachedMs! < 0 ? "-" : String(r.cachedMs)).padStart(8)} | ${(r.shownMs / 1000).toFixed(1).padStart(7)} | ${(r.settledMs / 1000).toFixed(1).padStart(9)} | ${(r.wsDown! / 1024).toFixed(1).padStart(10)} | ${(r.bytesUp! / 1024).toFixed(1).padStart(8)} | ${(r.httpBytes! / 1024).toFixed(1).padStart(8)}`).join("\n")}`);
 
 await browser.close();
 proxy.close();
