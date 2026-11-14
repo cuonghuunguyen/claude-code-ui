@@ -17,7 +17,7 @@ import { useT } from "./i18n.ts";
 import { SelectionMenu, useMenuGate } from "./selection-menu.tsx";
 import { ITEM, POPUP } from "./session-actions.tsx";
 import { openContextMenuFromKey } from "./tab-menu.ts";
-import { cellRect, terminalSnippet } from "./terminal-snippet.ts";
+import { cellRect, selectionAnchorCell, terminalSnippet } from "./terminal-snippet.ts";
 import { IconButton } from "./tabs-bar.tsx";
 import { useColorTheme, useDark } from "./theme.ts";
 import { terminalTheme } from "./themes.ts";
@@ -312,10 +312,11 @@ function TerminalView({
     const r = screen && cellRect({ x: Math.min(pos.x, t.cols - 1), y: pos.y }, screen, t.cols, t.rows, t.buffer.active.viewportY);
     return r && new DOMRect(r.left, r.top, r.width, r.height);
   };
-  const selectionEnd = () => {
+  /** The selection end cell, its row clamped into the visible rows so the menu stays while the end is scrolled out of view. */
+  const selectionAnchor = () => {
     const t = term.current?.t;
     const end = t?.getSelectionPosition()?.end;
-    return t && end ? cellAt(t, end) : undefined;
+    return t && end ? cellAt(t, selectionAnchorCell(end, t.cols, t.rows, t.buffer.active.viewportY)) : undefined;
   };
   const send = () => {
     const t = term.current?.t;
@@ -386,7 +387,7 @@ function TerminalView({
       // The ContextMenu key opens the menu next to the selection end, else the cursor. Shift+F10 stays the shell's.
       if (e.key === "ContextMenu" && wrap.current) {
         const sel = t.getSelectionPosition()?.end;
-        const at = sel ?? { x: t.buffer.active.cursorX, y: t.buffer.active.cursorY + t.buffer.active.baseY };
+        const at = sel ? selectionAnchorCell(sel, t.cols, t.rows, t.buffer.active.viewportY) : { x: t.buffer.active.cursorX, y: t.buffer.active.cursorY + t.buffer.active.baseY };
         const r = cellAt(t, at);
         const host = wrap.current;
         // openContextMenuFromKey places the menu at the bottom-left of its target: a stand-in for the cell.
@@ -502,13 +503,17 @@ function TerminalView({
           testId="terminal-selection"
           source={() => box.current}
           onDismiss={dismissMenu}
-          anchor={selectionEnd}
+          anchor={selectionAnchor}
+          keepOnPointerDown={(el) => !!box.current?.contains(el) && onScrollbar(el)}
           actions={[{ id: "add", label: tr("common.selection.addToChat"), icon: <MessageSquarePlusIcon />, onSelect: send }]}
         />
       )}
     </>
   );
 }
+
+/** xterm's own scrollbar: dragging it scrolls, the selection stays, so the menu stays (GH-762). */
+const onScrollbar = (el: Element) => !!el.closest(".xterm .scrollbar");
 
 /** 3 UTF-8 bytes at most per UTF-16 unit, so a part of this many units stays within MAX_TERMINAL_INPUT_BYTES. */
 const PART = Math.floor(MAX_TERMINAL_INPUT_BYTES / 3);

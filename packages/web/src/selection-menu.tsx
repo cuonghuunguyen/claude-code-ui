@@ -10,9 +10,9 @@ const same = (a?: DOMRect, b?: DOMRect) => a === b || (!!a && !!b && a.left === 
 
 /**
  * Floating menu next to a selection (a Quote-style button row). It knows nothing about the selection source: the caller shows it while a selection exists,
- * supplies the anchor rect and the actions, and drops it on `onDismiss` (Escape, a pointerdown outside, focus leaving the source, the scroll in "hide" mode, an action).
+ * supplies the anchor rect and the actions, and drops it on `onDismiss` (Escape, a pointerdown outside (but not on `keepOnPointerDown` elements), focus leaving the source, the scroll in "hide" mode, an action).
  */
-export function SelectionMenu({ anchor, actions, source, onDismiss, onScroll = "follow", testId = "selection-menu" }: {
+export function SelectionMenu({ anchor, actions, source, onDismiss, onScroll = "follow", keepOnPointerDown, testId = "selection-menu" }: {
   /** Re-read on every render, scroll and resize; undefined hides the menu (anchor outside the visible area). */
   anchor: () => DOMRect | undefined;
   actions: SelectionAction[];
@@ -21,14 +21,16 @@ export function SelectionMenu({ anchor, actions, source, onDismiss, onScroll = "
   onDismiss: () => void;
   /** "hide": any scroll dismisses. "follow": the menu moves with the anchor. */
   onScroll?: "hide" | "follow";
+  /** Pointerdown on these elements does not dismiss (a scrollbar inside the source). */
+  keepOnPointerDown?: (target: Element) => boolean;
   testId?: string;
 }) {
   const t = useT();
   const [rect, setRect] = useState<DOMRect | undefined>(anchor);
   const root = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
-  const live = useRef({ anchor, source, onDismiss });
-  live.current = { anchor, source, onDismiss };
+  const live = useRef({ anchor, source, onDismiss, keepOnPointerDown });
+  live.current = { anchor, source, onDismiss, keepOnPointerDown };
   useLayoutEffect(() => {
     const next = anchor();
     setRect((r) => (same(r, next) ? r : next));
@@ -55,7 +57,11 @@ export function SelectionMenu({ anchor, actions, source, onDismiss, onScroll = "
       const el = e.target instanceof Element ? e.target : null;
       return !!el && (!!root.current?.contains(el) || !!live.current.source()?.contains(el));
     };
-    const down = (e: Event) => !root.current?.contains(e.target as Node | null) && live.current.onDismiss();
+    const down = (e: Event) => {
+      const el = e.target instanceof Element ? e.target : null;
+      if (root.current?.contains(el) || (el && live.current.keepOnPointerDown?.(el))) return;
+      live.current.onDismiss();
+    };
     const focus = (e: Event) => !inside(e) && live.current.onDismiss();
     document.addEventListener("scroll", scroll, { capture: true, passive: true });
     window.addEventListener("resize", update);

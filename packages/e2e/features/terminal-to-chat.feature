@@ -65,3 +65,31 @@ Feature: Selected terminal output goes to the chat (GH-710)
     Then the session tab is the selected tab
     And the prompt box has the terminal output block with "red-710" for "Terminal 1"
     And I capture "terminal-main-area-add"
+
+  Scenario: F. The selection menu stays while the selection end is scrolled out of view (GH-762)
+    Given the viewport is 1440x900
+    And I start a Haiku session with the terminal docked
+    When I run "seq 1 300" in the terminal and wait for its output to end with "300"
+    And I select the terminal output line "298"
+    Then the terminal selection menu offers "Add to chat"
+    When I scroll the terminal up until "298" is out of view
+    Then the terminal selection menu offers "Add to chat"
+    And the terminal selection menu sits inside the terminal screen
+    And I capture "terminal-selection-end-out-of-view"
+    When I drag the terminal scrollbar up
+    Then the terminal selection menu offers "Add to chat"
+    When I scroll the terminal to the bottom
+    Then the terminal selection menu offers "Add to chat"
+    When I click Add to chat in the terminal selection menu
+    Then the prompt box has the terminal output block with "298" for "Terminal 1"
+
+  Scenario: G. A drag upward through the scrollback offers Add to chat on release (GH-762)
+    Given the viewport is 1440x900
+    And I start a Haiku session with the terminal docked
+    When I run "seq 1 300" in the terminal and wait for its output to end with "300"
+    And I drag a terminal selection upward from "298" until "298" is out of view
+    Then the terminal selection menu offers "Add to chat"
+    And the terminal selection menu sits inside the terminal screen
+    And I capture "terminal-selection-drag-up"
+    When I click Add to chat in the terminal selection menu
+    Then the prompt box has the terminal output block with "298" for "Terminal 1"

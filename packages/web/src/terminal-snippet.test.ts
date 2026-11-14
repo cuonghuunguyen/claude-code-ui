@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { TERMINAL_SNIPPET_MAX, cellRect, stripAnsi, terminalSnippet } from "./terminal-snippet.ts";
+import { TERMINAL_SNIPPET_MAX, cellRect, selectionAnchorCell, stripAnsi, terminalSnippet } from "./terminal-snippet.ts";
 
 const opts = { title: "Terminal 1", cwd: "/abs/project" };
 
@@ -57,4 +57,17 @@ it("cellRect maps a selection end cell to a screen rect", () => {
 
 it("terminalSnippet keeps a cwd with a backtick inside inline code", () => {
   expect(terminalSnippet("x", { title: "T", cwd: "/a`b" })!.split("\n")[0]).toBe('Output of terminal "T" in ``/a`b``:');
+});
+
+it("selectionAnchorCell keeps a visible end", () => {
+  expect(selectionAnchorCell({ x: 5, y: 10 }, 80, 24, 0)).toEqual({ x: 5, y: 10 });
+});
+it("selectionAnchorCell clamps an end below the screen to the bottom row", () => {
+  expect(selectionAnchorCell({ x: 5, y: 200 }, 80, 24, 100)).toEqual({ x: 5, y: 123 });
+});
+it("selectionAnchorCell clamps an end above the screen to the top row", () => {
+  expect(selectionAnchorCell({ x: 5, y: 3 }, 80, 24, 100)).toEqual({ x: 5, y: 100 });
+});
+it("selectionAnchorCell keeps the column inside the row", () => {
+  expect(selectionAnchorCell({ x: 80, y: 10 }, 80, 24, 0)).toEqual({ x: 79, y: 10 });
 });
