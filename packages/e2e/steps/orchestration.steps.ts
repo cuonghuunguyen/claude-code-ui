@@ -118,9 +118,13 @@ Given("the scratch project shares an ignored development-docs folder with its wo
 
 Then("the {string} tool card result says mode {string}", async ({ page }, text: string, mode: string) => {
   const card = toolCard(page, text).first();
-  const open = card.locator("button[aria-expanded='false']").first();
-  if (await open.count()) await open.click();
-  await expect(card).toContainText(new RegExp(`"mode":\\s*"${mode}"`), { timeout: 15_000 });
+  await expect(card).toHaveAttribute("data-status", "done", { timeout: TURN_MS });
+  // The card re-renders as it finishes: expand again until the result text is there.
+  await expect(async () => {
+    const open = card.locator("button[aria-expanded='false']").first();
+    if (await open.count()) await open.click({ timeout: 2_000 });
+    await expect(card).toContainText(new RegExp(`"mode":\\s*"${mode}"`), { timeout: 3_000 });
+  }).toPass({ timeout: 30_000 });
 });
 
 Then("the worker wrote {string} in the main checkout of the scratch project", async ({ project }, file: string) => {
