@@ -14,6 +14,10 @@ Then("the tree row {string} is selected", async ({ page }, rel: string) => {
   await expect(row(page, rel)).toHaveAttribute("aria-selected", "true");
 });
 
+Then("the tree row {string} is not selected", async ({ page }, rel: string) => {
+  await expect(row(page, rel)).not.toHaveAttribute("aria-selected", "true");
+});
+
 // The pane's own area above the prompt box: the timeline, empty space included.
 When("I drag the tree row {string} onto the timeline", async ({ page }, rel: string) => {
   const b = (await page.getByTestId("session-area").boundingBox())!;

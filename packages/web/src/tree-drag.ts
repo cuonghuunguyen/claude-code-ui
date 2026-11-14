@@ -23,3 +23,42 @@ export function dragEntries(row: string, selection: ReadonlySet<string>, visible
   if (!selection.has(row) || selection.size < 2) return own ? [own] : [{ path: row, isDir: false }];
   return visible.filter((e) => selection.has(e.path));
 }
+
+/** GH-757: the payload of a drag inside the file tree (same rows as the entries drag, plus name and side). */
+export const TREE_DRAG_TYPE = "application/x-claude-ui-entry";
+export type TreeDragRow = {
+  path: string;
+  name: string;
+  isDir: boolean;
+  side: string;
+};
+
+/** The rows of a tree drag: an array, or one object (old shape); undefined for missing, malformed or empty data. */
+export function readTreeDrag(
+  dt: Pick<DataTransfer, "getData">,
+): TreeDragRow[] | undefined {
+  try {
+    const raw: unknown = JSON.parse(dt.getData(TREE_DRAG_TYPE));
+    const d = Array.isArray(raw) ? raw : [raw];
+    if (!d.length) return undefined;
+    if (
+      !d.every(
+        (x) =>
+          x &&
+          typeof x.path === "string" &&
+          typeof x.name === "string" &&
+          typeof x.isDir === "boolean" &&
+          typeof x.side === "string",
+      )
+    )
+      return undefined;
+    return d.map((x) => ({
+      path: x.path,
+      name: x.name,
+      isDir: x.isDir,
+      side: x.side,
+    }));
+  } catch {
+    return undefined;
+  }
+}

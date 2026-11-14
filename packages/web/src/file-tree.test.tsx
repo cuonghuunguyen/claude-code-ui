@@ -1043,7 +1043,7 @@ it("GH-555 rows are draggable and dragstart carries the entry type and the path"
   const e = new Event("dragstart", { bubbles: true }) as Event & { dataTransfer: unknown };
   e.dataTransfer = { setData: (k: string, v: string) => (data[k] = v), effectAllowed: "" };
   await act(async () => void row.dispatchEvent(e));
-  expect(JSON.parse(data[DRAG_TYPE]!)).toEqual({ path: "/p/README.md", name: "README.md", isDir: false, side: "wsl:x" });
+  expect(JSON.parse(data[DRAG_TYPE]!)).toEqual([{ path: "/p/README.md", name: "README.md", isDir: false, side: "wsl:x" }]);
   expect(data["text/plain"]).toBe("/p/README.md");
   t.unmount();
 });
@@ -1175,7 +1175,7 @@ it("GH-707 a plain click clears the selection and acts as before; Escape clears 
   t.unmount();
 });
 
-it("GH-707 dragging a selected row carries every selected row and no single-row type", async () => {
+it("GH-707 GH-757 dragging a selected row carries every selected row, with name and side, under both types", async () => {
   const t = setup();
   await t.render();
   await click(t.row("/p/src"), { ctrlKey: true });
@@ -1185,7 +1185,10 @@ it("GH-707 dragging a selected row carries every selected row and no single-row 
     { path: "/p/src", isDir: true },
     { path: "/p/new.ts", isDir: false },
   ]);
-  expect(data[DRAG_TYPE]).toBeUndefined();
+  expect(JSON.parse(data[DRAG_TYPE]!)).toEqual([
+    { path: "/p/src", name: "src", isDir: true, side: "local" },
+    { path: "/p/new.ts", name: "new.ts", isDir: false, side: "local" },
+  ]);
   expect(data["text/plain"]).toBe("/p/src\n/p/new.ts");
   t.unmount();
 });
@@ -1197,7 +1200,7 @@ it("GH-707 dragging an unselected row carries that row, both types, and keeps th
   await click(t.row("/p/new.ts"), { ctrlKey: true });
   const data = await dragStart(t.row("/p/README.md"));
   expect(JSON.parse(data[ENTRIES]!)).toEqual([{ path: "/p/README.md", isDir: false }]);
-  expect(JSON.parse(data[DRAG_TYPE]!).path).toBe("/p/README.md");
+  expect(JSON.parse(data[DRAG_TYPE]!)).toMatchObject([{ path: "/p/README.md" }]);
   expect(sel(t)).toEqual(["/p/src", "/p/new.ts"]);
   t.unmount();
 });
@@ -1229,5 +1232,143 @@ it("GH-707 a selected path that is no longer visible leaves the selection", asyn
   await click(t.row("/p/src")); // collapse
   const data = await dragStart(t.row("/p/new.ts"));
   expect(JSON.parse(data[ENTRIES]!)).toEqual([{ path: "/p/new.ts", isDir: false }]);
+  t.unmount();
+});
+
+// GH-757: several rows dropped on a folder.
+const rowOf = (path: string, isDir = false) => ({
+  path,
+  name: path.split("/").at(-1)!,
+  isDir,
+  side: "local",
+});
+const dlgText = () =>
+  document.querySelector<HTMLElement>("[data-testid=tree-drop-dialog]")
+    ?.textContent ?? "";
+const confirmDrop = async () => {
+  await act(async () =>
+    document
+      .querySelector<HTMLElement>("[data-testid=tree-drop-confirm]")!
+      .click(),
+  );
+  await flush();
+};
+const alertText = (t: ReturnType<typeof setup>) =>
+  t.el.querySelector("[data-testid=tree-op-error]")?.textContent ?? "";
+
+it("GH-757 a drop of 2 rows on a folder asks once ('Move 2 items'), then renames both", async () => {
+  const t = setup({}, copyReplies);
+  await t.render();
+  await dropEv(t.row("/p/src"), {
+    [DRAG_TYPE]: JSON.stringify([
+      rowOf("/p/README.md"),
+      rowOf("/p/package.json"),
+    ]),
+  });
+  expect(dlgText()).toContain("Move 2 items into “src”?");
+  expect(sent(t, "fs.rename")).toHaveLength(0);
+  await confirmDrop();
+  expect(sent(t, "fs.rename")).toMatchObject([
+    { path: "/p/README.md", dir: "/p/src" },
+    { path: "/p/package.json", dir: "/p/src" },
+  ]);
+  t.unmount();
+});
+
+it("GH-757 Alt on the drop copies: 'Copy 2 items into …'", async () => {
+  const t = setup({}, copyReplies);
+  await t.render();
+  await act(async () => {
+    const e = new Event("drop", {
+      bubbles: true,
+      cancelable: true,
+    }) as Event & { dataTransfer: unknown; altKey: boolean };
+    e.altKey = true;
+    const data = {
+      [DRAG_TYPE]: JSON.stringify([
+        rowOf("/p/README.md"),
+        rowOf("/p/package.json"),
+      ]),
+    };
+    e.dataTransfer = {
+      types: Object.keys(data),
+      getData: (k: string) => (data as Record<string, string>)[k] ?? "",
+      files: [],
+      items: [],
+    };
+    t.row("/p/src").dispatchEvent(e);
+  });
+  expect(dlgText()).toContain("Copy 2 items into “src”?");
+  t.unmount();
+});
+
+it("GH-757 a row that is the target itself is refused: the dialog counts the other row, the alert names the refused one", async () => {
+  const t = setup({}, copyReplies);
+  await t.render();
+  await dropEv(t.row("/p/src"), {
+    [DRAG_TYPE]: JSON.stringify([rowOf("/p/src", true), rowOf("/p/README.md")]),
+  });
+  expect(dlgText()).toContain("Move “README.md” into “src”?");
+  await confirmDrop();
+  expect(sent(t, "fs.rename")).toMatchObject([
+    { path: "/p/README.md", dir: "/p/src" },
+  ]);
+  expect(alertText(t)).toContain("“src” cannot be pasted into itself.");
+  t.unmount();
+});
+
+it("GH-757 3 rows, the 2nd rename rejects: the alert lists it, the other two move and onMoved runs twice", async () => {
+  const onMoved = vi.fn();
+  const t = setup(
+    { onMoved },
+    {
+      ...copyReplies,
+      "fs.rename": (m: { path: string; name: string; dir?: string }) => {
+        if (m.path === "/p/package.json")
+          throw Object.assign(new Error("boom"), { code: "not_found" });
+        return { path: `${m.dir}/${m.name}` };
+      },
+    },
+  );
+  await t.render();
+  await dropEv(t.row("/p/src"), {
+    [DRAG_TYPE]: JSON.stringify([
+      rowOf("/p/README.md"),
+      rowOf("/p/package.json"),
+      rowOf("/p/new.ts"),
+    ]),
+  });
+  expect(dlgText()).toContain("Move 3 items into “src”?");
+  await confirmDrop();
+  expect(sent(t, "fs.rename").map((m) => m.path)).toEqual([
+    "/p/README.md",
+    "/p/package.json",
+    "/p/new.ts",
+  ]);
+  expect(alertText(t)).toContain("1 of 3 items were not moved:");
+  expect(t.el.querySelectorAll("[data-testid=tree-op-error] li")).toHaveLength(
+    1,
+  );
+  expect(
+    t.el.querySelector("[data-testid=tree-op-error] li")!.textContent,
+  ).toContain("package.json");
+  expect(onMoved).toHaveBeenCalledTimes(2);
+  t.unmount();
+});
+
+it("GH-757 a drop of 2 rows that ends with only a whole-batch error shows that error as one plain line", async () => {
+  const t = setup({}, { ...copyReplies, "fs.walk": () => Promise.reject(Object.assign(new Error("boom"), { code: "too_many" })) });
+  await t.render();
+  await act(async () => {
+    const e = new Event("drop", { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown; altKey: boolean };
+    e.altKey = true;
+    const data: Record<string, string> = { [DRAG_TYPE]: JSON.stringify([rowOf("/p/README.md"), rowOf("/p/package.json")]) };
+    e.dataTransfer = { types: Object.keys(data), getData: (k: string) => data[k] ?? "", files: [], items: [] };
+    t.row("/p/src").dispatchEvent(e);
+  });
+  await confirmDrop();
+  expect(alertText(t)).not.toBe("");
+  expect(alertText(t)).not.toContain("items were not");
+  expect(t.el.querySelectorAll("[data-testid=tree-op-error] li")).toHaveLength(0);
   t.unmount();
 });

@@ -66,6 +66,67 @@ Feature: Copy, cut, paste, drag and drop in the Files tree (GH-555)
     And the project has no "src/a.ts" on disk
     And the tree lists the row "other/a.ts"
 
+  Scenario: Several selected rows dragged onto a folder move after one confirm; a clash and a refusal are reported per row (GH-757)
+    Given the viewport is 1440x900
+    And the app is open
+    And I open the scratch project
+    And I start a new Haiku session
+    When I open the Files tab of the side panel
+    And I expand the tree folder "src"
+    And I expand the tree folder "lib"
+    And I ControlOrMeta-click the tree row "src/a.ts"
+    And I ControlOrMeta-click the tree row "lib/b.ts"
+    And I ControlOrMeta-click the tree row "other"
+    And I drag the tree row "lib/b.ts" onto the tree row "dest"
+    Then the drop confirm dialog says "Move 3 items into “dest”?"
+    And I capture "multi-drop-confirm"
+    When I confirm the drop
+    Then the project has "dest/a.ts" on disk with the text "export const a = 1;"
+    And the project has "dest/b.ts" on disk with the text "export const b = 1;"
+    And the project has "dest/other/note.txt" on disk with the text "note"
+    And the project has no "src/a.ts" on disk
+    And the project has no "lib/b.ts" on disk
+    And the project has no "other" on disk
+    And the tree lists the row "dest/a.ts"
+    And the tree lists the row "dest/b.ts"
+    And the tree lists the row "dest/other"
+    And I capture "multi-drop-moved"
+    When I ControlOrMeta-click the tree row "dest/a.ts"
+    And I ControlOrMeta-click the tree row "moveme"
+    And I drag the tree row "moveme" onto the tree row "dest2"
+    Then the drop confirm dialog says "Move 2 items into “dest2”?"
+    When I confirm the drop
+    Then the paste clash dialog is shown
+    When I answer the paste clash with "Skip"
+    Then the project has "dest2/moveme/inner.txt" on disk with the text "inner"
+    And the project has "dest/a.ts" on disk with the text "export const a = 1;"
+    And the project has "dest2/a.ts" on disk with the text "export const old = 0;"
+    And I capture "multi-drop-clash-skip"
+    When I expand the tree folder "parent"
+    And I expand the tree folder "parent/child"
+    And I ControlOrMeta-click the tree row "parent"
+    And I ControlOrMeta-click the tree row "dest/b.ts"
+    And I drag the tree row "dest/b.ts" onto the tree row "parent/child"
+    Then the drop confirm dialog says "Move “b.ts” into “parent/child”?"
+    When I confirm the drop
+    Then the tree error line says "cannot be pasted into itself"
+    And the project has "parent/child/b.ts" on disk with the text "export const b = 1;"
+    And the project has "parent/child/x.txt" on disk with the text "x"
+    And I capture "multi-drop-refused-row"
+    When I ControlOrMeta-click the tree row "parent"
+    Then the tree row "parent" is not selected
+    When I ControlOrMeta-click the tree row "dest/keep.txt"
+    And I ControlOrMeta-click the tree row "dest/a.ts"
+    And I drag the tree row "dest/a.ts" onto the tree row "lib" holding Alt
+    Then the drop confirm dialog says "Copy 2 items into “lib”?"
+    And I capture "multi-drop-copy-confirm"
+    When I confirm the drop
+    Then the project has "lib/keep.txt" on disk with the text "keep"
+    And the project has "lib/a.ts" on disk with the text "export const a = 1;"
+    And the project has "dest/keep.txt" on disk with the text "keep"
+    And the project has "dest/a.ts" on disk with the text "export const a = 1;"
+    And I capture "multi-drop-copied"
+
   Scenario: A clicked folder row keeps its selected background in the light and the dark theme
     Given the viewport is 1440x900
     And the app is open

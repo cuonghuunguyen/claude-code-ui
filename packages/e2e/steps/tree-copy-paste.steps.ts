@@ -80,6 +80,16 @@ When("I drag the tree row {string} onto the tree row {string}", async ({ page },
   await row(page, from).dragTo(row(page, to));
 });
 
+// Alt (Option) is held through the whole drag; the drop event then carries altKey, which turns a move into a copy.
+When("I drag the tree row {string} onto the tree row {string} holding Alt", async ({ page }, from: string, to: string) => {
+  await page.keyboard.down("Alt");
+  try {
+    await row(page, from).dragTo(row(page, to));
+  } finally {
+    await page.keyboard.up("Alt");
+  }
+});
+
 Then("the drop confirm dialog says {string}", async ({ page }, text: string) => {
   await expect(drop(page)).toContainText(text);
 });

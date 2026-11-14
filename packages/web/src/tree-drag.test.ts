@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dragEntries, ENTRIES_DRAG_TYPE, isEntriesDrag, readEntriesDrag } from "./tree-drag.ts";
+import { dragEntries, ENTRIES_DRAG_TYPE, isEntriesDrag, readEntriesDrag, readTreeDrag, TREE_DRAG_TYPE } from "./tree-drag.ts";
 
 const dt = (types: string[], data: Record<string, string> = {}) => ({ types, getData: (t: string) => data[t] ?? "" }) as unknown as DataTransfer;
 const order = [
@@ -38,5 +38,27 @@ describe("entries drag payload (GH-707)", () => {
   it("bad JSON, wrong shape and empty give undefined", () => {
     for (const raw of ["", "{", "{}", "[]", '[{"path":1,"isDir":false}]', '[{"path":"/a"}]'])
       expect(readEntriesDrag(dt([ENTRIES_DRAG_TYPE], { [ENTRIES_DRAG_TYPE]: raw }))).toBeUndefined();
+  });
+});
+
+describe("tree drag payload (GH-757)", () => {
+  const row = { path: "/p/a", name: "a", isDir: false, side: "local" };
+  const read = (v: string) => readTreeDrag(dt([TREE_DRAG_TYPE], { [TREE_DRAG_TYPE]: v }));
+  it("is the same type string as before", () => {
+    expect(TREE_DRAG_TYPE).toBe("application/x-claude-ui-entry");
+  });
+  it("an array gives its rows", () => {
+    const b = { path: "/p/b", name: "b", isDir: true, side: "local" };
+    expect(read(JSON.stringify([row, b]))).toEqual([row, b]);
+  });
+  it("a single object (old shape) gives one row", () => {
+    expect(read(JSON.stringify(row))).toEqual([row]);
+  });
+  it("bad JSON, wrong shape and empty give undefined", () => {
+    expect(read("{")).toBeUndefined();
+    expect(read("")).toBeUndefined();
+    expect(read("[]")).toBeUndefined();
+    expect(read("{}")).toBeUndefined();
+    expect(read(JSON.stringify([row, { path: "/p/x" }]))).toBeUndefined();
   });
 });

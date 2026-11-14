@@ -22,8 +22,8 @@ const nameProblemText = (name: string, windows: boolean) => {
   return p && t(`common.fileName.${p}` as Key, { name: name.split(".")[0] });
 };
 import { isImeKey } from "./ime.ts";
-import { isWinPath, joinPath, relPath, repoDir } from "./paths.ts";
-import { dragEntries, ENTRIES_DRAG_TYPE } from "./tree-drag.ts";
+import { baseName, isWinPath, joinPath, relPath, repoDir } from "./paths.ts";
+import { dragEntries, ENTRIES_DRAG_TYPE, readTreeDrag, TREE_DRAG_TYPE as DRAG_TYPE } from "./tree-drag.ts";
 import { setRepoChoice, type RepoList } from "./repo-choice.ts";
 import { RepoIcon } from "./repo-selector.tsx";
 import { ConfirmDialog, ITEM, POPUP } from "./session-actions.tsx";
@@ -53,7 +53,6 @@ const MARK_STYLE: Record<Mark, { text: string; label: () => string }> = {
 const DIR_STYLE: Record<DirMark, string> = { D: "text-destructive", M: "text-info", A: "text-success" };
 
 /** The drag of a tree row: JSON `{ path, name, isDir, side }`. */
-const DRAG_TYPE = "application/x-claude-ui-entry";
 const mb = (n: number) => `${(n / 1048576).toFixed(n < 10 * 1048576 ? 1 : 0)} MB`;
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 /** Commands that move focus themselves (an input, a dialog, the editor): the menu does not return it to the row. */
@@ -279,7 +278,9 @@ export function FileTree({
   const [nameMsg, setNameMsg] = useState<string>();
   const [nameError, setNameError] = useState<string>();
   /** A failed delete or duplicate. */
-  const [opError, setOpError] = useState<string>();
+  // GH-757: one line, or a heading with one line per failed row.
+  const [opErr, setOpErr] = useState<{ text: string; list: string[] }>();
+  const setOpError = (text: string | undefined) => setOpErr(text === undefined ? undefined : { text, list: [] });
   /** The path a request is working on (dimmed row). */
   const [busyPath, setBusyPath] = useState<string>();
   const opBusy = useRef(false);
@@ -296,7 +297,7 @@ export function FileTree({
   const [progress, setProgress] = useState<{ p: Progress; cancel: boolean }>();
   const [note, setNote] = useState<string>();
   const [dropDir, setDropDir] = useState<string>();
-  const [dropAsk, setDropAsk] = useState<{ item: Item; op: "copy" | "cut"; dir: string }>();
+  const [dropAsk, setDropAsk] = useState<{ items: Item[]; first: Item; count: number; op: "copy" | "cut"; dir: string }>();
   const abort = useRef<AbortController>(undefined);
   useEffect(() => treeClipboard.subscribe(() => setClip(treeClipboard.get())), []);
   useEffect(
@@ -586,9 +587,24 @@ export function FileTree({
     setOpError(undefined);
     setNote(undefined);
     const plan = planPaste(items, { side, dir }, op);
-    const refusal = plan.refused[0];
-    if (refusal) setOpError(refusal.code === "into_itself" ? tr("files.paste.intoItself", { name: refusal.name }) : refusal.code === "too_large" ? tr("files.paste.tooLarge") : opErrorText(refusal.code, "", refusal.name));
-    if (!plan.items.length) return void (warn && !refusal && setOpError(warn));
+    const rowLines: string[] = [];
+    const batchLines: string[] = [];
+    for (const f of plan.refused) {
+      if (f.code === "into_itself") rowLines.push(tr("files.paste.intoItself", { name: f.name }));
+      else if (f.code === "too_large") batchLines.push(tr("files.paste.tooLarge"));
+      else batchLines.push(opErrorText(f.code, "", f.name));
+    }
+    const total = plan.items.length + plan.refused.filter((f) => f.name).length;
+    /** One line as before; a heading and a list when several rows are involved. */
+    const report = () => {
+      const all = [...rowLines, ...batchLines];
+      if (!all.length) return false;
+      // No failed row: the whole-batch error (or the one refusal of a single row) is the line, without a heading.
+      if (!rowLines.length || (all.length === 1 && total < 2)) setOpError(all.join(" "));
+      else setOpErr({ text: tr(op === "cut" ? "files.paste.someFailedMove" : "files.paste.someFailedCopy", { count: rowLines.length, total }), list: all });
+      return true;
+    };
+    if (!plan.items.length) return void (!report() && warn && setOpError(warn));
     opBusy.current = true;
     const ac = (abort.current = new AbortController());
     setBusyPath(dir);
@@ -610,17 +626,22 @@ export function FileTree({
           ),
       });
     } catch (e) {
-      r = { done: [], moved: [], skipped: [], linksSkipped: 0, kept: [], error: { code: (e as RequestError).code ?? "", message: (e as Error).message, name: "" } };
+      r = { done: [], moved: [], skipped: [], linksSkipped: 0, kept: [], failed: [], error: { code: (e as RequestError).code ?? "", message: (e as Error).message, name: "" } };
     }
     clearTimeout(timer);
     abort.current = undefined;
     opBusy.current = false;
     setProgress(undefined);
     setBusyPath(undefined);
-    if (r.error) setOpError(opErrorText(r.error.code, r.error.message, r.error.name));
-    else if (r.cancelled) setNote(tr("files.paste.cancelled"));
-    else if (r.linksSkipped) setNote(tr("files.paste.linksSkipped", { count: r.linksSkipped }) + (r.kept.length ? ` ${tr("files.paste.sourceKept")}` : ""));
-    else if (warn) setOpError(warn);
+    for (const f of r.failed) {
+      const reason = opErrorText(f.code, f.message, f.name);
+      rowLines.push(reason.includes(f.name) ? reason : tr("files.paste.rowError", { name: f.name, reason }));
+    }
+    if (r.error) batchLines.push(opErrorText(r.error.code, r.error.message, r.error.name));
+    const reported = report();
+    if (r.cancelled && !r.error) setNote(tr("files.paste.cancelled"));
+    else if (r.linksSkipped && !r.error) setNote(tr("files.paste.linksSkipped", { count: r.linksSkipped }) + (r.kept.length ? ` ${tr("files.paste.sourceKept")}` : ""));
+    else if (warn && !reported) setOpError(warn);
     if (!r.done.length) return;
     if (op === "cut") {
       for (const m of r.moved) {
@@ -696,18 +717,15 @@ export function FileTree({
     const dir = dirAt(e.target);
     const dt = e.dataTransfer;
     if (dt.types.includes("Files")) return void transferOs(rawItems(dt), true, dir);
-    let d: { path: string; name: string; isDir: boolean; side: string };
-    try {
-      d = JSON.parse(dt.getData(DRAG_TYPE));
-    } catch {
-      return;
-    }
-    const item: Item = { kind: "daemon", name: d.name, isDir: d.isDir, side: d.side, path: d.path };
-    const op = d.side === side && !e.altKey ? "cut" : "copy";
-    // Nothing to ask when it is refused or does nothing; the transfer says why.
-    const plan = planPaste([item], { side, dir }, op);
-    if (!plan.items.length || plan.refused.length) return void transfer([item], op, dir);
-    setDropAsk({ item, op, dir });
+    const rows = readTreeDrag(dt);
+    if (!rows) return;
+    const items: Item[] = rows.map((d) => ({ kind: "daemon", name: d.name, isDir: d.isDir, side: d.side, path: d.path }));
+    // One tree, one side: every carried row on this side and no Alt/Option means move.
+    const op = rows.every((d) => d.side === side) && !e.altKey ? "cut" : "copy";
+    // Nothing to ask when everything is refused or does nothing; the transfer says why.
+    const plan = planPaste(items, { side, dir }, op);
+    if (!plan.items.length) return void transfer(items, op, dir);
+    setDropAsk({ items, first: plan.items[0]!, count: plan.items.length, op, dir });
   }
 
   const targetOf = (path: string | undefined): TreeTarget => {
@@ -865,9 +883,20 @@ export function FileTree({
           }}
         />
       </div>
-      {opError && (
+      {opErr && (
         <div role="alert" className="flex items-start gap-1 px-2 py-1 text-destructive" data-testid="tree-op-error">
-          <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">{opError}</span>
+          <div className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
+            {opErr.text}
+            {opErr.list.length > 0 && (
+              <ul className="list-disc pl-4">
+                {opErr.list.map((l, i) => (
+                  <li key={i} className="[overflow-wrap:anywhere]">
+                    {l}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
           <button
             type="button"
             aria-label={tr("files.dismiss")}
@@ -961,10 +990,10 @@ export function FileTree({
               aria-busy={busyPath === entry.path || undefined}
               draggable={!r.renaming}
               onDragStart={(e) => {
-                // GH-707: the entries for a prompt box; the tree's own move/copy drop takes one row only.
+                // GH-707: the entries for a prompt box; GH-757: the same rows with name and side, for a move/copy drop inside the tree.
                 const carried = dragEntries(entry.path, picked, visibleEntries);
                 e.dataTransfer.setData(ENTRIES_DRAG_TYPE, JSON.stringify(carried));
-                if (carried.length === 1) e.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ path: entry.path, name: entry.name, isDir: entry.isDir, side }));
+                e.dataTransfer.setData(DRAG_TYPE, JSON.stringify(carried.map((c) => ({ path: c.path, name: c.path === entry.path ? entry.name : baseName(c.path), isDir: c.isDir, side }))));
                 e.dataTransfer.setData("text/plain", carried.map((c) => c.path).join("\n"));
                 e.dataTransfer.effectAllowed = "copyMove";
               }}
@@ -1075,18 +1104,19 @@ export function FileTree({
       <PasteClashDialog ask={clash} />
       <ConfirmDialog
         open={!!dropAsk}
-        title={dropAsk ? tr(dropAsk.op === "cut" ? "files.paste.confirmMoveTitle" : "files.paste.confirmCopyTitle", { name: dropAsk.item.name }) : ""}
+        title={dropAsk ? tr(`files.paste.${dropAsk.op === "cut" ? "confirmMove" : "confirmCopy"}${dropAsk.count > 1 ? "ManyTitle" : "Title"}`, { name: dropAsk.first.name, count: dropAsk.count }) : ""}
         description={
           dropAsk
-            ? tr(dropAsk.op === "cut" ? "files.paste.confirmMove" : "files.paste.confirmCopy", {
-                name: dropAsk.item.name,
+            ? tr(`files.paste.${dropAsk.op === "cut" ? "confirmMove" : "confirmCopy"}${dropAsk.count > 1 ? "Many" : ""}`, {
+                name: dropAsk.first.name,
+                count: dropAsk.count,
                 folder: dropAsk.dir === cwd ? tr("files.tree.theProject") : relPath(dropAsk.dir, cwd),
-                side: dropAsk.item.kind === "daemon" && dropAsk.item.side !== side && sideLabel ? tr("files.paste.onSide", { side: sideLabel }) : "",
+                side: dropAsk.first.kind === "daemon" && dropAsk.first.side !== side && sideLabel ? tr("files.paste.onSide", { side: sideLabel }) : "",
               })
             : ""
         }
         confirm={tr(dropAsk?.op === "cut" ? "files.paste.confirmMoveButton" : "files.paste.confirmCopyButton")}
-        onConfirm={() => (dropAsk && void transfer([dropAsk.item], dropAsk.op, dropAsk.dir), setDropAsk(undefined))}
+        onConfirm={() => (dropAsk && void transfer(dropAsk.items, dropAsk.op, dropAsk.dir), setDropAsk(undefined))}
         onCancel={() => setDropAsk(undefined)}
         testId="tree-drop"
       />
