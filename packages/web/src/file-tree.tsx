@@ -600,7 +600,7 @@ export function FileTree({
       const all = [...rowLines, ...batchLines];
       if (!all.length) return false;
       if (all.length === 1 && (batchLines.length || total < 2)) setOpError(all[0]);
-      else setOpErr({ text: tr(op === "cut" ? "files.paste.someFailedMove" : "files.paste.someFailedCopy", { count: all.length, total }), list: all });
+      else setOpErr({ text: tr(op === "cut" ? "files.paste.someFailedMove" : "files.paste.someFailedCopy", { count: rowLines.length || all.length, total }), list: all });
       return true;
     };
     if (!plan.items.length) return void (!report() && warn && setOpError(warn));

@@ -268,6 +268,15 @@ describe("runTransfer per-item failure (GH-757)", () => {
     expect(staging(w, "b")).toEqual([]);
   });
 
+  it("cross Daemon cut whose source delete fails: copied, listed as failed, not as moved", async () => {
+    const w = world({ a: { "/a/1": file("1") }, b: { "/b": { kind: "dir" } } });
+    w.failOn((m) => m.type === "fs.delete" && m.side === "a");
+    const r = await runTransfer({ send: w.send, items: [dmn("a", "/a/1")], target: { side: "b", dir: "/b", names: [] }, op: "cut", resolve: keep });
+    expect(r.done).toEqual(["/b/1"]);
+    expect(r.moved).toEqual([]);
+    expect(r.failed).toMatchObject([{ name: "1" }]);
+  });
+
   it("limits stay a whole-batch error with no write", async () => {
     const w = world({ a: { "/a/h": file("1") }, b: { "/b": { kind: "dir" } } });
     const huge: Item = { kind: "browser", name: "h", isDir: false, items: [{ rel: "", kind: "file", size: 513 * 1024 * 1024 }] };

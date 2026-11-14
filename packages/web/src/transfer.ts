@@ -165,6 +165,7 @@ export async function runTransfer(o: {
           continue;
         }
         const linksBefore = res.linksSkipped;
+        let moved: { from: string; to: string } | undefined;
         const staging = joinPath(target.dir, `.${name}.partial-${Math.random().toString(16).slice(2, 8).padEnd(6, "0")}`);
         try {
           for (const e of entries!) {
@@ -199,14 +200,16 @@ export async function runTransfer(o: {
           res.done.push(r.path);
           // A skipped link would be lost with the source: the source stays.
           const keep = op === "cut" && res.linksSkipped > linksBefore;
-          if (it.kind === "daemon" && !keep) res.moved.push({ from: it.path, to: r.path });
           if (keep) res.kept.push(it.name);
           taken.add(key(name));
-      } catch (e) {
-        await call(target.side, { type: "fs.delete", path: staging }).catch(() => {});
-        throw e;
-      }
-      if (op === "cut" && it.kind === "daemon" && !res.kept.includes(it.name)) await call(it.side, { type: "fs.delete", path: it.path });
+          moved = it.kind === "daemon" && !keep ? { from: it.path, to: r.path } : undefined;
+        } catch (e) {
+          await call(target.side, { type: "fs.delete", path: staging }).catch(() => {});
+          throw e;
+        }
+        if (op === "cut" && it.kind === "daemon" && !res.kept.includes(it.name)) await call(it.side, { type: "fs.delete", path: it.path });
+        // Reported as moved only when the source is gone too (a failed delete leaves a copy and a "not moved" line).
+        if (moved) res.moved.push(moved);
       } catch (e) {
         if (e instanceof Cancelled) throw e;
         fail(it.name, e);
