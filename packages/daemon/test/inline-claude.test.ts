@@ -3,6 +3,8 @@ import type { Part } from "@claude-ui/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { ToolError } from "../src/daemon-mcp.ts";
 import { inlineClaudeOptions, runInlineClaude, type InlineClaudeDeps } from "../src/inline-claude.ts";
+import { sharedFixture } from "./shared-dirs-fixture.ts";
+import { canSymlink } from "./symlink-support.ts";
 import { INLINE_OUTPUT_TOKENS, type InlineSpec } from "../src/inline-types.ts";
 
 const SPEC: InlineSpec = { text: "Find foo", title: "Find foo", tools: ["Read", "Grep", "Glob"], mcp: [], maxTurns: 10 };
@@ -395,6 +397,26 @@ describe("ClaudeSession inline runs", () => {
     await s.run.inlineTask!({ ...SPEC, tools: ["Read", "Write", "Edit"] }, hooks("toolu_x"));
     expect(seen!.tools).toEqual(["Read"]);
     expect(seen!.disallowedTools).toEqual(expect.arrayContaining(["Edit", "Write", "NotebookEdit"]));
+    await s.close();
+  });
+  it.skipIf(!canSymlink)("a worker's inline run gets the worker's shared scratch folder as a working directory (GH-792)", async () => {
+    const { Session } = await import("../src/session.ts");
+    const { wt, shared } = sharedFixture();
+    let n = 0;
+    let seen: Options | undefined;
+    const query = ({ options }: { options: Options }) => {
+      if (n++ > 0) {
+        seen = options;
+        return Object.assign((async function* () { yield result(); })(), { close: () => {} }) as never;
+      }
+      let end!: () => void;
+      return Object.assign((async function* () { await new Promise<void>((r) => (end = r)); })(), { supportedCommands: async () => [], mcpServerStatus: async () => [], getSettings: async () => ({}), close: () => end?.() }) as never;
+    };
+    const s = new Session(wt, { query: query as never, worker: () => true, uploadDir: () => "/up/x" } as never);
+    s.prompt("hi");
+    await vi.waitFor(() => expect((s.run as unknown as { liveQuery(): unknown }).liveQuery()).toBeDefined());
+    await s.run.inlineTask!(SPEC, hooks("toolu_x"));
+    expect(seen!.additionalDirectories).toEqual(["/up/x", shared]);
     await s.close();
   });
   it("stopSubagent(toolUseId) aborts the inline run: result stopped", async () => {
