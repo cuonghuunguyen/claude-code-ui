@@ -4839,6 +4839,21 @@ describe("default permission mode from Claude settings (permissions.defaultMode)
     t.d.close();
   });
 
+  it.skipIf(process.platform === "win32")("session.subscribe sends the plan folders of a worktree session from the main checkout's local file", async () => {
+    const t = await setup();
+    const git = (...args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: t.project, stdio: "pipe" });
+    git("init", "-q");
+    git("commit", "-q", "--allow-empty", "-m", "init");
+    const wt = join(t.project, "wt-plans");
+    git("worktree", "add", "-q", wt, "-b", "feature-plans");
+    mkdirSync(join(t.project, ".claude"), { recursive: true });
+    writeFileSync(t.local, JSON.stringify({ plansDirectory: "docs/plans" }));
+    const created = (await t.c.request({ type: "session.create", cwd: wt })) as { result: { session: { id: string } } };
+    const sub = (await t.c.request({ type: "session.subscribe", sessionId: created.result.session.id, sinceSeq: 0 })) as { result: { planDirs: string[] } };
+    expect(sub.result.planDirs[0]).toBe(join(wt, "docs", "plans"));
+    t.d.close();
+  });
+
   it("an invalid higher-precedence value is skipped for the next valid one, like Claude Code", async () => {
     const t = await setup();
     write(t.user, "plan");
