@@ -188,7 +188,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
   const gen = useRef(0);
   // A remote operation (Fetch, Push, Pull) of this repository: one at a time; its result line shows under the filter row until the next one or Dismiss. Kept per repository path, not in this panel.
   const { running: op, settled } = useRemoteOp(cwd);
-  const runRemote = (msg: RemoteRequest | StashRequest, done: string | ((r: OpReply) => string), running: string, onFail?: (e: RequestError) => boolean) => void (!notGit && runRemoteOp(client, msg, done, running, undefined, onFail));
+  const runRemote = (msg: RemoteRequest | StashRequest, done: string | ((r: OpReply) => string), running: string, onFail?: (e: RequestError) => boolean, onDone?: () => void) => void (!notGit && runRemoteOp(client, msg, done, running, onDone && (() => onDone()), onFail));
   // Success or failure, the list reloads.
   const lastSettled = useRef(settled);
   useEffect(() => {
@@ -344,7 +344,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
               </p>
             )}
             {!error && !commits.length && !loading && <p className="m-auto p-4 text-muted-foreground">{filtered || (ref !== ALL && ref !== HEAD) ? tr("files.graph.noMatch") : tr("files.graph.noCommits")}</p>}
-            <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} hash={() => selected}>
+            <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} hash={() => selected} tagsOf={(h) => commits.find((c) => c.hash === h)?.refs ?? []}>
             <div
               ref={scroller}
               role="listbox"
@@ -369,7 +369,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
             <div className={cn("flex min-h-0 min-w-0 flex-col overflow-auto @max-2xl:border-t @2xl:border-l", file ? "@max-2xl:max-h-3/4 @2xl:w-3/5" : "@max-2xl:max-h-1/2 @2xl:w-80", "shrink-0")} data-testid="commit-details">
               {detailError && <p className="p-3 text-destructive">{detailError}</p>}
               {!detail && !detailError && <p className="p-3 text-muted-foreground">{tr("files.graph.loading")}</p>}
-              {detail && (file ? <FileView detail={detail} file={file} client={client} cwd={cwd} ex={ex} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details showRepo={(f) => repos?.find((r) => !r.outsideRoots && pathKey(r.path) === pathKey(joinPath(cwd, f.path)))?.rel} onShowRepo={onShowRepo} wrap={(el, refs) => <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} hash={() => detail.hash}>{cloneElement(el, { "data-hash": detail.hash } as object)}</BranchMenu>} detail={detail} refs={commits.find((c) => c.hash === detail.hash)?.refs ?? detail.refs} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
+              {detail && (file ? <FileView detail={detail} file={file} client={client} cwd={cwd} ex={ex} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details showRepo={(f) => repos?.find((r) => !r.outsideRoots && pathKey(r.path) === pathKey(joinPath(cwd, f.path)))?.rel} onShowRepo={onShowRepo} wrap={(el, refs) => <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} hash={() => detail.hash} tagsOf={() => refs}>{cloneElement(el, { "data-hash": detail.hash } as object)}</BranchMenu>} detail={detail} refs={commits.find((c) => c.hash === detail.hash)?.refs ?? detail.refs} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
             </div>
           )}
         </div>

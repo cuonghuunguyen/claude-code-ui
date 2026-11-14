@@ -2,7 +2,7 @@
 // started by a click, so the repository's hooks run like in a terminal; they never prompt for credentials.
 import { isAbsolute, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { wslHostPath, wslPathOf } from "@claude-ui/protocol";
+import { HARDEN, tagDeleteArgv, tagDeleteRemoteArgv, wslHostPath, wslPathOf } from "@claude-ui/protocol";
 import type { GitBranchInfo, GitBranchResult } from "@claude-ui/protocol";
 import { ceilingEnv, gitDirsOf, gitOperation, gitRefs, isHash, real, topIn, WorktreeError } from "./git.ts";
 import { BATCH_SSH, runGit } from "./git-runner.ts";
@@ -14,8 +14,8 @@ export const REMOTE_TIMEOUT = 120_000;
 export const remoteConfig = { timeout: REMOTE_TIMEOUT };
 const MAX_REMOTES = 20;
 /** Fetch needs no fsmonitor program and no `ext::` transport; submodules stay as they are. */
-/** Every remote operation: no fsmonitor program and no `ext::` transport. */
-export const HARDEN = ["-c", "core.fsmonitor=false", "-c", "protocol.ext.allow=never"];
+/** `HARDEN` lives in the protocol package (the web app shows the commands that use it). */
+export { HARDEN };
 export const FETCH_ARGS = [...HARDEN, "fetch", "--all", "--no-recurse-submodules"];
 /** Push, pull and fetch never follow submodules (their remotes are not checked against the roots) and push sends no tags the dialog does not show. */
 const PUSH = [...HARDEN, "push", "--no-recurse-submodules", "--no-follow-tags"];
@@ -132,7 +132,7 @@ async function remoteOp(top: string, verb: string, args: string[], env: NodeJS.P
 export type RemoteResult = { output: string; refs: string | null };
 
 /** Remote names and the user's own ssh command of the repository (`core.sshCommand`). */
-async function remoteConfigOf(top: string): Promise<{ names: Set<string>; sshCommand: string; defaultRemote?: string }> {
+export async function remoteConfigOf(top: string): Promise<{ names: Set<string>; sshCommand: string; defaultRemote?: string }> {
   const base = { ...process.env, ...(await ceilingEnv(top)), GIT_TERMINAL_PROMPT: "0" };
   const cfg = await local(top, ["config", "--get-regexp", "^(remote\\..+\\.url|core\\.sshcommand|branch\\.(main|master)\\.remote)$"], base);
   const names = new Set<string>();
@@ -323,3 +323,83 @@ async function writeOp(cwd: string, o: Write, verb: "push" | "pull"): Promise<Re
 }
 export const gitPush = (cwd: string, o: Write) => writeOp(cwd, o, "push");
 export const gitPull = (cwd: string, o: Omit<Write, "lease">) => writeOp(cwd, o, "pull");
+
+// ---- Tags: Remove Tag on remotes (docs/spec.md "Layout", Graph tab; wire `git.tagRemote`, `git.tagDelete`) ----
+
+const MAX_TAG_NAME = 255;
+/** A tag name git accepts as `refs/tags/<name>`, else `bad_request`. */
+export async function checkTagName(top: string, name: unknown, env: NodeJS.ProcessEnv): Promise<string> {
+  const bad = () => new WorktreeError("bad_request", "Not a valid tag name");
+  if (typeof name !== "string" || !name || name.length > MAX_TAG_NAME || name.startsWith("-") || name.includes("\0")) throw bad();
+  if ((await local(top, ["check-ref-format", `refs/tags/${name}`], env)).code !== 0) throw bad();
+  return name;
+}
+
+/** The value of local `refs/tags/<name>` (the tag object of an annotated tag), "" when there is none. */
+export async function localTagHash(top: string, name: string, env: NodeJS.ProcessEnv): Promise<string> {
+  return (await local(top, ["rev-parse", "-q", "--verify", `refs/tags/${name}`], env)).out;
+}
+
+/** Whether `remote` has the tag (`git ls-remote`): `hash` absent = it has not. Null outside a work tree. */
+export async function gitTagRemote(cwd: string, o: { name: unknown; remote: unknown } & RemoteOptions): Promise<{ remote: string; hash?: string } | null> {
+  const top = await topIn(cwd, o.allowed);
+  if (!top) return null;
+  const { names, sshCommand } = await remoteConfigOf(top);
+  const remote = o.remote;
+  if (typeof remote !== "string" || !names.has(remote)) throw new WorktreeError("bad_request", "Unknown remote");
+  const env = await remoteEnv(top, sshCommand);
+  const name = await checkTagName(top, o.name, env);
+  await checkRemotes(top, [remote], false, env, o.allowed, o.platform ?? process.platform);
+  const out = await remoteOp(top, "ls-remote", [...HARDEN, "ls-remote", "--refs", remote, `refs/tags/${name}`], env);
+  const row = out.split("\n").map((l) => l.trim().split(/\s+/)).find((r) => r[1] === `refs/tags/${name}` && isHash(r[0]));
+  return row ? { remote, hash: row[0]! } : { remote };
+}
+
+type TagRemoteDelete = { remote: unknown; hash: unknown; argv: unknown };
+const sameArgv = (a: unknown, b: string[]) => Array.isArray(a) && a.length === b.length && a.every((x, i) => x === b[i]);
+
+/**
+ * Deletes tag `name` on each of `remotes` (lease on the hash the dialog showed), in order, then locally (`tag -d`).
+ * `hash`: local `refs/tags/<name>` as shown. A remote failure stops before the local delete. Null outside a work tree.
+ */
+export async function gitTagDelete(cwd: string, o: { name: unknown; hash: unknown; argv: unknown; remotes?: unknown } & RemoteOptions): Promise<RemoteResult | null> {
+  const bad = (m: string) => new WorktreeError("bad_request", m);
+  const remotes = o.remotes === undefined ? [] : o.remotes;
+  if (!isHash(o.hash)) throw bad("hash must be the tag's hash");
+  if (!Array.isArray(remotes) || remotes.length > MAX_REMOTES) throw bad("remotes must be a list of at most 20 remotes");
+  const top = await topIn(cwd, o.allowed);
+  if (!top) return null;
+  return exclusive(top, async () => {
+    const { names, sshCommand } = await remoteConfigOf(top);
+    const env = await remoteEnv(top, sshCommand);
+    const name = await checkTagName(top, o.name, env);
+    const hash = o.hash as string;
+    if ((await localTagHash(top, name, env)) !== hash) throw new WorktreeError("stale", `Tag ${name} moved since the dialog opened: reopen it`);
+    const stale = () => new WorktreeError("stale", "The command changed since the dialog opened");
+    if (!sameArgv(o.argv, tagDeleteArgv(name))) throw stale();
+    const seen = new Set<string>();
+    const plan = (remotes as TagRemoteDelete[]).map((r) => {
+      if (!r || typeof r.remote !== "string" || !names.has(r.remote) || seen.has(r.remote)) throw bad("Unknown remote");
+      if (!isHash(r.hash)) throw bad("hash must be the remote tag's hash");
+      seen.add(r.remote);
+      if (!sameArgv(r.argv, tagDeleteRemoteArgv(r.remote, name, r.hash))) throw stale();
+      return { remote: r.remote, argv: r.argv as string[] };
+    });
+    await checkRemotes(top, plan.map((r) => r.remote), true, env, o.allowed, o.platform ?? process.platform);
+    const outputs: string[] = [];
+    const done: string[] = [];
+    for (const r of plan) {
+      try {
+        outputs.push(await remoteOp(top, "push", r.argv, env));
+        done.push(r.remote);
+      } catch (e) {
+        const text = (e as Error).message;
+        const was = done.length ? `\nAlready deleted on: ${done.join(", ")}` : "";
+        if (/stale info/.test(text)) throw new WorktreeError("stale", `${r.remote} changed the tag since the dialog opened; reopen it${was}`);
+        throw new WorktreeError(e instanceof WorktreeError ? e.code : "git_failed", `${text}${was}`);
+      }
+    }
+    outputs.push(await remoteOp(top, "tag", [...HARDEN, ...tagDeleteArgv(name)], env));
+    return { output: outputs.filter(Boolean).join("\n"), refs: await gitRefs(top, o.allowed) };
+  });
+}
