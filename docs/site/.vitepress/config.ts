@@ -58,7 +58,7 @@ const nav = (prefix: string, l: Labels): DefaultTheme.NavItem[] => [
 ];
 const SIDEBAR: [string, [string, string][]][] = [
   ["Getting started", [["Install & first run", "/guide/install"], ["A quick tour", "/guide/tour"], ["Video demo", "/demo"], ["FAQ", "/guide/faq"], ["How it compares", "/guide/compare"]]],
-  ["Working in a session", [["The prompt box", "/features/prompt-box"], ["Permissions & modes", "/features/permissions"], ["Reading a session", "/features/timeline"], ["Usage & context", "/features/usage"], ["Ask an aside (/btw)", "/features/aside"], ["Background shells", "/features/background-shells"], ["Inline tasks", "/features/inline-tasks"]]],
+  ["Working in a session", [["The prompt box", "/features/prompt-box"], ["Permissions & modes", "/features/permissions"], ["Reading a session", "/features/timeline"], ["Usage & context", "/features/usage"], ["Ask an aside (/btw)", "/features/aside"], ["Background shells", "/features/background-shells"], ["Inline tasks", "/features/inline-tasks"], ["Fork subagents", "/features/fork-subagents"]]],
   ["Many sessions", [["Projects & worktrees", "/features/projects"], ["Focus page", "/features/focus"], ["Notifications", "/features/notifications"], ["Orchestration (workers)", "/features/orchestration"]]],
   ["Workspace & layout", [["Sessions & tabs", "/features/sessions"], ["Panes & layout", "/features/panes"], ["Split view", "/features/split-view"], ["Context menus", "/features/context-menus"], ["Clean up", "/features/clean-up"], ["Command palette", "/features/palette"], ["Keep screen awake", "/features/keep-awake"]]],
   ["Code & git", [["Files", "/features/files"], ["Changes & diffs", "/features/changes"], ["Git operations", "/features/git"], ["Git graph", "/features/git-graph"], ["Terminal", "/features/terminal"]]],
@@ -86,6 +86,7 @@ const VI: Labels = {
   "Ask an aside (/btw)": "Hỏi bên lề (/btw)",
   "Background shells": "Shell nền",
   "Inline tasks": "Tác vụ nội tuyến",
+  "Fork subagents": "Subagent dạng fork",
   "Many sessions": "Nhiều phiên",
   "Projects & worktrees": "Dự án và worktree",
   "Focus page": "Trang Focus",

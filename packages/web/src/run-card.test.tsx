@@ -139,3 +139,15 @@ it("touch targets: the Stop button and the steps disclosure are 44px on coarse p
   expect(q("run-stop")!.className).toContain("pointer-coarse:size-11");
   expect(q("run-steps-toggle")!.className).toContain("pointer-coarse:min-h-11");
 });
+
+it("onOpen shows an Open button (touch target 44px) that opens the run; none without it (GH-718)", async () => {
+  await render(props());
+  expect(q("run-open")).toBeNull();
+  const open = vi.fn();
+  await render(props({ onOpen: open }));
+  const button = q("run-open")!;
+  expect(button.getAttribute("aria-label")).toContain("Find the callers of foo");
+  expect(button.className).toContain("pointer-coarse:size-11");
+  await click(button);
+  expect(open).toHaveBeenCalledTimes(1);
+});

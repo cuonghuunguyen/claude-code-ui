@@ -56,7 +56,7 @@ import { ConfigError, createConfig, runCli, timed, type CliRunner, type McpReque
 import { createPlugins, redact, type PluginsRequest } from "./plugins.ts";
 import { addonAssetHeaders, addonHeaders, createAddons, type AddonsRequest } from "./addons.ts";
 import { searchTranscripts } from "./content-search.ts";
-import { cliTurnRunning, interleaveRuns, JsonlTail, parseJsonl, transcriptEnd } from "./transcript.ts";
+import { cliTurnRunning, interleaveRuns, JsonlTail, parseJsonl, transcriptEnd, withoutForkPrefix } from "./transcript.ts";
 import type { KeepAwake } from "./keep-awake.ts";
 import { customCommand, EDITORS, findOnPath, isOpenWith, openCommand, type Launcher, type OpenCommand } from "./open-external.ts";
 import { createRouter, type Sides } from "./sides.ts";
@@ -66,6 +66,7 @@ import { createUpdater, type Updater } from "./update.ts";
 import { createOrchestration, SERVER as ORCHESTRATION_SERVER } from "./orchestration.ts";
 import { createDaemonMcp, DAEMON_SERVER, ToolError } from "./daemon-mcp.ts";
 import { createAgentTerminals, terminalPort } from "./agent-terminals.ts";
+import { createForkGroup } from "./fork-guidance.ts";
 import { createInlineTask } from "./inline-task.ts";
 import type { AddressInfo } from "node:net";
 import { serveAppIcon } from "./app-icon.ts";
@@ -433,6 +434,7 @@ export function createDaemon(opts: {
     plan,
     promptSuggestions: () => appSettings.get().focus.nextForYou,
     chrome: () => appSettings.get().chrome.enabled,
+    fork: () => appSettings.get().fork.enabled,
     visualizePlugin: () => (appSettings.get().chat.visualize ? visualizePluginDir() : undefined),
     // The plan fallback only while the plan says rejected: another 429 (per-model, credits) during a warning is no usage limit.
     onLimitStop: (id: string, resetsAt: number | undefined) => {
@@ -471,9 +473,9 @@ export function createDaemon(opts: {
       broadcast({ type: "sessions.changed" });
     },
     worker: (id: string) => !!settings.get(id)?.coordinatorId,
-    mcpServers: (id: string) => {
+    mcpServers: (id: string, engine?: "claude" | "opencode") => {
       const o = orchestration.mcpServers(id);
-      const d = daemonMcp.mcpServers(id);
+      const d = daemonMcp.mcpServers(id, engine);
       return o || d ? { ...o, ...d } : undefined;
     },
     agent: (id: string) => settings.get(id)?.agent,
@@ -1010,6 +1012,7 @@ export function createDaemon(opts: {
         return history
           .getSubagentMessages(id, a, { dir: cwd })
           .then((m) => withParallelCalls(f, m))
+          .then(withoutForkPrefix)
           .then((messages) => (runStamp !== undefined && cache.runs.set(a, { stamp: runStamp, messages }), messages))
           .catch((err) => (console.error(`reading subagent run ${a} of ${id} failed:`, err), []));
       }),
@@ -1297,6 +1300,7 @@ export function createDaemon(opts: {
           return s.run.inlineTask({ ...spec, ...(model && { model }) }, { signal, toolUseId, input, openCodeModel: appSettings.get().inlineTask.openCodeModel });
         },
       }),
+      createForkGroup(() => appSettings.get().fork.enabled),
     ],
   });
   const orchestration = createOrchestration({

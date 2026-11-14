@@ -234,6 +234,20 @@ export function withoutResultText(items: TimelineItem[], result: string, truncat
   return got === want && !truncated ? items.filter((_, n) => n !== i) : items;
 }
 
+/** A run's result text: its last assistant text step (a Fork run returns its final text); empty while that step streams or when there is none. */
+export function lastTextOf(items: TimelineItem[]): string {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]!;
+    if (it.kind === "part" && it.part.type === "assistant_text") return it.part.streaming ? "" : it.part.text;
+  }
+  return "";
+}
+
+/** The steps a run card counts: tool calls, also those folded into a context group. */
+export function stepCountOf(items: TimelineItem[]): number {
+  return items.reduce((n, i) => n + (i.kind === "context" ? i.calls.length : i.part.type === "tool_call" ? 1 : 0), 0);
+}
+
 /** The assistant text of the turn up to and including item `index` (back to its prompt), blocks joined by a blank line; tool calls and reasoning are not text parts. */
 export function turnText(items: readonly (TimelineItem | { kind: "fold" })[], index: number): string {
   const texts: string[] = [];

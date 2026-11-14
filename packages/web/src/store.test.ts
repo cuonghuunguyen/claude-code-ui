@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Event, Part } from "@claude-ui/protocol";
-import { applyEvent, emptySession, hitKey, partOf, shownState, wholeParts, withoutResultText, withArtifacts, withEdits, withPage, withSubscribe, type SessionView } from "./store.ts";
+import { applyEvent, emptySession, hitKey, partOf, shownState, wholeParts, withoutResultText, lastTextOf, stepCountOf, withArtifacts, withEdits, withPage, withSubscribe, type SessionView } from "./store.ts";
 import type { SessionInfo, Snapshot } from "@claude-ui/protocol";
 
 const ev = (seq: number, part: Part): Event => ({ type: "event", sessionId: "s", seq, part });
@@ -433,5 +433,21 @@ describe("withoutResultText", () => {
     expect(withoutResultText([part(text("b", "head tail", false))], "tail", true)).toHaveLength(1);
     expect(withoutResultText([part(text("b", "tail", false))], "tail", true)).toHaveLength(1);
     expect(withoutResultText(items, "")).toBe(items);
+  });
+});
+
+describe("run card helpers (GH-718)", () => {
+  const part = (p: Part) => ({ kind: "part" as const, part: p });
+  const call = (id: string) => ({ type: "tool_call", id, toolUseId: id, tool: "Grep", input: {}, status: "done" }) as Part;
+  it("lastTextOf: the last finished assistant text step of the run, empty while it streams or when there is none", () => {
+    expect(lastTextOf([part(text("a", "first", false)), part(call("c")), part(text("b", "The answer", false))])).toBe("The answer");
+    expect(lastTextOf([part(text("a", "so far", true))])).toBe("");
+    expect(lastTextOf([part(call("c"))])).toBe("");
+    expect(lastTextOf([])).toBe("");
+  });
+  it("stepCountOf: tool calls, also those inside a context group; texts do not count", () => {
+    const group = { kind: "context" as const, id: "g", calls: [call("x"), call("y")] as never };
+    expect(stepCountOf([part(call("c")), group, part(text("b", "t", false))])).toBe(3);
+    expect(stepCountOf([])).toBe(0);
   });
 });
