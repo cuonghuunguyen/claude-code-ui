@@ -117,6 +117,17 @@ describe("node-pty spawn-helper (GH-84)", () => {
     expect(onExit).toHaveBeenCalledWith(3);
   });
 
+  it("all lists every open terminal with its folder and marks the login one", () => {
+    const spawn = vi.fn(() => ({ ...fakePty }));
+    const terms = createTerminals(nodePtyRoot(), "linux", spawn as never);
+    const a = terms.create("/repo", 80, 24, {});
+    const b = terms.create("/other", 80, 24, {}, { file: "/bin/claude", args: [], title: "Claude login" });
+    expect(terms.all()).toEqual([
+      { id: a.id, title: "Terminal 1", cwd: "/repo", login: false },
+      { id: b.id, title: "Claude login", cwd: "/other", login: true },
+    ]);
+  });
+
   it.runIf(posix)("a spawn error names the chmod command when a helper stays broken", () => {
     const { root, helper } = pkg("build/Release");
     const terms = createTerminals(root, "darwin", spawnFails as never, eperm);

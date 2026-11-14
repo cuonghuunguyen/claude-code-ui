@@ -42,6 +42,9 @@ async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object
   const dataFile = join(root, "data.json");
   writeFileSync(dataFile, JSON.stringify({ sessions: [], messages: {}, ...o.data }));
   const env: Record<string, string> = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_DATA: dataFile, FAKE_OPENCODE_SCRIPT: (o.script ?? []).map(turn).join(","), ...o.env };
+  // Terminal access (GH-709) attaches a second MCP server to every session: off here; "OpenCode claude-ui tools" turns it on.
+  const appSettings = createSettings();
+  appSettings.set({ terminalAccess: { enabled: false } });
   const http = createDaemon({
     webRoot: root,
     roots: [root],
@@ -52,7 +55,7 @@ async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object
       p.open(project);
       return p;
     })(),
-    appSettings: createSettings(),
+    appSettings,
     settingsFile: join(root, "sessions.json"),
     claudeDir: join(root, "claude"),
     projectsDir: join(root, "claude", "projects"),
@@ -408,12 +411,12 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     const d = await boot({ script: ["text"] });
     const s = await d.open();
     const flat = (rules: { permission: string; pattern: string; action: string }[]) => rules.map((r) => `${r.permission}:${r.pattern}:${r.action}`);
-    expect(flat(d.requests("POST", "/session")[0]!.body.permission)).toEqual(["claude-ui:mode:config:allow", "claude-ui:agent:build:allow", "orchestration-*:*:deny", "claude-ui:always:allow"]);
+    expect(flat(d.requests("POST", "/session")[0]!.body.permission)).toEqual(["claude-ui:mode:config:allow", "claude-ui:agent:build:allow", "claude-ui-*:*:deny", "orchestration-*:*:deny", "claude-ui:always:allow"]);
     expect((await d.ok({ type: "session.subscribe", sessionId: s.id, sinceSeq: 0 })).session).toMatchObject({ permissionMode: "config", permissionModes: ["config", "default", "acceptEdits"] });
     for (const mode of ["auto", "dontAsk", "bypassPermissions"]) expect(await d.request({ type: "session.setPermissionMode", sessionId: s.id, mode })).toMatchObject({ type: "error" });
     const reply = await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "plan" });
     expect(reply.session).toMatchObject({ permissionMode: "config", agent: "plan" });
-    expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission)).toEqual(["claude-ui:mode:config:allow", "claude-ui:agent:plan:allow", "edit:*:deny", "edit:.opencode/plans/*.md:allow", "edit:*:deny", "edit:.opencode/plans/*.md:allow", "orchestration-*:*:deny", "claude-ui:always:allow"]);
+    expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission)).toEqual(["claude-ui:mode:config:allow", "claude-ui:agent:plan:allow", "edit:*:deny", "edit:.opencode/plans/*.md:allow", "edit:*:deny", "edit:.opencode/plans/*.md:allow", "claude-ui-*:*:deny", "orchestration-*:*:deny", "claude-ui:always:allow"]);
     await s.prompt("plan it");
     await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
     expect(d.requests("POST", `/session/${s.id}/prompt_async`)[0]!.body.agent).toBe("plan");
@@ -439,7 +442,7 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "default" });
     expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission)).toContain("bash:*:ask");
     await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "config" });
-    expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission)).toEqual(["claude-ui:mode:config:allow", "claude-ui:agent:build:allow", "*:*:allow", "external_directory:*:ask", "orchestration-*:*:deny", "claude-ui:always:allow"]);
+    expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission)).toEqual(["claude-ui:mode:config:allow", "claude-ui:agent:build:allow", "*:*:allow", "external_directory:*:ask", "claude-ui-*:*:deny", "orchestration-*:*:deny", "claude-ui:always:allow"]);
   });
 
   it("agents: the agents part lists build, docs and plan; setAgent writes a block with the agent's denials and prompts as it; an unknown or subagent name is refused", async () => {
@@ -451,7 +454,7 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "default" });
     expect((await d.ok({ type: "session.setAgent", sessionId: s.id, agent: "docs" })).session.agent).toBe("docs");
     expect(s.find("session_agent")?.agent).toBe("docs");
-    expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission)).toEqual(["claude-ui:mode:default:allow", "claude-ui:agent:docs:allow", "bash:*:ask", "edit:*:ask", "webfetch:*:ask", "websearch:*:ask", "edit:*:deny", "orchestration-*:*:deny", "claude-ui:always:allow"]);
+    expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission)).toEqual(["claude-ui:mode:default:allow", "claude-ui:agent:docs:allow", "bash:*:ask", "edit:*:ask", "webfetch:*:ask", "websearch:*:ask", "edit:*:deny", "claude-ui-*:*:deny", "orchestration-*:*:deny", "claude-ui:always:allow"]);
     // Edit automatically: the agent's denial still comes after the allow.
     await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "acceptEdits" });
     expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission).filter((r) => r.startsWith("edit:"))).toEqual(["edit:*:allow", "edit:*:deny"]);
@@ -1204,6 +1207,102 @@ describe("OpenCode orchestration", { timeout: TEST_MS }, () => {
     expect(d.requests("POST", "/session").at(-1)!.body.permission.map((x: { pattern: string }) => x.pattern)).toContain("agent:plan");
     await until(() => d.requests("POST", `/session/${w.sessionId}/prompt_async`).length === 1);
     expect(d.requests("POST", `/session/${w.sessionId}/prompt_async`)[0]!.body.agent).toBe("plan");
+  });
+});
+
+describe("OpenCode claude-ui tools (GH-709)", { timeout: TEST_MS }, () => {
+  const tools = (d: Boot) => d.ok({ type: "settings.set", patch: { terminalAccess: { enabled: true } } });
+  const orchestration = (d: Boot) => d.ok({ type: "settings.set", patch: { orchestration: { enabled: true, workerCap: 20 } } });
+  const attached = async (d: Boot, id: string, key: "orchestration" | "claude-ui") => {
+    await until(() => d.requests("POST", "/mcp").some((r) => r.body.name === mcpName(id, key)));
+    return d.requests("POST", "/mcp").find((r) => r.body.name === mcpName(id, key))!.body;
+  };
+  const mcpClient = async (url: string, bearer: string) => {
+    const c = new Client({ name: "test", version: "1" });
+    await c.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { authorization: bearer } } }));
+    cleanups.push(() => void c.close());
+    return c;
+  };
+
+  it("attaches the claude-ui server alone while orchestration is off; its route serves the terminal tools; the mode block allows list and read, asks for run and hides other sessions' tools", async () => {
+    const d = await boot({ script: ["text"] });
+    await tools(d);
+    const s = await d.open();
+    const body = await attached(d, s.id, "claude-ui");
+    const name = mcpName(s.id, "claude-ui");
+    expect(name).toBe(`claude-ui-${s.id.slice(-10)}`);
+    expect(body.config).toMatchObject({ type: "remote", oauth: false, timeout: 150_000 });
+    expect(d.requests("POST", "/mcp").map((r) => r.body.name)).not.toContain(mcpName(s.id));
+    const c = await mcpClient(body.config.url, body.config.headers.authorization);
+    expect((await c.listTools()).tools.map((t) => t.name)).toEqual(["terminal_list", "terminal_read", "terminal_run"]);
+    expect(JSON.parse(((await c.callTool({ name: "terminal_list", arguments: {} })) as any).content[0].text)).toEqual([]);
+    await s.prompt("hi");
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
+    const block = d.requests("PATCH", `/session/${s.id}`)[0]!.body.permission as Rule[];
+    const at = (r: object) => block.findIndex((x) => JSON.stringify(x) === JSON.stringify(r));
+    const deny = at({ permission: "claude-ui-*", pattern: "*", action: "deny" });
+    expect(deny).toBeGreaterThan(-1);
+    expect(at({ permission: `${name}_terminal_list`, pattern: "*", action: "allow" })).toBeGreaterThan(deny);
+    expect(at({ permission: `${name}_terminal_read`, pattern: "*", action: "allow" })).toBeGreaterThan(deny);
+    expect(at({ permission: `${name}_terminal_run`, pattern: "*", action: "ask" })).toBeGreaterThan(deny);
+    // The attach went in before the prompt.
+    const log = d.log().filter((l) => l.type === "request").map((l) => `${l.method} ${l.path}`);
+    expect(log.indexOf("POST /mcp")).toBeLessThan(log.indexOf(`POST /session/${s.id}/prompt_async`));
+  });
+
+  it("terminal_run is allowed without asking in bypass mode, and asks in every other mode including config", async () => {
+    const d = await boot({ script: ["text"], allowBypass: true });
+    await tools(d);
+    const s = await d.open();
+    const name = mcpName(s.id, "claude-ui");
+    await attached(d, s.id, "claude-ui");
+    const action = (mode: string) => async () => {
+      await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode });
+      const block = d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission as Rule[];
+      return block.find((r) => r.permission === `${name}_terminal_run`)?.action;
+    };
+    expect(await action("acceptEdits")()).toBe("ask");
+    expect(await action("config")()).toBe("ask");
+    expect(await action("bypassPermissions")()).toBe("allow");
+  });
+
+  it("with orchestration on too, both servers attach with their own tokens and the close disconnects both", async () => {
+    const d = await boot({ script: ["text"] });
+    await tools(d);
+    await orchestration(d);
+    const s = await d.open();
+    const claudeUi = await attached(d, s.id, "claude-ui");
+    const orch = await attached(d, s.id, "orchestration");
+    expect(claudeUi.config.headers.authorization).not.toBe(orch.config.headers.authorization);
+    // A token serves only its own server.
+    const c = await mcpClient(orch.config.url, orch.config.headers.authorization);
+    expect((await c.listTools()).tools.map((t) => t.name)).toContain("worker_start");
+    expect((await c.listTools()).tools.map((t) => t.name)).not.toContain("terminal_run");
+    await d.ok({ type: "session.delete", sessionId: s.id });
+    await until(() => d.requests("POST", `/mcp/${mcpName(s.id, "claude-ui")}/disconnect`).length === 1 && d.requests("POST", `/mcp/${mcpName(s.id)}/disconnect`).length === 1);
+  });
+
+  it("the setting off: no claude-ui attach", async () => {
+    const d = await boot({ script: ["text"] });
+    const off = await d.open();
+    await off.prompt("hi");
+    await until(() => d.requests("POST", `/session/${off.id}/prompt_async`).length === 1);
+    expect(d.requests("POST", "/mcp")).toHaveLength(0);
+  });
+
+  it("a terminal_run permission request shows as the claude-ui tool, with the \"always\" suggestion", async () => {
+    const d = await boot({ script: ["text"] });
+    await tools(d);
+    const s = await d.open();
+    const name = mcpName(s.id, "claude-ui");
+    await attached(d, s.id, "claude-ui");
+    await s.prompt("hi");
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
+    const call = { id: "prt_tr", sessionID: s.id, messageID: "msg_tr", type: "tool", callID: "call_tr", tool: `${name}_terminal_run`, state: { status: "pending", input: { terminal: "Terminal 9", command: "ls" } } };
+    await d.fake("/__emit", { directory: d.project, events: [{ type: "message.part.updated", properties: { part: call } }, { type: "permission.asked", properties: { id: "per_tr", sessionID: s.id, permission: call.tool, patterns: ["*"], always: ["*"], metadata: {}, tool: { messageID: "msg_tr", callID: "call_tr" } } }] });
+    await until(() => !!s.find("permission_request"));
+    expect(s.last("call_tr")).toMatchObject({ type: "tool_call", tool: "mcp__claude-ui__terminal_run" });
+    expect(s.find("permission_request")).toMatchObject({ tool: "mcp__claude-ui__terminal_run", input: { terminal: "Terminal 9", command: "ls" }, suggestions: [expect.objectContaining({ type: "addRules" })] });
   });
 });
 

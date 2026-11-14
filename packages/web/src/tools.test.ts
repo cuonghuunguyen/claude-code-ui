@@ -212,3 +212,26 @@ describe("artifactTitle", () => {
     expect(artifactTitle({ input: {} })).toBe("");
   });
 });
+
+describe("terminal tools (GH-709)", () => {
+  it("terminalTool names only the claude-ui terminal tools", async () => {
+    const { terminalTool } = await import("./tools.ts");
+    expect(terminalTool("mcp__claude-ui__terminal_run")).toBe("terminal_run");
+    expect(terminalTool("mcp__claude-ui__terminal_list")).toBe("terminal_list");
+    expect(terminalTool("mcp__other__terminal_run")).toBeUndefined();
+    expect(terminalTool("mcp__claude-ui__inline_task")).toBeUndefined();
+  });
+  it("terminalResult reads the JSON of a string or text-block output, else undefined", async () => {
+    const { terminalResult } = await import("./tools.ts");
+    expect(terminalResult('{"a":1}')).toEqual({ a: 1 });
+    expect(terminalResult([{ type: "text", text: "[1," }, { type: "text", text: "2]" }])).toEqual([1, 2]);
+    expect(terminalResult("No terminal x")).toBeUndefined();
+    expect(terminalResult("3")).toBeUndefined();
+  });
+  it("terminalSummary: run is `<title> $ <command>`, read the title, list nothing", async () => {
+    const { terminalSummary } = await import("./tools.ts");
+    expect(terminalSummary("terminal_run", { terminal: "a", command: "ls\nmore" }, '{"title":"Terminal 2"}')).toBe("Terminal 2 $ ls");
+    expect(terminalSummary("terminal_read", { terminal: "Terminal 1" })).toBe("Terminal 1");
+    expect(terminalSummary("terminal_list", {})).toBe("");
+  });
+});

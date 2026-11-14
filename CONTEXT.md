@@ -148,6 +148,10 @@ The file state saved before a user prompt's turn edits files; one per user promp
 Returning a session to a checkpoint: code only, conversation only, or both. Same modes as Claude Code's `/rewind`.
 _Avoid_: undo, revert
 
+**Daemon MCP server**:
+The `claude-ui` MCP server the daemon gives each session (an SDK server for Claude, a `/opencode-mcp` route for OpenCode). Tool groups register into it; the first is the agent's access to the open terminals.
+_Avoid_: built-in MCP, internal tools
+
 **Tool card**:
 The UI rendering of a `tool_call` merged with its `tool_result`, grouped by `toolUseId`.
 

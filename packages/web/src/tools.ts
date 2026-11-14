@@ -11,6 +11,30 @@ export const CONTEXT_TOOLS = new Set(["Read", "Grep", "Glob"]);
 // Input fields that best describe a call, most telling first.
 const SUMMARY_KEYS = ["file_path", "notebook_path", "pattern", "command", "path", "url", "query", "description", "prompt"];
 
+const TERMINAL_TOOL = /^mcp__claude-ui__(terminal_(?:list|read|run))$/;
+/** The claude-ui terminal tool (GH-709) a call is, else undefined. OpenCode's keys are mapped to the same names by the daemon. */
+export const terminalTool = (tool: string) => TERMINAL_TOOL.exec(tool)?.[1] as "terminal_list" | "terminal_read" | "terminal_run" | undefined;
+
+/** The JSON a terminal tool returned (its result text), else undefined (an error text, a result still missing). */
+export function terminalResult(output: unknown): Record<string, unknown> | unknown[] | undefined {
+  const raw = typeof output === "string" ? output : Array.isArray(output) ? output.map((b) => (typeof b === "string" ? b : ((b as { text?: unknown } | null)?.text ?? ""))).join("") : "";
+  try {
+    const v: unknown = JSON.parse(raw);
+    return v && typeof v === "object" ? (v as Record<string, unknown> | unknown[]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Header summary of a terminal call: run `<terminal> $ <command>`, read `<terminal>`, list none. The terminal's title comes from the result once it is there. */
+export function terminalSummary(tool: "terminal_list" | "terminal_read" | "terminal_run", input: unknown, output?: unknown): string {
+  if (tool === "terminal_list") return "";
+  const i = (input ?? {}) as Record<string, unknown>;
+  const r = terminalResult(output);
+  const title = !Array.isArray(r) && typeof r?.title === "string" ? r.title : typeof i.terminal === "string" ? i.terminal : "";
+  return tool === "terminal_run" && typeof i.command === "string" ? `${title} $ ${i.command.split("\n")[0]}` : title;
+}
+
 /** One-line summary of a tool input for the card header. */
 export function toolSummary(input: unknown): string {
   if (!input || typeof input !== "object") return "";

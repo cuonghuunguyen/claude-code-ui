@@ -45,6 +45,11 @@ export function createSecrets({ file }: { file?: string } = {}) {
   return {
     /** The saved Claude token accounts; never the tokens. */
     claudeAccounts: (): { id: string; name: string }[] => (get().claudeAccounts ?? []).map(({ id, name }) => ({ id, name })),
+    /** Every stored secret value, only to redact them from terminal output handed to an agent (agent-terminals.ts); never sent anywhere. */
+    values: (): string[] => {
+      const d = get();
+      return [...(d.jiraToken ? [d.jiraToken] : []), ...(d.claudeAccounts ?? []).map((a) => a.token)];
+    },
     /** Only for the env of a CLI process. */
     claudeToken: (id: string): string | undefined => get().claudeAccounts?.find((a) => a.id === id)?.token,
     /** Returns the new id. Throws when the name or token is invalid or the list is full. */

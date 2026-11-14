@@ -46,6 +46,9 @@ export function mapTool(name: string, input: Record<string, unknown> = {}): { to
   // A session's orchestration MCP tool (`orchestration-<last 10 of its id>_<tool>`, opencode-engine.ts mcpName) shows as Claude's.
   const orch = /^orchestration-[\w-]{10}_(\w+)$/.exec(name);
   if (orch) return { tool: `mcp__orchestration__${orch[1]}`, input };
+  // Likewise the claude-ui server's tools (`claude-ui-<last 10 of the id>_<tool>`).
+  const daemon = /^claude-ui-[\w-]{10}_(\w+)$/.exec(name);
+  if (daemon) return { tool: `mcp__claude-ui__${daemon[1]}`, input };
   const rule = RENAME[name];
   if (!rule) return { tool: name, input };
   const mapped = Object.fromEntries(Object.entries(input).map(([k, v]) => [rule[1][k] ?? k, v]));
