@@ -21,6 +21,9 @@ describe("plugin placeholders", () => {
   });
   it("a paragraph starting with a $$ block reserves height, other paragraphs do not", async () => {
     expect(await html(createElement(MathPlaceholderParagraph, null, ["$$", "\n", "x^2", "\n", "$$"]))).toContain("min-h-14");
+    // An image-only paragraph keeps streamdown's rule: no <p> around the block.
+    const img = createElement("div", { node: { tagName: "img" } } as never);
+    expect(await html(createElement(MathPlaceholderParagraph, null, img))).not.toContain("<p");
     expect(await html(createElement(MathPlaceholderParagraph, null, "so \\(a+b\\) holds"))).not.toContain("min-h");
   });
 });
