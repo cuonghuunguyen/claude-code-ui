@@ -7,6 +7,9 @@ const row = (page: Page, name: string) => popup(page).getByTestId("branch-popup-
 When("I open the Graph branch popup", async ({ page }) => {
   await page.getByTestId("graph-panel").getByTestId("graph-filter-branch").click();
   await expect(popup(page)).toBeVisible({ timeout: 30_000 });
+  // The pointer would stay over the spot of the click, and the popup's rows can appear or move under it (filter, viewport change):
+  // a mouse pointerenter opens that row's actions pane, so a scenario would depend on timing. Park the pointer outside the popup.
+  await page.mouse.move(0, 0);
 });
 
 Then("the branch popup search box is focused", async ({ page }) => {
@@ -31,6 +34,8 @@ When("I type {string} in the branch popup", async ({ page }, text: string) => {
 });
 
 When("I press {string} in the branch popup", async ({ page }, key: string) => {
+  // A pointer left over a row re-opens that row's actions pane after Escape closes it; keep the keys the only input.
+  await page.mouse.move(0, 0);
   await page.keyboard.press(key);
 });
 
@@ -43,10 +48,17 @@ Then("the Graph branch filter shows {string}", async ({ page }, name: string) =>
 });
 
 When("I open the actions of the branch {string} in the branch popup", async ({ page }, name: string) => {
-  const r = row(page, name);
-  await r.hover();
-  await r.getByTestId("branch-popup-more").click();
   const sub = page.getByTestId("branch-popup-sub");
+  // A mouse left over a row (the pointer stays where an earlier step put it) opens that row's actions as the list changes under it,
+  // and on a phone the pane then replaces the list, so the button is gone: accept the open pane when it is this branch's.
+  const r = row(page, name);
+  try {
+    await r.hover({ timeout: 3000 });
+    await r.getByTestId("branch-popup-more").click({ timeout: 3000 });
+  } catch {
+    // The HEAD row's pane is labelled "HEAD (main)" and offers the same actions as the "main" row.
+    await expect(sub).toHaveAttribute("aria-label", new RegExp(`^(HEAD \\()?${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\)?$`));
+  }
   await expect(sub).toBeVisible();
   await expect(sub.getByText("Loading…")).toHaveCount(0, { timeout: 30_000 });
 });

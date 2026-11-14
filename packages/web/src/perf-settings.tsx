@@ -6,6 +6,7 @@ import type { HistSummary, PerfDaemon, PerfReport, PerfWorst } from "@claude-ui/
 import type { Request } from "./client.ts";
 import { Button } from "@/components/ui/button";
 import { WEB_VERSION } from "./version.ts";
+import { downloadBlob } from "./download.ts";
 import { t, useT } from "./i18n.ts";
 
 const POLL_MS = 5000;
@@ -119,13 +120,7 @@ export function PerformanceSection({ request }: { request: <T>(msg: Request) => 
   );
   const exportJson = () => {
     if (!report) return;
-    const url = URL.createObjectURL(new Blob([JSON.stringify({ app: { web: WEB_VERSION }, report }, null, 2)], { type: "application/json" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `claude-ui-perf-${stamp(new Date())}.json`;
-    a.click();
-    // Not in the same tick: the download may still be reading the object.
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    downloadBlob(`claude-ui-perf-${stamp(new Date())}.json`, new Blob([JSON.stringify({ app: { web: WEB_VERSION }, report }, null, 2)], { type: "application/json" }));
   };
   const clear = () => void ask.current({ type: "perf.clear" }).then(load, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
 

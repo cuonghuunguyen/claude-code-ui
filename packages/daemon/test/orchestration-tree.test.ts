@@ -15,6 +15,7 @@ function fakeSession(id: string, live = true): any {
     working: () => f.works,
     permissionTier: async () => "low",
     pendingRequest: (r: string) => (f.pending.has(r) ? { type: "permission_request", escalated: false } : undefined),
+    pendingContext: () => undefined,
     subscribe: () => () => {},
     interrupt: async () => {},
     restartQuery: () => {

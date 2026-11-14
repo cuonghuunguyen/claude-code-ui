@@ -110,7 +110,7 @@ import { displayTitle, resumeSearchText, byRow, inProject, keepsBranch, patchSes
 import { BLOCK_TEXT, ignoredText, summaryText, type CleanupScope } from "./cleanup.ts";
 import { CleanupDialog } from "./cleanup-dialog.tsx";
 import { CreateWorktreeDialog } from "./create-worktree-dialog.tsx";
-import { appendQuote } from "./quote.ts";
+import { appendQuote, isBlockInsert } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
 import { UserMarkdown } from "./user-markdown.tsx";
 import { clearSaved } from "./editor-persist.ts";
@@ -132,7 +132,7 @@ import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withArtifacts, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { FILE_LINK_PROPS, FileLinkContext, resolveBareName } from "./file-links.tsx";
-import { BackgroundShellContext, PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type OpenViewer, type ViewerState } from "./viewer.ts";
+import { AllowDeniedContext, AlwaysAllowDeniedContext, BackgroundShellContext, LocalSettingsFileContext, PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type OpenViewer, type ViewerState } from "./viewer.ts";
 import { ViewerDialog } from "./viewer-dialog.tsx";
 import { BackgroundButton, ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
@@ -154,7 +154,8 @@ import { baseName, inDir, joinPath, relPath } from "./paths.ts";
 import { EditorSync, FilesPanel, FileTab } from "./files-panel.tsx";
 import { FileDialog } from "./file-dialog.tsx";
 import { createEditorStore, useEditorStore } from "./editor-store.ts";
-import { fileMention, isDirty } from "./files.ts";
+import { entryMention, fileMention, isDirty } from "./files.ts";
+import { isEntriesDrag, readEntriesDrag } from "./tree-drag.ts";
 import { defaultRepo, useRepos } from "./repos.ts";
 import { repoProjectKey, setRepoChoice, type RepoList } from "./repo-choice.ts";
 import { focusCommit } from "./graph-focus.ts";
@@ -224,6 +225,8 @@ const GraphPane = lazy(() => import("./git-graph-panel.tsx").then((m) => ({ defa
 const TerminalPanel = lazy(() => import("./terminal-panel.tsx").then((m) => ({ default: m.TerminalPanel })));
 /** Background views resubscribed at once after a reconnect. */
 const RESUBSCRIBE_CONCURRENCY = 4;
+/** The most a reconnect waits for the list and the shown sessions before the background views and the repos go on. */
+const RESYNC_SETTLE_MS = 15_000;
 const TERMINAL_KEY = "claude-ui.terminalOpen";
 const PANEL_HIDDEN_KEY = "claude-ui.sidePanelHidden";
 const FILE_TREE_HIDDEN_KEY = "claude-ui.fileTreeHidden";
@@ -369,6 +372,8 @@ export function App() {
   const refusedShown = useRef(new Set<string>());
   const newPrompt = useRef<HTMLTextAreaElement>(null);
   const [views, setViews] = useState<Record<string, SessionView>>({});
+  /** The resync of this connection settled (list and shown sessions replied): what is not needed at once (repos, background views) waits for it. */
+  const [synced, setSynced] = useState(false);
   // GH-133: prompts sent but not yet echoed by the daemon, by tab key (NEW_TAB while the first prompt creates the session).
   const [optimistic, setOptimistic] = useState<Record<string, Pending[]>>({});
   useEffect(() => setOptimistic((o) => pruneEchoed(o, views)), [views]);
@@ -1487,36 +1492,47 @@ export function App() {
 
   useEffect(() => {
     const c = connect({
-      onEvent: (e: Event) => {
-        setViews((v) => ({ ...v, [e.sessionId]: applyEvent(v[e.sessionId] ?? emptySession(), e) }));
-        // New titles and last activity come from the transcript; refresh when a session changes state. A replayed
-        // change is in the list already (one session.list per subscribe would rescan every transcript, FIX-LEAK).
-        const live = e.seq > (replayedTo.current[e.sessionId] ?? 0);
-        if (live) liveAt.current.set(e.sessionId, Date.now());
-        notifyRef.current?.(e, live);
-        if (e.part.type === "session_state") {
-          // Push rule: a session that needed the user while the page was hidden, also as seen in the replay of a reconnect that follows.
-          const prev = viewsRef.current[e.sessionId]?.state;
-          if (prev && isAttention(prev, e.part) && (document.visibilityState === "hidden" || (awaitReplay.current && !live))) {
-            hiddenNeed.current = true;
-            if (!live && awaitReplay.current) (clearTimeout(pushTimer.current), (pushTimer.current = setTimeout(() => document.visibilityState === "visible" && recNow.current.push(), 800)));
+      // One task applies every event received since the last one: one render for the batch, the side logic per event in arrival order.
+      onEvents: (es: Event[]) => {
+        setViews((v) => {
+          const next = { ...v };
+          for (const e of es) next[e.sessionId] = applyEvent(next[e.sessionId] ?? emptySession(), e);
+          return next;
+        });
+        // viewsRef is the view as of the last render: the state each session had before the event is tracked through the batch.
+        const states = new Map<string, SessionView["state"] | undefined>();
+        for (const e of es) {
+          const before = states.has(e.sessionId) ? states.get(e.sessionId) : viewsRef.current[e.sessionId]?.state;
+          states.set(e.sessionId, e.part.type === "session_state" ? e.part.state : before ?? emptySession().state);
+          // New titles and last activity come from the transcript; refresh when a session changes state. A replayed
+          // change is in the list already (one session.list per subscribe would rescan every transcript, FIX-LEAK).
+          const live = e.seq > (replayedTo.current[e.sessionId] ?? 0);
+          if (live) liveAt.current.set(e.sessionId, Date.now());
+          notifyRef.current?.(e, live);
+          if (e.part.type === "session_state") {
+            // Push rule: a session that needed the user while the page was hidden, also as seen in the replay of a reconnect that follows.
+            const prev = before;
+            if (prev && isAttention(prev, e.part) && (document.visibilityState === "hidden" || (awaitReplay.current && !live))) {
+              hiddenNeed.current = true;
+              if (!live && awaitReplay.current) (clearTimeout(pushTimer.current), (pushTimer.current = setTimeout(() => document.visibilityState === "visible" && recNow.current.push(), 800)));
+            }
+            // The turn's context_usage comes after this idle event: the rule waits for it.
+            // A new turn drops a context_usage that never came (a failed read).
+            if (live && e.part.state === "running") turnEnded.current.delete(e.sessionId);
+            if (live && sentHere.current.has(e.sessionId) && e.part.state !== "running" && e.part.state !== "needs_input") (sentHere.current.delete(e.sessionId), turnEnded.current.add(e.sessionId));
           }
-          // The turn's context_usage comes after this idle event: the rule waits for it.
-          // A new turn drops a context_usage that never came (a failed read).
-          if (live && e.part.state === "running") turnEnded.current.delete(e.sessionId);
-          if (live && sentHere.current.has(e.sessionId) && e.part.state !== "running" && e.part.state !== "needs_input") (sentHere.current.delete(e.sessionId), turnEnded.current.add(e.sessionId));
-        }
-        if (live && e.part.type === "context_usage" && turnEnded.current.delete(e.sessionId)) {
-          offer("contextBreakdown", { visible: document.visibilityState === "visible" && recNow.current.visibleIds.includes(e.sessionId), percent: e.part.usage.percentage }, () =>
-            document.querySelector<HTMLElement>(`[data-testid="session-area"] [data-session-id="${CSS.escape(e.sessionId)}"] [data-testid="context-meter"]`)?.click());
-        }
-        // /clear: a tab of the session follows the session the CLI goes on in; a replay (reopening the old session) does not.
-        if (e.part.type === "session_cleared" && live) follow(e.sessionId, e.part.sessionId);
-        if (e.part.type === "session_state" && live) void refreshList();
-        // The title of a session without transcript is "New session" until its transcript exists, some time into the first turn.
-        else if (live && listRef.current.some((s) => s.id === e.sessionId && !s.transcript) && Date.now() - titleRefreshed.current > 2000) {
-          titleRefreshed.current = Date.now();
-          void refreshList();
+          if (live && e.part.type === "context_usage" && turnEnded.current.delete(e.sessionId)) {
+            offer("contextBreakdown", { visible: document.visibilityState === "visible" && recNow.current.visibleIds.includes(e.sessionId), percent: e.part.usage.percentage }, () =>
+              document.querySelector<HTMLElement>(`[data-testid="session-area"] [data-session-id="${CSS.escape(e.sessionId)}"] [data-testid="context-meter"]`)?.click());
+          }
+          // /clear: a tab of the session follows the session the CLI goes on in; a replay (reopening the old session) does not.
+          if (e.part.type === "session_cleared" && live) follow(e.sessionId, e.part.sessionId);
+          if (e.part.type === "session_state" && live) void refreshList();
+          // The title of a session without transcript is "New session" until its transcript exists, some time into the first turn.
+          else if (live && listRef.current.some((s) => s.id === e.sessionId && !s.transcript) && Date.now() - titleRefreshed.current > 2000) {
+            titleRefreshed.current = Date.now();
+            void refreshList();
+          }
         }
       },
       onSessionsChanged: (m) => {
@@ -1567,11 +1583,13 @@ export function App() {
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
         c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLastEngine(r.settings.sessions?.engine ?? "claude"), setSessionsMode(r.settings.sessions?.defaultMode), setLabels(r.settings.labels), setBack(r.settings.back, true), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setVisualizeOn(r.settings.chat?.visualize === true), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
-        void refreshList();
+        // The resync of a reconnect: the list and the shown sessions first; the background views and the repos follow once they settled (GH-760).
+        setSynced(false);
+        const resync: Promise<unknown>[] = [refreshList()];
         const h = hashId();
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
         held.current.clear();
-        if (h && !viewsRef.current[h]) void subscribe(h);
+        if (h && !viewsRef.current[h]) resync.push(subscribe(h));
         // Shown sessions at once; background views through a small queue, so a restarted daemon is not asked to restore hundreds of transcripts in the same moment.
         // A background view of a session that is no longer live (idle, not live) is dropped, unless it is unread: the list does not follow it either.
         const live = (id: string) => {
@@ -1580,7 +1598,7 @@ export function App() {
         };
         const background: string[] = [];
         for (const id of Object.keys(viewsRef.current)) {
-          if (isShown(id)) void subscribe(id);
+          if (isShown(id)) resync.push(subscribe(id));
           else if (live(id)) background.push(id);
           else drop(id, false);
         }
@@ -1588,7 +1606,15 @@ export function App() {
         const worker = async () => {
           for (let id = background.shift(); id !== undefined && gen === connGen.current; id = background.shift()) if (viewsRef.current[id]) await subscribe(id, false, false, true);
         };
-        for (let i = 0; i < RESUBSCRIBE_CONCURRENCY; i++) void worker();
+        // Bounded wait: a request that never settles must not keep the background views and the repos from loading.
+        let timer: ReturnType<typeof setTimeout>;
+        const cap = new Promise<void>((r) => (timer = setTimeout(r, RESYNC_SETTLE_MS)));
+        void Promise.race([Promise.allSettled(resync), cap]).then(() => {
+          clearTimeout(timer);
+          if (gen !== connGen.current) return;
+          setSynced(true);
+          for (let i = 0; i < RESUBSCRIBE_CONCURRENCY; i++) void worker();
+        });
         void pushSubscription().then((sub) => {
           setPushOn(!!sub);
           if (sub) sendSubscription(c, sub).catch(() => {});
@@ -2229,6 +2255,9 @@ export function App() {
                         loadingOlder={!!olderLoading[s.id]}
                         onStopRun={(subagentId) => client.current!.request({ type: "session.stopSubagent", sessionId: s.id, subagentId })}
                         onBackgroundShell={(toolUseId) => client.current!.request({ type: "session.backgroundShell", sessionId: s.id, toolUseId })}
+                        onAllowDenied={(toolUseId) => client.current!.request({ type: "session.allowDenied", sessionId: s.id, toolUseId })}
+                        onLocalSettingsFile={() => client.current!.request({ type: "session.localSettingsFile", sessionId: s.id }).then((r) => (r as { file: string }).file)}
+                        onAlwaysAllowDenied={(toolUseId, scope) => client.current!.request({ type: "session.alwaysAllowDenied", sessionId: s.id, toolUseId, scope })}
                         onRewindShown={() => setRewindTo(undefined)}
                         session={s}
                         coordinator={isCoordinator(id)}
@@ -2404,7 +2433,7 @@ export function App() {
   const pane: Pane = (!lg && histPane === "terminal" && !termAvail) || (histPane === "plan" && !planListed) || (histPane === "artifacts" && !artifactsListed) || (histPane !== "session" && canMain(histPane) && areaOf(layout, histPane) === "main") ? "session" : histPane;
   // A project or worktree listed by session.list is a git work tree: the tab shows at once, without a git.status (a working-tree diff).
   const knownGit = !!panelCwd && !!worktrees[projectOf(panelCwd, worktrees)];
-  const { repos, truncated: reposTruncated } = useRepos(client.current, panelCwd, { connected: status === "connected", openFiles, seq: reposSeq, fresh: reposFresh });
+  const { repos, truncated: reposTruncated } = useRepos(client.current, panelCwd, { connected: status === "connected" && synced, openFiles, seq: reposSeq, fresh: reposFresh });
   const repo = repos ? defaultRepo(repos) : undefined;
   // Changes and the Graph resolve the remembered choice themselves.
   // Panes: the pane owner session's cwd replaces panelCwd here (the choice is kept per owner project).
@@ -3119,7 +3148,7 @@ export function App() {
           />
         ) : (
           <Suspense fallback={loading}>
-            <GraphTab client={client.current!} cwd={cwd} hidden={!here || (!lg && pane !== "session")} connected={status === "connected"} openFiles={openFiles} seq={reposSeq} repoKey={repoProjectKey(cwd, worktrees, listLoaded)} />
+            <GraphTab client={client.current!} cwd={cwd} hidden={!here || (!lg && pane !== "session")} connected={status === "connected" && synced} openFiles={openFiles} seq={reposSeq} repoKey={repoProjectKey(cwd, worktrees, listLoaded)} />
           </Suspense>
         )}
       </div>
@@ -3607,7 +3636,7 @@ export function App() {
 
 
   // The terminal panel: the dock's (one) and each terminal tab's, built the same way.
-  type TermProps = { login?: boolean; onLoginStarted?: () => void; shown: boolean; quiet: boolean; ensure: boolean; onEnsured: () => void; newTick: number; focusReq: number; onEmpty: () => void; onTerminals?: (n: number) => void };
+  type TermProps = { login?: boolean; onLoginStarted?: () => void; shown: boolean; quiet: boolean; ensure: boolean; onEnsured: () => void; newTick: number; focusReq: number; onEmpty: () => void; onTerminals?: (n: number) => void; onSend?: (text: string) => void };
   const terminalSection = (cwd: string, p: TermProps, dock: string) => (
     <section className={p.shown || dock === "main" ? "flex min-h-0 flex-1 flex-col" : "hidden"} data-testid="terminal-panel" data-dock={dock}>
       <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">{tr("app.main.loadingTerminal")}</p>}>
@@ -3636,6 +3665,8 @@ export function App() {
           if (rest.length) setPane(rest[0]!);
           else openArea(a, false);
         },
+        // Add to chat (GH-710): into the shown session's prompt box, like the file editor's.
+        onSend: (text) => (setInsert(text), setPane("session")),
         newTick: terminalTick,
         shown: shows("terminal"),
         focusReq: termFocusReq,
@@ -3660,6 +3691,7 @@ export function App() {
           newTick: carry ? terminalTick : termReq[ref]?.add ?? 0,
           focusReq: carry ? termFocusReq : termReq[ref]?.focus ?? 0,
           onEmpty: () => close(ref),
+          onSend: (text) => (open(ownerOf(ref)), setInsert(text)),
         },
         "main",
       )
@@ -5320,6 +5352,9 @@ export function SessionPane({
   onOpenSession = () => {},
   onStopRun = async () => {},
   onBackgroundShell,
+  onAllowDenied,
+  onAlwaysAllowDenied,
+  onLocalSettingsFile,
   insert,
   onInserted,
   rewindTo,
@@ -5385,6 +5420,10 @@ export function SessionPane({
   onStopRun?: (id: string) => Promise<unknown>;
   /** Run in background of a Bash card (GH-440); rejects with the daemon's error. Undefined: no button. */
   onBackgroundShell?: (toolUseId: string) => Promise<unknown>;
+  /** Allow and retry (GH-711) of an auto-mode-denied tool card; absent = no button. */
+  onAllowDenied?: (toolUseId: string) => Promise<unknown>;
+  onAlwaysAllowDenied?: (toolUseId: string, scope: "session" | "local") => Promise<unknown>;
+  onLocalSettingsFile?: () => Promise<string>;
   insert?: string;
   onInserted: () => void;
   /** Opens the rewind panel of this user message (palette Rewind). */
@@ -5486,6 +5525,15 @@ export function SessionPane({
   const backgroundShellRef = useRef(onBackgroundShell);
   backgroundShellRef.current = onBackgroundShell;
   const backgroundShellStable = useCallback((id: string) => backgroundShellRef.current!(id), []);
+  const allowDeniedRef = useRef(onAllowDenied);
+  allowDeniedRef.current = onAllowDenied;
+  const allowDeniedStable = useCallback((id: string) => allowDeniedRef.current!(id), []);
+  const alwaysAllowRef = useRef(onAlwaysAllowDenied);
+  alwaysAllowRef.current = onAlwaysAllowDenied;
+  const localFileRef = useRef(onLocalSettingsFile);
+  localFileRef.current = onLocalSettingsFile;
+  const localFileStable = useCallback(() => localFileRef.current!(), []);
+  const alwaysAllowStable = useCallback((id: string, scope: "session" | "local") => alwaysAllowRef.current!(id, scope), []);
   // Esc stops the turn, like Claude Code; in a subagent view it stops only that run, like Stop agent. The command picker handles
   // its own Esc first (preventDefault), and an open modal dialog owns Esc.
   const escStops = current ? isRunning(current) && !(stopOf && !stopOf.error) : turnRunning || shellRunning;
@@ -5587,6 +5635,26 @@ export function SessionPane({
   const [artifactOpened] = useState(() => new Set<string>()); // the card previews this session shows (ArtifactOpenedContext)
   const artifactUrls = useMemo(() => new Map(sessionArtifacts(view).flatMap((r) => (r.url && r.previewable ? [[r.url, r.partId] as const] : []))), [view.parts, view.aux]);
   const dockHidden = useHideOnScroll(card, phone, turnRunning || shellRunning || !!permission || !!question || !!current || dockFocused);
+  // GH-707: rows dragged from the Files tab onto the timeline or anywhere in the pane go to this pane's prompt box (none: not a drop target).
+  const promptable = !permission && !question && !current;
+  const [treeDrop, setTreeDrop] = useState<string>();
+  const [treeRing, setTreeRing] = useState(false);
+  const paneDrag = {
+    onDragOver: (e: DragEvent) => {
+      if (!promptable || !isEntriesDrag(e.dataTransfer)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      setTreeRing(true);
+    },
+    onDragLeave: (e: DragEvent) => !(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) && setTreeRing(false),
+    onDrop: (e: DragEvent) => {
+      setTreeRing(false);
+      if (!promptable || e.defaultPrevented || !isEntriesDrag(e.dataTransfer)) return;
+      e.preventDefault();
+      const entries = readEntriesDrag(e.dataTransfer);
+      if (entries) setTreeDrop(entryMention(entries, session.cwd));
+    },
+  };
 
   return (
     <MediaContext value={onMedia}>
@@ -5598,7 +5666,11 @@ export function SessionPane({
     <CwdContext value={session.cwd}>
     <OpenRunContext value={onOpenRun}>
     <BackgroundShellContext value={onBackgroundShell && backgroundShellStable}>
+    <AllowDeniedContext value={onAllowDenied && allowDeniedStable}>
+    <AlwaysAllowDeniedContext value={onAlwaysAllowDenied && alwaysAllowStable}>
+    <LocalSettingsFileContext value={onLocalSettingsFile && localFileStable}>
     <AgentLinksContext value={agentCtx}>
+      <div className="contents" {...paneDrag}>
       {current ? (
         <SubagentBar view={view} run={current} onOpen={onOpenRun} />
       ) : (
@@ -5853,8 +5925,9 @@ export function SessionPane({
               onTaken={() => (setTakeBack(undefined), setDraft(undefined))}
               onBash={capabilitiesOf(session).shell ? onBash : undefined}
               onSearch={onSearch}
-              insert={insert}
-              onInserted={onInserted}
+              insert={treeDrop ?? insert}
+              onInserted={() => (treeDrop !== undefined ? setTreeDrop(undefined) : onInserted())}
+              treeRing={treeRing}
               draft={draft}
               state={connected ? (turnRunning ? (view.state as "running" | "needs_input") : shellRunning ? "running" : "idle") : "disconnected"}
               onInterrupt={onInterrupt}
@@ -5873,7 +5946,11 @@ export function SessionPane({
         )}
         <StatusBar view={view} git={onGitStatus} onShells={onShells} sessionId={session.id} />
       </div>
+      </div>
     </AgentLinksContext>
+    </LocalSettingsFileContext>
+    </AlwaysAllowDeniedContext>
+    </AllowDeniedContext>
     </BackgroundShellContext>
     </OpenRunContext>
     </CwdContext>
@@ -5922,6 +5999,7 @@ function PromptBox({
   onSearch,
   insert,
   onInserted,
+  treeRing,
   draft,
   draftKey,
   pasteTag,
@@ -5982,6 +6060,8 @@ function PromptBox({
   onSearch: (query: string) => Promise<string[]>;
   insert?: string;
   onInserted?: () => void;
+  /** GH-707: rows of the Files tab are being dragged over the pane around this box. */
+  treeRing?: boolean;
   /** Replaces the text and images (rewind puts the original prompt back). */
   draft?: { text: string; images: string[] };
   /** Keeps the unsent text across a reload (drafts.ts); a `draft` above wins. */
@@ -6139,16 +6219,21 @@ function PromptBox({
     placeCaret.current = t.length;
     setCaret(t.length);
   };
+  /** Text from outside the box (Add to prompt, a tree drag): at the caret; a command first, a block as a paragraph. */
+  const [treeOver, setTreeOver] = useState(false);
+  const applyInsert = (s: string) => {
+    // A quote (GH-56) is prompt text, never part of a shell command.
+    // A diff block from the Changes tab (GH-611) or terminal output (GH-710) is a paragraph too.
+    const block = isBlockInsert(s);
+    if (block) setBash(false);
+    const r = block ? appendQuote(text, s) : s.startsWith("/") ? insertCommand(text, s) : insertAtCaret(text, caret, s);
+    edit(r.text, r.caret);
+    input.current?.focus();
+  };
   useEffect(() => {
     if (!insert) return;
-    // A quote (GH-56) is prompt text, never part of a shell command.
-    // A diff block from the Changes tab (GH-611) is a paragraph too.
-    const block = insert.startsWith(">") || /\n```+diff\n/.test(insert);
-    if (block) setBash(false);
-    const r = block ? appendQuote(text, insert) : insert.startsWith("/") ? insertCommand(text, insert) : insertAtCaret(text, caret, insert);
-    edit(r.text, r.caret);
+    applyInsert(insert);
     onInserted?.();
-    input.current?.focus();
   }, [insert]);
   useEffect(() => {
     if (!takeBack) return;
@@ -6322,8 +6407,22 @@ function PromptBox({
     attachFrom(e.clipboardData);
   };
   const onDrop = (e: DragEvent) => {
+    setTreeOver(false);
+    // GH-707: rows dragged from the Files tab become @mentions; the pane around the box sees the drop as handled (defaultPrevented) and only clears its ring.
+    if (isEntriesDrag(e.dataTransfer)) {
+      e.preventDefault();
+      const entries = readEntriesDrag(e.dataTransfer);
+      if (entries) applyInsert(entryMention(entries, cwd ?? ""));
+      return;
+    }
     e.preventDefault();
     attachFrom(e.dataTransfer);
+  };
+  const onDragOverBox = (e: DragEvent) => {
+    e.preventDefault();
+    if (!isEntriesDrag(e.dataTransfer)) return;
+    e.dataTransfer.dropEffect = "copy";
+    setTreeOver(true);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Enter commits the composition, Esc cancels it, arrows pick IME candidates: never send, pick, dismiss or switch modes then.
@@ -6391,7 +6490,7 @@ function PromptBox({
   };
 
   return (
-    <div className="relative flex flex-col gap-2" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+    <div className="relative flex flex-col gap-2" onDragOver={onDragOverBox} onDragLeave={(e) => !(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) && setTreeOver(false)} onDrop={onDrop}>
     {todos && <TodoDock items={todos} className={lift ? "pb-9" : undefined} />}
     {blocked && (
       // OpenCode composer dock anatomy (followup dock): rounded-xl, hairline border, layer-01 background.
@@ -6481,7 +6580,7 @@ function PromptBox({
       </ul>
     )}
     <div
-      className={`relative flex flex-col rounded-xl border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring/50 ${lift ? "-mt-11" : ""}`}
+      className={`relative flex flex-col rounded-xl border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring/50 ${treeOver || treeRing ? "ring-2 ring-ring" : ""} ${lift ? "-mt-11" : ""}`}
       data-testid="prompt-box"
     >
       {!bash && <MarkdownToolbar input={input} disabled={disabled} />}

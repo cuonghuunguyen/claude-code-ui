@@ -25,7 +25,7 @@ report-dir: <absolute path>
 | `commit` | The commit under test or review (`-` for planner and first implement). A verifier states this SHA in its RESULT. |
 | `coordinator` | Who started the receiver, for its own report line. `root` = the root coordinator. |
 | `attempts` | Attempts used and allowed for this stage on this ticket. At the budget the receiver does not retry: it ends `RESULT: failed`. |
-| `report-dir` | The ticket's scratch folder, `development-docs/<KEY>/` of the main checkout. Prefix your files with your role (`plan-`, `impl-`, `ui-`, `review-`); `notes.md` is the implementer's. The per-ticket ledger is `<report-dir>/ledger.md`. |
+| `report-dir` | The ticket's scratch folder, `development-docs/<KEY>/` of the main checkout. Prefix your files with your role (`plan-`, `impl-`, `ui-`, `review-`); `notes.md` is the implementer's. The per-ticket ledger is `<report-dir>/ledger.md`. Its top folder should be in `worktree.symlinkDirectories` (SKILL.md §2) so a write there needs no prompt; write with Write or Edit, not a Bash heredoc. |
 
 Extra, optional lines after the block are allowed only for facts the sender verified and the
 receiver cannot read itself (an app port from the coordinator, the previous report path for a

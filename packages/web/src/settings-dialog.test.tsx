@@ -28,7 +28,7 @@ async function render({ project, legacy = false, sides, docker, failGet = false,
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
   const onAddons = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {} }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {}, commitMessageWarm: false }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } };
   if (legacy) (delete (settings as Partial<Settings>).power, delete (settings as Partial<Settings>).app, delete (settings as Partial<Settings>).launcher);
   let refuse: string | undefined;
   const calls: Request[] = [];
@@ -481,7 +481,7 @@ it("General holds Timeline, Sending, Screen and Recommendations; Layout holds Si
   expect(order()).toEqual(["settings-sidebar", "settings-tabs", "settings-changes", "settings-terminal"]);
   expect(q("settings-terminal")!.querySelector("#settings-terminal-position-hint")!.textContent).toContain("with Main area, as the session's Terminal tab");
   await pick("about");
-  expect(order()).toEqual(["settings-guide", "settings-about"]);
+  expect(order()).toEqual(["settings-guide", "settings-about", "settings-browser-logs"]);
   expect(q("settings-about-web")).not.toBeNull();
   expect(q("settings-about-daemon")).toBeNull();
 });
@@ -967,6 +967,17 @@ it("Settings › Git shows the nine settings with VS Code's labels and defaults;
   expect((q("settings-git-detectSubmodulesLimit") as HTMLInputElement).value).toBe("10");
   expect(q("settings-git-openRepositoryInParentFolders")?.textContent).toContain("always");
   expect(document.getElementById("settings-git-openRepositoryInParentFolders-hint")?.textContent).toContain("VS Code: prompt");
+});
+
+it("Settings › Git: the warm commit message generator switch is off by default and saves a boolean", async () => {
+  const { q, pick, calls } = await render();
+  await pick("git");
+  const sw = q("settings-git-commitMessageWarm")!;
+  expect(sw.getAttribute("aria-checked")).toBe("false");
+  expect(document.getElementById("settings-git-commitMessageWarm-hint")?.textContent).toContain("Generate");
+  await act(async () => sw.click());
+  expect(calls.filter((c) => c.type === "settings.set").at(-1)).toEqual({ type: "settings.set", patch: { git: { commitMessageWarm: true } } });
+  expect(q("settings-git-commitMessageWarm")?.getAttribute("aria-checked")).toBe("true");
 });
 
 it("Auto repository detection saves true/false as booleans and subFolders as a string", async () => {

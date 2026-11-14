@@ -37,8 +37,8 @@ function useCommitMenu(client: Client, cwd: string, exact: boolean, hash: string
   return state;
 }
 
-/** The commit actions of `hash`: Copy Revision Number, Cherry-Pick, then Reset (red), Revert and Undo (HEAD's commit only). */
-export function CommitItems({ client, cwd, exact = false, repoName, hash, busy, onRun, onReset }: { client: Client; cwd: string; exact?: boolean; repoName?: string; hash: string; busy: boolean; onRun: Run; onReset: (m: GitCommitMenu) => void }) {
+/** The commit actions of `hash`: Copy Revision Number, Cherry-Pick, Compare with Local, Compare Before with Local, then Reset (red), Revert, Undo (HEAD's commit only) and Edit Commit Message. */
+export function CommitItems({ client, cwd, exact = false, repoName, hash, busy, onRun, onReset, onReword, onCompare }: { client: Client; cwd: string; exact?: boolean; repoName?: string; hash: string; busy: boolean; onRun: Run; onReset: (m: GitCommitMenu) => void; onReword: (m: GitCommitMenu) => void; /** `base`: the commit or its first parent; absent: no Compare items. */ onCompare?: (hash: string, base: string, before: boolean) => void }) {
   const tr = useT();
   const { menu, error } = useCommitMenu(client, cwd, exact, hash, false);
   const of = (text: string) => ofRepo(text, repoName);
@@ -51,6 +51,13 @@ export function CommitItems({ client, cwd, exact = false, repoName, hash, busy, 
     <ContextMenu.Item className={cn(ITEM, "h-auto min-h-8 flex-col items-start justify-center py-1 max-md:min-h-11", danger && "text-destructive")} disabled={busy || !argv} onClick={pick} title={!argv ? why : undefined} data-testid={id}>
       <span>{label}</span>
       {!argv && why && <span className="text-muted-foreground text-xs">{why}</span>}
+    </ContextMenu.Item>
+  );
+  /** An item with no daemon request behind it: `off` disables it and shows `why`. */
+  const item = (label: string, id: string, off: boolean, why: string | undefined, pick: () => void) => (
+    <ContextMenu.Item className={cn(ITEM, "h-auto min-h-8 flex-col items-start justify-center py-1 max-md:min-h-11")} disabled={busy || off} onClick={pick} title={off ? why : undefined} data-testid={id}>
+      <span>{label}</span>
+      {off && why && <span className="text-muted-foreground text-xs">{why}</span>}
     </ContextMenu.Item>
   );
   return (
@@ -70,9 +77,17 @@ export function CommitItems({ client, cwd, exact = false, repoName, hash, busy, 
         <>
           {row(tr("sidebar.git.commitCherryPick"), menu.cherryPick, menu.why?.cherryPick, "commit-cherry-pick", () => go("git.cherryPick", menu.cherryPick!, stop(t("sidebar.git.commitPickStopped", { hash: s }), t("sidebar.git.commitPicked", { hash: s })), of(t("sidebar.git.commitPicking", { hash: s }))))}
           <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+          {onCompare && (
+            <>
+              {item(tr("sidebar.git.commitCompare"), "commit-compare", false, undefined, () => onCompare(hash, hash, false))}
+              {item(tr("sidebar.git.commitCompareBefore"), "commit-compare-before", !menu.parent, tr("sidebar.git.commitCompareRoot"), () => onCompare(hash, menu.parent!, true))}
+              <ContextMenu.Separator className="-mx-1 my-1 h-px bg-border" />
+            </>
+          )}
           {row(tr("sidebar.git.commitReset"), menu.reset?.mixed, menu.why?.reset, "commit-reset", () => onReset(menu), true)}
           {row(tr("sidebar.git.commitRevert"), menu.revert, menu.why?.revert, "commit-revert", () => go("git.revert", menu.revert!, stop(t("sidebar.git.commitRevertStopped", { hash: s }), t("sidebar.git.commitReverted", { hash: s })), of(t("sidebar.git.commitReverting", { hash: s }))))}
           {menu.headHash === hash && row(tr("sidebar.git.commitUndo"), menu.undo, menu.why?.undo, "commit-undo", () => go("git.undoCommit", menu.undo!, of(t("sidebar.git.commitUndid", { hash: s })), of(t("sidebar.git.commitUndoing", { hash: s }))))}
+          {row(tr("sidebar.git.commitReword"), menu.reword ? [] : undefined, menu.why?.reword, "commit-reword", () => onReword(menu))}
         </>
       )}
     </div>

@@ -19,7 +19,7 @@ describe("treeMenuSections (GH-360)", () => {
   });
   it("a folder: new, copy, change, collapse (disabled when collapsed)", () => {
     const s = treeMenuSections({ kind: "dir", entry: dir, expanded: false }, false);
-    expect(ids(s)).toEqual([["newFile", "newFolder"], ["cut", "copy", "paste"], ["copyPath", "copyRel"], ["rename", "delete"], ["collapse"]]);
+    expect(ids(s)).toEqual([["newFile", "newFolder"], ["cut", "copy", "paste"], ["mention", "copyPath", "copyRel"], ["rename", "delete"], ["collapse"]]);
     expect(s[4]![0]!.disabled).toBe(true);
     expect(treeMenuSections({ kind: "dir", entry: dir, expanded: true }, false)[4]![0]!.disabled).toBe(false);
   });

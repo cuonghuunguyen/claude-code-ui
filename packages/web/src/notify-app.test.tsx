@@ -28,15 +28,15 @@ const replies: Record<string, unknown> = {
   "fs.search": { paths: [] },
   "terminal.list": { terminals: [] },
 };
-vi.mock("@xterm/xterm", () => ({ Terminal: class { options = {}; cols = 80; rows = 24; loadAddon() {} open() {} focus() {} write() {} reset() {} onData() {} onResize() {} attachCustomKeyEventHandler() {} dispose() {} } }));
+vi.mock("@xterm/xterm", () => ({ Terminal: class { options = {}; cols = 80; rows = 24; loadAddon() {} open() {} focus() {} write() {} reset() {} onData() {} onResize() {} onSelectionChange() {} onScroll() {} attachCustomKeyEventHandler() {} dispose() {} } }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 let emit: (e: unknown) => void = () => {};
 let emitSettings: (m: unknown) => void = () => {};
 const sent: { type: string; [k: string]: unknown }[] = [];
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
-  connect: (opts: { onEvent: (e: unknown) => void; onSettingsChanged?: (m: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
-    emit = opts.onEvent;
+  connect: (opts: { onEvents: (es: unknown[]) => void; onSettingsChanged?: (m: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
+    emit = (e) => opts.onEvents([e]);
     emitSettings = (m) => opts.onSettingsChanged?.(m);
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
     return {

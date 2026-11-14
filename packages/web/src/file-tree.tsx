@@ -22,7 +22,8 @@ const nameProblemText = (name: string, windows: boolean) => {
   return p && t(`common.fileName.${p}` as Key, { name: name.split(".")[0] });
 };
 import { isImeKey } from "./ime.ts";
-import { isWinPath, joinPath, relPath, repoDir } from "./paths.ts";
+import { baseName, isWinPath, joinPath, relPath, repoDir } from "./paths.ts";
+import { dragEntries, ENTRIES_DRAG_TYPE, readTreeDrag, TREE_DRAG_TYPE as DRAG_TYPE } from "./tree-drag.ts";
 import { setRepoChoice, type RepoList } from "./repo-choice.ts";
 import { RepoIcon } from "./repo-selector.tsx";
 import { ConfirmDialog, ITEM, POPUP } from "./session-actions.tsx";
@@ -52,7 +53,6 @@ const MARK_STYLE: Record<Mark, { text: string; label: () => string }> = {
 const DIR_STYLE: Record<DirMark, string> = { D: "text-destructive", M: "text-info", A: "text-success" };
 
 /** The drag of a tree row: JSON `{ path, name, isDir, side }`. */
-const DRAG_TYPE = "application/x-claude-ui-entry";
 const mb = (n: number) => `${(n / 1048576).toFixed(n < 10 * 1048576 ? 1 : 0)} MB`;
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 /** Commands that move focus themselves (an input, a dialog, the editor): the menu does not return it to the row. */
@@ -234,8 +234,8 @@ export function FileTree({
   repos?: RepoList;
   /** Show graph (a repository folder; hidden when unset). */
   onShowGraph?: () => void;
-  /** Add to prompt. */
-  onMention?: (path: string) => void;
+  /** Add to prompt (GH-707): the row, or every selected row when the row is in a selection of 2 or more. */
+  onMention?: (entries: { path: string; isDir: boolean }[]) => void;
   /** Refresh (the header's reload). */
   onReload?: () => void;
   /** A file or folder was renamed: open tabs below `from` follow to `to`. */
@@ -257,6 +257,9 @@ export function FileTree({
   const [query, setQuery] = useState("");
   const [found, setFound] = useState<{ query: string; paths: string[] }>();
   const [focused, setFocused] = useState<string>();
+  /** GH-707: the rows picked with Ctrl/Cmd+click and Shift+click (mouse only), and the row a Shift range starts from. */
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
+  const anchor = useRef<string>(undefined);
   const [marks, setMarks] = useState<ReturnType<typeof gitMarks>>();
   const [, tick] = useState(0);
   const root = useRef<HTMLDivElement>(null);
@@ -275,7 +278,9 @@ export function FileTree({
   const [nameMsg, setNameMsg] = useState<string>();
   const [nameError, setNameError] = useState<string>();
   /** A failed delete or duplicate. */
-  const [opError, setOpError] = useState<string>();
+  // GH-757: one line, or a heading with one line per failed row.
+  const [opErr, setOpErr] = useState<{ text: string; list: string[] }>();
+  const setOpError = (text: string | undefined) => setOpErr(text === undefined ? undefined : { text, list: [] });
   /** The path a request is working on (dimmed row). */
   const [busyPath, setBusyPath] = useState<string>();
   const opBusy = useRef(false);
@@ -292,7 +297,7 @@ export function FileTree({
   const [progress, setProgress] = useState<{ p: Progress; cancel: boolean }>();
   const [note, setNote] = useState<string>();
   const [dropDir, setDropDir] = useState<string>();
-  const [dropAsk, setDropAsk] = useState<{ item: Item; op: "copy" | "cut"; dir: string }>();
+  const [dropAsk, setDropAsk] = useState<{ items: Item[]; first: Item; count: number; op: "copy" | "cut"; dir: string }>();
   const abort = useRef<AbortController>(undefined);
   useEffect(() => treeClipboard.subscribe(() => setClip(treeClipboard.get())), []);
   useEffect(
@@ -412,6 +417,15 @@ export function FileTree({
   }, [missed]);
   const entries = rows.flatMap((r, i) => (r.kind === "entry" ? [{ r, i }] : []));
   const rowAt = (path: string) => rows.findIndex((r) => r.kind === "entry" && r.entry.path === path);
+  const visibleEntries = entries.map(({ r }) => ({ path: r.entry.path, isDir: r.entry.isDir }));
+  // A path that is no longer listed (collapsed, deleted, filtered) leaves the selection.
+  const pickedKey = visibleEntries.map((e) => e.path).join("\0");
+  useEffect(() => {
+    if (picked.size === 0) return;
+    const shown = new Set(visibleEntries.map((e) => e.path));
+    const next = [...picked].filter((p) => shown.has(p));
+    if (next.length !== picked.size) setPicked(new Set(next));
+  }, [pickedKey]);
   const tabPath = [focused, activePath].find((p) => p !== undefined && rowAt(p) >= 0) ?? entries[0]?.r.entry.path;
 
   // Scroll and focus a revealed or moved-to row once it renders.
@@ -573,9 +587,24 @@ export function FileTree({
     setOpError(undefined);
     setNote(undefined);
     const plan = planPaste(items, { side, dir }, op);
-    const refusal = plan.refused[0];
-    if (refusal) setOpError(refusal.code === "into_itself" ? tr("files.paste.intoItself", { name: refusal.name }) : refusal.code === "too_large" ? tr("files.paste.tooLarge") : opErrorText(refusal.code, "", refusal.name));
-    if (!plan.items.length) return void (warn && !refusal && setOpError(warn));
+    const rowLines: string[] = [];
+    const batchLines: string[] = [];
+    for (const f of plan.refused) {
+      if (f.code === "into_itself") rowLines.push(tr("files.paste.intoItself", { name: f.name }));
+      else if (f.code === "too_large") batchLines.push(tr("files.paste.tooLarge"));
+      else batchLines.push(opErrorText(f.code, "", f.name));
+    }
+    const total = plan.items.length + plan.refused.filter((f) => f.name).length;
+    /** One line as before; a heading and a list when several rows are involved. */
+    const report = () => {
+      const all = [...rowLines, ...batchLines];
+      if (!all.length) return false;
+      // No failed row: the whole-batch error (or the one refusal of a single row) is the line, without a heading.
+      if (!rowLines.length || (all.length === 1 && total < 2)) setOpError(all.join(" "));
+      else setOpErr({ text: tr(op === "cut" ? "files.paste.someFailedMove" : "files.paste.someFailedCopy", { count: rowLines.length, total }), list: all });
+      return true;
+    };
+    if (!plan.items.length) return void (!report() && warn && setOpError(warn));
     opBusy.current = true;
     const ac = (abort.current = new AbortController());
     setBusyPath(dir);
@@ -597,17 +626,22 @@ export function FileTree({
           ),
       });
     } catch (e) {
-      r = { done: [], moved: [], skipped: [], linksSkipped: 0, kept: [], error: { code: (e as RequestError).code ?? "", message: (e as Error).message, name: "" } };
+      r = { done: [], moved: [], skipped: [], linksSkipped: 0, kept: [], failed: [], error: { code: (e as RequestError).code ?? "", message: (e as Error).message, name: "" } };
     }
     clearTimeout(timer);
     abort.current = undefined;
     opBusy.current = false;
     setProgress(undefined);
     setBusyPath(undefined);
-    if (r.error) setOpError(opErrorText(r.error.code, r.error.message, r.error.name));
-    else if (r.cancelled) setNote(tr("files.paste.cancelled"));
-    else if (r.linksSkipped) setNote(tr("files.paste.linksSkipped", { count: r.linksSkipped }) + (r.kept.length ? ` ${tr("files.paste.sourceKept")}` : ""));
-    else if (warn) setOpError(warn);
+    for (const f of r.failed) {
+      const reason = opErrorText(f.code, f.message, f.name);
+      rowLines.push(reason.includes(f.name) ? reason : tr("files.paste.rowError", { name: f.name, reason }));
+    }
+    if (r.error) batchLines.push(opErrorText(r.error.code, r.error.message, r.error.name));
+    const reported = report();
+    if (r.cancelled && !r.error) setNote(tr("files.paste.cancelled"));
+    else if (r.linksSkipped && !r.error) setNote(tr("files.paste.linksSkipped", { count: r.linksSkipped }) + (r.kept.length ? ` ${tr("files.paste.sourceKept")}` : ""));
+    else if (warn && !reported) setOpError(warn);
     if (!r.done.length) return;
     if (op === "cut") {
       for (const m of r.moved) {
@@ -683,18 +717,15 @@ export function FileTree({
     const dir = dirAt(e.target);
     const dt = e.dataTransfer;
     if (dt.types.includes("Files")) return void transferOs(rawItems(dt), true, dir);
-    let d: { path: string; name: string; isDir: boolean; side: string };
-    try {
-      d = JSON.parse(dt.getData(DRAG_TYPE));
-    } catch {
-      return;
-    }
-    const item: Item = { kind: "daemon", name: d.name, isDir: d.isDir, side: d.side, path: d.path };
-    const op = d.side === side && !e.altKey ? "cut" : "copy";
-    // Nothing to ask when it is refused or does nothing; the transfer says why.
-    const plan = planPaste([item], { side, dir }, op);
-    if (!plan.items.length || plan.refused.length) return void transfer([item], op, dir);
-    setDropAsk({ item, op, dir });
+    const rows = readTreeDrag(dt);
+    if (!rows) return;
+    const items: Item[] = rows.map((d) => ({ kind: "daemon", name: d.name, isDir: d.isDir, side: d.side, path: d.path }));
+    // One tree, one side: every carried row on this side and no Alt/Option means move.
+    const op = rows.every((d) => d.side === side) && !e.altKey ? "cut" : "copy";
+    // Nothing to ask when everything is refused or does nothing; the transfer says why.
+    const plan = planPaste(items, { side, dir }, op);
+    if (!plan.items.length) return void transfer(items, op, dir);
+    setDropAsk({ items, first: plan.items[0]!, count: plan.items.length, op, dir });
   }
 
   const targetOf = (path: string | undefined): TreeTarget => {
@@ -754,7 +785,7 @@ export function FileTree({
         choose(t.repo.rel);
         return onShowGraph?.();
       case "mention":
-        return onMention?.(path);
+        return entry && onMention?.(dragEntries(entry.path, picked, visibleEntries));
       case "copyPath":
         onCopy?.(path, "path");
         return void tipOpenInFileManager(!!external, () => reopenMenu(rowEl(root.current, path), '[data-testid$="ext-menu-reveal"]'));
@@ -772,7 +803,33 @@ export function FileTree({
     return path === undefined ? -1 : rowAt(path);
   };
 
+  /** Ctrl/Cmd+click toggles, Shift+click picks the visible range from the anchor; true: the click was a selection click. Ctrl+click on macOS is the context menu. */
+  function selectClick(e: Pick<globalThis.MouseEvent, "ctrlKey" | "metaKey" | "shiftKey" | "altKey">, path: string) {
+    const mod = MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+    if (mod && !e.shiftKey && !e.altKey) {
+      setPicked((p) => {
+        const n = new Set(p);
+        if (!n.delete(path)) n.add(path);
+        return n;
+      });
+      anchor.current = path;
+      return true;
+    }
+    if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const paths = visibleEntries.map((x) => x.path);
+      const [a, b] = [paths.indexOf(anchor.current ?? ""), paths.indexOf(path)];
+      const from = a < 0 ? b : a;
+      setPicked(new Set(paths.slice(Math.min(from, b), Math.max(from, b) + 1)));
+      if (a < 0) anchor.current = path;
+      return true;
+    }
+    if (picked.size) setPicked(new Set());
+    anchor.current = path;
+    return false;
+  }
+
   function onKeyDown(e: KeyboardEvent) {
+    if (e.key === "Escape" && picked.size && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) return (e.stopPropagation(), e.preventDefault(), setPicked(new Set()));
     const i = rowOf(e.target);
     const row = rows[i];
     if (!row || row.kind !== "entry") return;
@@ -826,9 +883,20 @@ export function FileTree({
           }}
         />
       </div>
-      {opError && (
+      {opErr && (
         <div role="alert" className="flex items-start gap-1 px-2 py-1 text-destructive" data-testid="tree-op-error">
-          <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">{opError}</span>
+          <div className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
+            {opErr.text}
+            {opErr.list.length > 0 && (
+              <ul className="list-disc pl-4">
+                {opErr.list.map((l, i) => (
+                  <li key={i} className="[overflow-wrap:anywhere]">
+                    {l}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
           <button
             type="button"
             aria-label={tr("files.dismiss")}
@@ -861,7 +929,7 @@ export function FileTree({
         onTouchStartCapture={(e) => captureTarget(e.target)}
         onContextMenu={(e) => swallowKeyFollowup(e, keyOpenedAt)}
       >
-      <div role="tree" id="file-tree-rows" aria-label={tr("files.title")} ref={root} onKeyDown={onKeyDown}>
+      <div role="tree" id="file-tree-rows" aria-multiselectable="true" aria-label={tr("files.title")} ref={root} onKeyDown={onKeyDown}>
         {rows.map((r, i) => {
           const pad = { paddingLeft: `${8 + r.depth * 12}px` };
           if (r.kind === "status")
@@ -903,7 +971,8 @@ export function FileTree({
           const dirMark = entry.isDir && !mark ? marks?.dirs.get(pathKey(entry.path)) : undefined;
           const repo = entry.isDir ? folders.get(pathKey(entry.path)) : undefined;
           const repoText = repo && repoIconText(repo, entry.name);
-          const selected = entry.path === activePath;
+          const inPick = picked.has(entry.path);
+          const selected = entry.path === activePath || inPick;
           const marked = selected || entry.path === focused; // focus state outlives pointer hover and blur
           return (
             <Fragment key={entry.path}>
@@ -921,15 +990,18 @@ export function FileTree({
               aria-busy={busyPath === entry.path || undefined}
               draggable={!r.renaming}
               onDragStart={(e) => {
-                e.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ path: entry.path, name: entry.name, isDir: entry.isDir, side }));
-                e.dataTransfer.setData("text/plain", entry.path);
+                // GH-707: the entries for a prompt box; GH-757: the same rows with name and side, for a move/copy drop inside the tree.
+                const carried = dragEntries(entry.path, picked, visibleEntries);
+                e.dataTransfer.setData(ENTRIES_DRAG_TYPE, JSON.stringify(carried));
+                e.dataTransfer.setData(DRAG_TYPE, JSON.stringify(carried.map((c) => ({ path: c.path, name: c.path === entry.path ? entry.name : baseName(c.path), isDir: c.isDir, side }))));
+                e.dataTransfer.setData("text/plain", carried.map((c) => c.path).join("\n"));
                 e.dataTransfer.effectAllowed = "copyMove";
               }}
               onDragEnd={() => setDropDir(undefined)}
               className={`flex h-7 w-full cursor-pointer items-center gap-1 pr-2 text-left outline-none select-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring ${coarse} ${marked ? "bg-secondary text-foreground" : "hover:bg-muted"} ${busyPath === entry.path || (clip?.op === "cut" && clip.side === side && clip.path === entry.path) ? "opacity-60" : ""} ${dropDir === entry.path ? "ring-2 ring-inset ring-ring" : ""}`}
               style={pad}
               onFocus={() => setFocused(entry.path)}
-              onClick={() => (entry.isDir ? toggle(entry) : onOpen(entry.path, {}))}
+              onClick={(e) => !selectClick(e, entry.path) && (entry.isDir ? toggle(entry) : onOpen(entry.path, {}))}
               onDoubleClick={() => !entry.isDir && onOpen(entry.path, { pinned: true })}
               onMouseDown={(e) => e.button === 1 && !entry.isDir && onOpenTab && e.preventDefault()}
               onAuxClick={(e) => e.button === 1 && !entry.isDir && onOpenTab && (e.preventDefault(), onOpenTab(entry.path))}
@@ -1032,18 +1104,19 @@ export function FileTree({
       <PasteClashDialog ask={clash} />
       <ConfirmDialog
         open={!!dropAsk}
-        title={dropAsk ? tr(dropAsk.op === "cut" ? "files.paste.confirmMoveTitle" : "files.paste.confirmCopyTitle", { name: dropAsk.item.name }) : ""}
+        title={dropAsk ? tr(`files.paste.${dropAsk.op === "cut" ? "confirmMove" : "confirmCopy"}${dropAsk.count > 1 ? "ManyTitle" : "Title"}`, { name: dropAsk.first.name, count: dropAsk.count }) : ""}
         description={
           dropAsk
-            ? tr(dropAsk.op === "cut" ? "files.paste.confirmMove" : "files.paste.confirmCopy", {
-                name: dropAsk.item.name,
+            ? tr(`files.paste.${dropAsk.op === "cut" ? "confirmMove" : "confirmCopy"}${dropAsk.count > 1 ? "Many" : ""}`, {
+                name: dropAsk.first.name,
+                count: dropAsk.count,
                 folder: dropAsk.dir === cwd ? tr("files.tree.theProject") : relPath(dropAsk.dir, cwd),
-                side: dropAsk.item.kind === "daemon" && dropAsk.item.side !== side && sideLabel ? tr("files.paste.onSide", { side: sideLabel }) : "",
+                side: dropAsk.first.kind === "daemon" && dropAsk.first.side !== side && sideLabel ? tr("files.paste.onSide", { side: sideLabel }) : "",
               })
             : ""
         }
         confirm={tr(dropAsk?.op === "cut" ? "files.paste.confirmMoveButton" : "files.paste.confirmCopyButton")}
-        onConfirm={() => (dropAsk && void transfer([dropAsk.item], dropAsk.op, dropAsk.dir), setDropAsk(undefined))}
+        onConfirm={() => (dropAsk && void transfer(dropAsk.items, dropAsk.op, dropAsk.dir), setDropAsk(undefined))}
         onCancel={() => setDropAsk(undefined)}
         testId="tree-drop"
       />

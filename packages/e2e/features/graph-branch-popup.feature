@@ -35,7 +35,7 @@ Feature: The Graph branch popup searches branches and offers branch actions, in 
     And I start a new Haiku session
     When I open the Graph tab of the side panel
     And I open the commit menu on the row "local work"
-    Then the commit menu lists in order "Copy Revision Number, Cherry-Pick, Reset Current Branch to Here…, Revert Commit, Undo Commit, New Branch…"
+    Then the commit menu lists in order "Copy Revision Number, Cherry-Pick, Compare with Local, Compare Before with Local, Reset Current Branch to Here…, Revert Commit, Undo Commit, Edit Commit Message…, New Branch…, New Tag…"
     And the commit menu has no "Fetch all remotes"
     And the commit menu has no "Merge"
     And I capture "commit-menu-order"

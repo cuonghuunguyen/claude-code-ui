@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import {
   query as sdkQuery,
   type CanUseTool,
+  type HookInput,
+  type HookJSONOutput,
   type ModelInfo,
   type Options,
   type PermissionResult,
@@ -19,9 +21,11 @@ import {
   ALL_CAPABILITIES,
   bashRecords,
   escapeBash,
+  alwaysRule,
   createAdapter,
   imageBlock,
   permissionModesFor,
+  ruleString,
   type Effort,
   type Part,
   type PermissionMode,
@@ -29,10 +33,13 @@ import {
   type RewindMode,
   type RewindPreview,
 } from "@claude-ui/protocol";
+import { sharedDirs } from "./shared-dirs.ts";
 import { claudeEnv } from "./claude-env.ts";
 import { runBash, type BashResult, type BashRun } from "./bash.ts";
 import { readTail, taskDirs } from "./shell-output.ts";
 import { perf, type PerfSpanHandle } from "./perf.ts";
+import { DeniedRetryError, followUp, followUpAlways, OneShots, retryKey } from "./denied-retry.ts";
+import { addLocalAllowRule, localSettingsFile, SettingsFileError } from "./local-settings.ts";
 import { interleaveRuns, type TranscriptEnd } from "./transcript.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
@@ -164,7 +171,16 @@ export async function withQuery<T>(fn: (q: Query) => Promise<T>, query: typeof s
 
 /** A query with no prompt, for control requests only (withQuery, config queries); the caller closes it. */
 export const openQuery = (query: typeof sdkQuery = sdkQuery, options: Options = {}): Query =>
-  query({ prompt: new InputQueue(), options: { settingSources: SETTING_SOURCES, env: claudeEnv(), settings: { disableAllHooks: true }, ...options } });
+  query({
+    prompt: new InputQueue(),
+    options: {
+      settingSources: SETTING_SOURCES,
+      env: claudeEnv(),
+      ...options,
+      // Merged: a caller's settings must not drop disableAllHooks.
+      settings: typeof options.settings === "object" ? { disableAllHooks: true, ...options.settings } : (options.settings ?? { disableAllHooks: true }),
+    },
+  });
 
 /** withQuery() in the daemon-wide throwaway queue. */
 export const queuedQuery = <T,>(fn: (q: Query) => Promise<T>, query: typeof sdkQuery = sdkQuery, options: Options = {}): Promise<T> => queued(() => withQuery(fn, query, options));
@@ -172,9 +188,24 @@ export const queuedQuery = <T,>(fn: (q: Query) => Promise<T>, query: typeof sdkQ
 export const listModels = (query: typeof sdkQuery = sdkQuery): Promise<ModelInfo[]> => withQuery((q) => q.supportedModels(), query);
 
 
-/** The CLI's rule string of a rule value: `\`, `(` and `)` in the content are escaped with `\` (probed in the CLI 2.1.x binary). */
-const ruleString = ({ toolName, ruleContent }: { toolName: string; ruleContent?: string }) =>
-  ruleContent ? `${toolName}(${ruleContent.replace(/[\\()]/g, "\\$&")})` : toolName;
+/** Why auto mode ignores the allow rule of a denied `tool` call (user-facing). */
+const ignoredWhy = (tool: string) =>
+  tool === "Bash" || tool === "PowerShell"
+    ? "Auto mode sends this command to its classifier anyway: autoMode.classifyAllShell is on, or the command starts an interpreter or shell."
+    : "Claude Code drops this kind of rule in auto mode.";
+
+/**
+ * Whether auto mode keeps the allow rule `rule`: a throwaway auto mode CLI with only that rule as a flag rule lists the rules it
+ * applies (it omits the ones auto mode ignores). Not the session's CLI: the session may not run in auto mode when the user clicks.
+ */
+export async function autoModeKeeps(cwd: string, rule: string, query?: typeof sdkQuery): Promise<{ kept: boolean; managedOnly: boolean }> {
+  const { state } = await queuedQuery(
+    (q) => (q as unknown as { listPermissionRules(): Promise<{ state: { rules: { behavior: string; source: string }[]; managedOnly: boolean } }> }).listPermissionRules(),
+    query,
+    { cwd, permissionMode: "auto", persistSession: false, ...(process.env.CLAUDE_UI_E2E_CLAUDE_CLI && { pathToClaudeCodeExecutable: process.env.CLAUDE_UI_E2E_CLAUDE_CLI }), settings: { permissions: { allow: [rule] } } },
+  );
+  return { managedOnly: state.managedOnly, kept: state.rules.some((r) => r.behavior === "allow" && r.source === "flagSettings") };
+}
 
 const sessionRules = (g: PermissionUpdate[]) => g.flatMap((u) => (u.type === "addRules" && u.behavior === "allow" ? u.rules.map(ruleString) : []));
 
@@ -243,6 +274,13 @@ export class ClaudeSession implements EngineSession {
   private bashPinned = false;
   /** Born by a /clear hand-over and not prompted yet: its title is "New session" without reading its transcript. */
   private cleared = false;
+  /** Allow and retry (GH-711): approvals armed for the classifier-denied calls the user retries; the PreToolUse hook consumes one per matching call. */
+  private readonly oneShots = new OneShots();
+  /** Message IDs of Allow and retry follow-ups the CLI did not take yet; `retryRan`: one was taken, so the next idle drops the unused approvals. */
+  private readonly retryEchoes = new Set<string>();
+  /** Always allow (GH-756) saves that run: a second click on the same call is refused. */
+  private readonly savingAlways = new Set<string>();
+  private retryRan = false;
   /** Converts transcript messages (restore and sync); the live adapter converts the query's stream. */
   private readonly transcript = createAdapter();
   /** UUID of every transcript message the session logged or its own query streamed: the rest are external turns. */
@@ -345,8 +383,97 @@ export class ClaudeSession implements EngineSession {
   /** After the session_state idle event. */
   idle() {
     this.flushBashNotices();
+    // The turn of an Allow and retry follow-up ended: an approval its call did not use must not serve a later, unrelated identical call.
+    if (this.retryRan) this.dropApprovals();
     // A login or account change came while busy: the finished turn drops the old CLI, the next prompt resumes in a new one.
     if (this.staleLogin && this.session.releaseQuery()) this.staleLogin = false;
+  }
+
+  private dropApprovals() {
+    this.oneShots.clear();
+    this.retryEchoes.clear();
+    this.retryRan = false;
+  }
+
+  /** PreToolUse hook (SDK callback, runs before the classifier): an armed approval for this exact call allows it, once. */
+  private async preToolUse(input: HookInput): Promise<HookJSONOutput> {
+    if (input.hook_event_name !== "PreToolUse" || !this.oneShots.size || !this.oneShots.take(retryKey(input.tool_name, input.tool_input))) return {};
+    return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "Allowed once from claude-ui (Allow and retry)" } };
+  }
+
+  /**
+   * Allow and retry (GH-711): approves the classifier-denied main-thread call `toolUseId` once and asks Claude, in a follow-up
+   * user message, to run it again. Throws DeniedRetryError (`unknown_call` when no such call is denied or it is allowed already).
+   */
+  allowDenied(toolUseId: string): string | undefined {
+    if (!this.session.isLive()) throw new DeniedRetryError("session_not_live", `session ${this.id} is not live (${this.session.currentState()})`);
+    if (this.bashRun) throw new DeniedRetryError("bash_running", "a shell command is running: stop it first");
+    // Before allowRetry marks the call: prompt() refuses a rewind, and a marked call would keep a dead button.
+    if (this.rewinding) throw new DeniedRetryError("session_busy", "session is rewinding");
+    const r = this.adapter.allowRetry(toolUseId);
+    if (!r) throw new DeniedRetryError("unknown_call", "no call denied by auto mode with that ID, or it is allowed already");
+    const id = this.prompt(followUp(r.call.tool, r.call.input));
+    // The CLI runs the hook only after it took the message, so arming right after the push is in time.
+    this.oneShots.arm(retryKey(r.call.tool, r.call.input));
+    this.retryEchoes.add(id);
+    for (const p of r.parts) this.session.emit(p);
+    return id;
+  }
+
+  /**
+   * Always allow (GH-756): saves the allow rule of the classifier-denied call `toolUseId` for `scope`, then asks Claude to run it
+   * again. Nothing is saved when a throwaway auto mode CLI would ignore the rule. Throws DeniedRetryError.
+   */
+  async alwaysAllowDenied(toolUseId: string, scope: "session" | "local"): Promise<string | undefined> {
+    this.guardRetry();
+    if (this.savingAlways.has(toolUseId)) throw new DeniedRetryError("session_busy", "a save for this call is running");
+    const call = this.adapter.deniedCall(toolUseId);
+    if (!call) throw new DeniedRetryError("unknown_call", "no call denied by auto mode with that ID, or it is allowed already");
+    const rule = call.denial?.rule;
+    if (!rule) throw new DeniedRetryError("no_rule", `no allow rule fits this ${call.tool} call`);
+    this.savingAlways.add(toolUseId);
+    try {
+      const check = await autoModeKeeps(this.cwd, rule, this.opts.query).catch((e: Error) => {
+        throw new DeniedRetryError("check_failed", `Could not check the rule against auto mode: ${e.message}`);
+      });
+      if (check.managedOnly) throw new DeniedRetryError("managed_only", "Your organization allows managed permission rules only.");
+      if (!check.kept) throw new DeniedRetryError("ignored_in_auto", ignoredWhy(call.tool));
+      // The state may have changed while the check ran.
+      this.guardRetry();
+      if (!this.adapter.deniedCall(toolUseId)) throw new DeniedRetryError("unknown_call", "no call denied by auto mode with that ID, or it is allowed already");
+      if (scope === "local") {
+        try {
+          addLocalAllowRule(await localSettingsFile(this.cwd), rule);
+        } catch (e) {
+          if (e instanceof SettingsFileError) throw new DeniedRetryError("settings_write_failed", e.message);
+          throw new DeniedRetryError("settings_write_failed", `cannot save the rule: ${(e as Error).message}`);
+        }
+      }
+      // The rule is saved from here on (grants re-apply it at each CLI start): a failure below says so.
+      try {
+        // Both scopes: re-applied as allowedTools at each query start, and live now.
+        const value = alwaysRule(call.tool, call.input);
+        if (!("toolName" in value)) throw new Error(`no allow rule fits this ${call.tool} call`);
+        if (!sessionRules(this.grants).includes(rule)) this.grants.push({ type: "addRules", rules: [value], behavior: "allow", destination: "session" });
+        await this.query?.applyFlagSettings({ permissions: { allow: sessionRules(this.grants) } });
+        this.guardRetry();
+        const r = this.adapter.allowRetry(toolUseId, scope);
+        if (!r) throw new Error("the call is gone or allowed already");
+        const id = this.prompt(followUpAlways(r.call.tool, r.call.input, rule, scope));
+        for (const p of r.parts) this.session.emit(p);
+        return id;
+      } catch (e) {
+        throw new DeniedRetryError("rule_saved", e instanceof DeniedRetryError ? e.message : (e as Error).message);
+      }
+    } finally {
+      this.savingAlways.delete(toolUseId);
+    }
+  }
+
+  private guardRetry() {
+    if (!this.session.isLive()) throw new DeniedRetryError("session_not_live", `session ${this.id} is not live (${this.session.currentState()})`);
+    if (this.bashRun) throw new DeniedRetryError("bash_running", "a shell command is running: stop it first");
+    if (this.rewinding) throw new DeniedRetryError("session_busy", "session is rewinding");
   }
 
   bashCwdPinned() {
@@ -355,7 +482,7 @@ export class ClaudeSession implements EngineSession {
 
   /** Rules already saved never reach this callback. No timeout: the promise waits for the Session's answer or the SDK's abort. */
   private readonly canUseTool: CanUseTool = async (tool, input, opts) => {
-    const { signal, toolUseID, title: sdkTitle, mcpServer, blockedPath, defaultToNo } = opts;
+    const { signal, toolUseID, title: sdkTitle, mcpServer, blockedPath, defaultToNo, decisionReason } = opts;
     let suggestions = opts.suggestions ?? [];
     // Forwarded by sdk.mjs (0.3.285) but not declared in its CanUseTool type.
     const { requiresUserInteraction } = opts as { requiresUserInteraction?: boolean };
@@ -387,7 +514,7 @@ export class ClaudeSession implements EngineSession {
               settled: false,
               at: Date.now(),
             };
-      this.session.request({ part, ctx: { blockedPath, defaultToNo, requiresUserInteraction }, onAllow: card?.onAllow, reply: (r) => this.reply(part, resolve, r) });
+      this.session.request({ part, ctx: { blockedPath, defaultToNo, requiresUserInteraction, decisionReason }, onAllow: card?.onAllow, reply: (r) => this.reply(part, resolve, r) });
       signal.addEventListener("abort", () => this.session.cancel(requestId, "Request cancelled"), { once: true });
     });
   };
@@ -451,12 +578,15 @@ export class ClaudeSession implements EngineSession {
     this.ambientTasks.clear();
     const up = this.opts.uploadDir?.(this.id);
     const agent = this.opts.agent?.(this.id);
-    const dirs = [...(up ? [up] : []), ...sessionDirs(this.grants)];
+    // A worker's Bash starts in its cwd every time (`cd` does not carry over), so a read-only git command is judged by that cwd.
+    this.bashPinned = !!this.opts.worker?.(this.id);
+    // A worker's scratch folder is a link to the main checkout (shared-dirs.ts): a write through it resolves outside the cwd,
+    // which the CLI asks about even in auto mode. As a working directory it needs no prompt.
+    const shared = this.bashPinned ? sharedDirs(this.cwd) : [];
+    const dirs = [...new Set([...(up ? [up] : []), ...sessionDirs(this.grants), ...shared])];
     const rules = sessionRules(this.grants);
     const disallowed = this.opts.disallowedTools?.(this.id);
     const visualize = this.opts.visualizePlugin?.();
-    // A worker's Bash starts in its cwd every time (`cd` does not carry over), so a read-only git command is judged by that cwd.
-    this.bashPinned = !!this.opts.worker?.(this.id);
     const q = (this.query = (this.opts.query ?? sdkQuery)({
       prompt: this.input,
       options: {
@@ -494,6 +624,8 @@ export class ClaudeSession implements EngineSession {
           ...(this.bashPinned ? { CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: "1" } : {}),
         },
         canUseTool: (tool, input, o) => owner.run.canUseTool(tool, input, o),
+        // Allow and retry (GH-711): the one-shot approval of a call auto mode denied; returns {} for every other call.
+        hooks: { PreToolUse: [{ hooks: [(input) => owner.run.preToolUse(input)] }] },
         mcpServers: this.opts.mcpServers?.(this.id),
         ...(agent && { agent }),
         // E2E harness only: a fake CLI (packages/e2e/support/fake-claude-cli.mjs) for what the real one does only sometimes, e.g. a prompt suggestion.
@@ -528,6 +660,7 @@ export class ClaudeSession implements EngineSession {
     this.generation++;
     this.query?.close();
     this.query = undefined;
+    this.dropApprovals();
     // ponytail: 5 s cap in case the CLI hangs on exit; a later write then leaves a metadata-only transcript stub.
     await Promise.race([this.driving, new Promise((r) => setTimeout(r, 5000).unref())]);
   }
@@ -775,6 +908,7 @@ export class ClaudeSession implements EngineSession {
   async interrupt() {
     if (this.bashRun) return this.bashRun.kill();
     if (this.session.currentState() === "idle" && (this.tasks.size || this.cliTurn)) return this.resetWorking();
+    this.dropApprovals();
     if (!this.query || (this.session.currentState() !== "running" && this.session.currentState() !== "needs_input")) return;
     this.session.interruptPending();
     await this.query.interrupt();
@@ -868,6 +1002,7 @@ export class ClaudeSession implements EngineSession {
     this.generation++;
     this.query?.close();
     this.query = undefined;
+    this.dropApprovals();
     // The next query is granted this session's own folder (a /clear heir read its parent's until now).
     this.session.uploadOwner = this.id;
     // The old drive loop's finally skips this (newer generation): a background run of the closed query stops with it.
@@ -1056,6 +1191,7 @@ export class ClaudeSession implements EngineSession {
       // A newer generation (conversation rewind) already ended them, and its query may run tasks of its own.
       if (generation === s.generation) {
         s.tasks.clear();
+        s.dropApprovals();
         for (const part of s.adapter.endCalls()) s.session.emit(part);
       }
     }
@@ -1100,6 +1236,7 @@ export class ClaudeSession implements EngineSession {
     // Echo of a prompt() message (replay-user-messages); its user_text is already logged. The CLI took it now:
     // a steering message pushed as the turn ended starts a turn of its own. Other replays (the model switch echo) start none.
     if (m.type === "user" && "isReplay" in m && m.isReplay) {
+      if (m.uuid && this.retryEchoes.delete(m.uuid)) this.retryRan = true;
       if (this.session.currentState() === "idle" && m.uuid && this.checkpoints.has(m.uuid)) this.session.setState("running");
       return;
     }

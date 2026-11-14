@@ -1,5 +1,7 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
 import { planDirs } from "./plan-dirs.ts";
+import { DeniedRetryError } from "./denied-retry.ts";
+import { localSettingsFile, localSettingsFiles } from "./local-settings.ts";
 import { closeSync, createReadStream, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
 import { homedir, hostname as osHostname, tmpdir } from "node:os";
@@ -30,9 +32,9 @@ import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
 import { createJira, JiraError, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
 import { createWorktree, listBranches, pullRequestBranches, gitBlame, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitOperationOf, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, cachedStatuses, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
-import { gitBranch, gitFetch, gitPull, gitPush } from "./git-remote.ts";
-import { generateCommitMessage, instructionFor, promptFor } from "./commit-message.ts";
-import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff, gitCommitFiles, gitCommitMenu, gitContinue, gitMergeRebase, gitRollback, gitRollbackHunk, gitRollbackPreview, gitStash, gitStashList, gitStashPush } from "./git-write.ts";
+import { gitBranch, gitFetch, gitPull, gitPush, gitTagDelete, gitTagRemote } from "./git-remote.ts";
+import { createWarmCommitMessage, generateCommitMessage, instructionFor, promptFor } from "./commit-message.ts";
+import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff, gitCommitFiles, gitCommitMenu, gitContinue, gitMergeRebase, gitReword, gitRollback, gitRollbackHunk, gitRollbackPreview, gitStash, gitStashList, gitStashPush, gitTag, gitTagCreate, gitTagSigning } from "./git-write.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
@@ -137,6 +139,8 @@ const IDLE_CHECK_MS = 60_000;
 /** A new connection gets a fresh plan usage read when the last one is older (reset times pass without a turn). */
 const PLAN_STALE_MS = 5 * 60_000;
 const PING_MS = 15_000;
+/** A socket without a pong for this many ticks is dropped even while it takes data or sends messages (a slow drip must not keep it forever). */
+const PING_MAX_SILENT_TICKS = 8;
 const LAG_TICK_MS = 500;
 const LAG_LOG_MS = 1_000;
 const MEM_LOG_MS = 10 * 60_000;
@@ -415,6 +419,14 @@ export function createDaemon(opts: {
   // Account-wide, so not a session event: every connection gets each change.
   const plan = createPlanTracker({ onChange: (usage) => broadcast({ type: "plan_usage", usage }), read: () => queuedQuery(plan.refresh, opts.query), oauthToken: opts.oauthToken ?? (() => usesOauthToken(claudeEnv())), account: () => accountName() });
   /** Options of every session: settings changes are saved under its ID. */
+  // Local settings files per cwd. `Session.snapshot()` is synchronous, so `planDirs` reads this cache; async paths refresh or warm it.
+  const localFilesCache = new Map<string, string[]>();
+  const localFiles = async (cwd: string) => {
+    const files = await localSettingsFiles(cwd);
+    localFilesCache.set(cwd, files);
+    return files;
+  };
+  const cachedLocalFiles = (cwd: string) => localFilesCache.get(cwd) ?? [join(cwd, ".claude", "settings.local.json")];
   const sessionOpts = (initial: Partial<SessionSettings>) => ({
     ...initial,
     plan,
@@ -447,7 +459,7 @@ export function createDaemon(opts: {
     // The stale-turn check reads only the transcript's tail, not the chain and its subagent runs (GH-239).
     transcriptEnd: (id: string, cwd: string) => transcriptEnd(transcriptFile(projectsDir, transcriptCwd(id, cwd), id)),
     cliTurnRunning: (id: string) => cliTurnRunning(claudeDir, id),
-    planDirs: (cwd: string) => planDirs(claudeDir, cwd),
+    planDirs: (cwd: string) => planDirs(claudeDir, cwd, cachedLocalFiles(cwd)),
     // Only the fields this change set: a daemon on another port may have changed the others of the same session (GH-91).
     onSettings: (s: SessionSettings, id: string, fields: (keyof SessionSettings)[]) => saveSettings(() => settings.set(id, s, fields)),
     // /clear: the new session is listed; tabs that show the old one follow its session_cleared part.
@@ -480,6 +492,8 @@ export function createDaemon(opts: {
   const projectsDir = opts.projectsDir ?? join(claudeDir, "projects");
   const projects = opts.projects ?? createProjects();
   const appSettings = opts.appSettings ?? createSettings();
+  /** GH-668: the ready Haiku process of Generate; used only while `git.commitMessageWarm` is on. */
+  const warmCommit = createWarmCommitMessage(opts.query);
   /** The OpenCode server: started on first use (docs/spec.md "OpenCode engine"), stopped with the daemon. */
   const openCode = createOpenCodeServer({ path: () => appSettings.get().opencode.path, ...opts.opencode });
   /** Directory and title of each OpenCode session this daemon listed, created or opened. */
@@ -740,6 +754,9 @@ export function createDaemon(opts: {
     known = [];
     for (const s of sessions.values()) if (!s.releaseQuery()) s.staleLogin = true;
     void plan.reset();
+    // GH-668: the ready Haiku process holds the old login (token in its env).
+    warmCommit.stop();
+    if (appSettings.get().git.commitMessageWarm) warmCommit.prewarm();
     broadcast({ type: "config.changed", kind: "models", cwd: "" });
   };
   const supportsAuto = (model: string) => known.some((m) => m.value === model && m.supportsAutoMode);
@@ -1572,8 +1589,8 @@ export function createDaemon(opts: {
   }
 
   /** `permissions.defaultMode` of the Claude settings for `cwd`, else Settings `sessions.defaultMode`, when this daemon offers it for `model` (bypass needs the daemon flag, auto a model with support). */
-  const defaultModeFor = (cwd: string, model = "default") => {
-    const mode = readDefaultMode(claudeDir, cwd) ?? appSettings.get().sessions.defaultMode;
+  const defaultModeFor = async (cwd: string, model = "default") => {
+    const mode = readDefaultMode(claudeDir, cwd, await localFiles(cwd)) ?? appSettings.get().sessions.defaultMode;
     return permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto(model) }).find((m) => m === mode);
   };
 
@@ -2071,7 +2088,8 @@ export function createDaemon(opts: {
 
   // Ping each socket every interval; one that did not pong since the previous tick is half-open (phone asleep, wifi gone, no FIN):
   // terminate it so its close handler runs (focused tab, subscriptions, watches), else its stale "focused" entry mutes push.
-  const answered = new WeakSet<Conn>();
+  // A pong is not the only sign of life: the ping queues behind what the daemon already wrote (a resync burst on a slow link), so a socket
+  // that takes data (buffer shrinks) or sends messages is alive; only silence on all three drops it, and a hard cap bounds a slow drip.
   // A socket that cannot be pinged or terminated must not take the process down (an uncaught exception in this timer): drop it instead.
   const drop = (ws: Conn) => {
     try {
@@ -2085,13 +2103,28 @@ export function createDaemon(opts: {
     }
   };
   const pinger = setInterval(() => {
+    const secs = (opts.pingMs ?? PING_MS) / 1000;
     for (const ws of [...connections]) {
-      if (!answered.has(ws)) {
-        console.warn(`${new Date().toISOString()} ws: no pong in ${(opts.pingMs ?? PING_MS) / 1000}s, dropped (${connections.size - 1} left)`);
-        drop(ws);
-        continue;
+      const st = connStats.get(ws);
+      if (st) {
+        const buffered = ws.bufferedAmount;
+        if (!st.ponged) {
+          st.silent++;
+          const received = st.recvMsgs - st.recvAtTick;
+          const draining = buffered < st.bufAtTick;
+          const cap = st.silent >= PING_MAX_SILENT_TICKS;
+          if (cap || (!received && !draining)) {
+            const why = cap ? `no pong for ${st.silent} ticks (${st.silent * secs}s)` : `no pong in ${secs}s`;
+            console.warn(`${new Date().toISOString()} ws: ${why}, dropped (${connections.size - 1} left); open ${Math.round((Date.now() - st.openedAt) / 1000)}s, ${statText(st, `buffered ${mbText(buffered)} (prev tick ${mbText(st.bufAtTick)})`)}`);
+            drop(ws);
+            continue;
+          }
+          console.warn(`${new Date().toISOString()} ws: no pong in ${secs}s, kept: ${received ? `${received} msgs received` : `draining ${mbText(st.bufAtTick)} -> ${mbText(buffered)}`}`);
+        } else st.silent = 0;
+        st.ponged = false;
+        st.recvAtTick = st.recvMsgs;
+        st.bufAtTick = buffered;
       }
-      answered.delete(ws);
       try {
         ws.ping();
       } catch {
@@ -2123,9 +2156,11 @@ export function createDaemon(opts: {
     // Before `connections.add`: a sleep found now is broadcast to the others, then sent once to this connection below.
     sleepWatch?.check();
     connections.add(ws);
-    answered.add(ws);
     const openedAt = Date.now();
-    ws.on("pong", () => answered.add(ws));
+    const stat: ConnStat = { openedAt, sentMsgs: 0, sentBytes: 0, recvMsgs: 0, lastRecvAt: undefined, ua: String(req?.headers["user-agent"] ?? "-").slice(0, 160), ponged: true, silent: 0, recvAtTick: 0, bufAtTick: 0 };
+    connStats.set(ws, stat);
+    ws.on("pong", () => (stat.ponged = true));
+    ws.on("message", () => (stat.recvMsgs++, (stat.lastRecvAt = Date.now())));
     const usage = plan.current();
     if (usage !== undefined) send(ws, { type: "plan_usage", usage });
     if (plan.age() > PLAN_STALE_MS) void plan.reread();
@@ -2167,6 +2202,10 @@ export function createDaemon(opts: {
     let writingReplace = false;
     /** The running `git.commitMessage` of this connection: stopped by `git.commitMessageCancel`, a newer one, and the close. */
     let generating: AbortController | undefined;
+    /** The signed `git.tagCreate` of this connection, aborted by `git.tagCancel` and when the connection closes. */
+    let tagging: AbortController | undefined;
+    /** The `git.reword` of this connection, aborted by `git.rewordCancel` and when the connection closes. */
+    let rewording: AbortController | undefined;
     /** Clean up scans (`worktree.status` with `scan`) of this connection: aborted by `worktree.cancel` and when it closes. */
     const scans = new Map<string, AbortController>();
     const unwatchAll = () => {
@@ -2176,7 +2215,7 @@ export function createDaemon(opts: {
     // Without a listener a socket error (e.g. a frame above maxPayload) is thrown and the daemon exits; ws closes the socket itself.
     ws.on("error", (err) => console.warn("ws:", err.message));
     ws.on("close", (code) => {
-      console.log(`${new Date().toISOString()} ws: closed${code ? ` code ${code}` : ""} after ${Math.round((Date.now() - openedAt) / 1000)}s (${connections.size - 1} left)`);
+      console.log(`${new Date().toISOString()} ws: closed${code ? ` code ${code}` : ""} after ${Math.round((Date.now() - openedAt) / 1000)}s (${connections.size - 1} left); ${statText(stat)}`);
       router?.close();
       connections.delete(ws);
       mediaNonces.forEach((n) => (media.get(n)?.live?.forEach((r) => r.destroy()), media.delete(n)));
@@ -2188,6 +2227,8 @@ export function createDaemon(opts: {
       grepping?.abort();
       replacing?.abort();
       generating?.abort();
+      tagging?.abort();
+      rewording?.abort();
       scans.forEach((a) => a.abort());
       scans.clear();
       focused.delete(ws);
@@ -2202,7 +2243,7 @@ export function createDaemon(opts: {
       }
       if (typeof msg !== "object" || msg === null || Array.isArray(msg))
         return send(ws, { type: "error", code: "bad_message", message: "message must be a JSON object" });
-      if (msg.type === "ping" && msg.note) console.warn(`${new Date().toISOString()} ws: page reconnected after: ${String(msg.note).slice(0, 300)}`);
+      if (msg.type === "ping" && msg.note) console.warn(`${new Date().toISOString()} ws: page reconnected after: ${String(msg.note).slice(0, 600)}`);
       if (msg.type === "ping") return send(ws, { type: "reply", reqId: msg.reqId, result: {} });
       // Timed here, before the router, so a request a side serves or the router answers itself is attributed too.
       const end = perfMon.request(String(msg.type), typeof (msg as { cwd?: unknown }).cwd === "string" ? (msg as { cwd: string }).cwd : undefined);
@@ -2344,12 +2385,14 @@ export function createDaemon(opts: {
             return reply({ session: s.info() });
           }
           await modelList().catch(() => {});
+          // Before the removal check below: no await between that check and the new Session.
+          const permissionMode = await defaultModeFor(cwd, msg.model);
           // A removal may have started during the await: no live session in a deleted directory.
           if (isRemoving(cwd) || !existsSync(cwd)) return fail("worktree_removing", "This worktree is being removed");
           // The draft token of the new-session tab's uploads: the session gets their id, and with it their folder (one claim per token).
           const claimed = typeof msg.draft === "string" ? uploads.claim(msg.draft) : undefined;
           if (msg.draft !== undefined && !claimed) console.log("session.create: draft uploads not claimed");
-          const s = track(new Session(cwd, sessionOpts({ model: msg.model, permissionMode: defaultModeFor(cwd, msg.model) }), claimed ? { id: claimed } : undefined));
+          const s = track(new Session(cwd, sessionOpts({ model: msg.model, permissionMode }), claimed ? { id: claimed } : undefined));
           addProject(cwd);
           rememberEngine("claude");
           return reply({ session: s.info() });
@@ -2420,7 +2463,7 @@ export function createDaemon(opts: {
           const cwd = typeof msg.cwd === "string" && allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           await modelList().catch(() => {});
-          return reply({ mode: defaultModeFor(cwd) ?? "default" });
+          return reply({ mode: (await defaultModeFor(cwd)) ?? "default" });
         }
         case "session.commands": {
           const cwd = typeof msg.cwd === "string" && allowed(msg.cwd);
@@ -2447,6 +2490,9 @@ export function createDaemon(opts: {
             const s = await find(msg.sessionId, msg.background === true);
             const title = s && (await titleOf(s));
             if (!s || ws.readyState !== ws.OPEN) return;
+            // The snapshot below is synchronous and reads the plan folders: warm the local settings files first.
+            if (!localFilesCache.has(s.cwd)) await localFiles(s.cwd);
+            if (ws.readyState !== ws.OPEN) return;
             // Only an explicit open (link, notification) adds the project; a reconnect resubscribe must not bring back a removed one.
             if (msg.addProject === true) addProject(s.cwd);
             unsubscribes.get(s.id)?.();
@@ -2689,6 +2735,45 @@ export function createDaemon(opts: {
           }
           return reply({});
         }
+        case "session.allowDenied": {
+          if (typeof msg.toolUseId !== "string") return fail("bad_request", "toolUseId required");
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
+          // Like sendPrompt: the follow-up continues after the terminal CLI's turns.
+          if (s.info().state === "idle") await s.sync();
+          if (s.externalTurnRunning()) return fail("external_turn", "A terminal CLI turn is running in this session");
+          try {
+            s.allowDenied(msg.toolUseId);
+          } catch (e) {
+            return e instanceof DeniedRetryError ? fail(e.code, e.message) : fail("prompt_failed", (e as Error).message);
+          }
+          autoContinue.cancel(s.id);
+          queue.release(s.id);
+          return reply({});
+        }
+        case "session.localSettingsFile": {
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          return reply({ file: await localSettingsFile(s.cwd) });
+        }
+        case "session.alwaysAllowDenied": {
+          if (typeof msg.toolUseId !== "string") return fail("bad_request", "toolUseId required");
+          if (msg.scope !== "session" && msg.scope !== "local") return fail("bad_request", "scope must be session or local");
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
+          if (s.info().state === "idle") await s.sync();
+          if (s.externalTurnRunning()) return fail("external_turn", "A terminal CLI turn is running in this session");
+          try {
+            await s.alwaysAllowDenied(msg.toolUseId, msg.scope);
+          } catch (e) {
+            return e instanceof DeniedRetryError ? fail(e.code, e.message) : fail("prompt_failed", (e as Error).message);
+          }
+          autoContinue.cancel(s.id);
+          queue.release(s.id);
+          return reply({});
+        }
         case "session.shellOutput": {
           if (typeof msg.toolUseId !== "string") return fail("bad_request", "toolUseId required");
           const s = await find(msg.sessionId);
@@ -2842,6 +2927,7 @@ export function createDaemon(opts: {
             const before = appSettings.get().claude.account;
             const openCodePath = appSettings.get().opencode.path;
             const settings = appSettings.set(msg.patch);
+            if (msg.patch?.git?.commitMessageWarm !== undefined) (settings.git.commitMessageWarm ? warmCommit.prewarm() : warmCommit.stop());
             if (settings.opencode.path !== openCodePath) void restartOpenCode().then(() => broadcast({ type: "opencode.providersChanged" }));
             if (settings.claude.account !== before) (setClaudeToken(accountToken()), claudeLoginChanged());
             const origin = jiraOrigin(settings.jira.url);
@@ -3300,6 +3386,26 @@ export function createDaemon(opts: {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
           }
         }
+        case "git.reword": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          // Output is never logged. A hook may have changed files even when the run failed.
+          const ctl = (rewording = new AbortController());
+          try {
+            const written = await gitReword(cwd, { hash: msg.hash, message: msg.message, headRef: msg.headRef, headHash: msg.headHash, argv: msg.argv, signal: ctl.signal, allowed: (p) => inRoots(real(p) ?? p) });
+            markRepoStale(cwd);
+            return reply({ written });
+          } catch (e) {
+            if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          } finally {
+            if (rewording === ctl) rewording = undefined;
+          }
+        }
+        case "git.rewordCancel":
+          rewording?.abort();
+          return reply({});
         case "git.branchCreate":
         case "git.checkout": {
           const cwd = allowed(msg.cwd);
@@ -3312,6 +3418,53 @@ export function createDaemon(opts: {
             return reply({ written });
           } catch (e) {
             if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          }
+        }
+        case "git.tagCreate":
+        case "git.tagDelete": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          // Output and URLs are never logged.
+          try {
+            const o = { allowed: (p: string) => inRoots(real(p) ?? p) };
+            const ctl = msg.type === "git.tagCreate" ? (tagging = new AbortController()) : undefined;
+            try {
+              const written = await (msg.type === "git.tagCreate" ? gitTagCreate(cwd, { hash: msg.hash, name: msg.name, message: msg.message, sign: msg.sign, argv: msg.argv, signal: ctl!.signal, ...o }) : gitTagDelete(cwd, { name: msg.name, hash: msg.hash, argv: msg.argv, remotes: msg.remotes, ...o }));
+              markRepoStale(cwd);
+              return reply({ written });
+            } finally {
+              if (ctl && tagging === ctl) tagging = undefined;
+            }
+          } catch (e) {
+            if (e instanceof WorktreeError ? e.code !== "bad_request" : true) markRepoStale(cwd);
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          }
+        }
+        case "git.tagCancel":
+          tagging?.abort();
+          return reply({});
+        case "git.tagSigning": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          try {
+            return reply({ signing: await gitTagSigning(cwd, { allowed: (p: string) => inRoots(real(p) ?? p) }) });
+          } catch (e) {
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          }
+        }
+        case "git.tag":
+        case "git.tagRemote": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          try {
+            const o = { allowed: (p: string) => inRoots(real(p) ?? p) };
+            if (msg.type === "git.tag") return reply({ tag: await gitTag(cwd, { name: msg.name, ...o }) });
+            return reply({ remoteTag: await netSlot(() => gitTagRemote(cwd, { name: msg.name, remote: msg.remote, ...o })) });
+          } catch (e) {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
           }
         }
@@ -3373,7 +3526,7 @@ export function createDaemon(opts: {
             const d = await gitCommitDiff(cwd, { paths: msg.paths, allowed: (p) => inRoots(real(p) ?? p) });
             if (!d) return fail("not_git", NOT_TOP);
             const prompt = promptFor(instructionFor(appSettings.get().git, msg.project), d);
-            const message = await generateCommitMessage({ cwd, prompt, signal: ctl.signal, query: opts.query });
+            const message = await generateCommitMessage({ cwd, prompt, signal: ctl.signal, query: opts.query, ...(appSettings.get().git.commitMessageWarm && { warm: warmCommit }) });
             return reply({ message, ...(d.cut && { truncated: true }) });
           } catch (e) {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
@@ -3883,7 +4036,7 @@ export function createDaemon(opts: {
       .catch((e) => console.error("uploads: sweep failed:", e));
   const firstSweep = sweepMs > 0 ? setTimeout(() => void sweepUploads(), opts.uploadSweepFirstMs ?? 60_000).unref() : undefined;
   const sweeper = sweepMs > 0 ? setInterval(() => void sweepUploads(), sweepMs).unref() : undefined;
-  http.on("close", () => (clearInterval(sleepTimer), backReminders?.stop(), opts.keepAwake?.close(), orchestration.shutdown(), [...mcpRoutes.keys()].forEach(dropMcp), void openCode.close(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close()));
+  http.on("close", () => (clearInterval(sleepTimer), backReminders?.stop(), opts.keepAwake?.close(), orchestration.shutdown(), [...mcpRoutes.keys()].forEach(dropMcp), void openCode.close(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close(), warmCommit.stop()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).
   return Object.assign(http, {
     accept,
@@ -3921,6 +4074,32 @@ function isOwnOrigin(req: IncomingMessage, hostnames: Set<string>) {
   }
 }
 
+/** What the keep-alive and the drop and close log lines know of one connection (docs/spec.md "Daemon WebSocket keep-alive"). */
+interface ConnStat {
+  openedAt: number;
+  sentMsgs: number;
+  sentBytes: number;
+  recvMsgs: number;
+  lastRecvAt: number | undefined;
+  ua: string;
+  /** A pong came since the previous tick. */
+  ponged: boolean;
+  /** Ticks in a row without a pong. */
+  silent: number;
+  /** `recvMsgs` and `bufferedAmount` at the previous tick. */
+  recvAtTick: number;
+  bufAtTick: number;
+}
+const connStats = new WeakMap<Conn, ConnStat>();
+const mbText = (n: number) => `${(n / 2 ** 20).toFixed(1)}MB`;
+/** Counters of the drop and close lines: `sent 412 msgs 3.1MB, ... recv 37 msgs, last recv 12s ago`. */
+const statText = (st: ConnStat, buffered?: string) =>
+  `sent ${st.sentMsgs} msgs ${mbText(st.sentBytes)}${buffered ? `, ${buffered}` : ""}, recv ${st.recvMsgs} msgs${buffered ? `, last recv ${st.lastRecvAt === undefined ? "never" : `${Math.round((Date.now() - st.lastRecvAt) / 1000)}s ago`}` : ""}, ua ${JSON.stringify(st.ua)}`;
+
 function send(ws: Conn, m: ServerMessage) {
-  if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m));
+  if (ws.readyState !== ws.OPEN) return;
+  const data = JSON.stringify(m);
+  ws.send(data);
+  const st = connStats.get(ws);
+  if (st) (st.sentMsgs++, (st.sentBytes += Buffer.byteLength(data)));
 }

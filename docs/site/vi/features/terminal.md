@@ -27,6 +27,7 @@ Với Git Bash trên Windows, đặt `SHELL` thành `C:\Program Files\Git\bin\ba
 
 - Terminal sống trong daemon. Chúng vẫn còn sau khi tải lại trang hoặc mất kết nối, và kết quả gần nhất được phát lại.
 - Shell chỉ khởi động khi bạn mở terminal (Bật/tắt terminal, Terminal mới, hoặc bấm vào tab của nó), không bao giờ khi tải lại, chuyển phiên hay dự án, hoặc kết nối lại. Terminal bạn để mở chỉ hiện lại khi thư mục của nó có shell đang chạy, và khi đó nó không lấy tiêu điểm.
+- Chọn phần output rồi bấm **Thêm vào chat** (trong menu cạnh phần chọn hoặc menu chuột phải) để đưa nó vào ô nhập dưới dạng khối code kèm tên và thư mục của terminal. Khối giữ 8.000 ký tự cuối nếu phần chọn dài hơn. Chuột phải còn có **Sao chép** và **Dán**; <kbd>Shift</kbd>+chuột phải hiện menu của trình duyệt, và chương trình dùng chuột (vim, tmux) giữ chuột phải.
 - Các phím <kbd>Ctrl</kbd>+chữ thông thường được chuyển cho shell. Phím tắt của ứng dụng với <kbd>Alt</kbd> vẫn hoạt động.
 - Tối đa 8 terminal mỗi tab trình duyệt, tổng cộng 32.
 - Biểu tượng Nerd Font (nhiều prompt shell dùng) hiển thị đúng.

@@ -64,6 +64,11 @@ afterEach(() => {
   stampValue = "s1";
   noStamp = false;
   branchCount = 2;
+  tagRemotes = {};
+  tagSigning = undefined;
+  rewordOff = undefined;
+  rewordSigns = false;
+  diffReply = async () => ({ diff: { prefix: "", base: hash(1), files: [] } });
   forgetRemoteOps();
   forgetRepoChoices();
   localStorage.removeItem("claude-ui.repoChoice");
@@ -81,12 +86,27 @@ const infoMain = (o: Partial<GitBranchInfo> = {}): GitBranchInfo => ({
   headRef: "refs/heads/dev", headHash: hash(1), merge: ["merge", "--no-edit", "main"], rebase: ["rebase", "refs/heads/main"], ...o,
 });
 let branchInfo: (ref: string) => GitBranchInfo = () => infoMain();
+/** Edit Commit Message availability of the fake: HEAD (hash(3)) amends, older commits rebase; `rewordOff`: unavailable with that reason; `rewordSigns`: commit.gpgSign. */
+let rewordOff: string | undefined;
+let rewordSigns = false;
+const rewordMenu = (h: string): Partial<GitCommitMenu> => (rewordOff ? { why: { reword: rewordOff } } : { reword: h === hash(3) ? "amend" : "rebase", ...(rewordSigns && { signs: true }) });
 /** The commit menu of the fake: HEAD is the tip (hash(3) in `withRefs`), everything is available. */
 const commitMenu = (h: string, hard?: boolean): GitCommitMenu => ({
-  hash: h, parents: 1, headRef: "refs/heads/main", headHash: hash(3), undo: ["reset", "--soft", "HEAD~1"], revert: ["revert", "--no-edit", h], cherryPick: ["cherry-pick", h],
+  hash: h, parents: h === hash(1) ? 0 : 1, ...(h !== hash(1) && { parent: hash(Number.parseInt(h, 16) - 1) }), ...rewordMenu(h), headRef: "refs/heads/main", headHash: hash(3), undo: ["reset", "--soft", "HEAD~1"], revert: ["revert", "--no-edit", h], cherryPick: ["cherry-pick", h],
   reset: { soft: ["reset", "--soft", h], mixed: ["reset", "--mixed", h], hard: ["reset", "--hard", "--no-recurse-submodules", h] },
   ...(hard && { lose: ["a.txt", "b.txt"], loseCount: 3, dirty: "fp1" }),
 });
+/** Remove Tag dialog data of the fake: the local tag, and per remote the hash it answers (absent: not on that remote; "fail": ls-remote fails). */
+let tagRemotes: Record<string, string | undefined> = {};
+const tagReply = (m: Req & { name?: string }) => ({ tag: { name: m.name!, hash: hash(2), commit: hash(2), annotated: false, remotes: Object.keys(tagRemotes) } });
+const tagRemoteReply = async (m: Req & { name?: string; remote?: string }) => {
+  if (tagRemotes[m.remote!] === "fail") throw Object.assign(new Error("fatal: could not read\nsecond line"), { code: "git_failed" });
+  return { remoteTag: { remote: m.remote!, ...(tagRemotes[m.remote!] && { hash: tagRemotes[m.remote!] }) } };
+};
+/** New Tag signing config of the fake (`git.tagSigning`); absent: the daemon has no answer. */
+let tagSigning: { gpgSign: boolean; format: string; key?: string } | undefined;
+/** The fake's `git.diff` (Compare with Local) answer. */
+let diffReply: (m: Req) => Promise<unknown> = async () => ({ diff: { prefix: "", base: hash(1), files: [] } });
 let writeReply: () => Promise<unknown> = async () => ({ remote: { output: "", refs: "s2" } });
 function fake(all: GitCommit[], files: GitCommitDetail["files"] = [], page = 200, nogit = false) {
   const sent: Req[] = [];
@@ -100,6 +120,13 @@ function fake(all: GitCommit[], files: GitCommitDetail["files"] = [], page = 200
     if (m.type === "git.fetch") return fetchReply();
     if (m.type === "git.branch") return { branch: branchInfo(m.ref!) };
     if (m.type === "git.push" || m.type === "git.pull" || m.type === "git.merge" || m.type === "git.rebase" || m.type === "git.revert" || m.type === "git.undoCommit" || m.type === "git.cherryPick" || m.type === "git.checkout" || m.type === "git.branchCreate" || m.type === "git.reset") return writeReply();
+    if (m.type === "git.tagCreate" || m.type === "git.tagDelete") return writeReply();
+    if (m.type === "git.tagSigning") return { signing: tagSigning ?? null };
+    if (m.type === "git.tagCancel" || m.type === "git.rewordCancel") return {};
+    if (m.type === "git.reword") return writeReply();
+    if (m.type === "git.diff") return diffReply(m);
+    if (m.type === "git.tag") return tagReply(m);
+    if (m.type === "git.tagRemote") return tagRemoteReply(m);
     if (m.type === "git.commitMenu") return { commitMenu: commitMenu(m.hash!, (m as { hard?: boolean }).hard) };
     if (m.type === "git.refs") return { refs: noStamp ? null : stampValue };
     if (m.type === "git.status") return { status: { branch: statusBranch, added: 0, removed: 0 } };
@@ -382,7 +409,7 @@ it("a detached HEAD chip offers no Push or Pull, only Fetch", async () => {
   await mount(c);
   await menuAt([...el.querySelectorAll("[data-testid=commit-ref]")].find((x) => x.textContent === "HEAD")!);
   expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
-  expect(itemTexts()).toEqual(["New Branch…"]);
+  expect(itemTexts()).toEqual(["New Branch…", "New Tag…"]);
 });
 
 it("the HEAD label comes from the first page's head: it follows a checkout on Refresh and needs no HEAD commit in the page; the panel sends no git.status", async () => {
@@ -1032,7 +1059,7 @@ it("a click on empty list space then Shift+F10 opens the selected row's commit m
   await act(async () => void list().dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true })));
   await menuAt(list());
   expect(c.sent.filter((m) => m.type === "git.commitMenu").map((m) => m.hash)).toEqual([hash(3)]);
-  expect(itemTexts()).toEqual(["New Branch…"]);
+  expect(itemTexts()).toEqual(["New Branch…", "New Tag…"]);
 });
 
 it("the command block wraps at spaces (a long -c prefix is not cut mid-word)", async () => {
@@ -1293,7 +1320,7 @@ it("the commit menu has commit actions only, in order: Copy Revision Number, Che
   await mount(c);
   await menuAt(rowEls()[0]!);
   await flush();
-  expect(items().map((i) => i.textContent)).toEqual(["Copy Revision Number", "Cherry-Pick", "Reset Current Branch to Here…", "Revert Commit", "Undo Commit", "New Branch…"]);
+  expect(items().map((i) => i.textContent)).toEqual(["Copy Revision Number", "Cherry-Pick", "Compare with Local", "Compare Before with Local", "Reset Current Branch to Here…", "Revert Commit", "Undo Commit", "Edit Commit Message…", "New Branch…", "New Tag…"]);
   expect(byId("commit-reset").className).toContain("text-destructive");
   expect(document.querySelector("[data-testid=branch-fetch]")).toBeNull();
 });
@@ -1480,4 +1507,454 @@ it("GH-722: a New branch ask opens the New branch dialog; a Stash ask opens the 
   expect(el.querySelector("[data-testid=stash-section]")).not.toBeNull();
   expect(byId("git-stash-push-dialog")).not.toBeNull();
   await act(async () => byId("git-stash-push-cancel").click());
+});
+
+// ---- GH-666: New Tag and Remove Tag ----
+const tagged = (): GitCommit[] => {
+  const h = history(3);
+  h[1] = { ...h[1]!, refs: ["refs/tags/v1"] };
+  return h;
+};
+const fillField = (e: HTMLElement, v: string) =>
+  act(async () => {
+    const proto = e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(e, v);
+    e.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
+it("a tag chip menu starts with Remove Tag…, then the commit group with New Tag… and Remove Tag <name>…", async () => {
+  const c = fake(tagged());
+  await mount(c);
+  await menuAt(chip("refs/tags/v1"));
+  const ids = items().map((i) => i.dataset.testid);
+  expect(ids[0]).toBe("tag-remove");
+  expect(byId("tag-remove").textContent).toBe("Remove Tag…");
+  expect(ids).toContain("tag-new");
+  expect(byId("tag-remove-v1").textContent).toBe("Remove Tag v1…");
+  expect(ids.indexOf("tag-new")).toBeGreaterThan(ids.indexOf("branch-new"));
+  expect(c.sent.some((m) => m.type === "git.branch")).toBe(false);
+});
+
+it("a row menu has New Tag… and one Remove Tag <name>… per tag of the commit", async () => {
+  const c = fake(tagged());
+  await mount(c);
+  await menuAt(rowOf(hash(2)));
+  expect(byId("tag-new").textContent).toBe("New Tag…");
+  expect(byId("tag-remove")).toBeNull();
+  expect(byId("tag-remove-v1").textContent).toBe("Remove Tag v1…");
+  await closeMenu();
+  await menuAt(rowOf(hash(1)));
+  expect(byId("tag-new")).not.toBeNull();
+  expect(byId("tag-remove-v1")).toBeNull();
+});
+
+it("New Tag: the command follows the message (lightweight to annotated) and Create sends that argv", async () => {
+  const c = fake(tagged());
+  await mount(c);
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await menuAt(rowOf(hash(1)));
+  await act(async () => byId("tag-new").click());
+  expect(byId("git-new-tag-confirm").hasAttribute("disabled")).toBe(true);
+  expect(byId("git-command").textContent).toBe("git tag <name> " + hash(1));
+  await fillField(byId("git-new-tag-name"), "v2");
+  expect(byId("git-new-tag-confirm").hasAttribute("disabled")).toBe(false);
+  expect(byId("git-command").textContent).toBe("git tag v2 " + hash(1));
+  await fillField(byId("git-new-tag-message"), "first release");
+  expect(byId("git-command").textContent).toBe(`git tag -a -m "first release" v2 ${hash(1)}`);
+  await act(async () => byId("git-new-tag-confirm").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.tagCreate")).toEqual([{ type: "git.tagCreate", cwd: "/p", hash: hash(1), name: "v2", message: "first release", argv: ["tag", "-a", "-m", "first release", "v2", hash(1)] }]);
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Created tag v2 at 0000000");
+});
+
+it("New Tag without a message sends a lightweight tag with no message field", async () => {
+  const c = fake(tagged());
+  await mount(c);
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await menuAt(rowOf(hash(1)));
+  await act(async () => byId("tag-new").click());
+  await fillField(byId("git-new-tag-name"), "  v3  ");
+  await act(async () => byId("git-new-tag-confirm").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.tagCreate")).toEqual([{ type: "git.tagCreate", cwd: "/p", hash: hash(1), name: "v3", argv: ["tag", "v3", hash(1)] }]);
+});
+
+it("Remove Tag: a checkbox only for a remote that has the tag, the command follows it, the request carries remotes", async () => {
+  const c = fake(tagged());
+  await mount(c);
+  tagRemotes = { origin: hash(2), backup: undefined, broken: "fail" };
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await menuAt(chip("refs/tags/v1"));
+  await act(async () => byId("tag-remove").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.tag")).toEqual([{ type: "git.tag", cwd: "/p", name: "v1" }]);
+  expect(c.sent.filter((m) => m.type === "git.tagRemote").map((m) => (m as { remote?: string }).remote).sort()).toEqual(["backup", "broken", "origin"]);
+  expect(byId("git-remove-tag-remote-origin")).not.toBeNull();
+  expect((byId("git-remove-tag-remote-origin") as HTMLInputElement).checked).toBe(false);
+  expect(byId("git-remove-tag-remote-backup")).toBeNull();
+  expect(byId("git-remove-tag-remote-broken")).toBeNull();
+  expect(byId("git-remove-tag-dialog").textContent).toContain("Could not check broken: fatal: could not read");
+  expect(byId("git-remove-tag-dialog").textContent).not.toContain("second line");
+  expect(byId("git-command").textContent).toBe("git tag -d v1");
+  await act(async () => byId("git-remove-tag-remote-origin").click());
+  const push = ["-c", "core.fsmonitor=false", "-c", "protocol.ext.allow=never", "push", "--no-recurse-submodules", `--force-with-lease=refs/tags/v1:${hash(2)}`, "origin", "--delete", "refs/tags/v1"];
+  expect(byId("git-command").textContent).toBe(`git ${push.join(" ")}\ngit tag -d v1`);
+  await act(async () => byId("git-remove-tag-confirm").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.tagDelete")).toEqual([{ type: "git.tagDelete", cwd: "/p", name: "v1", hash: hash(2), argv: ["tag", "-d", "v1"], remotes: [{ remote: "origin", hash: hash(2), argv: push }] }]);
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Deleted tag v1 locally and on origin");
+});
+
+it("Remove Tag with no remote checked sends no remotes and reports a local delete", async () => {
+  const c = fake(tagged());
+  await mount(c);
+  tagRemotes = { origin: hash(2) };
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await menuAt(rowOf(hash(2)));
+  await act(async () => byId("tag-remove-v1").click());
+  await flush();
+  await act(async () => byId("git-remove-tag-confirm").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.tagDelete")).toEqual([{ type: "git.tagDelete", cwd: "/p", name: "v1", hash: hash(2), argv: ["tag", "-d", "v1"] }]);
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Deleted tag v1");
+});
+
+// ---- GH-666: New Tag signing (tag.gpgSign) ----
+const openNewTag = async (c: ReturnType<typeof fake>, name = "v2") => {
+  await mount(c);
+  await menuAt(rowOf(hash(1)));
+  await act(async () => byId("tag-new").click());
+  await flush();
+  if (name) await fillField(byId("git-new-tag-name"), name);
+};
+const tagCreates = (c: ReturnType<typeof fake>) => c.sent.filter((m) => m.type === "git.tagCreate");
+
+it("New Tag reads the signing config when it opens and shows it; no signing configured: no toggle default, plain command", async () => {
+  const c = fake(tagged());
+  tagSigning = { gpgSign: false, format: "openpgp", key: "ABCD1234" };
+  await openNewTag(c, "");
+  expect(c.sent.filter((m) => m.type === "git.tagSigning")).toEqual([{ type: "git.tagSigning", cwd: "/p" }]);
+  expect((byId("git-new-tag-sign") as HTMLInputElement).checked).toBe(false);
+  expect(byId("git-new-tag-signing").textContent).toContain("openpgp");
+  expect(byId("git-new-tag-signing").textContent).toContain("ABCD1234");
+  await fillField(byId("git-new-tag-name"), "v2");
+  expect(byId("git-command").textContent).toBe("git tag v2 " + hash(1));
+  await act(async () => byId("git-new-tag-cancel").click());
+  expect(c.sent.some((m) => m.type === "git.tagCancel")).toBe(false);
+});
+
+it("New Tag with tag.gpgSign on: the toggle starts on, the command is a signed one, and switching it off adds --no-sign", async () => {
+  const c = fake(tagged());
+  tagSigning = { gpgSign: true, format: "ssh" };
+  await openNewTag(c);
+  expect((byId("git-new-tag-sign") as HTMLInputElement).checked).toBe(true);
+  expect(byId("git-command").textContent).toBe(`git tag -s -m v2 v2 ${hash(1)}`);
+  await fillField(byId("git-new-tag-message"), "first");
+  expect(byId("git-command").textContent).toBe(`git tag -s -m first v2 ${hash(1)}`);
+  await act(async () => byId("git-new-tag-sign").click());
+  expect(byId("git-command").textContent).toBe(`git tag -a --no-sign -m first v2 ${hash(1)}`);
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await act(async () => byId("git-new-tag-confirm").click());
+  await flush();
+  expect(tagCreates(c)).toEqual([{ type: "git.tagCreate", cwd: "/p", hash: hash(1), name: "v2", message: "first", sign: false, argv: ["tag", "-a", "--no-sign", "-m", "first", "v2", hash(1)] }]);
+  expect(byId("git-new-tag-dialog")).toBeNull();
+});
+
+it("a signed create keeps the dialog open with a waiting line and closes with the result line on success", async () => {
+  const c = fake(tagged());
+  tagSigning = { gpgSign: false, format: "openpgp" };
+  await openNewTag(c);
+  await act(async () => byId("git-new-tag-sign").click());
+  expect(byId("git-command").textContent).toBe(`git tag -s -m v2 v2 ${hash(1)}`);
+  let done!: () => void;
+  writeReply = () => new Promise((r) => (done = () => r({ written: { output: "", refs: "s2" } })));
+  await act(async () => byId("git-new-tag-confirm").click());
+  await flush();
+  expect(tagCreates(c)).toEqual([{ type: "git.tagCreate", cwd: "/p", hash: hash(1), name: "v2", sign: true, argv: ["tag", "-s", "-m", "v2", "v2", hash(1)] }]);
+  expect(byId("git-new-tag-dialog")).not.toBeNull();
+  expect(byId("git-new-tag-waiting").textContent).toContain("passphrase");
+  expect(byId("git-new-tag-confirm").hasAttribute("disabled")).toBe(true);
+  await act(async () => done());
+  await flush();
+  expect(byId("git-new-tag-dialog")).toBeNull();
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Created tag v2");
+});
+
+it("Cancel while signing sends git.tagCancel and closes the dialog", async () => {
+  const c = fake(tagged());
+  tagSigning = { gpgSign: true, format: "openpgp" };
+  await openNewTag(c);
+  let fail!: () => void;
+  writeReply = () => new Promise((_, rej) => (fail = () => rej(Object.assign(new Error("Cancelled"), { code: "cancelled" }))));
+  await act(async () => byId("git-new-tag-confirm").click());
+  await flush();
+  await act(async () => byId("git-new-tag-cancel").click());
+  expect(c.sent.filter((m) => m.type === "git.tagCancel")).toEqual([{ type: "git.tagCancel", cwd: "/p" }]);
+  expect(byId("git-new-tag-dialog")).toBeNull();
+  await act(async () => fail());
+  await flush();
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")).toBeNull();
+});
+
+it("a signing failure stays in the dialog (the user can retry unsigned) instead of a result line", async () => {
+  const c = fake(tagged());
+  tagSigning = { gpgSign: true, format: "openpgp" };
+  await openNewTag(c);
+  writeReply = async () => {
+    throw Object.assign(new Error("signing did not finish: gpg passphrase prompt?"), { code: "git_failed" });
+  };
+  await act(async () => byId("git-new-tag-confirm").click());
+  await flush();
+  expect(byId("git-new-tag-dialog")).not.toBeNull();
+  expect(byId("git-new-tag-error").textContent).toBe("signing did not finish: gpg passphrase prompt?");
+  expect(byId("git-new-tag-waiting")).toBeNull();
+  expect(byId("git-new-tag-confirm").hasAttribute("disabled")).toBe(false);
+  await act(async () => byId("git-new-tag-sign").click());
+  expect(byId("git-new-tag-error")).toBeNull();
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await act(async () => byId("git-new-tag-confirm").click());
+  await flush();
+  expect(byId("git-new-tag-dialog")).toBeNull();
+});
+
+// ---- GH-667: Compare with Local, Compare Before with Local, Edit Commit Message ----
+const ids = () => items().map((i) => i.dataset.testid);
+const reqs = (c: ReturnType<typeof fake>, type: string) => c.sent.filter((m) => m.type === type);
+const COMPARE_FILES = [
+  { status: "M", path: "a.txt", added: 2, removed: 1 },
+  { status: "A", path: "work.txt", added: 3, removed: 0, untracked: true },
+  { status: "D", path: "gone.txt", added: 0, removed: 4 },
+] as const;
+
+it("the commit menu orders Compare with Local and Compare Before with Local after Cherry-Pick and Edit Commit Message after Undo", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  await menuAt(rowOf(hash(3)));
+  const i = ids().filter((x) => x?.startsWith("commit-"));
+  expect(i).toEqual(["commit-copy-hash", "commit-cherry-pick", "commit-compare", "commit-compare-before", "commit-reset", "commit-revert", "commit-undo", "commit-reword"]);
+  expect(byId("commit-compare").textContent).toBe("Compare with Local");
+  expect(byId("commit-compare-before").textContent).toBe("Compare Before with Local");
+  expect(byId("commit-reword").textContent).toBe("Edit Commit Message…");
+  expect(byId("commit-reword").hasAttribute("data-disabled")).toBe(false);
+  expect(ids().indexOf("branch-new")).toBeGreaterThan(ids().indexOf("commit-reword"));
+});
+
+it("Compare Before with Local is disabled on a root commit with a reason; Edit Commit Message shows why.reword when unavailable", async () => {
+  const c = fake(history(3));
+  rewordOff = "Already pushed to origin/main";
+  await mount(c);
+  await menuAt(rowOf(hash(1)));
+  expect(byId("commit-compare-before").hasAttribute("data-disabled")).toBe(true);
+  expect(byId("commit-compare-before").textContent).toContain("First commit: nothing before it");
+  expect(byId("commit-compare").hasAttribute("data-disabled")).toBe(false);
+  expect(byId("commit-reword").hasAttribute("data-disabled")).toBe(true);
+  expect(byId("commit-reword").textContent).toContain("Already pushed to origin/main");
+  await act(async () => byId("commit-reword").click());
+  expect(byId("git-reword-dialog")).toBeNull();
+});
+
+it("Compare with Local asks git.diff base commit for the hash, lists the files and marks untracked ones; Back returns to the details", async () => {
+  const c = fake(history(3));
+  diffReply = async () => ({ diff: { prefix: "", base: hash(2), files: [...COMPARE_FILES] } });
+  await mount(c);
+  await menuAt(rowOf(hash(2)));
+  await act(async () => byId("commit-compare").click());
+  await flush();
+  expect(reqs(c, "git.diff")).toEqual([{ type: "git.diff", cwd: "/p", base: "commit", ref: hash(2) }]);
+  expect(byId("compare-title").textContent).toBe(`${hash(2).slice(0, 7)} ↔ Local`);
+  const files = [...document.querySelectorAll("[data-testid=compare-file]")];
+  expect(files.map((f) => f.textContent)).toEqual([expect.stringContaining("a.txt"), expect.stringContaining("work.txt"), expect.stringContaining("gone.txt")]);
+  expect(files[1]!.textContent).toContain("untracked");
+  expect(el.querySelector("[data-testid=commit-file]")).toBeNull();
+  expect(rowOf(hash(2)).getAttribute("aria-selected")).toBe("true");
+  await act(async () => byId("compare-back").click());
+  expect(el.querySelector("[data-testid=git-compare]")).toBeNull();
+  expect(el.querySelector("[data-testid=commit-details]")!.textContent).toContain("commit 2");
+});
+
+it("Compare Before with Local asks git.diff with the first parent and titles both hashes", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  await menuAt(rowOf(hash(2)));
+  await act(async () => byId("commit-compare-before").click());
+  await flush();
+  expect(reqs(c, "git.diff")).toEqual([{ type: "git.diff", cwd: "/p", base: "commit", ref: hash(1) }]);
+  expect(byId("compare-title").textContent).toBe(`Before ${hash(2).slice(0, 7)} (${hash(1).slice(0, 7)}) ↔ Local`);
+  expect(el.textContent).toContain("No differences");
+});
+
+it("a compare error shows as an alert; Refresh asks again; selecting another commit ends the compare", async () => {
+  const c = fake(history(3));
+  diffReply = async () => {
+    throw Object.assign(new Error("Invalid base"), { code: "bad_request" });
+  };
+  await mount(c);
+  await menuAt(rowOf(hash(2)));
+  await act(async () => byId("commit-compare").click());
+  await flush();
+  expect(el.querySelector("[data-testid=compare-error]")!.textContent).toBe("Invalid base");
+  expect(el.querySelector("[data-testid=compare-error]")!.getAttribute("role")).toBe("alert");
+  diffReply = async () => ({ diff: { prefix: "", files: [...COMPARE_FILES] } });
+  await act(async () => byId("compare-refresh").click());
+  await flush();
+  expect(reqs(c, "git.diff")).toHaveLength(2);
+  expect(el.querySelector("[data-testid=compare-error]")).toBeNull();
+  expect(document.querySelectorAll("[data-testid=compare-file]")).toHaveLength(3);
+  await act(async () => rowOf(hash(1)).dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  await flush();
+  expect(el.querySelector("[data-testid=git-compare]")).toBeNull();
+});
+
+it("a compare file press reads the base side with git.fileAt and the work tree side with fs.read of the absolute path; Back returns to the list", async () => {
+  const c = fake(history(3));
+  diffReply = async () => ({ diff: { prefix: "sub/", base: hash(2), files: [{ status: "R", oldPath: "old.txt", path: "sub/new.txt" }, { status: "A", path: "sub/work.txt", untracked: true }, { status: "D", path: "sub/gone.txt" }] } });
+  await mount(c);
+  await menuAt(rowOf(hash(2)));
+  await act(async () => byId("commit-compare").click());
+  await flush();
+  // cwd "/p" with prefix "sub/": the repository top is "/".
+  await act(async () => el.querySelectorAll<HTMLElement>("[data-testid=compare-file]")[0]!.click());
+  await flush();
+  expect(reqs(c, "git.fileAt")).toEqual([{ type: "git.fileAt", cwd: "/p", hash: hash(2), path: "old.txt" }]);
+  expect(reqs(c, "fs.read").map((m) => m.path)).toEqual(["/sub/new.txt"]);
+  expect(el.querySelector("[data-testid=commit-file-diff]")).not.toBeNull();
+  await act(async () => el.querySelector<HTMLElement>("[data-testid=commit-back]")!.click());
+  expect(document.querySelectorAll("[data-testid=compare-file]")).toHaveLength(3);
+  // Added: no base read; deleted: no work tree read.
+  c.sent.length = 0;
+  await act(async () => el.querySelectorAll<HTMLElement>("[data-testid=compare-file]")[1]!.click());
+  await flush();
+  expect(reqs(c, "git.fileAt")).toEqual([]);
+  expect(reqs(c, "fs.read")).toHaveLength(1);
+  await act(async () => el.querySelector<HTMLElement>("[data-testid=commit-back]")!.click());
+  c.sent.length = 0;
+  await act(async () => el.querySelectorAll<HTMLElement>("[data-testid=compare-file]")[2]!.click());
+  await flush();
+  expect(reqs(c, "git.fileAt")).toHaveLength(1);
+  expect(reqs(c, "fs.read")).toEqual([]);
+});
+
+const openReword = async (c: ReturnType<typeof fake>, h = hash(3)) => {
+  await mount(c);
+  await menuAt(rowOf(h));
+  await act(async () => byId("commit-reword").click());
+  await flush();
+};
+
+it("Edit Commit Message of HEAD: prefilled with the message, Save disabled until changed, the command follows the text, Save sends the builder's argv", async () => {
+  const c = fake(history(3));
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await openReword(c);
+  expect(reqs(c, "git.commit").at(-1)).toEqual({ type: "git.commit", cwd: "/p", hash: hash(3) });
+  const msg = byId("git-reword-message") as HTMLTextAreaElement;
+  expect(msg.value).toBe("commit 3\n\nbody text");
+  expect(byId("git-reword-confirm").hasAttribute("disabled")).toBe(true);
+  expect(byId("git-command").textContent).toBe(`git commit --amend --only --allow-empty -m "commit 3\\n\\nbody text"`);
+  await fillField(msg, "new subject");
+  expect(byId("git-reword-confirm").hasAttribute("disabled")).toBe(false);
+  expect(byId("git-command").textContent).toBe('git commit --amend --only --allow-empty -m "new subject"');
+  await fillField(msg, "   ");
+  expect(byId("git-reword-confirm").hasAttribute("disabled")).toBe(true);
+  await fillField(msg, "new subject");
+  await act(async () => byId("git-reword-confirm").click());
+  await flush();
+  expect(reqs(c, "git.reword")).toEqual([{ type: "git.reword", cwd: "/p", hash: hash(3), message: "new subject", headRef: "refs/heads/main", headHash: hash(3), argv: [["commit", "--amend", "--only", "--allow-empty", "-m", "new subject"]] }]);
+  expect(byId("git-reword-dialog")).toBeNull();
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain(`Edited message of ${hash(3).slice(0, 7)}`);
+});
+
+it("Edit Commit Message of an older commit shows two command lines and the rebase text; a stopped rebase points to the Changes tab", async () => {
+  const c = fake(history(3));
+  writeReply = async () => ({ written: { output: "", refs: "s2", operation: { kind: "rebase", conflicted: [] } } });
+  await openReword(c, hash(2));
+  expect(byId("git-reword-dialog").textContent).toContain("Rewrites the later commits of main with a rebase");
+  await fillField(byId("git-reword-message"), "renamed");
+  const lines = byId("git-command").textContent!.split("\n");
+  expect(lines).toHaveLength(2);
+  expect(lines[0]).toContain(`git commit --only --allow-empty --no-verify -m`);
+  expect(lines[1]).toBe(`git -c sequence.editor=: rebase -i --autosquash --autostash ${hash(1)}`);
+  await act(async () => byId("git-reword-confirm").click());
+  await flush();
+  expect((reqs(c, "git.reword")[0] as unknown as { argv: unknown[] }).argv).toHaveLength(2);
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("stopped: see the Changes tab");
+});
+
+it("Ctrl+Enter in the message saves; Enter alone does not", async () => {
+  const c = fake(history(3));
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await openReword(c);
+  const msg = byId("git-reword-message");
+  await fillField(msg, "two\nlines");
+  await act(async () => void msg.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+  expect(reqs(c, "git.reword")).toHaveLength(0);
+  await act(async () => void msg.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true })));
+  await flush();
+  expect(reqs(c, "git.reword")).toHaveLength(1);
+});
+
+it("a signed edit keeps the dialog open with a status line, Cancel sends git.rewordCancel and closes, no result line", async () => {
+  const c = fake(history(3));
+  rewordSigns = true;
+  await openReword(c);
+  await fillField(byId("git-reword-message"), "signed");
+  let fail!: () => void;
+  writeReply = () => new Promise((_, rej) => (fail = () => rej(Object.assign(new Error("Cancelled"), { code: "cancelled" }))));
+  await act(async () => byId("git-reword-confirm").click());
+  await flush();
+  expect(byId("git-reword-dialog")).not.toBeNull();
+  expect(byId("git-reword-waiting").textContent).toContain("enter your passphrase if asked");
+  expect(byId("git-reword-confirm").hasAttribute("disabled")).toBe(true);
+  await act(async () => byId("git-reword-cancel").click());
+  expect(reqs(c, "git.rewordCancel")).toEqual([{ type: "git.rewordCancel", cwd: "/p" }]);
+  expect(byId("git-reword-dialog")).toBeNull();
+  await act(async () => fail());
+  await flush();
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")).toBeNull();
+});
+
+it("Esc while signing cancels like the Cancel button", async () => {
+  const c = fake(history(3));
+  rewordSigns = true;
+  await openReword(c);
+  await fillField(byId("git-reword-message"), "signed");
+  writeReply = () => new Promise(() => {});
+  await act(async () => byId("git-reword-confirm").click());
+  await flush();
+  await closeMenu();
+  expect(reqs(c, "git.rewordCancel")).toHaveLength(1);
+  expect(byId("git-reword-dialog")).toBeNull();
+});
+
+it("a signing error shows in the dialog, the status line goes, a retry succeeds and closes with the result line", async () => {
+  const c = fake(history(3));
+  rewordSigns = true;
+  await openReword(c);
+  await fillField(byId("git-reword-message"), "signed");
+  writeReply = async () => {
+    throw Object.assign(new Error("signing did not finish: gpg passphrase prompt?"), { code: "git_failed" });
+  };
+  await act(async () => byId("git-reword-confirm").click());
+  await flush();
+  expect(byId("git-reword-dialog")).not.toBeNull();
+  expect(byId("git-reword-error").textContent).toBe("signing did not finish: gpg passphrase prompt?");
+  expect(byId("git-reword-waiting")).toBeNull();
+  expect(byId("git-reword-confirm").hasAttribute("disabled")).toBe(false);
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await act(async () => byId("git-reword-confirm").click());
+  await flush();
+  expect(byId("git-reword-dialog")).toBeNull();
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Edited message of");
+});
+
+it("a failed message load shows an alert and keeps Save disabled", async () => {
+  const c = fake(history(3));
+  await mount(c);
+  await menuAt(rowOf(hash(3)));
+  vi.mocked(c.request).mockImplementationOnce(async (m: Req) => (c.sent.push(m), Promise.reject(Object.assign(new Error("Unknown commit"), { code: "bad_request" }))));
+  await act(async () => byId("commit-reword").click());
+  await flush();
+  expect(byId("git-reword-load-error").textContent).toBe("Unknown commit");
+  expect(byId("git-reword-confirm").hasAttribute("disabled")).toBe(true);
+  expect((byId("git-reword-message") as HTMLTextAreaElement).disabled).toBe(true);
+  await act(async () => byId("git-reword-cancel").click());
 });

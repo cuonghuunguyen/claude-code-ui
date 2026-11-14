@@ -35,8 +35,8 @@ let changed: (m: unknown) => void = () => {};
 const sent: { type: string; [k: string]: unknown }[] = [];
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
-  connect: (opts: { onEvent: (e: unknown) => void; onSessionsChanged?: (m: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
-    emit = opts.onEvent;
+  connect: (opts: { onEvents: (es: unknown[]) => void; onSessionsChanged?: (m: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
+    emit = (e) => opts.onEvents([e]);
     changed = opts.onSessionsChanged ?? (() => {});
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
     return { request: async (m: { type: string }) => {
