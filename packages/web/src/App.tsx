@@ -2186,7 +2186,6 @@ export function App() {
   const hosted = shown ?? (loadingMain ? active : undefined);
   /** Something fills the main area: a session (or its skeleton), or a pane tab (even while its owner loads). */
   const mainShown = !!shown || !!paneRef || loadingMain;
-  /** Both splits render (a loading session shows its skeleton in its split, GH-774). */
   // Drag a tab onto the session area (GH-356): an edge splits there, the middle of a split shows the tab in it.
   const splitDrop = useSplitDrop({
     enabled: () => lg && splitContent(activeRef.current),
@@ -2219,16 +2218,15 @@ export function App() {
     const total = (row ? area.w : area.h) - 8;
     return ratioFor(split.ratio * total, total, row ? SPLIT_MIN_W : SPLIT_MIN_H);
   })();
+  /** Both splits render (a loading session shows its skeleton in its split, GH-774). */
   const splitShown = splitOn && split.ids.every((id) => (isPaneRef(id) ? !!sessionOf(ownerOf(id)) : !!sessionOf(id) && (!!viewOf(id) || loadingTab(id))));
   const inSplit = (id: string) => splitShown && split!.ids.includes(id);
   // GH-774: a split partner with no view (restored by a reload, idle, not followed) is asked for, so its skeleton does not stay.
-  const askedPartner = useRef(new Set<string>());
   useEffect(() => {
-    if (status !== "connected") return void askedPartner.current.clear();
-    if (!listLoaded || !splitOn) return;
+    if (status !== "connected" || !listLoaded || !splitOn) return;
     for (const id of split.ids) {
-      if (id === activeId || !isSession(id) || viewsRef.current[id] || failedTabsRef.current.has(id) || !sessionOf(id) || askedPartner.current.has(id)) continue;
-      askedPartner.current.add(id);
+      if (id === activeId || !isSession(id) || viewsRef.current[id] || failedTabsRef.current.has(id) || !sessionOf(id) || requested.current.has(id)) continue;
+      requested.current.add(id);
       void subscribe(id);
     }
   }, [status, listLoaded, splitOn, split?.ids.join("\n"), activeId]);

@@ -154,6 +154,16 @@ describe("session skeleton", () => {
     expect(visible('textarea[aria-label="Prompt"]').length).toBe(2);
   });
 
+  it("a running split partner is subscribed once", async () => {
+    replies["session.list"] = { sessions: [item(OLD, "Old"), item(PARTNER, "Partner", { state: "running", live: true })], projects: ["/p/demo"] };
+    replies["session.subscribe"] = () => new Promise(() => {});
+    saveTabs([OLD, PARTNER]);
+    saveSplit({ ids: [OLD, PARTNER], dir: "row", ratio: 0.5, at: 0 } as never);
+    await mount("#" + OLD);
+    await settle();
+    expect(sent.filter((m) => m.type === "session.subscribe" && m.sessionId === PARTNER)).toHaveLength(1);
+  });
+
   it("on a phone the skeleton has no header", async () => {
     width = 390;
     replies["session.subscribe"] = () => new Promise(() => {});
