@@ -181,7 +181,7 @@ import { FOCUS_TAB, NEW_TAB, avatarColors, insertPaneTab, keysFinal as tabKeysFi
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { type Area, type DockArea, type DockSide, PANE_IDS, canMain, type PaneId, activePane, areaOf, flipSide, isAddonPane, loadLayout, loadPaneTabs, movePane, paneLabel, paneTabText, rememberPane, resetLayout, saveLayout, saveTerminalDock, setAddonPaneTitles, useLayout, useMinWidth, withPane, withPanes } from "./layout.ts";
-import { OnFirstOpen, PaneFallback } from "./lazy-dialog.tsx";
+import { DialogFallback, OnFirstOpen, PaneFallback } from "./lazy-dialog.tsx";
 import { PlanPane } from "./plan-pane.tsx";
 import { PER_CWD, artifactRef, identityOf, isItem, isPaneRef, kindOf, ownerOf, paneTabFor, paneTabTitle, parseRef, partIdOf, pathOf, refOf } from "./pane-ref.ts";
 import { type DockedCommand, type DockedSession, DOCKED_DRAG_TYPE, DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PANE_DRAG_TYPE, PaneSlot, usePaneHosts } from "./dock-area.tsx";
@@ -3930,7 +3930,7 @@ export function App() {
         </div>
       </header>
       <DeleteDialog title={deleting && (list.find((s) => s.id === deleting)?.title ?? tr("app.palette.untitled"))} onConfirm={() => deleteSession(deleting!)} onCancel={() => setDeleting(undefined)} />
-      <OnFirstOpen open={!!cleanup}><CleanupDialog
+      <OnFirstOpen open={!!cleanup} fallback={<DialogFallback size="cleanup" />}><CleanupDialog
         scope={cleanup}
         list={list}
         worktrees={worktrees}
@@ -4690,7 +4690,7 @@ export function App() {
       )}
       <OnFirstOpen open={settingsOpen}><SettingsDialog onLogin={() => (setSettingsOpen(false), openLogin())} project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} onOpenCodeProviders={dropOpenCodeModels} /></OnFirstOpen>
       {(viewer || shown) && client.current && (
-        <OnFirstOpen open={!!viewer}><ViewerDialog
+        <OnFirstOpen open={!!viewer} fallback={<DialogFallback size="large" />}><ViewerDialog
           target={viewer && !isFileTarget(viewer.target) ? viewer.target : undefined}
           opener={viewer?.opener}
           client={client.current}
@@ -4706,7 +4706,7 @@ export function App() {
         /></OnFirstOpen>
       )}
       {(fileDialog?.owner || panelTarget) && client.current && (
-        <OnFirstOpen open={!!fileDialog}><FileDialog
+        <OnFirstOpen open={!!fileDialog} fallback={<DialogFallback size="large" />}><FileDialog
           open={!!fileDialog}
           opener={fileDialog?.opener}
           client={client.current}

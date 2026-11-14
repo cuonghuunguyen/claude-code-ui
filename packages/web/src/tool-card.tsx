@@ -644,6 +644,12 @@ function EditDiff({ call, result }: { call: ToolCall; result?: ToolResult }) {
   );
 }
 
+/** Rows the unified diff will have: changed lines plus up to 3 context lines around them (never more than both sides together). */
+function skeletonRows(tool: string, input: unknown, files: { oldFile: { contents: string }; newFile: { contents: string } }) {
+  const both = lineCount(files.oldFile.contents) + lineCount(files.newFile.contents);
+  const s = diffStats(tool, input);
+  return s ? Math.min(both, s.added + s.removed + 6) : both;
+}
 const lineCount = (s: string) => (s ? s.split("\n").length - (s.endsWith("\n") ? 1 : 0) : 0);
 
 /** The Edit/Write diff of a tool input; `fallback` while the input is incomplete. Also used by the permission panel. */
@@ -678,7 +684,7 @@ export function InputDiff({
   if (!files) return fallback;
   return (
     <div className="overflow-hidden rounded-md border text-xs" data-testid="edit-diff">
-      <Suspense fallback={<DiffSkeleton rows={lineCount(files.oldFile.contents) + lineCount(files.newFile.contents)} header={fileHeader} />}>
+      <Suspense fallback={<DiffSkeleton rows={skeletonRows(tool, input, files)} header={fileHeader} />}>
         <MultiFileDiff oldFile={files.oldFile} newFile={files.newFile} options={options} />
       </Suspense>
     </div>

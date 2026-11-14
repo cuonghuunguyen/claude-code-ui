@@ -39,11 +39,15 @@ import { ListResizer, loadListWidth, saveListWidth } from "./changes-panel.tsx";
 import { usePanelAsk } from "./panel-ask.ts";
 import { fileSize, isDirty, isMarkdown, loadMdView, mediaKind, pin, entryMention, saveMdView, type MdView } from "./files.ts";
 import { setEditorOf } from "./find-in-files.ts";
+
 import { docText, lineBreaks, replaceDoc, selectionMention, selectionQuote } from "./editor-doc.ts";
 import { createEditorStore, useEditorStore, useEditorSync, type EditorStore } from "./editor-store.ts";
 import { EditorSync } from "./editor-sync.ts";
 
 type Client = ReturnType<typeof connect>;
+
+// Find in files reads the selection of the focused editor through this (find-in-files.ts has no CodeMirror of its own).
+setEditorOf((el) => EditorView.findFromDOM(el));
 
 /** Panel width from which the tree sits beside the editor (Tailwind's `@2xl`, the Changes tab's list rule); below it the tree is a drawer. */
 export const TREE_BESIDE_PX = 672;
