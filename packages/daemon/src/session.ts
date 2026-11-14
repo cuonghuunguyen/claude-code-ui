@@ -446,6 +446,11 @@ export class Session {
     return this.pending.get(requestId)?.part;
   }
 
+  /** The Engine's request flags of a pending request (blockedPath, decisionReason ...); undefined once settled or unknown. */
+  pendingContext(requestId: string): Omit<TierContext, "cwd"> | undefined {
+    return this.pending.get(requestId)?.ctx;
+  }
+
   /**
    * The permission tier of a pending permission request (docs/spec.md "Permission tiers"); undefined for a question or unknown ID.
    * Read once per request off the event loop (tierAsync: git runs as a child process) and reused for the permission event, the

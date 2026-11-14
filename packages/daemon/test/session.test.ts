@@ -8,6 +8,8 @@ import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { parseOmitted, type Event } from "@claude-ui/protocol";
 import { CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, INTERRUPT_GRACE_MS, queuedQuery, Session, STALE_TURN_MS, THROWAWAY_TIMEOUT_MS } from "../src/session.ts";
 import { taskDirs } from "../src/shell-output.ts";
+import { canSymlink } from "./symlink-support.ts";
+import { sharedFixture } from "./shared-dirs-fixture.ts";
 import { createPerf, setPerf } from "../src/perf.ts";
 import { createUpdater, RESTART_CODE } from "../src/update.ts";
 import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, clearState, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, limitQuery, limitState, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, parallelPermissionQuery, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped, foregroundBashQuery, backgrounded, deniedQuery, hookResults } from "./fake-query.ts";
@@ -511,6 +513,24 @@ describe("Session", () => {
       { type: "text", text: "what is this?" },
       { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } },
     ]);
+  });
+
+  describe.skipIf(!canSymlink)("Shared folders of a worker (GH-755)", () => {
+    it("a worker query gets the shared folder as a working directory, next to the upload folder; a user session does not", () => {
+      const { wt, shared } = sharedFixture();
+      started({ query: fakeQuery as never, worker: () => true, uploadDir: () => "/up/x" }, wt);
+      expect(calls.at(-1)!.additionalDirectories).toEqual(["/up/x", shared]);
+      started({ query: fakeQuery as never, worker: () => true }, wt);
+      expect(calls.at(-1)!.additionalDirectories).toEqual([shared]);
+      started({ query: fakeQuery as never, worker: () => false, uploadDir: () => "/up/x" }, wt);
+      expect(calls.at(-1)!.additionalDirectories).toEqual(["/up/x"]);
+      started({ query: fakeQuery as never }, wt);
+      expect(calls.at(-1)!.additionalDirectories).toBeUndefined();
+    });
+    it("a worker in a plain folder gets no extra directory", () => {
+      started({ query: fakeQuery as never, worker: () => true }, "/tmp");
+      expect(calls.at(-1)!.additionalDirectories).toBeUndefined();
+    });
   });
 
   describe("Inline visualizations (GH-690)", () => {

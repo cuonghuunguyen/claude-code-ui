@@ -160,6 +160,15 @@ Everything a worker produces that is **not the fix** goes in the playbook's scra
 logs, screenshots, HTML reports. Nothing under it is ever committed. If `git status` lists it,
 the ignore did not land; fix that, never `git add` around it.
 
+Put the scratch folder (its top folder, e.g. `development-docs`) in `worktree.symlinkDirectories`
+of the main checkout's `.claude/settings.local.json`. Then every worktree the daemon creates
+holds it as a link to the main checkout, and a worker's writes there need no permission prompt
+(the daemon adds the folder to the worker's working directories) and are low tier. Without the
+link `report-dir` is outside the worker's folder and every write to it is a prompt for the user.
+Workers write report files with Write or Edit, never a Bash heredoc (Bash is always high tier
+and goes to the auto-mode classifier). A permission event with `blockedPath` / `decisionReason`
+says why the CLI asked.
+
 The playbook says how the folder is ignored. Default: the worker appends `development-docs/`
 to `"$(git rev-parse --git-common-dir)/info/exclude"` (idempotently). Not a literal
 `.git/info/exclude`: in a linked worktree `.git` is a file and that path silently does nothing.

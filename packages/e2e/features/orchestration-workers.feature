@@ -51,6 +51,17 @@ Feature: Orchestration workers: targets, worker trees and closing finished worke
     And the worktree folder of the new branch has no "skip.log"
     And I capture "worker worktreeinclude"
 
+  Scenario: An auto-mode worker writes to its linked scratch folder without a permission prompt
+    Given the scratch project shares an ignored development-docs folder with its worktrees
+    When I send "Load the worker_start tool with ToolSearch (query select:mcp__orchestration__worker_start), then call it with exactly {\"name\":\"probe\",\"repo\":\"<project>\",\"branch\":\"<branch>\",\"model\":\"sonnet\",\"mode\":\"auto\",\"prompt\":\"Use the Write tool to write the file development-docs/probe/notes.md with the content OK. Then reply with exactly: DONE\"}. Do nothing else." with the scratch project and a new branch name filled in
+    Then I see a permission request
+    When I allow the permission request
+    Then the "worker_start" tool card result says mode "auto"
+    And the worker wrote "development-docs/probe/notes.md" in the main checkout of the scratch project
+    When I open the worker "probe"
+    Then no permission request is shown
+    And I capture "worker scratch write"
+
   Scenario: Settings shows the worker tree limits
     When I open Settings › Orchestration
     Then the Orchestration setting "Maximum tree depth" is 2
