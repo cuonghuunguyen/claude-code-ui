@@ -3317,6 +3317,17 @@ describe("Always allow (GH-756)", () => {
     await s.close();
   });
 
+  it("Always allow again after rule_saved adds the rule once", async () => {
+    const { s } = await open();
+    ruleCheck.failApply = true;
+    await expect(s.alwaysAllowDenied("dn-1", "local")).rejects.toMatchObject({ code: "rule_saved" });
+    ruleCheck.failApply = false;
+    await s.alwaysAllowDenied("dn-1", "local");
+    expect(controlCalls.filter((c) => "applyFlagSettings" in (c as object)).at(-1)).toEqual({ applyFlagSettings: { permissions: { allow: ["Bash(git push --force)"] } } });
+    expect(JSON.parse(readFileSync(join(tmp, ".claude", "settings.local.json"), "utf8")).permissions.allow).toEqual(["Bash(git push --force)"]);
+    await s.close();
+  });
+
   it("errors: unknown call, no rule, a save already running, a second use", async () => {
     const { s } = await open();
     await expect(s.alwaysAllowDenied("nope", "session")).rejects.toMatchObject({ code: "unknown_call" });

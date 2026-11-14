@@ -454,7 +454,7 @@ export class ClaudeSession implements EngineSession {
         // Both scopes: re-applied as allowedTools at each query start, and live now.
         const value = alwaysRule(call.tool, call.input);
         if (!("toolName" in value)) throw new Error(`no allow rule fits this ${call.tool} call`);
-        this.grants.push({ type: "addRules", rules: [value], behavior: "allow", destination: "session" });
+        if (!sessionRules(this.grants).includes(rule)) this.grants.push({ type: "addRules", rules: [value], behavior: "allow", destination: "session" });
         await this.query?.applyFlagSettings({ permissions: { allow: sessionRules(this.grants) } });
         this.guardRetry();
         const r = this.adapter.allowRetry(toolUseId, scope);
