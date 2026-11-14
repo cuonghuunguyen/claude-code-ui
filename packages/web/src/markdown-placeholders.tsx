@@ -19,7 +19,7 @@ export function MathPlaceholderParagraph({ node: _node, children, className, ...
     if (el.props.node?.tagName === "img" || (el.props.node?.tagName === "code" && el.props["data-block"] !== undefined)) return <>{children}</>;
   }
   const first = Array.isArray(children) ? children[0] : children;
-  const block = typeof first === "string" && /^\s*(?:\$\$|\\\[)/.test(first);
+  const block = typeof first === "string" && /^\s*\$\$/.test(first);
   return (
     <p {...rest} className={[className, block && "min-h-14"].filter(Boolean).join(" ") || undefined}>
       {children}

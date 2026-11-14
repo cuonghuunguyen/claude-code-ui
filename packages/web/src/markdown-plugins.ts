@@ -1,6 +1,6 @@
 import { cjk } from "@streamdown/cjk";
 import type { code as codePlugin } from "@streamdown/code";
-import type { math as mathPlugin } from "@streamdown/math";
+import type { math as mathPlugin, MathPlugin } from "@streamdown/math";
 import type { mermaid as mermaidPlugin } from "@streamdown/mermaid";
 import { useEffect, useMemo, useState } from "react";
 
@@ -14,7 +14,7 @@ type Need = "code" | "math" | "mermaid";
 
 const FENCE = /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})/;
 const MERMAID_FENCE = /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})[ \t]*mermaid/i;
-// The math plugin has singleDollarTextMath off: only $$ blocks (and the \( \[ forms) are math, a lone $ is text.
+// The math plugin has singleDollarTextMath off: only $$ blocks and the \( \) \[ \] forms are math, a lone $ is text.
 const MATH = /\$\$|\\\(|\\\[|\\begin\{/;
 
 /** What `text` needs; pure, so a test can pin it. */
@@ -22,10 +22,39 @@ export function markdownNeeds(text: string): Record<Need, boolean> {
   return { code: FENCE.test(text), mermaid: MERMAID_FENCE.test(text), math: MATH.test(text) };
 }
 
+// Code first (fence to its end or the end of text, then a span of equal backtick runs), so a \( or \[ inside code is skipped.
+const BACKSLASH_MATH = /((?:^|\n)[ \t]{0,3}(`{3,}|~{3,})[^\n]*(?:\n[\s\S]*?(?:\n[ \t]{0,3}\2[`~]*[ \t]*(?=\n|$)|$)|$))|(`+)[\s\S]*?\3|(?<!\\)\\\(([\s\S]*?)(?<!\\)\\\)|(?<!\\)\\\[([\s\S]*?)(?<!\\)\\\]/g;
+
+/**
+ * `\( x \)` and `\[ x \]` as `$$ x $$` (inline) and a `$$` block, outside code. Markdown eats the backslash of `\(` as an escape,
+ * so remark-math never sees these forms; the source is rewritten before the parser runs. Pure, so a test can pin it.
+ */
+export function backslashMathToDollars(text: string): string {
+  if (!text.includes("\\")) return text;
+  return text.replace(BACKSLASH_MATH, (m, fence, _f, _t, inline, block) =>
+    fence !== undefined ? m : inline !== undefined ? `$$${inline}$$` : block !== undefined ? `\n\n$$\n${String(block).trim()}\n$$\n\n` : m,
+  );
+}
+
+type Pluggable = MathPlugin["remarkPlugin"];
+type Processor = { parser?: (doc: string, file: unknown) => unknown };
+type RemarkFn = (this: Processor, options?: unknown) => void;
+
+/** The math plugin with `\( \)` and `\[ \]` as math delimiters too. */
+function withBackslashDelimiters(base: typeof mathPlugin): typeof mathPlugin {
+  const [attach, options] = base.remarkPlugin as [RemarkFn, unknown];
+  function remarkMathBackslash(this: Processor) {
+    const parse = this.parser;
+    if (parse) this.parser = (doc, file) => parse(backslashMathToDollars(doc), file);
+    attach.call(this, options);
+  }
+  return { ...base, remarkPlugin: remarkMathBackslash as Pluggable };
+}
+
 const loaders: { [K in Need]: () => Promise<NonNullable<MarkdownPlugins[K]>> } = {
   code: () => import("@streamdown/code").then((m) => m.code),
   // The KaTeX stylesheet comes with the plugin: without it the MathML copy shows beside the formula and the fonts are missing.
-  math: () => Promise.all([import("katex/dist/katex.min.css"), import("@streamdown/math")]).then(([, m]) => m.math),
+  math: () => Promise.all([import("katex/dist/katex.min.css"), import("@streamdown/math")]).then(([, m]) => withBackslashDelimiters(m.math)),
   mermaid: () => import("@streamdown/mermaid").then((m) => m.mermaid),
 };
 const loaded: { [K in Need]?: NonNullable<MarkdownPlugins[K]> } = {};

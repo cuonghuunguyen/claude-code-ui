@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { loadMarkdownPlugin, markdownNeeds, resetMarkdownPlugins, useMarkdownPlugins, type MarkdownPlugins } from "./markdown-plugins.ts";
+import { backslashMathToDollars, loadMarkdownPlugin, markdownNeeds, resetMarkdownPlugins, useMarkdownPlugins, type MarkdownPlugins } from "./markdown-plugins.ts";
 
 const sheet = vi.hoisted(() => ({ loaded: 0 }));
 
@@ -72,5 +72,34 @@ describe("math plugin stylesheet (GH-790)", () => {
     expect(sheet.loaded).toBe(0);
     await fresh.loadMarkdownPlugin("math");
     expect(sheet.loaded).toBe(1);
+  });
+});
+
+describe("backslash math delimiters (GH-798)", () => {
+  it("rewrites \\( \\) inline and \\[ \\] block to $$", () => {
+    expect(backslashMathToDollars("so \\(a+b\\) holds")).toBe("so $$a+b$$ holds");
+    expect(backslashMathToDollars("x \\[\n a^2 \n\\] y")).toBe("x \n\n$$\na^2\n$$\n\n y");
+  });
+  it("leaves code spans, fences and escaped backslashes literal", () => {
+    for (const t of ["`\\(a\\)`", "``x \\[a\\] ``", "```\n\\(a\\)\n```", "~~~tex\n\\[a\\]\n~~~", "\\\\(a\\\\)", "plain"]) expect(backslashMathToDollars(t)).toBe(t);
+    expect(backslashMathToDollars("```\n\\(a\\)\n```\n\\(b\\)")).toBe("```\n\\(a\\)\n```\n$$b$$");
+  });
+
+  it("the loaded math plugin renders both forms as KaTeX, once, and code stays literal", async () => {
+    const { Streamdown } = await import("streamdown");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    await loadMarkdownPlugin("math");
+    let plugins: MarkdownPlugins = { cjk: (await import("@streamdown/cjk")).cjk };
+    const Probe = () => (plugins = useMarkdownPlugins("$$"), null);
+    const root = createRoot(document.createElement("div"));
+    await act(async () => root.render(createElement(Probe)));
+    const html = renderToStaticMarkup(
+      createElement(Streamdown, { plugins }, "in \\(a+b\\) and\n\n\\[\nc^2\n\\]\n\nuse `\\(x\\)` and\n\n```\n\\[y\\]\n```"),
+    );
+    expect((html.match(/class="katex"/g) ?? []).length).toBe(2);
+    expect(html).toContain("katex-display");
+    expect(html).toContain("\\(x\\)");
+    expect(html).toContain("\\[y\\]");
+    await act(async () => root.unmount());
   });
 });
