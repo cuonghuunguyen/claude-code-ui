@@ -694,6 +694,7 @@ const MAX_REMOTES = 20;
 export async function gitTagCreate(cwd: string, o: { hash: unknown; name: unknown; message?: unknown; argv: unknown } & RemoteOptions): Promise<Written | null> {
   const { hash, name, message } = o;
   if (message !== undefined && (typeof message !== "string" || message.length > MAX_TAG_MESSAGE || message.includes("\0"))) throw bad("message must be text of at most 10000 characters");
+  return pinScope(async () => {
   const top = await topIn(cwd, o.allowed);
   if (!top) return null;
   const env = await writeEnvNoEditor(top);
@@ -706,10 +707,12 @@ export async function gitTagCreate(cwd: string, o: { hash: unknown; name: unknow
     if (!Array.isArray(o.argv) || o.argv.length !== argv.length || o.argv.some((a, i) => a !== argv[i])) throw new WorktreeError("stale", "The command changed since the dialog opened");
     return { output: (await run(top, argv, env)).out, refs: await gitRefs(top, o.allowed) };
   });
+  });
 }
 
 /** The local tag and the configured remotes (no network), for the Remove Tag dialog. Null outside a work tree. */
 export async function gitTag(cwd: string, o: { name: unknown } & RemoteOptions): Promise<GitTagInfo | null> {
+  return pinScope(async () => {
   const top = await topIn(cwd, o.allowed);
   if (!top) return null;
   const env = await writeEnv(top);
@@ -720,6 +723,7 @@ export async function gitTag(cwd: string, o: { name: unknown } & RemoteOptions):
   const annotated = (await ask(top, ["cat-file", "-t", `refs/tags/${name}`], env)).out === "tag";
   const { names } = await remoteConfigOf(top);
   return { name, hash, commit, annotated, remotes: [...names].slice(0, MAX_REMOTES) };
+  });
 }
 
 /** Checks out a local branch (`refs/heads/x`), or a remote branch (`refs/remotes/r/b`) as a new local branch that tracks it. */

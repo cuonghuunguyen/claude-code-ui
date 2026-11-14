@@ -3328,7 +3328,7 @@ export function createDaemon(opts: {
             markRepoStale(cwd);
             return reply({ written });
           } catch (e) {
-            if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
+            if (e instanceof WorktreeError ? e.code !== "bad_request" : true) markRepoStale(cwd);
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
           }
         }
