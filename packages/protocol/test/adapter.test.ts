@@ -1050,3 +1050,31 @@ describe("failed login (GH-615)", () => {
     expect(run([{ type: "system", subtype: "api_retry", error: "rate_limit" }])).toHaveLength(1);
   });
 });
+
+describe("adapter on a recorded fork run (GH-718, SDK 0.3.285)", () => {
+  const messages = fixture("fork-run.jsonl");
+  const parts = run(messages);
+  const subs = parts.filter((p) => p.type === "subagent") as Extract<Part, { type: "subagent" }>[];
+
+  it("the Agent call with subagent_type fork is one subagent part with agentType fork that ends done at its task_notification", () => {
+    const id = subs[0]!.id;
+    expect(subs.every((p) => p.id === id)).toBe(true);
+    expect(subs.every((p) => p.agentType === "fork")).toBe(true);
+    expect(subs.at(-1)).toMatchObject({ status: "done" });
+    expect(subs.at(-1)!.endedAt).toBeGreaterThan(0);
+  });
+
+  it("the fork's own steps are children of the call; the parent's own parts are not", () => {
+    const id = subs[0]!.id;
+    const children = parts.filter((p) => (p as { parentId?: string }).parentId === id);
+    expect(children.some((p) => p.type === "tool_call")).toBe(true);
+    expect(children.some((p) => p.type === "assistant_text")).toBe(true);
+    expect(parts.filter((p) => p.type === "assistant_text" && !(p as { parentId?: string }).parentId).length).toBeGreaterThan(0);
+  });
+
+  it("a subagent call without subagent_type has no agentType", () => {
+    const adapter = createAdapter();
+    const out = adapter.convert({ type: "assistant", message: { id: "m1", role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Agent", input: { description: "x", prompt: "y" } }] } } as never);
+    expect(out.find((p) => p.type === "subagent")).not.toHaveProperty("agentType");
+  });
+});

@@ -212,3 +212,19 @@ function alive(pid: unknown) {
     return (e as NodeJS.ErrnoException).code === "EPERM";
   }
 }
+
+/**
+ * A fork run's transcript (`subagents/agent-<id>.jsonl`) starts with a copy of the parent's Agent call (same tool_use id) and a synthetic
+ * user entry holding a tool_result for that id ("Fork started") plus the fork boilerplate (SDK 0.3.285). Both are dropped: they would make
+ * a second subagent part with the parent's id and re-anchor the call at the run's own result. Detected by content, so a run without the
+ * prefix (another SDK version, a normal subagent) comes back as it is.
+ */
+export function withoutForkPrefix(run: SessionMessage[]): SessionMessage[] {
+  const first = run[0];
+  const call = first?.parent_tool_use_id;
+  if (!call || first!.type !== "assistant") return run;
+  const blocks = (m: SessionMessage) => ((m.message as { content?: unknown } | undefined)?.content ?? []) as { type?: string; id?: string; tool_use_id?: string }[];
+  if (!Array.isArray(blocks(first!)) || !blocks(first!).some((b) => b.type === "tool_use" && b.id === call)) return run;
+  const at = run.findIndex((m, i) => i > 0 && m.type === "user" && Array.isArray(blocks(m)) && blocks(m).some((b) => b.type === "tool_result" && b.tool_use_id === call));
+  return at < 0 ? run : run.slice(at + 1);
+}

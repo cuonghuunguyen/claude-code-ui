@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { Session } from "../src/session.ts";
-import { interleaveRuns } from "../src/transcript.ts";
+import { interleaveRuns, withoutForkPrefix } from "../src/transcript.ts";
 import type { Event } from "@claude-ui/protocol";
 import { fakeQuery, history } from "./fake-query.ts";
 
@@ -134,5 +134,35 @@ describe("restored subagent runs", () => {
     const texts = events.map((e) => e.part).filter((p) => p.type === "assistant_text" || p.type === "user_text").map((p) => (p as { text: string }).text);
     expect(texts.indexOf("child text")).toBeGreaterThan(-1);
     expect(texts.indexOf("child text")).toBeLessThan(texts.indexOf("after the run"));
+  });
+});
+
+describe("withoutForkPrefix (GH-718)", () => {
+  // A fork run's transcript opens with a copy of the parent's Agent call and a synthetic "Fork started" result for it (SDK 0.3.285).
+  const callCopy = m("assistant", "f-call", [{ type: "tool_use", id: "toolu_fork", name: "Agent", input: { subagent_type: "fork", description: "count" } }], "toolu_fork");
+  const started = m("user", "f-started", [{ type: "tool_result", tool_use_id: "toolu_fork", content: [{ type: "text", text: "Fork started — processing in background" }] }, { type: "text", text: "<fork-boilerplate>" }], "toolu_fork");
+  const steps = [
+    m("assistant", "f-1", [{ type: "tool_use", id: "toolu_glob", name: "Glob", input: { pattern: "*.txt" } }], "toolu_fork"),
+    m("user", "f-2", [{ type: "tool_result", tool_use_id: "toolu_glob", content: "a.txt" }], "toolu_fork"),
+  ];
+  const parentMain = [
+    m("user", "p-user", "fork it"),
+    m("assistant", "p-call", [{ type: "tool_use", id: "toolu_fork", name: "Agent", input: { subagent_type: "fork", description: "count" } }]),
+    m("user", "p-placeholder", [{ type: "tool_result", tool_use_id: "toolu_fork", content: "Async agent launched successfully" }]),
+    m("user", "p-notice", "<task-notification>done</task-notification>"),
+  ];
+
+  it("drops the copied call and its synthetic result, keeps the real steps", () => {
+    expect(withoutForkPrefix([callCopy, started, ...steps]).map((x) => x.uuid)).toEqual(["f-1", "f-2"]);
+  });
+
+  it("leaves a run that has no such prefix as it is", () => {
+    expect(withoutForkPrefix(children)).toBe(children);
+    expect(withoutForkPrefix([])).toEqual([]);
+  });
+
+  it("a restored fork run anchors at the parent's placeholder result and starts at its first real step", () => {
+    const ordered = interleaveRuns(parentMain, [withoutForkPrefix([callCopy, started, ...steps])], { pruneOrphans: true });
+    expect(ordered.map((x) => x.uuid)).toEqual(["p-user", "p-call", "p-placeholder", "f-1", "f-2", "p-notice"]);
   });
 });

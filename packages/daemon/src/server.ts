@@ -54,7 +54,7 @@ import { ConfigError, createConfig, runCli, timed, type CliRunner, type McpReque
 import { createPlugins, redact, type PluginsRequest } from "./plugins.ts";
 import { addonAssetHeaders, addonHeaders, createAddons, type AddonsRequest } from "./addons.ts";
 import { searchTranscripts } from "./content-search.ts";
-import { cliTurnRunning, interleaveRuns, JsonlTail, parseJsonl, transcriptEnd } from "./transcript.ts";
+import { cliTurnRunning, interleaveRuns, JsonlTail, parseJsonl, transcriptEnd, withoutForkPrefix } from "./transcript.ts";
 import type { KeepAwake } from "./keep-awake.ts";
 import { customCommand, EDITORS, findOnPath, isOpenWith, openCommand, type Launcher, type OpenCommand } from "./open-external.ts";
 import { createRouter, type Sides } from "./sides.ts";
@@ -993,6 +993,7 @@ export function createDaemon(opts: {
         return history
           .getSubagentMessages(id, a, { dir: cwd })
           .then((m) => withParallelCalls(f, m))
+          .then(withoutForkPrefix)
           .then((messages) => (runStamp !== undefined && cache.runs.set(a, { stamp: runStamp, messages }), messages))
           .catch((err) => (console.error(`reading subagent run ${a} of ${id} failed:`, err), []));
       }),

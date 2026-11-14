@@ -165,9 +165,9 @@ export type Part = { parentId?: string } & (
    * A subagent run (Agent/Task call); `id` = `toolUseId`, its `tool_result` is `<toolUseId>:result`, child parts have `parentId` = `id`.
    * Its own `parentId`: the run that started it (absent = the session). `startedAt` / `endedAt` (ms): transcript timestamps, else the
    * daemon's clock; `endedAt` once the status is done, error, denied or stopped (a background run: at its task_notification; a run
-   * no query runs any more: at its last message).
+   * no query runs any more: at its last message). `agentType`: the Agent input `subagent_type`; `"fork"` = a Fork run (docs/spec.md "Fork runs").
    */
-  | { type: "subagent"; id: string; toolUseId: string; description: string; status: ToolStatus; startedAt: number; endedAt?: number }
+  | { type: "subagent"; id: string; toolUseId: string; description: string; status: ToolStatus; startedAt: number; endedAt?: number; agentType?: string }
   /** The turn was stopped (session.interrupt, or No without feedback); replaces its turn_result. */
   | { type: "turn_interrupted"; id: string }
   /** A CLI banner (system/informational, model refusal fallback): `notice` gray, `warning` prominent; `id` = its uuid. */
