@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { expect, it, vi } from "vitest";
 import { checkPatch, createSettings, DEFAULTS, parseSettings } from "../src/settings.ts";
 
-const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {} };
+const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {}, commitMessageWarm: false };
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
@@ -374,6 +374,17 @@ it("launcher defaults and validation", () => {
   for (const port of [0, 70000]) expect(checkPatch({ launcher: { port } })).toBe("Port must be a whole number from 1 to 65535");
   expect(checkPatch({ launcher: { roots: ["rel/dir"] } })).toMatch(/^Roots must be/);
   expect(checkPatch({ launcher: { roots: [resolve("x")] } })).toBeUndefined();
+});
+
+it("git.commitMessageWarm (GH-668) is a boolean, off by default and not stored while off", () => {
+  const f = file();
+  const s = createSettings({ file: f });
+  expect(s.get().git.commitMessageWarm).toBe(false);
+  expect(s.set({ git: { commitMessageWarm: true } }).git.commitMessageWarm).toBe(true);
+  expect(createSettings({ file: f }).get().git.commitMessageWarm).toBe(true);
+  s.set({ git: { commitMessageWarm: false } });
+  expect(JSON.parse(readFileSync(f, "utf8")).git ?? {}).toEqual({});
+  expect(() => s.set({ git: { commitMessageWarm: "yes" as never } })).toThrow(/Keep commit message generator warm must be/);
 });
 
 it("commit message instructions: saved, read back, the default is not stored; bad values are refused", () => {

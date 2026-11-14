@@ -109,6 +109,30 @@ Feature: Changes tab commits the checked files and Claude writes the commit mess
     And no error shows in the commit box
     And I capture "commit-message-generated"
 
+  Scenario: With Keep commit message generator warm on, Generate writes a message on the first and the second click
+    Given the viewport is 1440x900
+    And the app is open
+    And I open the scratch project
+    And I start a new Haiku session
+    When I open Settings and choose the Git group
+    And I switch "Keep commit message generator warm" on in Settings Git
+    Then I capture "warm-switch-on"
+    When I close Settings
+    And I open the Changes tab of the side panel
+    And I choose the "Uncommitted" diff mode
+    And I check the file "a.txt" in the Changes tab
+    And I click Generate in the commit box
+    Then the commit message box holds a message from Claude
+    When I type the commit message ""
+    And I click Generate in the commit box
+    Then the commit message box holds a message from Claude
+    And Commit is enabled
+    And no error shows in the commit box
+    And I capture "warm-generated-twice"
+    When I open Settings and choose the Git group
+    And I switch "Keep commit message generator warm" off in Settings Git
+    And I close Settings
+
   Scenario: A resolved merge that is not finished shows the banner without conflicted files
     Given the scratch project has a merge with its conflicts resolved but not committed
     And the viewport is 1440x900

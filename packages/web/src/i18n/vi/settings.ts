@@ -266,6 +266,8 @@ export default {
   "settings.row.git.openRepositoryInParentFolders.hint": "Điều khiển việc có mở kho mã nằm trong thư mục cha của không gian làm việc hoặc tệp đang mở hay không. Mặc định always (VS Code: prompt); prompt hoạt động như always ở đây cho đến khi có hộp thoại hỏi.",
   "settings.row.git.commitMessageInstruction.label": "Chỉ dẫn viết nội dung commit",
   "settings.row.git.commitMessageInstruction.hint": "Điều Claude được yêu cầu khi viết nội dung commit cho các tệp đã chọn. Để trống: dùng chỉ dẫn có sẵn (chữ xám).",
+  "settings.row.git.commitMessageWarm.label": "Giữ sẵn trình tạo nội dung commit",
+  "settings.row.git.commitMessageWarm.hint": "Daemon giữ sẵn một tiến trình Claude Haiku để nút Tạo nội dung commit chạy nhanh hơn. Tốn một tiến trình nhàn rỗi khi bật. Tắt: mỗi lần bấm một tiến trình.",
   "settings.git.projectInstruction.label": "Chỉ dẫn viết nội dung commit cho {project}",
   "settings.git.projectInstruction.hint": "Chỉ áp dụng cho dự án này; ưu tiên hơn chỉ dẫn ở trên. Để trống: dùng chỉ dẫn ở trên.",
 

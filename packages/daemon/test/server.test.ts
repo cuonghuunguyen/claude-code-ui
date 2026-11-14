@@ -1329,6 +1329,45 @@ describe("daemon", () => {
     }
   });
 
+  it("git.commitMessage with commitMessageWarm: a ready process answers, switching it off stops it", async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "cm-")));
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    writeFileSync(join(repo, "a.txt"), "hello\n");
+    const procs = { spawned: 0, aborted: 0, tokens: [] as (string | undefined)[] };
+    const query = ((a: { prompt: unknown; options: { abortController?: AbortController; systemPrompt?: string; env?: Record<string, string | undefined> } }) => {
+      if (typeof a.prompt === "string" || !a.options.systemPrompt?.includes("git commit messages")) return (fakeQuery as never as (x: unknown) => unknown)(a);
+      procs.spawned++;
+      procs.tokens.push(a.options.env?.CLAUDE_CODE_OAUTH_TOKEN);
+      a.options.abortController!.signal.addEventListener("abort", () => procs.aborted++, { once: true });
+      return (async function* () {
+        for await (const _ of a.prompt as AsyncIterable<unknown>) yield { type: "result", subtype: "success", is_error: false, result: "feat: warm" };
+      })();
+    }) as never;
+    const appSettings = createSettings();
+    const d = createDaemon({ webRoot, token, roots: [repo], query, appSettings });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const m = { type: "git.commitMessage", cwd: repo, paths: ["a.txt"] };
+      await c.request({ type: "settings.set", patch: { git: { commitMessageWarm: true } } });
+      await vi.waitFor(() => expect(procs.spawned).toBe(1));
+      expect(await c.request(m)).toMatchObject({ result: { message: "feat: warm" } });
+      expect(procs.spawned).toBe(2);
+      // A switched Claude account replaces the ready process: it holds the old token in its env.
+      const added = (await c.request({ type: "claude.account.add", name: "Work", token: "tok-work" })) as { result: { claudeAccounts: { id: string }[] } };
+      await c.request({ type: "settings.set", patch: { claude: { account: added.result.claudeAccounts[0]!.id } } });
+      await vi.waitFor(() => expect(procs.spawned).toBe(3));
+      expect(procs.tokens.at(-1)).toBe("tok-work");
+      expect(procs.aborted).toBe(2);
+      await c.request({ type: "settings.set", patch: { git: { commitMessageWarm: false } } });
+      await vi.waitFor(() => expect(procs.aborted).toBe(3));
+      await c.request(m);
+      expect(procs.spawned).toBe(3); // off: the cold path, no warm process
+    } finally {
+      d.close();
+    }
+  });
+
   it("git.checkout with local changes that the branch would overwrite replies local_changes", async () => {
     const c = await client();
     const repo = join(webRoot, "coproj");
