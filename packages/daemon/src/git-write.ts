@@ -263,7 +263,10 @@ function hasAmendBang(top: string, env: NodeJS.ProcessEnv): Promise<boolean> {
         const m = /(\d+)\.(\d+)/.exec(r.out);
         return !!m && (Number(m[1]) > 2 || (Number(m[1]) === 2 && Number(m[2]) >= 32));
       },
-      () => false,
+      () => {
+        gitNew.delete(top); // a failed read is not cached as "too old"
+        return false;
+      },
     );
     gitNew.set(top, known);
   }
@@ -280,8 +283,8 @@ async function rewordCheck(top: string, hash: string, head: string, parents: num
   if (pushed) return `Already pushed to ${shortRef(pushed)}`;
   if (hash === head) return "amend";
   if ((await run(top, ["rev-list", "--merges", "--count", `${hash}..HEAD`], env)).out !== "0") return "A merge commit follows it: edit its message in a terminal";
-  const later = (await run(top, ["log", "--format=%s", `${hash}..HEAD`], env)).out.split("\n");
-  if (later.some((s) => /^(fixup|squash|amend)! /.test(s))) return "A fixup!/squash!/amend! commit follows it: edit its message in a terminal";
+  // Asked of git, not read from a subject list: `run` keeps only the last 8000 characters, which would cut the newest subjects.
+  if ((await run(top, ["rev-list", "--count", "-E", "--grep=^(fixup|squash|amend)! ", `${hash}..HEAD`], env)).out !== "0") return "A fixup!/squash!/amend! commit follows it: edit its message in a terminal";
   if (!(await hasAmendBang(top, env))) return "Needs git 2.32 or newer";
   return "rebase";
 }
@@ -816,6 +819,7 @@ export async function gitReword(cwd: string, o: { hash: unknown; message: unknow
         return await runStop(top, argv[1]!, env, o.allowed, opts);
       } catch (e) {
         // A killed signing commit (timeout, cancel) leaves its index lock behind: the exclusive lock means no write of this daemon holds it.
+        // Accepted risk (recorded in notes.md): another git process (terminal, IDE) that took the lock in the instant after the kill loses it.
         if (signs && (o.signal?.aborted || (e instanceof WorktreeError && e.message === head))) await rm(hostOf(top, (await run(top, ["rev-parse", "--git-path", "index.lock"], env).catch(() => ({ out: "" }))).out || join(top, ".git", "index.lock")), { force: true }).catch(() => undefined);
         if (temporary) await undoReword(top, env, temporary, headHash);
         if (signs && e instanceof WorktreeError && e.code === "git_failed" && e.message !== head && /gpg|sign|pinentry|passphrase|ssh-keygen/i.test(e.message)) throw new WorktreeError("git_failed", `${head}\n${e.message}`);

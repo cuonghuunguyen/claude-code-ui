@@ -116,6 +116,13 @@ describe("commitMenu reword", () => {
       expect((await menu(r, first)).why?.reword).toBe("A fixup!/squash!/amend! commit follows it: edit its message in a terminal");
     }
   });
+  it("a fixup! commit at HEAD is found behind a long history (subject list longer than the run buffer)", async () => {
+    const r = repo();
+    const first = head(r.dir, "HEAD~2");
+    for (let i = 0; i < 300; i++) run(r.dir, "commit", "-q", "--allow-empty", "-m", `later commit number ${i} with a long enough subject line`);
+    run(r.dir, "commit", "-q", "--allow-empty", "-m", "fixup! c2");
+    expect((await menu(r, first)).why?.reword).toBe("A fixup!/squash!/amend! commit follows it: edit its message in a terminal");
+  }, 60_000);
   it("a commit that is not on the current branch is refused", async () => {
     const r = repo();
     run(r.dir, "checkout", "-q", "-b", "side", "HEAD~1");
