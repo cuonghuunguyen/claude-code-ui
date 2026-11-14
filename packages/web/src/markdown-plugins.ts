@@ -33,20 +33,50 @@ const BACKSLASH_MATH = new RegExp(
   "g",
 );
 
+const LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]/;
+const INDENTED = /^(?: {4}|\t)/;
+
+/** [start, end) offsets of indented code blocks: 4+ spaces or a tab after a blank line, not a list item's continuation. */
+function indentedCodeRanges(text: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  let pos = 0;
+  let prevBlank = true;
+  let inList = false;
+  let open: [number, number] | undefined;
+  for (const line of text.split("\n")) {
+    const end = pos + line.length;
+    if (!line.trim()) prevBlank = true;
+    else {
+      if (open && INDENTED.test(line)) open[1] = end;
+      else {
+        open = undefined;
+        if (LIST_ITEM.test(line)) inList = true;
+        else if (!/^[ \t]/.test(line)) inList = false;
+        if (prevBlank && !inList && INDENTED.test(line)) ranges.push((open = [pos, end]));
+      }
+      prevBlank = false;
+    }
+    pos = end + 1;
+  }
+  return ranges;
+}
+
 /**
- * `\( x \)` and `\[ x \]` as `$$ x $$`, outside code. Markdown eats the backslash of `\(` as an escape, so remark-math never
- * sees these forms; the source is rewritten before the parser runs. A `\[` and `\]` that each stand alone on their line are
- * replaced in place (same length, list indent and `>` prefix kept); a `\[ x \]` inside a line becomes a `$$` block of its own.
- * Pure, so a test can pin it.
+ * `\( x \)` and `\[ x \]` as `$$ x $$`, outside code (fences, code spans, indented code). Markdown eats the backslash of `\(`
+ * as an escape, so remark-math never sees these forms; the source is rewritten before the parser runs. A `\[` and `\]` that
+ * each stand alone on their line are replaced in place (same length, list indent and `>` prefix kept); in a table row `\[ x \]`
+ * is inline math (a block would split the row); elsewhere in a line it becomes a `$$` block of its own. Pure, so a test can pin it.
  */
 export function backslashMathToDollars(text: string): string {
   if (!text.includes("\\")) return text;
+  const code = indentedCodeRanges(text);
   return text.replace(BACKSLASH_MATH, (m, fence, _f, _t, inline, block, offset: number) => {
-    if (fence !== undefined) return m;
+    if (fence !== undefined || code.some(([from, to]) => offset >= from && offset < to)) return m;
     if (inline !== undefined) return `$$${inline}$$`;
     if (block === undefined) return m;
     const before = text.slice(text.lastIndexOf("\n", offset - 1) + 1, offset);
     if (/^[ \t>]*$/.test(before) && /^[ \t]*\n/.test(block) && /\n[ \t>]*$/.test(block)) return `$$${block}$$`;
+    if (/^\s*\|/.test(before)) return `$$${String(block).replace(/\s*\n\s*/g, " ")}$$`;
     return `\n\n$$\n${String(block).trim()}\n$$\n\n`;
   });
 }

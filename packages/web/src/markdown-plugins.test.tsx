@@ -84,6 +84,15 @@ describe("backslash math delimiters (GH-798)", () => {
     expect(backslashMathToDollars("1. Step:\n   \\[\n   x = 1\n   \\]\n2. Next")).toBe("1. Step:\n   $$\n   x = 1\n   $$\n2. Next");
     expect(backslashMathToDollars("> \\[\n> a^2\n> \\]")).toBe("> $$\n> a^2\n> $$");
   });
+  it("indented code stays literal; a list item's indented continuation is not code", () => {
+    for (const t of ["    \\(a\\)", "text\n\n    \\[a\\]\n\n\tx \\(b\\)"]) expect(backslashMathToDollars(t)).toBe(t);
+    expect(backslashMathToDollars("text\n\n    \\(a\\)\n\nafter \\(b\\)")).toBe("text\n\n    \\(a\\)\n\nafter $$b$$");
+    expect(backslashMathToDollars("text\n    \\(a\\)")).toBe("text\n    $$a$$");
+    expect(backslashMathToDollars("- item\n\n    \\(a\\)")).toBe("- item\n\n    $$a$$");
+  });
+  it("\\[ \\] in a table cell is inline math, the row stays one line", () => {
+    expect(backslashMathToDollars("| a | b |\n|---|---|\n| \\[y\\] | 2 |")).toBe("| a | b |\n|---|---|\n| $$y$$ | 2 |");
+  });
   it("a stray opener does not pair across a blank line, and an unclosed one is fast", () => {
     expect(backslashMathToDollars("group with \\( only\n\nlater \\(x\\)")).toBe("group with \\( only\n\nlater $$x$$");
     expect(backslashMathToDollars("a ` b\n\n\\(x\\)")).toBe("a ` b\n\n$$x$$");
