@@ -5,14 +5,14 @@ import { Skeleton } from "@/components/ui/skeleton";
  * The frame of ConfigDialog (config-dialog.tsx: backdrop, panel size and position) with skeleton rows, shown while the
  * chunk of a lazy dialog loads: the panel is already at its final size when the dialog's own content replaces it.
  */
-export function DialogFallback({ size = "config" }: { size?: "config" | "worktree" | "cleanup" | "large" }) {
+export function DialogFallback({ size = "config" }: { size?: "config" | "settings" | "worktree" | "cleanup" | "large" }) {
   const box =
     size === "large"
       ? // ViewerDialog and FileDialog.
         "fixed inset-0 z-50 m-auto flex h-[min(100dvh-32px,90dvh)] w-[min(100vw-32px,1200px)] flex-col overflow-hidden rounded-2xl border bg-card shadow-floating max-sm:h-dvh max-sm:w-full max-sm:rounded-none"
       : size === "cleanup"
         ? "-translate-x-1/2 fixed top-[max(48px,calc((100dvh-640px)/2))] left-1/2 z-50 flex max-h-[min(100dvh-96px,640px)] w-[min(100vw-24px,720px)] flex-col rounded-2xl border bg-card shadow-floating max-sm:top-0 max-sm:h-dvh max-sm:w-full max-sm:rounded-none"
-        : `-translate-x-1/2 fixed top-[max(48px,calc((100dvh-560px)/2))] left-1/2 z-50 flex max-h-[min(100dvh-96px,560px)] w-[min(100vw-24px,640px)] flex-col rounded-2xl border bg-card shadow-floating max-sm:top-0 max-sm:h-dvh max-sm:max-h-none max-sm:w-full max-sm:rounded-none${size === "worktree" ? " sm:h-[408px]" : ""}`;
+        : `-translate-x-1/2 fixed top-[max(48px,calc((100dvh-560px)/2))] left-1/2 z-50 flex max-h-[min(100dvh-96px,560px)] w-[min(100vw-24px,640px)] flex-col rounded-2xl border bg-card shadow-floating max-sm:top-0 max-sm:h-dvh max-sm:max-h-none max-sm:w-full max-sm:rounded-none${size === "worktree" ? " sm:h-[408px]" : size === "settings" ? " sm:h-[546px]" : ""}`;
   return (
     <>
       <div className="fixed inset-0 z-50 bg-overlay" />
