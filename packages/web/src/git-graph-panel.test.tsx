@@ -209,7 +209,8 @@ it("clicking a file shows its diff from git.fileAt of parent and commit; an adde
     { type: "git.fileAt", cwd: "/p", hash: hash(4), path: "src/m.ts" },
     { type: "git.fileAt", cwd: "/p", hash: hash(5), path: "src/m.ts" },
   ]);
-  expect(el.querySelector("[data-testid=pierre-diff]")).not.toBeNull();
+  // The diff component is a lazy chunk (GH-775).
+  await vi.waitFor(() => expect(el.querySelector("[data-testid=pierre-diff]")).not.toBeNull(), { timeout: 10_000 });
   await act(async () => el.querySelector<HTMLElement>("[data-testid=commit-back]")!.click());
   c.sent.length = 0;
   await act(async () => fileBtn(0).click());

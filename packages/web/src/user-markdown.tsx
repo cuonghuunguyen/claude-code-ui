@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
-import { code, type CodeHighlighterPlugin, type HighlightResult } from "@streamdown/code";
-import { cjk } from "@streamdown/cjk";
-import { math } from "@streamdown/math";
-import { mermaid } from "@streamdown/mermaid";
+import type { CodeHighlighterPlugin, HighlightResult } from "@streamdown/code";
+import { useMarkdownPlugins } from "./markdown-plugins.ts";
 import { defaultRehypePlugins, defaultRemarkPlugins, type Streamdown } from "streamdown";
 import { MessageResponse } from "./components/ai-elements/message.tsx";
 import { useAddonFenceRenderers } from "./addon-render.tsx";
@@ -44,8 +42,7 @@ const keyOf = (o: { language: string; code: string }) => `${o.language}\0${o.cod
  * per token on every row mount made scrolling stutter, GH-188) and are reported to `onDeferred`; `user-code-paint.ts`
  * paints their colors over the plain text once they are on screen and the scroll has rested.
  */
-function userCodeFor(onDeferred: () => void) {
-  const deferred = new Set<string>();
+function userCodeFor(code: CodeHighlighterPlugin, deferred: Set<string>, onDeferred: () => void) {
   const sync = new Map<string, boolean>();
   let used = 0;
   // Streamdown keeps a block's last result until the plugin gives a new one: on the first mount that is the plain block,
@@ -73,7 +70,7 @@ function userCodeFor(onDeferred: () => void) {
       return r;
     },
   };
-  return { plugin, deferred };
+  return plugin;
 }
 
 /** A user message's text as markdown, through the same renderer as assistant text (code beyond the first 1200 characters painted when idle). */
@@ -104,11 +101,14 @@ export function UserMarkdown({ text }: { text: string }) {
       for (const el of watched.keys()) unwatchBlock(el);
       watched.clear();
     };
-    const own = { ...userCodeFor(() => queued || ((queued = true), queueMicrotask(scan))), scan, unwatchAll };
+    const own = { deferred: new Set<string>(), onDeferred: () => queued || ((queued = true), queueMicrotask(scan)), scan, unwatchAll };
     return own;
   });
   const renderers = useAddonFenceRenderers();
-  const plugins = useMemo(() => ({ cjk, code: own.plugin, math, mermaid, ...(renderers.length && { renderers }) }), [own, renderers]);
+  // The code plugin (shiki) loads when the text has a fence; until then the blocks are plain.
+  const loaded = useMarkdownPlugins(text);
+  const codePlugin = useMemo(() => loaded.code && userCodeFor(loaded.code, own.deferred, own.onDeferred), [loaded.code, own]);
+  const plugins = useMemo(() => ({ ...loaded, ...(codePlugin && { code: codePlugin }), ...(renderers.length && { renderers }) }), [loaded, codePlugin, renderers]);
   useEffect(() => {
     own.scan();
     return own.unwatchAll;

@@ -37,21 +37,22 @@ import { blameEntries, type BlameEntry } from "./blame.ts";
 import { TimelinePanel } from "./timeline-panel.tsx";
 import { ListResizer, loadListWidth, saveListWidth } from "./changes-panel.tsx";
 import { usePanelAsk } from "./panel-ask.ts";
-import { docText, fileSize, isDirty, isMarkdown, lineBreaks, loadMdView, mediaKind, pin, entryMention, replaceDoc, saveMdView, selectionMention, selectionQuote, type MdView } from "./files.ts";
+import { fileSize, isDirty, isMarkdown, loadMdView, mediaKind, pin, entryMention, saveMdView, type MdView } from "./files.ts";
+import { setEditorOf } from "./find-in-files.ts";
+import { docText, lineBreaks, replaceDoc, selectionMention, selectionQuote } from "./editor-doc.ts";
 import { createEditorStore, useEditorStore, useEditorSync, type EditorStore } from "./editor-store.ts";
+import { EditorSync } from "./editor-sync.ts";
 
 type Client = ReturnType<typeof connect>;
+
+// Find in files reads the selection of the focused editor through this (find-in-files.ts has no CodeMirror of its own).
+setEditorOf((el) => EditorView.findFromDOM(el));
 
 /** Panel width from which the tree sits beside the editor (Tailwind's `@2xl`, the Changes tab's list rule); below it the tree is a drawer. */
 export const TREE_BESIDE_PX = 672;
 const TREE_WIDTH_KEY = "claude-ui.filesTreeWidth";
 
-/** The one editor sync of the shared store (disk watch, reload on change) for every Files view. */
-export function EditorSync({ store, client, status, watch }: { store: EditorStore; client: Client; status: ConnectionStatus; watch: string[] }) {
-  useEditorSync(store, client, status, watch, true);
-  useEffect(() => void (status === "connected" && store.restore()), [status]);
-  return null;
-}
+export { EditorSync };
 
 /**
  * Tabs are keyed by absolute path and kept across sessions; the panel shows those inside `cwd`. `onSend` gets an `@path#lines` mention.

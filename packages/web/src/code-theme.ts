@@ -2,12 +2,9 @@ import { HighlightStyle, LanguageDescription, LanguageSupport, type Language } f
 import { languages } from "@codemirror/language-data";
 import { styleTags, Tag, tags as t } from "@lezer/highlight";
 import { baseName } from "./paths.ts";
-import { registerDiffThemes } from "./code-palette.ts";
 
 // GH-394: the editor's syntax colours. The values are the shared palette (code-palette.ts, `--syntax-*` in index.css); the diff
-// uses the same palette through a Shiki theme. Registering the diff themes here, at module load, puts it before any diff renders
-// (tool-card.tsx imports this module).
-registerDiffThemes();
+// uses the same palette through a Shiki theme (registered when the diffs library loads, diffs.ts).
 
 // Custom tags that fall back to their parent when a theme does not know them.
 const jsonKey = Tag.define(t.propertyName);

@@ -197,8 +197,8 @@ describe("ToolCard edits", () => {
 
   it("Edit body is a diff instead of the JSON parameters", () => {
     const html = renderToStaticMarkup(<ToolBody call={edit("Edit", { file_path: "/p/a.ts", old_string: "b = 2", new_string: "b = 3" })} />);
-    // @pierre/diffs renders the diff client-side into this element.
-    expect(html).toMatch(/data-testid="edit-diff"><diffs-container>/);
+    // @pierre/diffs is a lazy chunk and renders client-side: the card holds a box of the diff's size (1 line each side: 2 rows of 20px, 16px padding, 36px header) meanwhile.
+    expect(html).toMatch(/data-testid="edit-diff"><div[^>]*data-testid="diff-skeleton"[^>]*style="height:92px"/);
     expect(html).not.toContain("Parameters");
   });
 

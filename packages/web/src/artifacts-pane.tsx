@@ -13,25 +13,8 @@ import type { SessionView } from "./store.ts";
 import { isClaudeUrl } from "./tools.ts";
 
 const WIDE = 720;
-// The selected row per session, outside React so "Move to Artifacts" (App) can preselect without App state.
-// `detail`: below 720 px the preview shows instead of the list.
-type Pick = { partId: string; detail: boolean };
-const picked = new Map<string, Pick>();
-const listeners = new Set<() => void>();
-export function selectArtifact(owner: string, partId: string, detail = false): void {
-  picked.set(owner, { partId, detail });
-  listeners.forEach((l) => l());
-}
-/** A forgotten (deleted or unknown) session keeps no selection. */
-export function forgetArtifactSelection(owner: string): void {
-  if (picked.delete(owner)) listeners.forEach((l) => l());
-}
-/** Tests: a fresh start. */
-export function resetArtifactSelection(): void {
-  picked.clear();
-  listeners.forEach((l) => l());
-}
-const subscribe = (l: () => void) => (listeners.add(l), () => void listeners.delete(l));
+import { forgetArtifactSelection, picked, resetArtifactSelection, selectArtifact, subscribe, type Pick } from "./artifact-selection.ts";
+export { forgetArtifactSelection, resetArtifactSelection, selectArtifact };
 
 type Props = {
   view: SessionView | undefined;

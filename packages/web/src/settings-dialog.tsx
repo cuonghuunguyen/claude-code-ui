@@ -50,31 +50,8 @@ import { LOCALES, setLocalePref, t, useLocale, useT, type Key } from "./i18n.ts"
 import { addonThemes, swatchOf, THEMES, type Theme, type ThemeId } from "./themes.ts";
 import { AddonsContext, enabledAddons } from "./addons.ts";
 
-const GROUP_KEY = "claude-ui.settingsGroup";
-/** Groups merged into larger ones: a remembered old id opens the group that holds its section now. */
-const MOVED: Record<string, string> = { timeline: "general", sending: "general", screen: "general", changes: "layout", sidebar: "layout", tabs: "layout", terminal: "layout", guide: "about" };
-const loadGroup = () => {
-  try {
-    const id = localStorage.getItem(GROUP_KEY) ?? undefined;
-    return id && (MOVED[id] ?? id);
-  } catch {
-    return undefined;
-  }
-};
-const storeGroup = (id: string) => {
-  try {
-    localStorage.setItem(GROUP_KEY, id);
-  } catch {
-    // Storage blocked: the group lasts while the page is open.
-  }
-};
-/** Set by `saveGroup`: the next open lands on the stored group's settings, not on the list of groups (below md). */
-let landOnGroup = false;
-/** Settings opens at this group next time, on its settings also below md (also the Create worktree modal's "Open Settings › Jira", the model picker's "Connect a provider…"). */
-export const saveGroup = (id: string) => {
-  storeGroup(id);
-  landOnGroup = true;
-};
+import { loadGroup, saveGroup, storeGroup, takeLandOnGroup } from "./settings-group.ts";
+export { saveGroup };
 
 type Category = "App" | "Sessions" | "Integrations" | "System";
 type Group = { id: string; title: string; category: Category; body: ReactNode };
@@ -939,8 +916,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const [drilled, setDrilled] = useState(false);
   useEffect(() => {
     if (!open) return;
-    setDrilled(landOnGroup);
-    landOnGroup = false;
+    setDrilled(takeLandOnGroup());
   }, [open]);
   const tabRefs = useRef(new Map<string, HTMLButtonElement>());
 

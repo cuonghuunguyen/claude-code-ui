@@ -1,6 +1,6 @@
 // Files changed in a session, for the changes tab (docs/spec.md "Layout"): built from its successful Edit/Write calls.
 import type { Part } from "@claude-ui/protocol";
-import { parseDiffFromFile } from "@pierre/diffs";
+import { lineStats } from "./diff-stats.ts";
 import { partOf, wholeParts, type SessionView, type ToolCall } from "./store.ts";
 import { diffStats } from "./tools.ts";
 
@@ -61,8 +61,7 @@ export function baseline(after: string, c: FileChange): string | undefined {
 export type Stats = { added: number; removed: number };
 
 export function fileStats(before: string, after: string, name: string): Stats {
-  const { hunks } = parseDiffFromFile({ name, contents: before }, { name, contents: after });
-  return { added: hunks.reduce((n, h) => n + h.additionLines, 0), removed: hunks.reduce((n, h) => n + h.deletionLines, 0) };
+  return lineStats(name, before, after);
 }
 
 /** Sum of the per-call diffs: the stats of a file without a baseline. */

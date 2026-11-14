@@ -1,5 +1,6 @@
-import { bundledLanguagesInfo, createHighlighter, type GrammarState, type Highlighter, type ThemedToken } from "shiki";
-import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
+import type { GrammarState, Highlighter, ThemedToken } from "shiki";
+// Only the language list is static (small); shiki itself and its engine load with the first block that is painted (an entry-chunk cost otherwise).
+import { bundledLanguagesInfo } from "shiki/langs";
 import { sinceUserScroll } from "./scroll-rest.ts";
 
 /**
@@ -178,7 +179,9 @@ function prepare(lang: string): "ready" | "wait" {
   if (loading.has(lang)) return "wait";
   loading.add(lang);
   if (!shiki) {
-    const created = createHighlighter({ themes: [THEMES.light, THEMES.dark], langs: [], engine: createJavaScriptRegexEngine({ forgiving: true }) });
+    const created = Promise.all([import("shiki"), import("shiki/engine/javascript")]).then(([s, e]) =>
+      s.createHighlighter({ themes: [THEMES.light, THEMES.dark], langs: [], engine: e.createJavaScriptRegexEngine({ forgiving: true }) }),
+    );
     shiki = created;
     // Only a failed creation makes a new instance: a failed language never does (one instance holds the languages).
     created.catch(() => void (shiki === created && (shiki = undefined)));

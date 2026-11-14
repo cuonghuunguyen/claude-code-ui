@@ -2,7 +2,7 @@
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import type { FsGrepResult } from "@claude-ui/protocol";
-import { FIND_HISTORY_KEY, fileCheckState, loadFindHistory, loadReplaceOpen, replaceRequestFiles, saveReplaceOpen, skippedRows, splitUnsaved, lineSegments, matchRows, pushFindHistory, saveFindHistory, selectionQuery } from "./find-in-files.ts";
+import { FIND_HISTORY_KEY, fileCheckState, loadFindHistory, loadReplaceOpen, replaceRequestFiles, saveReplaceOpen, skippedRows, splitUnsaved, lineSegments, matchRows, pushFindHistory, saveFindHistory, selectionQuery, setEditorOf } from "./find-in-files.ts";
 
 afterEach(() => {
   localStorage.clear();
@@ -65,6 +65,7 @@ describe("selectionQuery", () => {
     expect(selectionQuery(document.body)).toBeUndefined();
   });
   it("reads a CodeMirror selection; two lines give none", () => {
+    setEditorOf((el) => EditorView.findFromDOM(el)); // files-panel.tsx registers this when the editor chunk loads
     const view = new EditorView({ doc: "foo bar\nbaz", parent: document.body });
     view.dispatch({ selection: { anchor: 4, head: 7 } });
     expect(selectionQuery(view.contentDOM)).toBe("bar");

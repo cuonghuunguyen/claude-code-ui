@@ -1,28 +1,20 @@
 "use client";
 // Derived from AI Elements (Apache-2.0, Copyright 2023 Vercel, Inc.), modified; see THIRD_PARTY_NOTICES.md.
+// The sweep is a CSS keyframe (`shimmer-sweep` in index.css) instead of `motion`: motion-dom and framer-motion were 450 KB of the entry chunk for this one effect.
 
 import { cn } from "@/lib/utils";
-import type { MotionProps } from "motion/react";
-import { motion, useReducedMotion } from "motion/react";
-import type { CSSProperties, ElementType, JSX } from "react";
-import { memo, useMemo } from "react";
+import type { CSSProperties, ElementType } from "react";
+import { memo, useMemo, useSyncExternalStore } from "react";
 
-type MotionHTMLProps = MotionProps & Record<string, unknown>;
-
-// Cache motion components at module level to avoid creating during render
-const motionComponentCache = new Map<
-  keyof JSX.IntrinsicElements,
-  React.ComponentType<MotionHTMLProps>
->();
-
-const getMotionComponent = (element: keyof JSX.IntrinsicElements) => {
-  let component = motionComponentCache.get(element);
-  if (!component) {
-    component = motion.create(element);
-    motionComponentCache.set(element, component);
-  }
-  return component;
+const REDUCED = "(prefers-reduced-motion: reduce)";
+const subscribeReduced = (cb: () => void) => {
+  const q = window.matchMedia?.(REDUCED);
+  q?.addEventListener?.("change", cb);
+  return () => q?.removeEventListener?.("change", cb);
 };
+const reducedNow = () => window.matchMedia?.(REDUCED).matches ?? false;
+/** True while the user asks the system for reduced motion (live: it follows a change of the setting). */
+const useReducedMotion = () => useSyncExternalStore(subscribeReduced, reducedNow, () => false);
 
 export interface TextShimmerProps {
   children: string;
@@ -39,10 +31,6 @@ const ShimmerComponent = ({
   duration = 2,
   spread = 2,
 }: TextShimmerProps) => {
-  const MotionComponent = getMotionComponent(
-    Component as keyof JSX.IntrinsicElements
-  );
-
   const dynamicSpread = useMemo(
     () => (children?.length ?? 0) * spread,
     [children, spread]
@@ -53,29 +41,23 @@ const ShimmerComponent = ({
   }
 
   return (
-    <MotionComponent
-      animate={{ backgroundPosition: "0% center" }}
+    <Component
       className={cn(
         "relative inline-block bg-[length:250%_100%,auto] bg-clip-text text-transparent",
         "[--bg:linear-gradient(90deg,#0000_calc(50%-var(--spread)),var(--color-background),#0000_calc(50%+var(--spread)))] [background-repeat:no-repeat,padding-box]",
         className
       )}
-      initial={{ backgroundPosition: "100% center" }}
       style={
         {
           "--spread": `${dynamicSpread}px`,
           backgroundImage:
             "var(--bg), linear-gradient(var(--color-muted-foreground), var(--color-muted-foreground))",
+          animation: `shimmer-sweep ${duration}s linear infinite`,
         } as CSSProperties
       }
-      transition={{
-        duration,
-        ease: "linear",
-        repeat: Number.POSITIVE_INFINITY,
-      }}
     >
       {children}
-    </MotionComponent>
+    </Component>
   );
 };
 

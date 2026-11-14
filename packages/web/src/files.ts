@@ -1,11 +1,9 @@
 // Editor tab state (docs/spec.md "Editor"): the disk version the tab is based on, the user's draft, and a pending conflict.
-import { Compartment, EditorState, Text, type TransactionSpec } from "@codemirror/state";
 import type { FsMediaResult, FsReadResult } from "@claude-ui/protocol";
 import type { RequestError } from "./client.ts";
 import { t } from "./i18n.ts";
 import { mentionPath } from "./mentions.ts";
 import { isWinPath, relPath } from "./paths.ts";
-import { QUOTE_MAX, quoteText } from "./quote.ts";
 
 export type Tab = {
   path: string;
@@ -137,54 +135,14 @@ export const saved = (t: Tab, content: string, mtime: number): Tab => ({
 });
 
 
-// CodeMirror splits on any line break and joins with "\n" unless the separator is set: a CRLF file would turn dirty and save as LF.
-const separator = new Compartment();
-const lineBreak = (text: string) => (text.includes("\r\n") ? "\r\n" : "\n");
-
-/** Editor extension that keeps `text`'s line breaks; the other kind of break stays inside a line, so the text round-trips as is. */
-export const lineBreaks = (text: string) => separator.of(EditorState.lineSeparator.of(lineBreak(text)));
-
-/** Replaces the whole document with `text`, switching to its line breaks. */
-export function replaceDoc(state: EditorState, text: string): TransactionSpec {
-  const sep = lineBreak(text);
-  return {
-    changes: { from: 0, to: state.doc.length, insert: Text.of(text.split(sep)) },
-    effects: separator.reconfigure(EditorState.lineSeparator.of(sep)),
-  };
-}
-
-/** The document joined with its own line breaks (`doc.toString()` always joins with "\n"). */
-export const docText = (state: EditorState) => state.sliceDoc();
-
 /** A Windows path in "/": the CLI resolves either, and "\" would read as an escape in a quoted mention. */
-const mentionRel = (path: string, cwd: string) => (isWinPath(path) ? relPath(path, cwd).replace(/\\/g, "/") : relPath(path, cwd));
+export const mentionRel = (path: string, cwd: string) => (isWinPath(path) ? relPath(path, cwd).replace(/\\/g, "/") : relPath(path, cwd));
 
 /** "Add to prompt" from the file tree: `@path` of the file, relative to `cwd`. */
 export const fileMention = (path: string, cwd: string) => mentionPath(mentionRel(path, cwd));
 
 /** GH-707: Add to prompt and a tree drag: `@rel` per entry (a folder ends with "/"), joined by a space. Relative to `cwd`; without `cwd` absolute. */
 export const entryMention = (entries: { path: string; isDir: boolean }[], cwd: string) => entries.map((e) => mentionPath(mentionRel(e.path, cwd) + (e.isDir ? "/" : ""))).join(" ");
-
-/**
- * "Add to chat" (Alt+K): `@path#Lstart-end` of the main selection, path relative to `cwd`; the file alone when nothing is selected.
- * The SDK attaches only the range for `#L…` (`#start-end` attaches the whole file), and a quoted path needs the range inside the quotes.
- */
-export function selectionMention(state: EditorState, path: string, cwd: string) {
-  const rel = mentionRel(path, cwd);
-  const { from, to, empty } = state.selection.main;
-  if (empty) return mentionPath(rel);
-  const start = state.doc.lineAt(from);
-  const end = state.doc.lineAt(to);
-  // A selection that ends at the start of a line (whole lines selected) does not include that line.
-  const last = end.number > start.number && to === end.from ? end.number - 1 : end.number;
-  return mentionPath(`${rel}#L${start.number}${last > start.number ? `-${last}` : ""}`);
-}
-
-/** "Quote" in the editor: the selected text as a fenced blockquote (cut at the quote cap); undefined for an empty selection. */
-export function selectionQuote(state: EditorState) {
-  const { from, to, empty } = state.selection.main;
-  return empty ? undefined : quoteText(state.sliceDoc(from, to), QUOTE_MAX, true);
-}
 
 export const fileSize = (n: number) => (n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${+(n / 1024).toFixed(1)} KB` : `${+(n / 1024 ** 2).toFixed(1)} MB`);
 
