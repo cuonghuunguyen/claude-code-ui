@@ -1,9 +1,11 @@
 // Reconnect burst harness (GH-760): a phone that reconnects over a slow link to a daemon with hundreds of sessions and live turns.
 // Not part of `npm test` or the Cucumber suite (needs `npm run build` and takes minutes):
-//   npx tsx packages/e2e/perf/reconnect-burst.ts [--sessions 300 --live 40 --tabs 8 --cpu 6 --kbps 1000 --reconnects 10 --port 4321 --label base --report-dir <dir> --ping-ms 15000]
+//   npx tsx packages/e2e/perf/reconnect-burst.ts [--sessions 300 --live 40 --tabs 8 --cpu 6 --kbps 1000 --reconnects 10 --quiet 0 --stream --port 4321 --label base --report-dir <dir> --ping-ms 15000]
 // Starts its own daemon (temp XDG_CONFIG_HOME and CLAUDE_CONFIG_DIR, API key variables unset, fake query) behind a throttling TCP proxy,
 // opens a 390x844 Chromium page with CPU throttling, cuts the socket `--reconnects` times and counts what each resync costs.
-// Exit code 1 when the daemon logs a "no pong ... dropped" line.
+// Per reconnect: bytes down by message class, live generation rate, time until the shown tab caught up (shownMs) and until the link is idle (settledMs).
+// `--stream`: the fake turns emit text deltas (streamed parts). `--quiet N`: after the live reconnects, wait until the turns ended and the page caught up, then N more reconnects (nothing changed).
+// Exit code 1 when the daemon logs a "no pong ... dropped" line; 2 when the page's last seq of a followed live session differs from the harness client's after the last reconnect (missed events).
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, connect as tcpConnect, type Socket } from "node:net";
@@ -26,6 +28,8 @@ const opt = {
   label: arg("label", "run"),
   reportDir: resolve(arg("report-dir", ".")),
   padKb: Number(arg("pad-kb", "100")),
+  quiet: Number(arg("quiet", "0")),
+  stream: process.argv.includes("--stream"),
 };
 const repo = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 
@@ -86,7 +90,16 @@ function fakeQuery({ prompt }: { prompt: AsyncIterable<{ message: { content: unk
       yield { type: "system", subtype: "init", uuid: randomUUID(), session_id: "x" } as never;
       for (let i = 0; i < 600; i++) {
         const callId = `toolu_${randomUUID()}`;
-        yield { type: "assistant", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { id: `msg_${randomUUID()}`, content: [{ type: "text", text: `step ${i}: ${"working ".repeat(40)}` }, { type: "tool_use", id: callId, name: "Read", input: { file_path: `/tmp/f${i}.txt` } }] } } as never;
+        const msgId = `msg_${randomUUID()}`;
+        if (opt.stream) {
+          // SDK includePartialMessages shape: message_start, then text deltas of block 0; the adapter keeps the whole text so far in each streamed part.
+          yield { type: "stream_event", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, event: { type: "message_start", message: { id: msgId } } } as never;
+          for (let d = 0; d < 10; d++) {
+            yield { type: "stream_event", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: `${d === 0 ? `step ${i}: ` : ""}${"working ".repeat(4)}` } } } as never;
+            await sleep(8);
+          }
+        }
+        yield { type: "assistant", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { id: msgId, content: [{ type: "text", text: `step ${i}: ${"working ".repeat(40)}` }, { type: "tool_use", id: callId, name: "Read", input: { file_path: `/tmp/f${i}.txt` } }] } } as never;
         yield { type: "user", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: callId, content: "line\n".repeat(30) }] } } as never;
         await sleep(100);
       }
@@ -178,13 +191,19 @@ await proxy.listen();
 
 // --- live sessions through a harness client straight to the daemon ---
 const liveIds: string[] = [];
+/** Harness client: bytes it received (live generation rate), last seq per session and turn-ended count. */
+const gen = { bytes: 0, msgs: 0 };
+const daemonSeq = new Map<string, number>();
 await (async () => {
   const ws = new WebSocket(`ws://127.0.0.1:${daemonPort}/ws`, ["claude-ui", `token.${token}`], { origin: `http://127.0.0.1:${daemonPort}` });
   await new Promise((r, j) => (ws.once("open", r), ws.once("error", j)));
   const waiting = new Map<string, (m: { result?: { session?: { id: string } } }) => void>();
   ws.on("message", (d) => {
+    gen.bytes += (d as Buffer).length;
+    gen.msgs++;
     const m = JSON.parse(String(d));
     if (m.reqId) waiting.get(m.reqId)?.(m);
+    else if (m.sessionId && typeof m.seq === "number") daemonSeq.set(m.sessionId, Math.max(daemonSeq.get(m.sessionId) ?? 0, m.seq));
   });
   const req = (msg: object) => new Promise<{ result?: { session?: { id: string } } }>((res) => ((msg as { reqId: string }).reqId, ws.send(JSON.stringify(msg)), waiting.set((msg as { reqId: string }).reqId, res)));
   for (let i = 0; i < opt.live; i++) {
@@ -207,6 +226,47 @@ const pageLines: string[] = [];
 page.on("console", (m) => {
   const t = m.text();
   if (t.includes("claude-ui:")) pageLines.push(t);
+});
+// What the page socket carries, by class; the page's last seq per session (events and subscribe replies).
+const cls: Record<string, { n: number; b: number }> = {};
+const pageSeq = new Map<string, number>();
+let listReplyAt = 0;
+const add = (k: string, b: number) => ((cls[k] ??= { n: 0, b: 0 }).n++, (cls[k].b += b));
+page.on("websocket", (w) => {
+  const reqType = new Map<string, string>();
+  const seen = new Map<string, number>();
+  w.on("framesent", (f) => {
+    try {
+      const m = JSON.parse(String(f.payload));
+      if (m.reqId) reqType.set(m.reqId, m.type + (m.type === "session.subscribe" ? `:${m.sessionId}${m.background ? ":bg" : ""}` : ""));
+    } catch {}
+  });
+  w.on("framereceived", (f) => {
+    const b = Buffer.byteLength(String(f.payload));
+    let m: { reqId?: string; type?: string; sessionId?: string; seq?: number; result?: { seq?: number; snapshot?: unknown } };
+    try {
+      m = JSON.parse(String(f.payload));
+    } catch {
+      return add("unparsed", b);
+    }
+    if (m.reqId) {
+      const t = reqType.get(m.reqId) ?? "?";
+      if (t === "session.list") listReplyAt = Date.now();
+      if (t.startsWith("session.subscribe")) {
+        const [, id, bg] = t.split(":");
+        const seq = m.result?.seq ?? 0;
+        pageSeq.set(id!, Math.max(pageSeq.get(id!) ?? 0, seq));
+        seen.set(id!, seq);
+        return add(`reply session.subscribe${m.result?.snapshot ? " (snapshot)" : ""}${bg ? " bg" : ""}`, b);
+      }
+      return add(`reply ${t}`, b);
+    }
+    if (m.sessionId && typeof m.seq === "number") {
+      pageSeq.set(m.sessionId, Math.max(pageSeq.get(m.sessionId) ?? 0, m.seq));
+      return add(m.seq <= (seen.get(m.sessionId) ?? 0) ? "event replay" : "event live", b);
+    }
+    add(`other ${m.type}`, b);
+  });
 });
 await page.goto(`http://127.0.0.1:${opt.port}/#token=${token}`);
 await page.waitForSelector('[data-testid="titlebar"]', { timeout: 60_000 });
@@ -231,27 +291,66 @@ const settled = async (since: number) => {
   }
   return -1;
 };
-type Row = { n: number; settledMs: number; bytesDown: number; drops: number; kept: number };
+type Row = { n: number; phase: "live" | "quiet"; settledMs: number; shownMs: number; bytesDown: number; genKBps: number; classes: Record<string, { n: number; b: number }>; drops: number; kept: number };
 const rows: Row[] = [];
-for (let n = 1; n <= opt.reconnects; n++) {
+const shownId = liveIds[Math.min(opt.tabs, liveIds.length) - 1];
+const MB = (n: number) => (n / 2 ** 20).toFixed(2);
+async function reconnect(n: number, phase: Row["phase"]) {
   const up0 = proxy.stats.upgrades;
   const down0 = proxy.stats.down;
   const lines0 = daemonLog.length;
+  for (const k of Object.keys(cls)) delete cls[k];
+  const g0 = gen.bytes;
+  const t0 = Date.now();
+  const target = shownId ? (daemonSeq.get(shownId) ?? 0) : 0;
+  listReplyAt = 0;
   proxy.cut();
+  // shownMs: the list reply arrived and the shown tab holds every event the daemon had at the cut.
+  let shownMs = -1;
+  const shown = (async () => {
+    while (Date.now() - t0 < 90_000) {
+      if (listReplyAt && (!shownId || (pageSeq.get(shownId) ?? 0) >= target)) return (shownMs = Date.now() - t0);
+      await sleep(100);
+    }
+  })();
   const settledMs = await settled(up0);
+  await shown;
+  const secs = (Date.now() - t0) / 1000;
   const fresh = daemonLog.slice(lines0);
-  rows.push({ n, settledMs, bytesDown: proxy.stats.down - down0, drops: fresh.filter((l) => /no pong .*dropped/.test(l)).length, kept: fresh.filter((l) => /no pong .*kept/.test(l)).length });
-  console.log(`reconnect ${n}: settled ${settledMs < 0 ? ">90s" : `${(settledMs / 1000).toFixed(1)}s`}, ${(rows.at(-1)!.bytesDown / 2 ** 20).toFixed(1)}MB down, drops ${rows.at(-1)!.drops}, kept ${rows.at(-1)!.kept}`);
+  const row: Row = { n, phase, settledMs, shownMs, bytesDown: proxy.stats.down - down0, genKBps: (gen.bytes - g0) / secs / 1024, classes: structuredClone(cls), drops: fresh.filter((l) => /no pong .*dropped/.test(l)).length, kept: fresh.filter((l) => /no pong .*kept/.test(l)).length };
+  rows.push(row);
+  const sec = (ms: number) => (ms < 0 ? ">90s" : `${(ms / 1000).toFixed(1)}s`);
+  console.log(`reconnect ${n} (${phase}): shown ${sec(shownMs)}, settled ${sec(settledMs)}, ${MB(row.bytesDown)}MB down, drops ${row.drops}, kept ${row.kept}`);
+  console.log(`  live generation (harness client, all ${liveIds.length} live sessions): ${row.genKBps.toFixed(0)} KB/s; link ${opt.kbps / 8} KB/s`);
+  for (const [k, v] of Object.entries(row.classes).sort((a, b) => b[1].b - a[1].b)) console.log(`  ${k.padEnd(40)} ${String(v.n).padStart(6)} msgs ${MB(v.b).padStart(7)} MB`);
+}
+for (let n = 1; n <= opt.reconnects; n++) await reconnect(n, "live");
+if (opt.quiet > 0) {
+  // Wait until the turns ended (the harness client receives nothing for 5 s) and the page caught up, then reconnect with nothing changed.
+  let last = gen.bytes;
+  let idle = 0;
+  for (let t = 0; t < 600 && idle < 10; t++) {
+    await sleep(500);
+    idle = gen.bytes === last ? idle + 1 : 0;
+    last = gen.bytes;
+  }
+  console.log(`harness: turns ${idle >= 10 ? "ended" : "still running"}, ${opt.quiet} quiet reconnects`);
+  for (let n = 1; n <= opt.quiet; n++) await reconnect(opt.reconnects + n, "quiet");
 }
 
+// Missed events: after the last reconnect the page's last seq of every followed live session equals the harness client's (turns must have ended).
+await sleep(3000);
+const missed = liveIds.filter((id) => pageSeq.has(id) && pageSeq.get(id) !== daemonSeq.get(id)).map((id) => ({ id, page: pageSeq.get(id), daemon: daemonSeq.get(id) }));
+console.log(missed.length ? `MISSED EVENTS in ${missed.length} sessions: ${JSON.stringify(missed.slice(0, 5))}` : `no missed events (${[...pageSeq.keys()].filter((id) => liveIds.includes(id)).length} followed live sessions checked)`);
+
 const drops = daemonLog.filter((l) => /no pong .*dropped/.test(l));
-const report = { label: opt.label, opts: opt, rows, drops: drops.length, daemonLines: daemonLog.filter((l) => /no pong|closed/.test(l)).slice(-60), pageLines: pageLines.slice(-60) };
+const report = { label: opt.label, opts: opt, rows, missed, drops: drops.length, daemonLines: daemonLog.filter((l) => /no pong|closed/.test(l)).slice(-60), pageLines: pageLines.slice(-60) };
 mkdirSync(opt.reportDir, { recursive: true });
 writeFileSync(join(opt.reportDir, `perf-${opt.label}.json`), JSON.stringify(report, null, 2));
-console.log(`\n n | settled s | MB down | drops | kept\n${rows.map((r) => `${String(r.n).padStart(2)} | ${(r.settledMs / 1000).toFixed(1).padStart(9)} | ${(r.bytesDown / 2 ** 20).toFixed(1).padStart(7)} | ${String(r.drops).padStart(5)} | ${r.kept}`).join("\n")}\ntotal drops: ${drops.length}`);
+console.log(`\n n | phase | shown s | settled s | MB down | gen KB/s | drops | kept\n${rows.map((r) => `${String(r.n).padStart(2)} | ${r.phase.padEnd(5)} | ${(r.shownMs / 1000).toFixed(1).padStart(7)} | ${(r.settledMs / 1000).toFixed(1).padStart(9)} | ${MB(r.bytesDown).padStart(7)} | ${r.genKBps.toFixed(0).padStart(8)} | ${String(r.drops).padStart(5)} | ${r.kept}`).join("\n")}\ntotal drops: ${drops.length}`);
 
 await browser.close();
 proxy.close();
 daemon.close();
 rmSync(run, { recursive: true, force: true });
-process.exit(drops.length ? 1 : 0);
+process.exit(missed.length ? 2 : drops.length ? 1 : 0);

@@ -1382,6 +1382,8 @@ export function createRouter(opts: {
   /** Longest wait for a side's list in the lookup of an unlisted session ID (default LOOKUP_TIMEOUT_MS); no answer: the side lists nothing. */
   lookupTimeoutMs?: number;
   media?: (id: string, msg: Extract<ClientMessage, { type: "fs.media" }>, call: (m: ClientMessage) => Promise<ServerMessage>) => Promise<ServerMessage>;
+  /** The browser's list reply: a delta against the `since` version when the daemon holds it (server.ts listVersions, GH-767). Absent: the whole list. Only for a request with `since` (a string, empty for the first one). The lists the router asks of the sides and of the local daemon carry no `since`. */
+  encodeList?: (result: ListLike & object, since: unknown) => object;
 }) {
   const { sides, send } = opts;
   const conns = new Map<string, Conn>();
@@ -1595,7 +1597,9 @@ export function createRouter(opts: {
 
   async function mergedList(msg: ClientMessage): Promise<ServerMessage> {
     void sides.refresh();
-    const answers = await Promise.all(all().map(async (id) => [id, await call(id, msg)] as const));
+    // The versions are the hub's: each side and the local daemon answer the whole list.
+    const { since, ...whole } = msg as ClientMessage & { since?: unknown };
+    const answers = await Promise.all(all().map(async (id) => [id, await call(id, whole as ClientMessage)] as const));
     const local = answers[0]![1];
     if (local.type !== "reply") return local;
     const merged = { ...(local.result as ListLike & object) } as ListLike & Record<string, unknown>;
@@ -1639,7 +1643,8 @@ export function createRouter(opts: {
     merged.projects = order.map((x, i) => [...x, i] as const).sort((a, b) => b[1] - a[1] || a[2] - b[2]).map(([p]) => p);
     merged.sessions.sort((a, b) => b.lastActivity - a.lastActivity);
     merged.recentProjects.sort((a, b) => b.lastActivity - a.lastActivity);
-    return { type: "reply", reqId: msg.reqId, result: { ...merged, sides: sides.list(), ...(docker && { docker }), ...(sides.sshAvailable && { ssh: true as const }), cwdSides, ...(Object.keys(sideEngines).length && { sideEngines }) } };
+    const result = { ...merged, sides: sides.list(), ...(docker && { docker }), ...(sides.sshAvailable && { ssh: true as const }), cwdSides, ...(Object.keys(sideEngines).length && { sideEngines }) };
+    return { type: "reply", reqId: msg.reqId, result: opts.encodeList && typeof since === "string" ? opts.encodeList(result, since) : result };
   }
 
   async function handle(msg: ClientMessage & Record<string, unknown>) {

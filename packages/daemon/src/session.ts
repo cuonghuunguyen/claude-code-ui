@@ -234,12 +234,34 @@ export class Session {
     return pos === undefined ? undefined : this.index.artifacts(pos);
   }
 
-  /** Replays events with seq > sinceSeq, then follows. Returns an unsubscribe function. */
-  subscribe(sinceSeq: number, listener: Listener): () => void {
+  /** Replays events with seq > sinceSeq, then follows. Returns an unsubscribe function. `replay` false: follows only (the caller replays with `eventsAfter`, GH-767). */
+  subscribe(sinceSeq: number, listener: Listener, replay = true): () => void {
     this.run.subscribed(sinceSeq);
-    for (const e of this.log) if (e.seq > sinceSeq) listener(e);
+    if (replay) for (const e of this.log) if (e.seq > sinceSeq) listener(e);
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Index of the first log event with seq > `seq`: the log is seq-sorted (a replaced streaming event leaves a gap, never a disorder). */
+  private after(seq: number): number {
+    let lo = 0;
+    let hi = this.log.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (this.log[mid]!.seq > seq) hi = mid;
+      else lo = mid + 1;
+    }
+    return lo;
+  }
+
+  /** The events a `subscribe(seq)` replays, in order, without copying the log. The log must not change while it is iterated. */
+  *eventsAfter(seq: number): Generator<Event> {
+    for (let i = this.after(seq); i < this.log.length; i++) yield this.log[i]!;
+  }
+
+  /** How many events `eventsAfter(seq)` yields. */
+  countAfter(seq: number): number {
+    return this.log.length - this.after(seq);
   }
 
 

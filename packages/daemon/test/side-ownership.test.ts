@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import type { ClientMessage, ServerMessage } from "@claude-ui/protocol";
 import { createRouter, createSides, dockerSide, type SideProcess } from "../src/sides.ts";
+import { createListVersions } from "../src/list-versions.ts";
 
 const LOCAL = "11111111-1111-4111-8111-111111111111";
 const A1 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -820,5 +821,36 @@ describe("session.ids fallback and malformed answers (GH-328 F1)", () => {
     await new Promise((r) => setTimeout(r, 100));
     expect(frames(a, "session.list")).toEqual([]);
     expect(t.sides.sessionSide.get(B1)).toBeUndefined();
+  });
+});
+
+describe("hub session list versions (GH-767)", () => {
+  it("versions the merged list: a delta against `since`, and the lists asked of the sides and the local daemon carry no `since`", async () => {
+    let title = "one";
+    const a = fakeSide((m) => (m.type === "session.list" ? { sessions: [{ id: A1, cwd: "/a", lastActivity: 1, title: "side" }], projects: ["/a"], recentProjects: [] } : null));
+    const versions = createListVersions("hub");
+    const localSeen: any[] = [];
+    const t = await setup(a, undefined, undefined, {
+      router: {
+        encodeList: (r, since) => versions.encode(r as never, since),
+        localCall: async (m) => (localSeen.push(m), { type: "reply", reqId: m.reqId, result: { sessions: [{ id: LOCAL, cwd: "/host", lastActivity: 2, title }], projects: ["/host"], recentProjects: [] } }),
+      },
+    });
+    const first = (await t.req({ type: "session.list", since: "" }))[0] as any;
+    expect(first.result.version).toBe("hub:1");
+    expect(first.result.delta).toBeUndefined();
+    expect(first.result.sessions.map((x: any) => x.id)).toEqual([LOCAL, A1]);
+    title = "two";
+    const next = (await t.req({ type: "session.list", since: first.result.version }))[0] as any;
+    expect(next.result).toMatchObject({ delta: true, version: "hub:2", ids: [LOCAL, A1] });
+    expect(next.result.sessions.map((x: any) => x.id)).toEqual([LOCAL]);
+    expect(next.result.projects).toEqual(["/host", "/a"]);
+    // Neither the local daemon nor the side saw `since` (their lists are whole and unversioned).
+    expect(localSeen.filter((m) => m.type === "session.list").every((m) => !("since" in m))).toBe(true);
+    expect(frames(a, "session.list").every((m) => !("since" in m))).toBe(true);
+    // A request without `since` gets the plain list.
+    const plain = (await t.req({ type: "session.list" }))[0] as any;
+    expect(plain.result.version).toBeUndefined();
+    expect(plain.result.delta).toBeUndefined();
   });
 });

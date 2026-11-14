@@ -190,6 +190,7 @@ import { BackButton, BackPanel, BackReminderCards, BriefRow } from "./back-panel
 import { briefTag, foldBriefTurns, markFields, markOf, setBack, staleTurns, useBack } from "./back-marks.ts";
 import { SideBadge, SideLabel, SideState, sideLookup } from "./sides.tsx";
 import { dock, dockedIn, loadDocked, neighbourAfterDock, saveDocked, stripTabs, undock, useDocked } from "./docked-sessions.ts";
+import { applyListReply } from "./list-delta.ts";
 import { FOCUS_TAB, NEW_TAB, avatarColors, insertPaneTab, keysFinal as tabKeysFinal, closeMany, closeTab, closeTargets, otherGroupTargets, loadPinned, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, savePinned, saveTabs, setPinned, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
@@ -456,6 +457,7 @@ export function App() {
   // Unpaired: the drafts of this browser go with its token (drafts.ts).
   useEffect(() => {
     if (status !== "unauthorized") return;
+    listVersion.current = listRows.current = undefined;
     clearDrafts();
     editors.forget();
     clearSaved();
@@ -810,10 +812,32 @@ export function App() {
   const connGen = useRef(0);
   const listFresh = useRef(false);
 
-  async function refreshList() {
+  /** The `version` and the session rows of the last applied list: the next request sends the version and gets only the changed rows (GH-767). Not cleared on a reconnect: the daemon holds versions. */
+  const listVersion = useRef<string | undefined>(undefined);
+  const listRows = useRef<ListResult["sessions"] | undefined>(undefined);
+  /** One list request in flight, at most one more queued behind it: concurrent triggers share it (as the daemon's `list()`), so replies cannot arrive out of order. */
+  const listFlight = useRef<Promise<void> | undefined>(undefined);
+  const listQueued = useRef<Promise<void> | undefined>(undefined);
+  function refreshList(): Promise<void> {
+    if (!listFlight.current) return (listFlight.current = loadList().finally(() => (listFlight.current = undefined)));
+    return (listQueued.current ??= listFlight.current.then(() => ((listQueued.current = undefined), refreshList())));
+  }
+
+  /** `whole`: ask without `since` (a delta that could not be applied). */
+  async function loadList(whole = false): Promise<void> {
     const gen = connGen.current;
     try {
-      const { sessions, projects, recentProjects = [], permissionModes, engines: listedEngines, sideEngines: listedSideEngines, sides, docker, ssh, cwdSides = {}, worktrees = {} } = await client.current!.request<ListResult>({ type: "session.list" });
+      const since = whole ? undefined : listVersion.current;
+      const reply = await client.current!.request<ListResult>({ type: "session.list", since: since ?? "" });
+      const rows = reply.delta && since !== listVersion.current ? undefined : applyListReply(listRows.current, reply);
+      if (!rows) {
+        listVersion.current = listRows.current = undefined;
+        return loadList(true);
+      }
+      listRows.current = rows;
+      listVersion.current = reply.version;
+      const sessions = rows;
+      const { projects, recentProjects = [], permissionModes, engines: listedEngines, sideEngines: listedSideEngines, sides, docker, ssh, cwdSides = {}, worktrees = {} } = reply;
       // A project removed here or by another client: its session tabs close (they would show a session no longer listed).
       const listed = new Set(sessions.map((s) => s.id));
       closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd))).map((s) => s.id)));
