@@ -404,4 +404,63 @@ describe("batched apply of received messages (GH-760)", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("messages queued from a socket that a wake probe replaced are not applied, though it never reported down", async () => {
+    type Listener = (ev: { data?: string; type: string }) => void;
+    const made: FakeSocket[] = [];
+    class FakeSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+      readyState = 1;
+      listeners = new Map<string, Listener[]>();
+      constructor() {
+        made.push(this);
+      }
+      addEventListener(t: string, l: Listener) {
+        this.listeners.set(t, [...(this.listeners.get(t) ?? []), l]);
+      }
+      fire(type: string, ev: object = {}) {
+        this.listeners.get(type)?.forEach((l) => l({ type, ...ev }));
+      }
+      send() {}
+      close() {
+        this.readyState = 3;
+      }
+    }
+    // A MessageChannel the test runs by hand: the drain task waits until the probe has replaced the socket.
+    const channels: { port1: { onmessage?: () => void; close: () => void; unref: () => void } }[] = [];
+    class ManualChannel {
+      port1 = { onmessage: undefined as (() => void) | undefined, close() {}, unref() {} };
+      port2 = { postMessage() {} };
+      constructor() {
+        channels.push(this);
+      }
+    }
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.stubGlobal("MessageChannel", ManualChannel);
+    try {
+      const applied: number[] = [];
+      let wake!: (force?: boolean) => void;
+      const c = connect({
+        url: "ws://fake",
+        token: "t",
+        wakeEvents: (w) => ((wake = w), () => {}),
+        probeTimeoutMs: 10,
+        onEvents: (es) => applied.push(...es.map((e) => e.seq)),
+      });
+      const first = made[0]!;
+      first.fire("open");
+      for (let i = 1; i <= 5; i++) first.fire("message", { data: JSON.stringify(ev(i)) });
+      // No reply to the ping: the probe abandons the first socket and dials a second one (no close event of the first).
+      wake(true);
+      await until(() => made.length === 2);
+      channels[0]!.port1.onmessage!();
+      expect(applied).toEqual([]);
+      c.close();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

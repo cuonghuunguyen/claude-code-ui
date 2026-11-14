@@ -112,7 +112,6 @@ export function connect(opts: {
   }
 
   /** Messages received and not yet applied. Each socket message is its own task, so applying them there renders the page once per event of a replay. */
-  const utf8 = new TextEncoder();
   let queue: { sock: WebSocket; data: string }[] = [];
   let head = 0;
   let drainScheduled = false;
@@ -183,7 +182,8 @@ export function connect(opts: {
       const m = parsed;
       const t1 = clock();
       since.msgs++;
-      const bytes = utf8.encode(data).byteLength;
+      // Characters, not bytes: counting bytes would double the work per message; the MB figures are approximate.
+      const bytes = data.length;
       since.bytes += bytes;
       since.parseMs += t1 - t0;
       stall.message(bytes, t1 - t0);

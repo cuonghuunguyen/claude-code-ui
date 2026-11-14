@@ -19,8 +19,9 @@ function rig(over: Partial<StallSeams> & { longtask?: boolean } = {}) {
     disconnect() {}
   }
   let visibleCb: (() => void) | undefined;
+  let unsubscribed = 0;
   const log = createStallLog({
-    onVisible: (cb) => ((visibleCb = cb), () => (visibleCb = undefined)),
+    onVisible: (cb) => ((visibleCb = cb), () => ((visibleCb = undefined), unsubscribed++)),
     now: () => t,
     setInterval: (f) => ((tickFn = f), 1 as never),
     clearInterval: () => (tickFn = undefined),
@@ -39,6 +40,7 @@ function rig(over: Partial<StallSeams> & { longtask?: boolean } = {}) {
     advance: (ms: number) => void (t += ms),
     longtask: (...d: number[]) => entries.cb?.({ getEntries: () => d.map((duration) => ({ duration })) }),
     running: () => tickFn !== undefined,
+    unsubscribed: () => unsubscribed,
     /** The page became visible again (visibilitychange, pageshow, resume). */
     becomeVisible: () => visibleCb?.(),
   };
@@ -134,7 +136,9 @@ describe("stall log", () => {
   it("stop ends the visibility listener", () => {
     const r = rig();
     r.log.start();
+    expect(r.unsubscribed()).toBe(0);
     r.log.stop();
+    expect(r.unsubscribed()).toBe(1);
     r.becomeVisible();
     expect(r.running()).toBe(false);
   });
