@@ -111,6 +111,33 @@ describe("Session", () => {
     expect(late.every((e) => all.includes(e))).toBe(true);
   });
 
+  it("eventsAfter and countAfter give the events a replaying subscribe gets, and subscribe(replay: false) replays none (GH-767)", async () => {
+    const s = new Session("/tmp", { query: fakeQuery as never });
+    const all: Event[] = [];
+    s.subscribe(0, (e) => all.push(e));
+    s.prompt("hello");
+    await until(all, (e) => e.part.type === "turn_result");
+    for (const since of [0, 3, all.at(-1)!.seq - 1, all.at(-1)!.seq, 10_000]) {
+      const replayed: Event[] = [];
+      s.subscribe(since, (e) => replayed.push(e))();
+      expect([...s.eventsAfter(since)]).toEqual(replayed);
+      expect(s.countAfter(since)).toBe(replayed.length);
+    }
+    const none: Event[] = [];
+    s.subscribe(0, (e) => none.push(e), false)();
+    expect(none).toEqual([]);
+  });
+
+  it("eventsAfter skips the seq a streamed part's latest event replaced (GH-767)", () => {
+    const s = new Session("/tmp", { query: fakeQuery as never });
+    for (let i = 1; i <= 5; i++) s.emit({ type: "assistant_text", id: "streamed", text: "x".repeat(i), streaming: true });
+    s.emit({ type: "assistant_text", id: "plain", text: "y", streaming: false });
+    // Streamed events 1 and 5 stay (first, latest); 2-4 were replaced, then the plain part.
+    expect([...s.eventsAfter(0)].map((e) => e.seq)).toEqual([1, 5, 6]);
+    expect([...s.eventsAfter(1)].map((e) => e.seq)).toEqual([5, 6]);
+    expect(s.countAfter(2)).toBe(2);
+  });
+
   it("strips API key env vars from the SDK env (ADR 0002)", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
     vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "tok");

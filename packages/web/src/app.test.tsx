@@ -607,6 +607,77 @@ it("a project removed by another client closes its open session tabs here", asyn
   }
 });
 
+describe("session list versions (GH-767)", () => {
+  const listReqs = () => sent.filter((m) => m.type === "session.list") as { type: string; since?: string }[];
+  const other: SessionListItem = { ...session, id: "other-1", cwd: "/p/other", title: "Other" };
+  const saved = replies["session.list"];
+  afterEach(() => void (replies["session.list"] = saved));
+
+  it("sends the version of the last list as since and merges the delta rows by ids", async () => {
+    // Remount with a versioned first list.
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"], version: "e:1" };
+    await rerender();
+    const n = listReqs().length;
+    replies["session.list"] = { delta: true, version: "e:2", ids: [ID, other.id], sessions: [other], projects: ["/p/demo", "/p/other"] };
+    await act(async () => sessionsChanged({ type: "sessions.changed" }));
+    await act(async () => {});
+    expect(listReqs()[n]!.since).toBe("e:1");
+    expect(el.querySelector('[data-cwd="/p/other"]')).not.toBeNull();
+    // The next request names the new version; a delta that drops an id removes its row.
+    replies["session.list"] = { delta: true, version: "e:3", ids: [ID], sessions: [], projects: ["/p/demo"] };
+    await act(async () => sessionsChanged({ type: "sessions.changed" }));
+    await act(async () => {});
+    expect(listReqs()[n + 1]!.since).toBe("e:2");
+    expect(el.querySelector('[data-cwd="/p/other"]')).toBeNull();
+    expect(el.querySelector(`[data-tab-id="${ID}"]`)).not.toBeNull();
+  });
+
+  it("asks for the whole list again when a delta names an id with no known row", async () => {
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"], version: "e:1" };
+    await rerender();
+    const n = listReqs().length;
+    let calls = 0;
+    replies["session.list"] = (m: { since?: string }) => (calls++, m.since ? { delta: true, version: "e:2", ids: [ID, "ghost"], sessions: [], projects: ["/p/demo"] } : { sessions: [session, other], projects: ["/p/demo", "/p/other"], version: "e:3" });
+    await act(async () => sessionsChanged({ type: "sessions.changed" }));
+    await act(async () => {});
+    expect(calls).toBe(2);
+    expect(listReqs()[n]!.since).toBe("e:1");
+    expect(listReqs()[n + 1]!.since).toBe("");
+    expect(el.querySelector('[data-cwd="/p/other"]')).not.toBeNull();
+  });
+
+  it("asks with an empty since until a list brings a version, and keeps asking so when the daemon sends none", async () => {
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+    await rerender();
+    const n = listReqs().length;
+    await act(async () => sessionsChanged({ type: "sessions.changed" }));
+    await act(async () => {});
+    expect(listReqs().length).toBeGreaterThan(n);
+    expect(listReqs().slice(n).every((m) => m.since === "")).toBe(true);
+  });
+
+  it("runs one list request at a time: triggers while one is in flight share one trailing request", async () => {
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"], version: "e:1" };
+    await rerender();
+    const n = listReqs().length;
+    const gates: (() => void)[] = [];
+    let inFlight = 0;
+    let most = 0;
+    replies["session.list"] = () => (++inFlight, (most = Math.max(most, inFlight)), new Promise((r) => gates.push(() => (inFlight--, r({ sessions: [session], projects: ["/p/demo"], version: "e:1" })))));
+    await act(async () => {
+      for (let i = 0; i < 4; i++) sessionsChanged({ type: "sessions.changed" });
+    });
+    expect(listReqs().length - n).toBe(1);
+    await act(async () => gates.shift()!());
+    await act(async () => {});
+    expect(listReqs().length - n).toBe(2);
+    await act(async () => gates.shift()!());
+    await act(async () => {});
+    expect(listReqs().length - n).toBe(2);
+    expect(most).toBe(1);
+  });
+});
+
 const panelBtn = () => el.querySelector('[data-testid="panel-toggle"]')!;
 const sidePanel = () => el.querySelector('[data-testid="side-panel"]')!;
 
@@ -1430,6 +1501,31 @@ it("a page-load link does not re-add a removed project; opening the session (cli
   expect(subscribes()).toContainEqual(expect.objectContaining({ sessionId: other.id, addProject: true }));
   replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
   replies["session.subscribe"] = { logEpoch: "e1", session };
+});
+
+it("a reconnect subscribes the visible tab first, then the other open tabs (GH-767)", async () => {
+  const subscribes = () => sent.filter((m) => m.type === "session.subscribe") as unknown as { sessionId: string; background?: boolean }[];
+  const mk = (id: string) => ({ ...session, id, title: id });
+  const [a, b, c] = ["aaaaaaaa-2222-3333-4444-555555555555", "bbbbbbbb-2222-3333-4444-555555555555", "cccccccc-2222-3333-4444-555555555555"].map(mk);
+  const all = [session, a!, b!, c!];
+  replies["session.list"] = { sessions: all, projects: ["/p/demo"] };
+  replies["session.subscribe"] = (m: { sessionId: string }) => ({ logEpoch: "e1", session: all.find((x) => x.id === m.sessionId) });
+  try {
+    // Open a, b, c in that order, then show the first one again: the visible tab is the oldest view, not the last.
+    for (const x of [a!, b!, c!, a!]) {
+      await act(async () => (location.hash = `#${x.id}`, window.dispatchEvent(new PopStateEvent("popstate"))));
+      await act(async () => {});
+    }
+    sent.length = 0;
+    await act(async () => reconnect());
+    await act(async () => {});
+    const ids = subscribes().filter((m) => !m.background).map((m) => m.sessionId);
+    expect(new Set(ids)).toEqual(new Set([ID, a!.id, b!.id, c!.id]));
+    expect(ids[0]).toBe(a!.id);
+  } finally {
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+    replies["session.subscribe"] = { logEpoch: "e1", session };
+  }
 });
 
 it("opening the page-load session of a removed project (popstate, tab click) adds the project, though its view exists", async () => {

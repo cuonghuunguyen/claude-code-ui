@@ -60,6 +60,8 @@ import { cliTurnRunning, interleaveRuns, JsonlTail, parseJsonl, transcriptEnd, w
 import type { KeepAwake } from "./keep-awake.ts";
 import { customCommand, EDITORS, findOnPath, isOpenWith, openCommand, type Launcher, type OpenCommand } from "./open-external.ts";
 import { createRouter, type Sides } from "./sides.ts";
+import { createFeeds } from "./feed.ts";
+import { createListVersions } from "./list-versions.ts";
 import { createSessionSettings } from "./session-settings.ts";
 import { createUploads, SESSION_DIR } from "./uploads.ts";
 import { createUpdater, type Updater } from "./update.ts";
@@ -108,6 +110,8 @@ const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 const CLEARED = /^\/(clear|reset|new)$/;
 /** session.list waits this long for the model list (auto mode of new sessions) before it replies without it. */
 export const MODEL_LIST_WAIT_MS = 2000;
+/** A background resubscribe that is behind by more events than this gets the snapshot (last page) instead of the replay (GH-767). */
+export const REPLAY_MAX_EVENTS = 500;
 /** The longest `session.list` waits for the OpenCode server (it may start, or hang, for the first list). */
 const OPENCODE_LIST_WAIT_MS = 3000;
 
@@ -401,11 +405,15 @@ export function createDaemon(opts: {
   stopWaitMs?: number;
   /** GH-553: the OS launcher shortcut (shortcut.ts); none: launcher.shortcut fails (a side, another OS). */
   shortcut?: { installed(): boolean; set(on: boolean): Promise<boolean> };
+  /** A background resubscribe behind by more events than this gets the snapshot (default REPLAY_MAX_EVENTS). */
+  replayMaxEvents?: number;
   /** Update checks and installs (update.ts); none: no update_available, update.* fail. Checks start with the daemon. */
   update?: Omit<Parameters<typeof createUpdater>[0], "busy" | "broadcast">;
 }) {
   const hostnames = new Set([...LOCAL_HOSTNAMES, ...(opts.hostnames ?? [])]);
   const logEpoch = randomUUID();
+  /** The versions of the lists sent to pages (`session.list {since}` answers a delta, GH-767); one per daemon, a reconnect is a new connection. */
+  const listVersions = createListVersions(logEpoch);
   /** fs.upload storage: one private folder per session; a session gets only its own as an additional directory, so Claude reads an attachment without asking (uploads.ts). */
   const uploads = createUploads({ dir: opts.uploadDir });
   const sessions = new Map<string, Session>();
@@ -2187,6 +2195,9 @@ export function createDaemon(opts: {
     if (slept && (opts.watchSleep?.now ?? Date.now)() - slept.at > SLEEP_KEEP_MS) slept = undefined;
     if (slept) send(ws, { type: "daemon_slept", ...slept });
     const unsubscribes = new Map<string, () => void>();
+    /** This connection's session feeds: events go to the socket while its buffer allows, else from the log later (feed.ts). */
+    const feeds = createFeeds(ws, (e) => send(ws, e));
+    let subscribeOrder = 0;
     // fs.watch: watched path as the client gave it → canonical path and its stat listener.
     // fs.media: key (canonical path, "blob\0cwd\0hash\0path", "<side>\0cwd\0hash\0path") -> nonce issued to this connection.
     const mediaNonces = new Map<string, string>();
@@ -2502,6 +2513,8 @@ export function createDaemon(opts: {
           }
         }
         case "session.subscribe": {
+          // Before the first await: the page's order of asking, for the feed order (the lookups below finish in any order).
+          const order = ++subscribeOrder;
           const span = perfMon.span("session.open");
           try {
             const s = await find(msg.sessionId, msg.background === true);
@@ -2522,15 +2535,27 @@ export function createDaemon(opts: {
             };
             // Different epoch: the client's seqs belong to an earlier daemon run, so replay everything.
             const since = msg.logEpoch === logEpoch ? msg.sinceSeq : 0;
+            // A shown tab (plain subscribe) is sent first when the link is slow.
+            const shown = msg.background !== true;
+            const from = typeof msg.from === "string" ? msg.from : undefined;
             // Paged, first subscribe or new epoch: a snapshot (last page) instead of the replay; reply, snapshot and subscribe in one synchronous step.
-            if (msg.paged === true && since === 0) {
-              const { seq, snapshot } = s.snapshot(typeof msg.from === "string" ? msg.from : undefined);
-              reply({ logEpoch, seq, session: s.info(), title: title!, snapshot, ...planDirsOf(s) });
-              const stop = s.subscribe(seq, (e) => send(ws, e));
+            let snap = msg.paged === true && since === 0 ? s.snapshot(from) : undefined;
+            // A background view far behind (a reconnect after a long gap) takes the snapshot too when the page is clearly smaller than the gap (GH-767; a page is at
+            // most PAGE_PARTS parts, but one giant turn comes whole, where the replay is the cheaper one). A shown tab keeps the replay (its scroll position).
+            if (!snap && msg.paged === true && !shown && since > 0) {
+              const gap = s.countAfter(since);
+              if (gap > (opts.replayMaxEvents ?? REPLAY_MAX_EVENTS)) {
+                const page = s.snapshot(from);
+                if (page.snapshot.page.parts.length * 2 < gap) snap = page;
+              }
+            }
+            if (snap) {
+              reply({ logEpoch, seq: snap.seq, session: s.info(), title: title!, snapshot: snap.snapshot, ...planDirsOf(s) });
+              const stop = feeds.follow(s, snap.seq, shown, order);
               return keep(stop, mirror(s));
             }
             reply({ logEpoch, seq: s.seq(), session: s.info(), title: title!, ...planDirsOf(s) });
-            const stop = s.subscribe(since, (e) => send(ws, e));
+            const stop = feeds.follow(s, since, shown, order);
             return keep(stop, mirror(s));
           } finally {
             span.end();
@@ -2847,7 +2872,8 @@ export function createDaemon(opts: {
           }
         }
         case "session.list":
-          return reply(await list());
+          // `since` (even empty) = the page understands versions; the hub's own calls send none and get the plain list.
+          return reply(typeof msg.since === "string" ? listVersions.encode(await list(), msg.since) : await list());
         case "session.ids":
           return reply({ ids: await sessionIds() } satisfies SessionIdsResult);
         case "project.open": {
@@ -3992,6 +4018,7 @@ export function createDaemon(opts: {
         sides: opts.sides,
         send: (m) => send(ws, m),
         local: (msg) => local(msg, (m) => send(ws, m)),
+        encodeList: (result, since) => listVersions.encode(result, since),
         localCall: (msg) =>
           new Promise<ServerMessage>((resolve) =>
             local(msg, resolve).catch((err) => (console.error("request handler failed:", err), resolve({ type: "error", reqId: msg.reqId, code: "internal_error", message: "request failed" }))),

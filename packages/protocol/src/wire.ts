@@ -184,7 +184,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** `answers`: question text -> answer. First answer wins, like permission.respond. `choices`: question text -> the chosen option labels, then the Other text; optional, an Engine that needs the structure of a multi-select answer (OpenCode) uses it, Claude ignores it. */
   | { type: "question.respond"; requestId: string; answers: Record<string, string>; choices?: Record<string, string[]> }
   | { type: "models.list"; engine?: Engine; cwd?: string }
-  | { type: "session.list" }
+  /** `since`: the `version` of a list the client applied (`""`: none yet); the reply carries a `version` and may be a delta (GH-767). Without `since` the reply is the plain list. */
+  | { type: "session.list"; since?: string }
   /** Every session ID this daemon has (live, or a transcript inside its roots), added project or not; the hub's lookup of an unlisted ID (GH-328), which names no ID. Reply SessionIdsResult. */
   | { type: "session.ids" }
   /** Adds a directory inside the roots to the known projects (kept across daemon restarts). */
@@ -678,6 +679,11 @@ export type ListResult = {
   cwdSides?: Record<string, string>;
   /** Git worktrees of each listed project that is in a git repository (docs/spec.md "Projects"), the main worktree first. */
   worktrees?: Record<string, Worktree[]>;
+  /** Names this list for `session.list {since}` (docs/spec.md "Session list versions"). Absent: an older daemon, never a delta. */
+  version?: string;
+  /** A reply to `since`: `sessions` holds only the rows added or changed since that version, `ids` every listed session id in list order. The other fields are whole. */
+  delta?: true;
+  ids?: string[];
 };
 /**
  * A git worktree of a project's repository, identified by its directory (canonical path). `main`: the repository's own checkout.
