@@ -111,6 +111,10 @@ _Avoid_: message (on the wire)
 **Seq**:
 Per-session, monotonically increasing event number used for replay and de-duplication.
 
+**View cache**:
+The browser's IndexedDB copy of the last session list and of session views (parts, aux, info, title), drawn at page load before the socket opens and resumed against the Daemon after connect. A cache only, never a source of truth; dropped when the Daemon identity or token changes.
+_Avoid_: offline mode, local history (that is the Daemon's file store)
+
 **Part**:
 One unit of the normalized message model (`assistant_text`, `tool_call`, `permission_request`, ...). The UI renders only parts.
 _Avoid_: block, chunk
