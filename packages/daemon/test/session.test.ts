@@ -10,7 +10,7 @@ import { CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, INTERRUPT_GRACE_MS, queuedQue
 import { taskDirs } from "../src/shell-output.ts";
 import { createPerf, setPerf } from "../src/perf.ts";
 import { createUpdater, RESTART_CODE } from "../src/update.ts";
-import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, clearState, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, limitQuery, limitState, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, parallelPermissionQuery, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped, foregroundBashQuery, backgrounded } from "./fake-query.ts";
+import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, clearState, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, limitQuery, limitState, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, parallelPermissionQuery, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped, foregroundBashQuery, backgrounded, deniedQuery, hookResults } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
@@ -544,7 +544,8 @@ describe("Session", () => {
       }
       {
         started({ query: fakeQuery as never, worker: () => true });
-        expect(calls.at(-1)).not.toHaveProperty("hooks");
+        // Only Allow and retry's PreToolUse callback (GH-711), no other hook.
+        expect(Object.keys(calls.at(-1)!.hooks ?? {})).toEqual(["PreToolUse"]);
       }
       {
         let on = false;
@@ -3108,5 +3109,90 @@ describe("Next for you (GH-305)", () => {
     t.s.clearSuggestion();
     t.s.clearSuggestion();
     expect(suggestions(t.events)).toEqual(["run the tests", null]);
+  });
+});
+
+describe("Allow and retry (GH-711)", () => {
+  const idles = (events: Event[]) => events.filter((e) => e.part.type === "session_state" && e.part.state === "idle").length;
+  const waitIdle = async (events: Event[], count: number) => {
+    await until(events, () => idles(events) >= count);
+  };
+  const open = async () => {
+    hookResults.length = 0;
+    const s = new Session("/repo", { query: deniedQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("go");
+    await waitIdle(events, 1);
+    return { s, events };
+  };
+  const hasAllow = (r: unknown) => (r as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput?.permissionDecision === "allow";
+
+  it("a classifier denial is a denied card with its reason; the query gets a PreToolUse callback hook that allows nothing by default", async () => {
+    const { s, events } = await open();
+    expect(lastPart(events, "dn-1")).toMatchObject({ status: "denied", denial: { by: "classifier", reason: "[Git Destructive]" } });
+    expect(calls.at(-1)?.hooks?.PreToolUse?.[0]?.hooks).toHaveLength(1);
+    expect(hookResults).toEqual([{}]);
+    await s.close();
+  });
+
+  it("allowDenied emits the part as allowed, sends the follow-up naming the command, and the retried call runs once", async () => {
+    const { s, events } = await open();
+    s.allowDenied("dn-1");
+    expect(lastPart(events, "dn-1")).toMatchObject({ denial: { allowed: true } });
+    const sent = (events.find((e) => e.part.type === "user_text" && e.part.text.startsWith("Auto mode denied"))!.part as { text: string }).text;
+    expect(sent).toContain("Auto mode denied your Bash call");
+    expect(sent).toContain("git push --force");
+    await waitIdle(events, 2);
+    // Another description, same command: the hook allows it, no second denial.
+    expect(hasAllow(hookResults.at(-1))).toBe(true);
+    expect(lastPart(events, "dn-2")).toMatchObject({ tool: "Bash", status: "done" });
+    await s.close();
+  });
+
+  it("the approval is consumed by the first matching call: a second identical call is denied again", async () => {
+    const { s, events } = await open();
+    s.allowDenied("dn-1");
+    await waitIdle(events, 2);
+    s.prompt("again");
+    await waitIdle(events, 3);
+    expect(hookResults.map(hasAllow)).toEqual([false, true, false]);
+    expect(lastPart(events, "dn-3")).toMatchObject({ status: "denied" });
+    await s.close();
+  });
+
+  it("an approval the follow-up's turn did not use is dropped at that turn's idle: a later identical call is denied", async () => {
+    hookResults.length = 0;
+    const s = new Session("/repo", { query: deniedQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("go run-ls");
+    await waitIdle(events, 1);
+    // The follow-up (no "run-ls" in it) makes the fake run `git push --force`: not the armed `ls`, so the hook allows nothing.
+    s.allowDenied("dn-1");
+    await waitIdle(events, 2);
+    expect(hookResults.map(hasAllow)).toEqual([false, false]);
+    s.prompt("again run-ls");
+    await waitIdle(events, 3);
+    expect(hookResults.map(hasAllow)).toEqual([false, false, false]);
+    expect(lastPart(events, "dn-3")).toMatchObject({ status: "denied" });
+    await s.close();
+  });
+
+  it("errors: unknown call, a second use", async () => {
+    const { s } = await open();
+    expect(() => s.allowDenied("nope")).toThrow(expect.objectContaining({ code: "unknown_call" }));
+    s.allowDenied("dn-1");
+    expect(() => s.allowDenied("dn-1")).toThrow(expect.objectContaining({ code: "unknown_call" }));
+    await s.close();
+  });
+
+  it("interrupt drops an armed approval", async () => {
+    const { s, events } = await open();
+    s.allowDenied("dn-1");
+    await s.interrupt();
+    await waitIdle(events, 2);
+    expect(hasAllow(hookResults.at(-1))).toBe(false);
+    await s.close();
   });
 });

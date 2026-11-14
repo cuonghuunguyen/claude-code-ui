@@ -22,7 +22,7 @@ import { relPath } from "./paths.ts";
 import { specOf } from "./keymap.ts";
 import { keyText } from "./shortcuts.ts";
 import { fileSize } from "./files.ts";
-import { BackgroundShellContext, PlanTabContext, ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
+import { AllowDeniedContext, BackgroundShellContext, PlanTabContext, ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
 import { ArtifactLinkMenu, ArtifactPreview, usePreviewOpen } from "./artifact-preview.tsx";
 import { ARTIFACT_TOOLS, artifactPreviewable, artifactSummary, artifactTitle, claudeUrl, diffStats, editFiles, filePath, isClaudeUrl, readRange, todoItems, todoSummary, toolSummary } from "./tools.ts";
 import { t as tr, useT } from "./i18n.ts";
@@ -105,10 +105,14 @@ export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; res
   const toBackground = use(BackgroundShellContext);
   const canBackground = !!toBackground && call.tool === "Bash" && call.status === "running" && call.shell === "foreground";
   const [moving, setMoving] = useState<{ error?: string }>();
+  const allowDenied = use(AllowDeniedContext);
+  const autoDenied = call.status === "denied" && call.denial?.by === "classifier" ? call.denial : undefined;
+  const canAllow = !!allowDenied && !!autoDenied;
+  const [allowing, setAllowing] = useState<{ error?: string }>();
   const decided = call.coordinator && (call.coordinator.decision === "allow" ? t("session.toolCard.approvedByCoordinator") : t("session.toolCard.deniedByCoordinator"));
   const header = (
     <ToolHeader
-      className={target || canBackground ? "min-w-0 flex-1" : undefined}
+      className={target || canBackground || canAllow ? "min-w-0 flex-1" : undefined}
       type="dynamic-tool"
       toolName={call.tool}
       state={awaiting ? "approval-requested" : STATE[call.status]}
@@ -129,9 +133,20 @@ export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; res
   );
   return (
     <Tool data-testid="tool-card" data-status={call.status} {...useExpanded(call.id, awaiting && !stats)}>
-      {target || canBackground ? (
+      {target || canBackground || canAllow ? (
         <div className="group/head flex items-center gap-1">
           {header}
+          {canAllow && (
+            <AllowAndRetryButton
+              allowed={!!autoDenied.allowed}
+              pending={!!allowing && !allowing.error}
+              onClick={() => {
+                setAllowing({});
+                // Success: the daemon re-emits the part with denial.allowed, which swaps the label.
+                allowDenied!(call.toolUseId).then(() => setAllowing(undefined), (e: Error) => setAllowing({ error: e.message }));
+              }}
+            />
+          )}
           {canBackground && (
             <BackgroundButton
               pending={!!moving && !moving.error}
@@ -150,6 +165,17 @@ export function ToolCard({ call, result, awaiting, plan }: { call: ToolCall; res
       {canBackground && moving?.error && (
         <p role="alert" data-testid="run-in-background-error" className="px-3 pb-2 text-xs text-destructive">
           {t("session.toolCard.backgroundFailed", { error: moving.error })}
+        </p>
+      )}
+      {autoDenied && (
+        // Outside the collapsible body: the reason is what the user weighs before Allow and retry.
+        <p data-testid="auto-mode-denial" className="px-3 pb-2 text-xs text-muted-foreground">
+          {autoDenied.reason ? t("session.toolCard.deniedByAutoModeReason", { reason: autoDenied.reason }) : t("session.toolCard.deniedByAutoMode")}
+        </p>
+      )}
+      {canAllow && allowing?.error && (
+        <p role="alert" data-testid="allow-and-retry-error" className="px-3 pb-2 text-xs text-destructive">
+          {t("session.toolCard.allowAndRetryFailed", { error: allowing.error })}
         </p>
       )}
       <ToolContent>
@@ -191,6 +217,23 @@ export function BackgroundButton({ pending, onClick }: { pending: boolean; onCli
       className={cn(OPEN_CLASS.replace("opacity-0 ", ""), "disabled:cursor-default disabled:opacity-50")}
     >
       <SendToBackIcon aria-hidden className="size-4" />
+    </button>
+  );
+}
+
+/** Allow and retry (GH-711): a text button (the action needs words), 44 px high below md. */
+function AllowAndRetryButton({ allowed, pending, onClick }: { allowed: boolean; pending: boolean; onClick: () => void }) {
+  const t = useT();
+  return (
+    <button
+      type="button"
+      data-testid="allow-and-retry"
+      disabled={allowed || pending}
+      aria-busy={pending}
+      onClick={onClick}
+      className="flex h-7 shrink-0 cursor-pointer items-center rounded-md border px-2 text-xs font-medium text-foreground outline-none hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info disabled:cursor-default disabled:opacity-50 max-md:min-h-11 pointer-coarse:min-h-11"
+    >
+      {allowed ? t("session.toolCard.allowedOnce") : t("session.toolCard.allowAndRetry")}
     </button>
   );
 }

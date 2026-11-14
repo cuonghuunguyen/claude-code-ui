@@ -573,3 +573,56 @@ export function limitQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserM
     close: () => void (closed++, closedQueries.push(options ?? {}), q.return(undefined)),
   });
 }
+
+/** PreToolUse hook answers of deniedQuery, in call order. */
+export const hookResults: unknown[] = [];
+
+/**
+ * Fake query() for Allow and retry (GH-711), shapes of live SDK 0.3.285: the first prompt makes Bash call `dn-1` that the auto mode
+ * classifier denies (`permission_denied`, then the error tool_result and a result). Every later prompt is echoed (isReplay) and
+ * runs the same command again as `dn-<n>` with another description: the PreToolUse hook of the query options is asked first
+ * (`hookResults`); `allow` -> a done tool_result, else a second denial. A prompt containing "run-ls" runs `ls` instead.
+ */
+export function deniedQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
+  calls.push(options ?? {});
+  const out: SDKMessage[] = [];
+  let wake = () => {};
+  const emit = (m: unknown) => (out.push(m as SDKMessage), wake());
+  let n = 0;
+  const finish = () => emit({ type: "result", subtype: "success", uuid: randomUUID(), session_id: "x", is_error: false, duration_ms: 1, total_cost_usd: 0, result: "", usage: { input_tokens: 1, output_tokens: 1 }, permission_denials: [] });
+  const deny = (id: string) => {
+    emit({ type: "system", subtype: "permission_denied", uuid: randomUUID(), session_id: "x", tool_name: "Bash", tool_use_id: id, decision_reason_type: "classifier", decision_reason: "[Git Destructive]", message: "denied" });
+    emit({ type: "user", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, is_error: true, content: "Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Git Destructive]." }] } });
+  };
+  void (async () => {
+    for await (const input of prompt) {
+      const first = n === 0;
+      const id = `dn-${++n}`;
+      const text = JSON.stringify(input.message.content);
+      if (!first) emit({ ...input, session_id: "x", isReplay: true });
+      const command = text.includes("run-ls") ? "ls" : "git push --force";
+      emit({ type: "assistant", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { id: `msg_${id}`, content: [{ type: "tool_use", id, name: "Bash", input: { command, description: `try ${n}` } }] } });
+      const hook = options?.hooks?.PreToolUse?.[0]?.hooks[0];
+      const r = hook ? await hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command, description: `try ${n}` }, tool_use_id: id } as never, id, { signal: new AbortController().signal }) : {};
+      hookResults.push(r);
+      if ((r as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput?.permissionDecision === "allow")
+        emit({ type: "user", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ran" }] } });
+      else deny(id);
+      finish();
+    }
+  })();
+  let ended = false;
+  const q = (async function* () {
+    while (!ended) {
+      while (out.length) yield out.shift()!;
+      if (ended) return;
+      await new Promise<void>((r) => (wake = r));
+    }
+  })();
+  return Object.assign(q, {
+    supportedCommands: async () => [],
+    getContextUsage: async () => fakeUsage,
+    interrupt: async () => {},
+    close: () => void (closed++, (ended = true), wake()),
+  });
+}

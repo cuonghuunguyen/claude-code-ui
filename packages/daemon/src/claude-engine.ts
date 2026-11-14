@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import {
   query as sdkQuery,
   type CanUseTool,
+  type HookInput,
+  type HookJSONOutput,
   type ModelInfo,
   type Options,
   type PermissionResult,
@@ -33,6 +35,7 @@ import { claudeEnv } from "./claude-env.ts";
 import { runBash, type BashResult, type BashRun } from "./bash.ts";
 import { readTail, taskDirs } from "./shell-output.ts";
 import { perf, type PerfSpanHandle } from "./perf.ts";
+import { DeniedRetryError, followUp, OneShots, retryKey } from "./denied-retry.ts";
 import { interleaveRuns, type TranscriptEnd } from "./transcript.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
@@ -243,6 +246,11 @@ export class ClaudeSession implements EngineSession {
   private bashPinned = false;
   /** Born by a /clear hand-over and not prompted yet: its title is "New session" without reading its transcript. */
   private cleared = false;
+  /** Allow and retry (GH-711): approvals armed for the classifier-denied calls the user retries; the PreToolUse hook consumes one per matching call. */
+  private readonly oneShots = new OneShots();
+  /** Message IDs of Allow and retry follow-ups the CLI did not take yet; `retryRan`: one was taken, so the next idle drops the unused approvals. */
+  private readonly retryEchoes = new Set<string>();
+  private retryRan = false;
   /** Converts transcript messages (restore and sync); the live adapter converts the query's stream. */
   private readonly transcript = createAdapter();
   /** UUID of every transcript message the session logged or its own query streamed: the rest are external turns. */
@@ -345,8 +353,39 @@ export class ClaudeSession implements EngineSession {
   /** After the session_state idle event. */
   idle() {
     this.flushBashNotices();
+    // The turn of an Allow and retry follow-up ended: an approval its call did not use must not serve a later, unrelated identical call.
+    if (this.retryRan) this.dropApprovals();
     // A login or account change came while busy: the finished turn drops the old CLI, the next prompt resumes in a new one.
     if (this.staleLogin && this.session.releaseQuery()) this.staleLogin = false;
+  }
+
+  private dropApprovals() {
+    this.oneShots.clear();
+    this.retryEchoes.clear();
+    this.retryRan = false;
+  }
+
+  /** PreToolUse hook (SDK callback, runs before the classifier): an armed approval for this exact call allows it, once. */
+  private async preToolUse(input: HookInput): Promise<HookJSONOutput> {
+    if (input.hook_event_name !== "PreToolUse" || !this.oneShots.size || !this.oneShots.take(retryKey(input.tool_name, input.tool_input))) return {};
+    return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "Allowed once from claude-ui (Allow and retry)" } };
+  }
+
+  /**
+   * Allow and retry (GH-711): approves the classifier-denied main-thread call `toolUseId` once and asks Claude, in a follow-up
+   * user message, to run it again. Throws DeniedRetryError (`unknown_call` when no such call is denied or it is allowed already).
+   */
+  allowDenied(toolUseId: string): string | undefined {
+    if (!this.session.isLive()) throw new DeniedRetryError("session_not_live", `session ${this.id} is not live (${this.session.currentState()})`);
+    if (this.bashRun) throw new DeniedRetryError("bash_running", "a shell command is running: stop it first");
+    const r = this.adapter.allowRetry(toolUseId);
+    if (!r) throw new DeniedRetryError("unknown_call", "no call denied by auto mode with that ID, or it is allowed already");
+    const id = this.prompt(followUp(r.call.tool, r.call.input));
+    // The CLI runs the hook only after it took the message, so arming right after the push is in time.
+    this.oneShots.arm(retryKey(r.call.tool, r.call.input));
+    this.retryEchoes.add(id);
+    for (const p of r.parts) this.session.emit(p);
+    return id;
   }
 
   bashCwdPinned() {
@@ -494,6 +533,8 @@ export class ClaudeSession implements EngineSession {
           ...(this.bashPinned ? { CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: "1" } : {}),
         },
         canUseTool: (tool, input, o) => owner.run.canUseTool(tool, input, o),
+        // Allow and retry (GH-711): the one-shot approval of a call auto mode denied; returns {} for every other call.
+        hooks: { PreToolUse: [{ hooks: [(input) => owner.run.preToolUse(input)] }] },
         mcpServers: this.opts.mcpServers?.(this.id),
         ...(agent && { agent }),
         // E2E harness only: a fake CLI (packages/e2e/support/fake-claude-cli.mjs) for what the real one does only sometimes, e.g. a prompt suggestion.
@@ -528,6 +569,7 @@ export class ClaudeSession implements EngineSession {
     this.generation++;
     this.query?.close();
     this.query = undefined;
+    this.dropApprovals();
     // ponytail: 5 s cap in case the CLI hangs on exit; a later write then leaves a metadata-only transcript stub.
     await Promise.race([this.driving, new Promise((r) => setTimeout(r, 5000).unref())]);
   }
@@ -775,6 +817,7 @@ export class ClaudeSession implements EngineSession {
   async interrupt() {
     if (this.bashRun) return this.bashRun.kill();
     if (this.session.currentState() === "idle" && (this.tasks.size || this.cliTurn)) return this.resetWorking();
+    this.dropApprovals();
     if (!this.query || (this.session.currentState() !== "running" && this.session.currentState() !== "needs_input")) return;
     this.session.interruptPending();
     await this.query.interrupt();
@@ -868,6 +911,7 @@ export class ClaudeSession implements EngineSession {
     this.generation++;
     this.query?.close();
     this.query = undefined;
+    this.dropApprovals();
     // The next query is granted this session's own folder (a /clear heir read its parent's until now).
     this.session.uploadOwner = this.id;
     // The old drive loop's finally skips this (newer generation): a background run of the closed query stops with it.
@@ -1056,6 +1100,7 @@ export class ClaudeSession implements EngineSession {
       // A newer generation (conversation rewind) already ended them, and its query may run tasks of its own.
       if (generation === s.generation) {
         s.tasks.clear();
+        s.dropApprovals();
         for (const part of s.adapter.endCalls()) s.session.emit(part);
       }
     }
@@ -1100,6 +1145,7 @@ export class ClaudeSession implements EngineSession {
     // Echo of a prompt() message (replay-user-messages); its user_text is already logged. The CLI took it now:
     // a steering message pushed as the turn ended starts a turn of its own. Other replays (the model switch echo) start none.
     if (m.type === "user" && "isReplay" in m && m.isReplay) {
+      if (m.uuid && this.retryEchoes.delete(m.uuid)) this.retryRan = true;
       if (this.session.currentState() === "idle" && m.uuid && this.checkpoints.has(m.uuid)) this.session.setState("running");
       return;
     }

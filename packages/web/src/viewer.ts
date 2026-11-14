@@ -86,6 +86,8 @@ export const callPath = (call: ToolCall) => ((call.input as { file_path?: unknow
 export type OpenViewer = (t: ViewerTarget, opener?: HTMLElement | null) => void;
 /** Run in background of a Bash card (GH-440): the session view's request for that call. */
 export const BackgroundShellContext = createContext<((toolUseId: string) => Promise<unknown>) | undefined>(undefined);
+/** Allow and retry (GH-711) of a tool card the auto mode classifier denied: the session view's request for that call; absent = no button. */
+export const AllowDeniedContext = createContext<((toolUseId: string) => Promise<unknown>) | undefined>(undefined);
 export const ViewerContext = createContext<OpenViewer | undefined>(undefined);
 
 export type ViewerState = { target: ViewerTarget; sessionId: string; cwd: string; opener: HTMLElement | null };

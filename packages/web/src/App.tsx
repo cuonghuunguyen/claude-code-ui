@@ -132,7 +132,7 @@ import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withArtifacts, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { FILE_LINK_PROPS, FileLinkContext, resolveBareName } from "./file-links.tsx";
-import { BackgroundShellContext, PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type OpenViewer, type ViewerState } from "./viewer.ts";
+import { AllowDeniedContext, BackgroundShellContext, PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type OpenViewer, type ViewerState } from "./viewer.ts";
 import { ViewerDialog } from "./viewer-dialog.tsx";
 import { BackgroundButton, ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
@@ -2230,6 +2230,7 @@ export function App() {
                         loadingOlder={!!olderLoading[s.id]}
                         onStopRun={(subagentId) => client.current!.request({ type: "session.stopSubagent", sessionId: s.id, subagentId })}
                         onBackgroundShell={(toolUseId) => client.current!.request({ type: "session.backgroundShell", sessionId: s.id, toolUseId })}
+                        onAllowDenied={(toolUseId) => client.current!.request({ type: "session.allowDenied", sessionId: s.id, toolUseId })}
                         onRewindShown={() => setRewindTo(undefined)}
                         session={s}
                         coordinator={isCoordinator(id)}
@@ -5324,6 +5325,7 @@ export function SessionPane({
   onOpenSession = () => {},
   onStopRun = async () => {},
   onBackgroundShell,
+  onAllowDenied,
   insert,
   onInserted,
   rewindTo,
@@ -5389,6 +5391,8 @@ export function SessionPane({
   onStopRun?: (id: string) => Promise<unknown>;
   /** Run in background of a Bash card (GH-440); rejects with the daemon's error. Undefined: no button. */
   onBackgroundShell?: (toolUseId: string) => Promise<unknown>;
+  /** Allow and retry (GH-711) of an auto-mode-denied tool card; absent = no button. */
+  onAllowDenied?: (toolUseId: string) => Promise<unknown>;
   insert?: string;
   onInserted: () => void;
   /** Opens the rewind panel of this user message (palette Rewind). */
@@ -5490,6 +5494,9 @@ export function SessionPane({
   const backgroundShellRef = useRef(onBackgroundShell);
   backgroundShellRef.current = onBackgroundShell;
   const backgroundShellStable = useCallback((id: string) => backgroundShellRef.current!(id), []);
+  const allowDeniedRef = useRef(onAllowDenied);
+  allowDeniedRef.current = onAllowDenied;
+  const allowDeniedStable = useCallback((id: string) => allowDeniedRef.current!(id), []);
   // Esc stops the turn, like Claude Code; in a subagent view it stops only that run, like Stop agent. The command picker handles
   // its own Esc first (preventDefault), and an open modal dialog owns Esc.
   const escStops = current ? isRunning(current) && !(stopOf && !stopOf.error) : turnRunning || shellRunning;
@@ -5622,6 +5629,7 @@ export function SessionPane({
     <CwdContext value={session.cwd}>
     <OpenRunContext value={onOpenRun}>
     <BackgroundShellContext value={onBackgroundShell && backgroundShellStable}>
+    <AllowDeniedContext value={onAllowDenied && allowDeniedStable}>
     <AgentLinksContext value={agentCtx}>
       <div className="contents" {...paneDrag}>
       {current ? (
@@ -5901,6 +5909,7 @@ export function SessionPane({
       </div>
       </div>
     </AgentLinksContext>
+    </AllowDeniedContext>
     </BackgroundShellContext>
     </OpenRunContext>
     </CwdContext>

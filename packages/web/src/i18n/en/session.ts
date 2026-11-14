@@ -142,6 +142,11 @@ export default {
   "session.ai.status.output-error": "Error",
   // tool-card.tsx
   "session.toolCard.stopped": "Stopped",
+  "session.toolCard.allowAndRetry": "Allow and retry",
+  "session.toolCard.allowedOnce": "Allowed once",
+  "session.toolCard.deniedByAutoMode": "Denied by auto mode",
+  "session.toolCard.deniedByAutoModeReason": "Denied by auto mode: {reason}",
+  "session.toolCard.allowAndRetryFailed": "Could not allow: {error}",
   "session.toolCard.approvedByCoordinator": "Approved by coordinator",
   "session.toolCard.deniedByCoordinator": "Denied by coordinator",
   "session.toolCard.editedByYou": "{tool} · edited by you",

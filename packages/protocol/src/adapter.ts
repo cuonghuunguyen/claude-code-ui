@@ -15,6 +15,10 @@ function callPart(id: string, tool: string, input: unknown, status: ToolStatus, 
   return { type: "subagent", id, toolUseId: id, description: typeof description === "string" ? description : "", status, startedAt };
 }
 
+/** Start of the tool_result text of a call the auto mode classifier denied (Claude Code transcripts; GH-711). */
+export const CLASSIFIER_DENIAL_PREFIX = "Permission for this action was denied by the Claude Code auto mode classifier.";
+const CLASSIFIER_REASON = /Reason: (\[[^\]]+\])/;
+
 const ENDED = new Set<ToolStatus>(["done", "error", "denied", "stopped"]);
 
 // Known SDK messages the UI does not show. Anything else unhandled becomes a `raw` part.
@@ -178,9 +182,29 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
     return [next];
   }
 
-  function deny(toolUseId: string): Part[] {
+  // Classifier denials of main-thread calls (GH-711), by tool_use_id; also kept for a denial that arrives before its tool_use.
+  const denials = new Map<string, { by: "classifier"; reason?: string; allowed?: true }>();
+
+  /** `denial`: the auto mode classifier's (main thread only); the call keeps it with its status. */
+  function deny(toolUseId: string, denial?: { by: "classifier"; reason?: string }): Part[] {
     denied.add(toolUseId);
-    return setStatus(toolUseId, "denied");
+    if (denial) denials.set(toolUseId, denial);
+    const before = calls.get(toolUseId);
+    const info = denials.get(toolUseId);
+    if (before?.type === "tool_call" && info && !before.parentId && !before.denial) calls.set(toolUseId, { ...before, denial: info });
+    const parts = setStatus(toolUseId, "denied");
+    const after = calls.get(toolUseId);
+    return parts.length || !after || after === before ? parts : [after];
+  }
+
+  /** Allow and retry: the classifier-denied main-thread call `toolUseId`, once; marks its part allowed. */
+  function allowRetry(toolUseId: string): { call: Extract<Part, { type: "tool_call" }>; parts: Part[] } | undefined {
+    const call = calls.get(toolUseId);
+    if (call?.type !== "tool_call" || call.status !== "denied" || call.parentId || call.denial?.by !== "classifier" || call.denial.allowed) return undefined;
+    const next = { ...call, denial: { ...call.denial, allowed: true as const } };
+    calls.set(toolUseId, next);
+    denials.set(toolUseId, next.denial);
+    return { call: next, parts: [next] };
   }
 
   let knownCommands: SDKSlashCommand[] | undefined;
@@ -263,6 +287,8 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
           if (block.type === "redacted_thinking") return [];
           if (block.type === "tool_use") {
             const call = callPart(block.id, block.name, block.input, denied.has(block.id) ? "denied" : "running", startOf(block.id));
+            const early = denials.get(block.id);
+            if (early && call.type === "tool_call" && !m.parent_tool_use_id) call.denial = early;
             calls.set(block.id, call);
             const todos = (block.input as { todos?: TodoItem[] }).todos;
             if (block.name !== "TodoWrite" || m.parent_tool_use_id || !Array.isArray(todos)) return [call];
@@ -352,6 +378,11 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
             parts.push(...markShell(b.tool_use_id, "background"));
           }
           // A stopped run's tool_result is an error ("Agent stopped"); it stays stopped.
+          // Restore: the transcript has no permission_denied entry, only the classifier's error text.
+          if (isError && typeof output === "string" && output.startsWith(CLASSIFIER_DENIAL_PREFIX) && call?.type === "tool_call" && !m.parent_tool_use_id && !denied.has(b.tool_use_id)) {
+            const reason = CLASSIFIER_REASON.exec(output)?.[1];
+            parts.push(...deny(b.tool_use_id, { by: "classifier", ...(reason && { reason }) }));
+          }
           if (!background.has(b.tool_use_id) && call?.status !== "stopped")
             parts.push(...setStatus(b.tool_use_id, denied.has(b.tool_use_id) ? "denied" : isError ? "error" : "done"));
           return false;
@@ -401,7 +432,10 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
           terminalOnly = new Set(m.terminal_slash_commands);
           return knownCommands ? commands(knownCommands) : [];
         }
-        if (m.type === "system" && m.subtype === "permission_denied") return deny(m.tool_use_id);
+        if (m.type === "system" && m.subtype === "permission_denied") {
+          const a = m as { decision_reason_type?: string; decision_reason?: string; agent_id?: string };
+          return a.decision_reason_type === "classifier" && !a.agent_id ? deny(m.tool_use_id, { by: "classifier", ...(a.decision_reason && { reason: a.decision_reason }) }) : deny(m.tool_use_id);
+        }
         if (m.type === "system" && m.subtype === "compact_boundary") {
           compacting = { type: "compaction", id: m.uuid, trigger: m.compact_metadata.trigger };
           return [compacting];
@@ -484,5 +518,5 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   const outputFile = (toolUseId: string) => outputs.get(toolUseId);
 
   /** deny: marks a tool call denied now; its later tool_result keeps status denied. */
-  return { byCoordinator, convert, commands, deny, edit, endCalls, openCalls, outputFile, taskCall };
+  return { allowRetry, byCoordinator, convert, commands, deny, edit, endCalls, openCalls, outputFile, taskCall };
 }

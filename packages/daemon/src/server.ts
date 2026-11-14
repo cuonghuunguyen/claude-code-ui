@@ -1,5 +1,6 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
 import { planDirs } from "./plan-dirs.ts";
+import { DeniedRetryError } from "./denied-retry.ts";
 import { closeSync, createReadStream, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
 import { homedir, hostname as osHostname, tmpdir } from "node:os";
@@ -2664,6 +2665,23 @@ export function createDaemon(opts: {
           } catch (e) {
             return fail("background_failed", (e as Error).message);
           }
+          return reply({});
+        }
+        case "session.allowDenied": {
+          if (typeof msg.toolUseId !== "string") return fail("bad_request", "toolUseId required");
+          const s = await find(msg.sessionId);
+          if (!s) return;
+          if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
+          // Like sendPrompt: the follow-up continues after the terminal CLI's turns.
+          if (s.info().state === "idle") await s.sync();
+          if (s.externalTurnRunning()) return fail("external_turn", "A terminal CLI turn is running in this session");
+          try {
+            s.allowDenied(msg.toolUseId);
+          } catch (e) {
+            return e instanceof DeniedRetryError ? fail(e.code, e.message) : fail("prompt_failed", (e as Error).message);
+          }
+          autoContinue.cancel(s.id);
+          queue.release(s.id);
           return reply({});
         }
         case "session.shellOutput": {
