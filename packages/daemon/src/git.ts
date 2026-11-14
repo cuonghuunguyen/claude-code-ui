@@ -675,7 +675,7 @@ async function copyWorktreeInclude(main: string, path: string): Promise<void> {
 }
 
 /** `worktree.*` of the Claude settings: local > project (of the main checkout) > user; per key the first file that sets it. */
-function worktreeSettings(claudeDir: string, main: string): { baseRef?: unknown; symlinkDirectories?: unknown } {
+export function worktreeSettings(claudeDir: string, main: string): { baseRef?: unknown; symlinkDirectories?: unknown } {
   const out: { baseRef?: unknown; symlinkDirectories?: unknown } = {};
   for (const f of [join(main, ".claude", "settings.local.json"), join(main, ".claude", "settings.json"), join(claudeDir, "settings.json")]) {
     try {

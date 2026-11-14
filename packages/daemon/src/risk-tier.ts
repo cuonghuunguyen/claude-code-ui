@@ -4,11 +4,14 @@ import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { foreignPointer } from "./remote-path.ts";
 import { gitReadOnly, repoSafety, repoSafetyAsync, type RepoSafety } from "./git-readonly.ts";
+import { sharedLinks, under } from "./shared-dirs.ts";
 
 export type Tier = "low" | "high";
 export type TierContext = {
   cwd: string;
   blockedPath?: string;
+  /** The CLI's own reason for asking (SDK `decisionReason`). Carried to the coordinator; the tier does not read it. */
+  decisionReason?: string;
   defaultToNo?: boolean;
   requiresUserInteraction?: boolean;
   /** The CLI runs with CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1: every Bash command starts in `cwd`, so a read-only git command is judged by it. */
@@ -38,7 +41,7 @@ export const deniedName = (seg: string, revision = false) => {
   // `revision`: a git revision token, where HEAD is the usual name (those four names matter for writes: a bare repo layout).
   return DENY_DIRS.has(s) || (DENY_NAMES.has(s) && !(revision && GIT_LAYOUT.has(s))) || s.startsWith(".env") || s.endsWith(".pem") || s.endsWith(".key");
 };
-const denied = (seg: string) => deniedName(seg) || aliased(seg);
+export const denied = (seg: string) => deniedName(seg) || aliased(seg);
 /**
  * Reads: `.claude/skills/**` below a root (those first two segments) and CLAUDE.md / AGENTS.md as the last segment are agent
  * docs; every other segment, and the aliasing rules for every segment, hold as for writes. `nameOnly`: skip the aliasing
@@ -93,9 +96,18 @@ export function pathLow(p: unknown, cwd: string, write: boolean, cwdOk = !write,
   }
   // Throws on a dangling symlink: caught by tier() -> high.
   const real = join(realpathSync(base), ...rest);
-  // Reads may lie in more than one root (the cwd, then the main checkout); the first root that holds the path decides. Writes: the cwd.
-  for (const root of write ? [cwd] : roots) {
+  // Reads may lie in more than one root (the cwd, then the main checkout); the first root that holds the path decides. Writes: the
+  // cwd, then the shared folders of a worker (shared-dirs.ts): its scratch files in the main checkout, never a tracked folder.
+  let facts = safety;
+  const links = write ? sharedLinks(cwd) : [];
+  for (const root of write ? [cwd, ...links.map((d) => d.real)] : roots) {
     const realRoot = realpathSync(root);
+    const link = links.find((d) => d.real === root);
+    if (link) {
+      if (!under(realRoot, real)) continue;
+      // A tracked folder is not scratch (RepoSafety.trackedShared): no low Write there.
+      if ((facts ??= repoSafety(cwd)).trackedShared.includes(link.rel)) continue;
+    }
     const rel = relative(realRoot, real);
     if (rel === "") return cwdOk;
     if (rel.split(sep)[0] === ".." || isAbsolute(rel)) continue;
@@ -109,12 +121,14 @@ export function pathLow(p: unknown, cwd: string, write: boolean, cwdOk = !write,
     // would be repo config: core.fsmonitor, diff.external run on a later git command the user approves).
     // Git's control files and hook folders by name, at any depth (a submodule's `sub/.husky/_` too); then no Write is low in a
     // repository that is not plain (hooks, programs or includes in its config, submodules, nested repositories, unreadable), nor into what its config names.
-    if ([...segs0, ...rawSegs].some(gitControl) || gitRunsIt(real, cwd, safety)) return false;
+    if ([...segs0, ...rawSegs].some(gitControl) || gitRunsIt(real, cwd, facts)) return false;
     const has = (dir: string, n: string) => !!lstatSync(join(dir, n), { throwIfNoEntry: false });
     const segs = segs0;
     for (let i = 0; i < segs.length; i++) {
       const dir = join(realRoot, ...segs.slice(0, i));
       const seg = segs[i]!.toLowerCase();
+      // A nested repository below a shared folder (a clone): its config and hooks are its own.
+      if (link && has(dir, ".git")) return false;
       if (seg === "config" && i === segs.length - 1 && ["HEAD", "objects", "refs"].some((n) => has(dir, n))) return false;
       if ((seg === "objects" || seg === "refs") && has(dir, "config")) return false;
     }
@@ -142,7 +156,7 @@ function treeHasDenied(dir: string): boolean {
  * Git's own control files and hook folders, by name at any depth: .gitmodules, .gitattributes, .gitconfig, .gitignore, .githooks*,
  * .husky*, hooks, .lfsconfig. `.github` and `.gitlab*` hold CI files, not git's: a push (high) is what runs them.
  */
-const gitControl = (seg: string) => {
+export const gitControl = (seg: string) => {
   const g = seg.toLowerCase();
   return g === "hooks" || g.startsWith(".husky") || g === ".lfsconfig" || (g.startsWith(".git") && g !== ".github" && !g.startsWith(".gitlab"));
 };

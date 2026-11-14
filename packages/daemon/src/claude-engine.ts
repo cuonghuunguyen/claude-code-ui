@@ -31,6 +31,7 @@ import {
   type RewindMode,
   type RewindPreview,
 } from "@claude-ui/protocol";
+import { sharedDirs } from "./shared-dirs.ts";
 import { claudeEnv } from "./claude-env.ts";
 import { runBash, type BashResult, type BashRun } from "./bash.ts";
 import { readTail, taskDirs } from "./shell-output.ts";
@@ -396,7 +397,7 @@ export class ClaudeSession implements EngineSession {
 
   /** Rules already saved never reach this callback. No timeout: the promise waits for the Session's answer or the SDK's abort. */
   private readonly canUseTool: CanUseTool = async (tool, input, opts) => {
-    const { signal, toolUseID, title: sdkTitle, mcpServer, blockedPath, defaultToNo } = opts;
+    const { signal, toolUseID, title: sdkTitle, mcpServer, blockedPath, defaultToNo, decisionReason } = opts;
     let suggestions = opts.suggestions ?? [];
     // Forwarded by sdk.mjs (0.3.285) but not declared in its CanUseTool type.
     const { requiresUserInteraction } = opts as { requiresUserInteraction?: boolean };
@@ -428,7 +429,7 @@ export class ClaudeSession implements EngineSession {
               settled: false,
               at: Date.now(),
             };
-      this.session.request({ part, ctx: { blockedPath, defaultToNo, requiresUserInteraction }, onAllow: card?.onAllow, reply: (r) => this.reply(part, resolve, r) });
+      this.session.request({ part, ctx: { blockedPath, defaultToNo, requiresUserInteraction, decisionReason }, onAllow: card?.onAllow, reply: (r) => this.reply(part, resolve, r) });
       signal.addEventListener("abort", () => this.session.cancel(requestId, "Request cancelled"), { once: true });
     });
   };
@@ -492,12 +493,15 @@ export class ClaudeSession implements EngineSession {
     this.ambientTasks.clear();
     const up = this.opts.uploadDir?.(this.id);
     const agent = this.opts.agent?.(this.id);
-    const dirs = [...(up ? [up] : []), ...sessionDirs(this.grants)];
+    // A worker's Bash starts in its cwd every time (`cd` does not carry over), so a read-only git command is judged by that cwd.
+    this.bashPinned = !!this.opts.worker?.(this.id);
+    // A worker's scratch folder is a link to the main checkout (shared-dirs.ts): a write through it resolves outside the cwd,
+    // which the CLI asks about even in auto mode. As a working directory it needs no prompt.
+    const shared = this.bashPinned ? sharedDirs(this.cwd) : [];
+    const dirs = [...new Set([...(up ? [up] : []), ...sessionDirs(this.grants), ...shared])];
     const rules = sessionRules(this.grants);
     const disallowed = this.opts.disallowedTools?.(this.id);
     const visualize = this.opts.visualizePlugin?.();
-    // A worker's Bash starts in its cwd every time (`cd` does not carry over), so a read-only git command is judged by that cwd.
-    this.bashPinned = !!this.opts.worker?.(this.id);
     const q = (this.query = (this.opts.query ?? sdkQuery)({
       prompt: this.input,
       options: {

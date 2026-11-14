@@ -11,6 +11,7 @@ import { pinEnv } from "./git.ts";
 import { runGit } from "./git-runner.ts";
 import { perf } from "./perf.ts";
 import { deniedRead, pathLow } from "./risk-tier.ts";
+import { sharedLinks, type SharedDir } from "./shared-dirs.ts";
 
 /** One option: `value` absent = takes none; else the value must match (when `optional`, the bare option is fine too). */
 type Opt = { value: RegExp; optional: boolean } | undefined;
@@ -96,6 +97,8 @@ export type RepoSafety = {
   protectedPaths: string[];
   /** A path in the index or the HEAD tree is on the read deny list (`deniedRead`); unknown = true. A plain `git diff` then prints it (GH-282). */
   trackedDenied: boolean;
+  /** Shared folders of the cwd (shared-dirs.ts) the index or the HEAD tree holds a path of, as `rel`: not a scratch folder, so no low Write there. */
+  trackedShared: string[];
 };
 
 /** Program values the user's own system or global config may hold without making a repository unsafe (bare names via PATH). */
@@ -260,22 +263,28 @@ function inRepo(dir: string): boolean {
 }
 
 /** The steps both readers share; only how git runs and how folders are listed differ. */
-type Scan = { top: string; out: RepoSafety; flag: (why: string) => void; inside: (p: string) => boolean };
+type Scan = { top: string; out: RepoSafety; flag: (why: string) => void; inside: (p: string) => boolean; shared: SharedDir[] };
 function begin(cwd: string): Scan {
-  const out: RepoSafety = { unsafe: false, failed: false, why: [], protectedPaths: [], trackedDenied: true };
+  const out: RepoSafety = { unsafe: false, failed: false, why: [], protectedPaths: [], trackedDenied: true, trackedShared: [] };
   const flag = (why: string) => {
     out.unsafe = true;
     out.why.push(why);
   };
   const top = realpathSync(cwd);
+  // The shared folders count as part of the worktree: a config value naming a file there is as dangerous as one naming a file in it.
+  const shared = sharedLinks(cwd);
+  const roots = [top, ...shared.map((d) => d.real)];
   const inside = (p: string) => {
-    const rel = relative(top, realish(p));
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    const real = realish(p);
+    return roots.some((r) => {
+      const rel = relative(r, real);
+      return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    });
   };
   const pathEntries = (process.env.PATH ?? "").split(delimiter);
   // A trailing `;` is common on Windows and names nothing; elsewhere an empty entry is the current folder.
   if (pathEntries.some((e, i) => (e === "" ? !(process.platform === "win32" && i === pathEntries.length - 1) : !absolute(e)))) flag("PATH has a relative entry");
-  return { top, out, flag, inside };
+  return { top, out, flag, inside, shared };
 }
 
 /** `git config --list -z --show-scope --show-origin`: scope NUL origin NUL key NL value NUL, repeated (includes expanded). */
@@ -328,7 +337,7 @@ function visit({ top, flag }: Scan, d: string, depth: number, entries: Dirent[],
 }
 
 const failClosed = (s: Scan | undefined): RepoSafety => {
-  const out = s?.out ?? { unsafe: false, failed: false, why: [], protectedPaths: [], trackedDenied: true };
+  const out = s?.out ?? { unsafe: false, failed: false, why: [], protectedPaths: [], trackedDenied: true, trackedShared: [] };
   out.failed = out.unsafe = true;
   out.trackedDenied = true;
   out.why.push("could not read the repository's config or index");
@@ -337,13 +346,17 @@ const failClosed = (s: Scan | undefined): RepoSafety => {
 /** Parses `ls-files` records (`<mode> <path>`, NUL separated): gitlinks make the repository unsafe; a denied path sets trackedDenied. */
 const listing = (s: Scan, text: string) => {
   let denied = false;
+  const tracked = new Set<string>();
   for (const rec of text.split("\u0000")) {
     const sp = rec.indexOf(" ");
     if (sp < 0) continue;
     if (rec.slice(0, sp) === "160000") s.flag("a submodule (gitlink) in the index");
-    if (deniedRead(rec.slice(sp + 1).split("/"))) denied = true;
+    const path = rec.slice(sp + 1);
+    if (deniedRead(path.split("/"))) denied = true;
+    for (const d of s.shared) if ([d.rel, d.target].some((n) => path === n || path.startsWith(`${n}/`))) tracked.add(d.rel);
   }
   s.out.trackedDenied = denied;
+  s.out.trackedShared = [...tracked];
 };
 
 const headExists = (run: () => string) => {

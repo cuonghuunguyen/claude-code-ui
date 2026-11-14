@@ -76,6 +76,9 @@ export type WorkerEvent = {
   tier?: Tier;
   /** permission: whether you may answer it with worker_permission (low tier and the user allows it); when false, hand it to the user with worker_escalate. */
   mayAnswer?: boolean;
+  /** permission: the path the CLI says is outside what the worker may write, and the CLI's own reason for asking (it names the rule that fired). Absent when the CLI sent none. */
+  blockedPath?: string;
+  decisionReason?: string;
   /** denied: the worker's tool call that was denied (auto-mode classifier, a rule, the user). */
   toolUseId?: string;
   input?: string;
@@ -510,6 +513,9 @@ export function createOrchestration(deps: OrchestrationDeps) {
       e.requestId = p.requestId;
       e.tool = p.tool;
       e.input = cut(JSON.stringify(p.input) ?? "");
+      const why = s.pendingContext(p.requestId);
+      if (why?.blockedPath) e.blockedPath = cut(why.blockedPath);
+      if (why?.decisionReason) e.decisionReason = cut(why.decisionReason);
       const captured = l.coordinatorId;
       // The tier is read off the event loop (git child processes): this worker's later events wait behind it, in order.
       return inOrder(s.id, async () => {
@@ -887,7 +893,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
       ),
       def(
         "worker_wait",
-        `Wait for worker events: question, permission (\`tier\`, \`mayAnswer\`), denied (cannot be undone), turn_end (\`result\`: first ${MAX_TEXT} characters, \`closed: true\`: the daemon closed the CLI), error, stalled (\`reason\`; a report only, the worker is not stopped). Returns unread events at once, else waits up to timeoutMs (default ${DEFAULT_WAIT_MS}, max ${MAX_WAIT_MS}); an empty list on timeout.`,
+        `Wait for worker events: question, permission (\`tier\`, \`mayAnswer\`, and \`blockedPath\`, \`decisionReason\` when the CLI gave a reason), denied (cannot be undone), turn_end (\`result\`: first ${MAX_TEXT} characters, \`closed: true\`: the daemon closed the CLI), error, stalled (\`reason\`; a report only, the worker is not stopped). Returns unread events at once, else waits up to timeoutMs (default ${DEFAULT_WAIT_MS}, max ${MAX_WAIT_MS}); an empty list on timeout.`,
         {
           names: z.array(name).max(50).optional(),
           types: z.array(z.enum(EVENT_TYPES)).max(EVENT_TYPES.length).optional(),

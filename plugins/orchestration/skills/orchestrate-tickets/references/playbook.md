@@ -113,7 +113,7 @@ claude-ui (playbook in the repo, `.claude/skills/implement-issue/SKILL.md`):
 tracker: github-issues   states: started → —, implemented → —, in-review → —
 host: github   push: ask   remote-branch: same
 ci: none   base: main   branch: GH-<n>-<slug>
-scratch: <main checkout>/development-docs/GH-<n>/  ignored by: .gitignore
+scratch: <main checkout>/development-docs/GH-<n>/  ignored by: .gitignore  linked: worktree.symlinkDirectories
 acceptance: playwright
 ```
 

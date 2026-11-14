@@ -1455,6 +1455,28 @@ describe("orchestration", () => {
     await respond(high.requestId, "deny");
   });
 
+  it("a permission event carries the CLI's blockedPath and decisionReason when it sent them (GH-755), cut to the text limit", async () => {
+    enable();
+    await closeAll();
+    const coord = await coordinator();
+    await call(coord, "worker_start", { name: "why", cwd: dirB, prompt: perm("Edit", editIn, { blockedPath: "/main/development-docs/K/x.md", decisionReason: "Path is outside the working directories" }) });
+    const e = await permEvent(coord, "why");
+    expect(e).toMatchObject({ type: "permission", blockedPath: "/main/development-docs/K/x.md", decisionReason: "Path is outside the working directories", tier: "high", mayAnswer: false });
+    await respond(e.requestId, "deny");
+    await turnEnd(coord, "why");
+    await call(coord, "worker_send", { name: "why", text: perm("Edit", editIn, { decisionReason: "r".repeat(5000) }) });
+    const long = await permEvent(coord, "why");
+    expect(long.decisionReason.length).toBeLessThan(4200);
+    expect(long.decisionReason.startsWith("rrrr")).toBe(true);
+    await respond(long.requestId, "deny");
+    await turnEnd(coord, "why");
+    await call(coord, "worker_send", { name: "why", text: perm("Edit", editIn) });
+    const none = await permEvent(coord, "why");
+    expect(none).not.toHaveProperty("blockedPath");
+    expect(none).not.toHaveProperty("decisionReason");
+    await respond(none.requestId, "deny");
+  });
+
   it("a worker's query starts with CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1; a coordinator's does not", async () => {
     enable();
     const coord = await coordinator();
