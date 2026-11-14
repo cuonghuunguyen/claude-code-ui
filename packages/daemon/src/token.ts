@@ -1,5 +1,5 @@
 // Pairing token: generated on first run, kept owner-only in the config dir, presented on every WebSocket.
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, win32 } from "node:path";
@@ -27,6 +27,29 @@ export function loadToken(dir = configDir()): string {
   writeFileSync(file, token + "\n", { mode: 0o600 });
   return token;
 }
+
+/**
+ * The daemon's persistent identity (GH-771, `daemon_hello`): a random UUID kept as plain text in the config dir, so a browser's view cache
+ * knows whether it belongs to this daemon. A read or write failure gives an id for this run only, logged once.
+ */
+export function loadDaemonId(dir = configDir(), log: (message: string) => void = console.warn): string {
+  const file = join(dir, "daemon-id");
+  try {
+    const id = readFileSync(file, "utf8").trim();
+    if (/^[\w-]{1,100}$/.test(id)) return id;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") return perRun(log, e as Error);
+  }
+  const id = randomUUID();
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(file, id + "\n");
+  } catch (e) {
+    return perRun(log, e as Error, id);
+  }
+  return id;
+}
+const perRun = (log: (message: string) => void, e: Error, id = randomUUID()) => (log(`claude-ui: daemon-id not usable (${e.message}); this run uses a temporary id, a browser's cached sessions will not match after a restart`), id);
 
 /** The token goes in the fragment: browsers never send it to the server, so it stays out of request lines. */
 export const pairingUrl = (origin: string, token: string) => `${origin}/#token=${token}`;

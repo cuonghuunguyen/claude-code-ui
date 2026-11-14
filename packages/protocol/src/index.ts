@@ -1,4 +1,5 @@
 export * from "./parts.ts";
+export { partHash } from "./part-hash.ts";
 export * from "./always-rule.ts";
 export * from "./wire.ts";
 export { CLASSIFIER_DENIAL_PREFIX, createAdapter, bashRecords, escapeBash } from "./adapter.ts";

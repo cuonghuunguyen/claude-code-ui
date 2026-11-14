@@ -12,7 +12,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { ALL_CAPABILITIES, CHUNK_BYTES, createAdapter, editorLabel, parseEditorCommand, EFFORTS, ENGINES, type Engine as EngineName, type AsideOpenResult, type PromptResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_MARKS_MAX, BACK_TAG, type ClientMessage, type FsEntry, type FsGrepResult, type ListResult, type MediaReadResult, type ModelInfo, type PermissionMode, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, CHUNK_BYTES, KNOWN_HASH_MAX, KNOWN_ID_MAX, KNOWN_MAX, createAdapter, editorLabel, parseEditorCommand, EFFORTS, ENGINES, type Engine as EngineName, type AsideOpenResult, type PromptResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_MARKS_MAX, BACK_TAG, type ClientMessage, type FsEntry, type FsGrepResult, type ListResult, type MediaReadResult, type ModelInfo, type PermissionMode, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
@@ -112,6 +112,18 @@ const CLEARED = /^\/(clear|reset|new)$/;
 export const MODEL_LIST_WAIT_MS = 2000;
 /** A background resubscribe that is behind by more events than this gets the snapshot (last page) instead of the replay (GH-767). */
 export const REPLAY_MAX_EVENTS = 500;
+
+/** `session.subscribe` `known` as a part id -> hash map; undefined when absent, null when malformed (GH-771). */
+function parseKnown(v: unknown): Map<string, string> | undefined | null {
+  if (v === undefined) return undefined;
+  if (!Array.isArray(v) || v.length > KNOWN_MAX) return null;
+  const out = new Map<string, string>();
+  for (const e of v) {
+    if (!Array.isArray(e) || e.length !== 2 || typeof e[0] !== "string" || typeof e[1] !== "string" || e[0].length > KNOWN_ID_MAX || e[1].length > KNOWN_HASH_MAX) return null;
+    out.set(e[0], e[1]);
+  }
+  return out;
+}
 /** The longest `session.list` waits for the OpenCode server (it may start, or hang, for the first list). */
 const OPENCODE_LIST_WAIT_MS = 3000;
 
@@ -331,6 +343,8 @@ export function createDaemon(opts: {
   addonsDir?: string;
   /** Directory no Artifact preview (page or supporting file) may read: the daemon's config dir (token, settings). Default configDir(). */
   privateDir?: string;
+  /** This daemon's persistent identity for `daemon_hello` (main.ts: `loadDaemonId()`); default a random id per run. */
+  daemonId?: string;
   webRoot: string;
   token: string;
   roots: string[];
@@ -412,6 +426,7 @@ export function createDaemon(opts: {
 }) {
   const hostnames = new Set([...LOCAL_HOSTNAMES, ...(opts.hostnames ?? [])]);
   const logEpoch = randomUUID();
+  const daemonId = opts.daemonId ?? randomUUID();
   /** The versions of the lists sent to pages (`session.list {since}` answers a delta, GH-767); one per daemon, a reconnect is a new connection. */
   const listVersions = createListVersions(logEpoch);
   /** fs.upload storage: one private folder per session; a session gets only its own as an additional directory, so Claude reads an attachment without asking (uploads.ts). */
@@ -2186,6 +2201,8 @@ export function createDaemon(opts: {
     connStats.set(ws, stat);
     ws.on("pong", () => (stat.ponged = true));
     ws.on("message", () => (stat.recvMsgs++, (stat.lastRecvAt = Date.now())));
+    // First: the page reads the daemon's identity and epoch before anything else (GH-771).
+    send(ws, { type: "daemon_hello", daemonId, logEpoch });
     const usage = plan.current();
     if (usage !== undefined) send(ws, { type: "plan_usage", usage });
     if (plan.age() > PLAN_STALE_MS) void plan.reread();
@@ -2515,6 +2532,8 @@ export function createDaemon(opts: {
         case "session.subscribe": {
           // Before the first await: the page's order of asking, for the feed order (the lookups below finish in any order).
           const order = ++subscribeOrder;
+          const known = parseKnown(msg.known);
+          if (known === null) return fail("bad_request", `known must be an array of at most ${KNOWN_MAX} [part id, hash] string pairs (id <= ${KNOWN_ID_MAX}, hash <= ${KNOWN_HASH_MAX} characters)`);
           const span = perfMon.span("session.open");
           try {
             const s = await find(msg.sessionId, msg.background === true);
@@ -2534,18 +2553,21 @@ export function createDaemon(opts: {
               unsubscribes.set(s.id, () => (stop(), release(), hold && unhold(s.id)));
             };
             // Different epoch: the client's seqs belong to an earlier daemon run, so replay everything.
-            const since = msg.logEpoch === logEpoch ? msg.sinceSeq : 0;
+            // Same epoch but ahead of the log: the session was dropped and restored in this run (its seq restarted); the client's seq means nothing, so snapshot.
+            const since = msg.logEpoch === logEpoch && msg.sinceSeq <= s.seq() ? msg.sinceSeq : 0;
             // A shown tab (plain subscribe) is sent first when the link is slow.
             const shown = msg.background !== true;
             const from = typeof msg.from === "string" ? msg.from : undefined;
             // Paged, first subscribe or new epoch: a snapshot (last page) instead of the replay; reply, snapshot and subscribe in one synchronous step.
-            let snap = msg.paged === true && since === 0 ? s.snapshot(from) : undefined;
+            // `known` (part hashes the page holds) only shrinks a snapshot reply: refs for the parts it already has (GH-771).
+            const snapshotOf = (f: string | undefined) => (known ? s.snapshot(f, known) : s.snapshot(f));
+            let snap = msg.paged === true && since === 0 ? snapshotOf(from) : undefined;
             // A background view far behind (a reconnect after a long gap) takes the snapshot too when the page is clearly smaller than the gap (GH-767; a page is at
             // most PAGE_PARTS parts, but one giant turn comes whole, where the replay is the cheaper one). A shown tab keeps the replay (its scroll position).
             if (!snap && msg.paged === true && !shown && since > 0) {
               const gap = s.countAfter(since);
               if (gap > (opts.replayMaxEvents ?? REPLAY_MAX_EVENTS)) {
-                const page = s.snapshot(from);
+                const page = snapshotOf(from);
                 if (page.snapshot.page.parts.length * 2 < gap) snap = page;
               }
             }

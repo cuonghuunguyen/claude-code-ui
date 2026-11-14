@@ -1417,7 +1417,8 @@ export function createRouter(opts: {
     if (typeof r.session?.id === "string" && !(await claimSession(id, r.session.id))) return false;
     sides.learn(id, m, kind);
     const parts = [...(r.snapshot?.heads?.map((h) => h.part) ?? []), ...(r.snapshot?.page?.parts ?? []), ...(r.snapshot?.aux?.map((a) => a.part) ?? []), ...(r.page?.parts ?? [])];
-    for (const p of parts) noteRequest(id, p as never);
+    // A snapshot answered to `known` holds {ref} entries (GH-771): not parts, nothing to note.
+    for (const p of parts) if (!(p && typeof p === "object" && "ref" in p)) noteRequest(id, p as never);
     return true;
   };
   const sideConflict = (reqId: string): ServerMessage => ({ type: "error", reqId, code: "side_conflict", message: "more than one side has this session" });
@@ -1456,6 +1457,8 @@ export function createRouter(opts: {
     }
     // Plan usage is the local account's; a side's would overwrite it.
     if (m.type === "plan_usage") return;
+    // The browser's connection has the Hub's identity and epoch (GH-771); a side's hello would replace it.
+    if (m.type === "daemon_hello") return;
     // A side deletes its own sessions from the list only.
     if (m.type === "sessions.changed" && m.deleted !== undefined && sides.sessionSide.get(m.deleted) !== id) return send({ type: "sessions.changed" });
     send(m);

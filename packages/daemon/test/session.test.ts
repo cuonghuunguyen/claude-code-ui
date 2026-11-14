@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import { parseOmitted, type Event } from "@claude-ui/protocol";
+import { parseOmitted, partHash, type Event } from "@claude-ui/protocol";
 import { CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, INTERRUPT_GRACE_MS, queuedQuery, Session, STALE_TURN_MS, THROWAWAY_TIMEOUT_MS } from "../src/session.ts";
 import { taskDirs } from "../src/shell-output.ts";
 import { canSymlink } from "./symlink-support.ts";
@@ -237,6 +237,54 @@ describe("Session", () => {
     }
     expect(pages.length).toBeGreaterThan(1);
     expect(pages.flat()).toEqual(ids);
+  });
+
+  it("GH-771: snapshot with known replaces matching parts (page and aux) by refs; changed, unknown and missing ids stay whole or absent", () => {
+    const msg = (type: string, uuid: string, content: unknown, extra: object = {}) => ({ type, uuid, session_id: "s", parent_tool_use_id: null, message: { role: type, content, ...extra } });
+    const msgs: unknown[] = [];
+    for (let i = 0; i < 14; i++) {
+      msgs.push(msg("user", `u${i}`, `prompt ${i}`));
+      msgs.push(msg("assistant", `a${i}`, [{ type: "text", text: `answer ${i}` }], { id: `m${i}`, stop_reason: "end_turn" }));
+    }
+    const s = Session.restore(randomUUID(), "/tmp", msgs as never, { query: fakeQuery as never });
+    const plain = s.snapshot();
+    const parts = plain.snapshot.page.parts;
+    expect(parts.length).toBeGreaterThan(4);
+    const known = new Map<string, string>(parts.map((p) => [p.id, partHash(p)]));
+    // a changed hash, an id the daemon does not hold
+    const [changed, kept] = [parts[0]!, parts[1]!];
+    known.set(changed.id, "stale");
+    known.set("gone-part", "abc");
+    const { snapshot } = s.snapshot(undefined, known);
+    expect(snapshot.refs).toBe(true);
+    expect(snapshot.page.parts).toHaveLength(parts.length);
+    expect(snapshot.page.parts[0]).toEqual(changed);
+    expect(snapshot.page.parts[1]).toEqual({ ref: kept.id });
+    expect(snapshot.page.parts.slice(2).every((p) => "ref" in p)).toBe(true);
+    expect(JSON.stringify(snapshot)).not.toContain("gone-part");
+    expect(snapshot.page.older).toEqual(plain.snapshot.page.older);
+    expect(snapshot.heads).toEqual(plain.snapshot.heads);
+    // an empty known map still answers in the wire form without refs entries
+    expect(s.snapshot(undefined, new Map()).snapshot.page.parts).toEqual(parts);
+  });
+
+  it("GH-771: aux entries are ref'd like page parts, with their pos", () => {
+    const msg = (type: string, uuid: string, content: unknown, extra: object = {}) => ({ type, uuid, session_id: "s", parent_tool_use_id: null, message: { role: type, content, ...extra } });
+    const msgs: unknown[] = [];
+    // an old ExitPlanMode call is aux data of the unloaded region
+    msgs.push(msg("user", "u-plan", "plan it"));
+    msgs.push(msg("assistant", "a-plan", [{ type: "tool_use", id: "toolu_plan", name: "ExitPlanMode", input: { plan: "do x" } }], { id: "m-plan", stop_reason: "tool_use" }));
+    for (let i = 0; i < 20; i++) {
+      msgs.push(msg("user", `u${i}`, `prompt ${i}`));
+      msgs.push(msg("assistant", `a${i}`, [{ type: "text", text: `answer ${i}` }], { id: `m${i}`, stop_reason: "end_turn" }));
+    }
+    const s = Session.restore(randomUUID(), "/tmp", msgs as never, { query: fakeQuery as never });
+    const plain = s.snapshot().snapshot;
+    expect(plain.aux.length).toBeGreaterThan(0);
+    const known = new Map<string, string>(plain.aux.map((a) => [a.part.id, partHash(a.part)]));
+    const { snapshot } = s.snapshot(undefined, known);
+    expect(snapshot.aux.map((a) => a.pos)).toEqual(plain.aux.map((a) => a.pos));
+    expect(snapshot.aux.every((a) => "ref" in a.part)).toBe(true);
   });
 
   it("snapshot and page leave out large media; media() returns it; live events keep it (GH-274)", () => {

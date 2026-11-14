@@ -854,3 +854,26 @@ describe("hub session list versions (GH-767)", () => {
     expect(plain.result.delta).toBeUndefined();
   });
 });
+
+describe("GH-771: daemon_hello and snapshot refs through the hub", () => {
+  it("a side's daemon_hello is not relayed to the browser", async () => {
+    const a = fakeSide();
+    const t = await setup(a);
+    a.out({ type: "daemon_hello", daemonId: "side-daemon", logEpoch: "side-epoch" });
+    a.out({ type: "plan_usage", usage: null });
+    await t.settle();
+    expect(t.sent.filter((m) => m.type === "daemon_hello")).toEqual([]);
+  });
+
+  it("session.subscribe known reaches the owning side unchanged; a reply with refs passes and is relayed whole", async () => {
+    const known = [["p1", "h1"], ["p2", "h2"]];
+    const snapshot = { heads: [], attentionSeq: 0, refs: true, page: { parts: [{ ref: "p1" }, { type: "assistant_text", id: "p3", text: "new", streaming: false }] }, aux: [{ pos: 2, part: { ref: "p2" } }] };
+    const a = fakeSide((m) => (m.type === "session.subscribe" ? { logEpoch: "e", seq: 5, session: { id: A1, cwd: "/a" }, title: "t", snapshot } : lists(A1)(m)));
+    const t = await setup(a);
+    await t.req({ type: "session.list" });
+    const r = await t.req({ type: "session.subscribe", sessionId: A1, sinceSeq: 0, paged: true, known });
+    expect(frames(a, "session.subscribe")[0]).toMatchObject({ sessionId: A1, paged: true, known });
+    expect(r.find((m) => m.type === "reply")).toMatchObject({ result: { snapshot } });
+    expect(t.sides.sessionSide.get(A1)).toBe("docker:a");
+  });
+});
