@@ -393,6 +393,18 @@ Auto-mode classifier: a classifier denial never reaches `canUseTool`; it arrives
 8. The panel header has a Stop button (like Esc: it denies the request and interrupts the turn): the panel replaces the prompt box, so without it a phone could not stop the turn.
 9. The panel is at most 60% of the viewport height (`60dvh`, like the question panel): its body scrolls and the Allow/Deny tray stays in view, which matters on a phone.
 
+### Allow and retry (GH-711)
+
+Claude only. In auto mode the classifier can deny a call; the SDK sends `system/permission_denied` (`decision_reason_type: "classifier"`, `decision_reason` e.g. `[Git Destructive]`, `agent_id` inside a subagent) and the call ends with an error `tool_result` "Permission for this action was denied by the Claude Code auto mode classifier. Reason: [..]". Claude Code has no API to re-run a denied call.
+
+1. The adapter sets `denial: { by: "classifier", reason? }` on the `tool_call` part of a main-thread call denied by the classifier. A restored transcript has no `permission_denied` entry: an `is_error` result starting with that text gives the same status `denied` and `denial` (reason read from the first `[..]`). Denials by the user, a coordinator, a rule or a mode, and calls inside a subagent have no `denial`.
+2. The tool card shows "Denied by auto mode: <reason>" and a text button **Allow and retry** (44 px high below `md`). Without a handler (read-only views) there is no button.
+3. `session.allowDenied` (`toolUseId`): the daemon arms a one-shot approval for the call and sends a follow-up user message through the normal prompt path (steers a running turn, starts a turn when idle): "Auto mode denied your <Tool> call. I allow it once. Run it again with the same input:" and the command (or the input JSON, capped at 4000 characters) in a code fence. The part is re-emitted with `denial.allowed: true` (memory only, ADR 0001); the button shows "Allowed once", disabled.
+4. The approval is an in-process SDK `PreToolUse` callback hook. Hooks run before the classifier; a hook `allow` skips it (probed, SDK 0.3.285). The hook answers `allow` for the first call whose key matches, else `{}`. Deny and ask rules still win. Key: tool plus command for Bash and PowerShell; tool plus the input without `description` (key order ignored) for other tools. The model rewrites `description` on retry; if it changes the command the key misses and the classifier decides again. The hook also sees subagent calls: an identical subagent call can use the approval first (accepted).
+5. Lifetime: until the first matching call, the end of the follow-up's turn (the first idle after the CLI took the follow-up), Stop, or the end of the query (CLI close or restart). A daemon restart drops it.
+6. Errors: `unknown_call` (no such classifier-denied main-thread call, or already allowed), `unsupported` (OpenCode: no auto mode), `session_not_live`, `external_turn`, `bash_running`.
+7. Known limit: user or managed settings `disableAllHooks` / `allowManagedHooksOnly` may also disable SDK callback hooks; the retry is then denied again. "Always allow" is not part of this feature.
+
 ### Questions
 
 `AskUserQuestion` arrives through `canUseTool`. The daemon logs a `question` part; the UI shows a question panel in place of the prompt box, with an "Other" free-text choice. The answer returns through `updatedInput`. Counts as `needs_input`. `by: "coordinator"` / `escalated` + `reason` (Orchestration): the timeline marker says "Answered by coordinator", the panel shows "Escalated by coordinator: <reason>" (plain text).

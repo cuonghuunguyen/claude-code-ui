@@ -24,6 +24,7 @@ import type { TranscriptEnd } from "./transcript.ts";
 import { tierAsync, type Tier, type TierContext } from "./risk-tier.ts";
 import { claudeEngine, ClaudeSession, type Options, type Query, type QueryFn, type SessionMessage, type Transcript } from "./claude-engine.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
+import { DeniedRetryError } from "./denied-retry.ts";
 
 // The SDK-facing code lives in claude-engine.ts; these names stay importable from here.
 export { withQuery, openQuery, queuedQuery, listModels, transcriptModel, THROWAWAY_TIMEOUT_MS, CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, STALE_TURN_MS, INTERRUPT_GRACE_MS, BASH_BACKGROUND_WAIT_MS, type Transcript } from "./claude-engine.ts";
@@ -302,6 +303,11 @@ export class Session {
   }
   stopSubagent(callId: string) {
     return this.run.stopSubagent(callId);
+  }
+  /** Allow and retry (GH-711); `unsupported` without the Engine's support (OpenCode). */
+  allowDenied(toolUseId: string) {
+    if (!this.run.allowDenied) throw new DeniedRetryError("unsupported", "this session's engine has no auto mode");
+    return this.run.allowDenied(toolUseId);
   }
   backgroundShell(toolUseId: string) {
     return this.run.backgroundShell(toolUseId);

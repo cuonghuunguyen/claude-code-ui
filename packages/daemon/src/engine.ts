@@ -49,6 +49,8 @@ export interface EngineSession {
   interrupt(): Promise<void>;
   stopSubagent(callId: string): Promise<boolean>;
   backgroundShell(toolUseId: string): Promise<boolean>;
+  /** Allow and retry (GH-711), Claude only: approves the classifier-denied call once and sends the follow-up message; throws DeniedRetryError. */
+  allowDenied?(toolUseId: string): string | undefined;
   stopShell(id: string): Promise<boolean>;
   shellOutput(toolUseId: string): Promise<{ output: string; truncated: boolean } | undefined>;
   previewRewind(userMessageId: string): Promise<RewindPreview>;

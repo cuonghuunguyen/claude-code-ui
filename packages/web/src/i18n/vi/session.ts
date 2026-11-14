@@ -144,6 +144,11 @@ export default {
   "session.ai.status.output-error": "Lỗi",
   // tool-card.tsx
   "session.toolCard.stopped": "Đã dừng",
+  "session.toolCard.allowAndRetry": "Cho phép và thử lại",
+  "session.toolCard.allowedOnce": "Đã cho phép một lần",
+  "session.toolCard.deniedByAutoMode": "Chế độ tự động đã từ chối",
+  "session.toolCard.deniedByAutoModeReason": "Chế độ tự động đã từ chối: {reason}",
+  "session.toolCard.allowAndRetryFailed": "Không thể cho phép: {error}",
   "session.toolCard.approvedByCoordinator": "Điều phối viên đã duyệt",
   "session.toolCard.deniedByCoordinator": "Điều phối viên đã từ chối",
   "session.toolCard.editedByYou": "{tool} · bạn đã sửa",

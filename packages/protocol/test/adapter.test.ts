@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { bashRecords, createAdapter, imageBlock, type Part } from "../src/index.ts";
+import { bashRecords, CLASSIFIER_DENIAL_PREFIX, createAdapter, imageBlock, type Part } from "../src/index.ts";
 
 const fixture = (name: string) =>
   readFileSync(new URL(`fixtures/${name}`, import.meta.url), "utf8").trim().split("\n").map((l) => JSON.parse(l));
@@ -408,6 +408,86 @@ describe("adapter on unknown messages", () => {
       { type: "result", uuid: "r1", duration_ms: 1, total_cost_usd: 0, usage: {}, is_error: false, permission_denials: [{ tool_use_id: "t1" }] },
     ]);
     expect(parts.filter((p) => p.type === "tool_call").map((p) => p.status)).toEqual(["running", "denied"]);
+  });
+});
+
+describe("auto mode denial (GH-711)", () => {
+  const bash = (id = "t1", parent: string | null = null) =>
+    ({ type: "assistant", parent_tool_use_id: parent, message: { id: `m-${id}`, content: [{ type: "tool_use", id, name: "Bash", input: { command: "git push --force" } }] } }) as never;
+  const denial = (extra: object = {}) =>
+    ({ type: "system", subtype: "permission_denied", tool_name: "Bash", tool_use_id: "t1", decision_reason_type: "classifier", decision_reason: "[Git Destructive]", ...extra }) as never;
+  const errResult = (text: string, id = "t1", parent: string | null = null) =>
+    ({ type: "user", parent_tool_use_id: parent, message: { content: [{ type: "tool_result", tool_use_id: id, is_error: true, content: text }] } }) as never;
+  const callOf = (parts: Part[]) => parts.filter((p) => p.type === "tool_call").at(-1) as Extract<Part, { type: "tool_call" }>;
+
+  it("a classifier permission_denied marks the call denied with its reason; the error result keeps both", () => {
+    const a = createAdapter();
+    a.convert(bash());
+    expect(callOf(a.convert(denial()))).toMatchObject({ status: "denied", denial: { by: "classifier", reason: "[Git Destructive]" } });
+    expect(a.convert(errResult(`${CLASSIFIER_DENIAL_PREFIX} Reason: [Git Destructive].`)).filter((p) => p.type === "tool_call")).toEqual([]);
+    expect(a.allowRetry("t1")?.call.denial).toMatchObject({ reason: "[Git Destructive]" });
+  });
+
+  it("a denial before its tool_use still lands on the call", () => {
+    const a = createAdapter();
+    a.convert(denial());
+    expect(callOf(a.convert(bash()))).toMatchObject({ status: "denied", denial: { by: "classifier", reason: "[Git Destructive]" } });
+  });
+
+  it("rule and mode denials have no denial field", () => {
+    for (const type of ["rule", "mode"]) {
+      const a = createAdapter();
+      a.convert(bash());
+      const call = callOf(a.convert(denial({ decision_reason_type: type })));
+      expect(call.status).toBe("denied");
+      expect(call.denial).toBeUndefined();
+    }
+  });
+
+  it("a subagent's call (agent_id, or a parent) has no denial field", () => {
+    const a = createAdapter();
+    a.convert(bash());
+    expect(callOf(a.convert(denial({ agent_id: "sub1" }))).denial).toBeUndefined();
+    const b = createAdapter();
+    b.convert(bash("t1", "agent1"));
+    const call = callOf(b.convert(denial()));
+    expect(call.status).toBe("denied");
+    expect(call.denial).toBeUndefined();
+  });
+
+  it("restore: an error result with the classifier text (no permission_denied entry) is denied with the parsed reason", () => {
+    const a = createAdapter();
+    a.convert(bash());
+    expect(callOf(a.convert(errResult(`${CLASSIFIER_DENIAL_PREFIX} Reason: [Git Destructive]. Try something else.`)))).toMatchObject({ status: "denied", denial: { by: "classifier", reason: "[Git Destructive]" } });
+  });
+
+  it("restore: no bracketed reason -> denial without reason; a plain error stays error; a subagent's stays denied-less", () => {
+    const a = createAdapter();
+    a.convert(bash());
+    const call = callOf(a.convert(errResult(`${CLASSIFIER_DENIAL_PREFIX} Reason: unclear.`)));
+    expect(call).toMatchObject({ status: "denied", denial: { by: "classifier" } });
+    expect(call.denial?.reason).toBeUndefined();
+    const b = createAdapter();
+    b.convert(bash());
+    expect(callOf(b.convert(errResult("boom"))).status).toBe("error");
+    const c = createAdapter();
+    c.convert(bash("t1", "agent1"));
+    expect(callOf(c.convert(errResult(`${CLASSIFIER_DENIAL_PREFIX} Reason: [X].`, "t1", "agent1"))).denial).toBeUndefined();
+  });
+
+  it("allowRetry returns the call once and marks the part allowed; unknown, non-classifier and repeated ids give undefined", () => {
+    const a = createAdapter();
+    a.convert(bash());
+    a.convert(denial());
+    expect(a.allowRetry("nope")).toBeUndefined();
+    const r = a.allowRetry("t1")!;
+    expect(r.call).toMatchObject({ tool: "Bash", input: { command: "git push --force" } });
+    expect(r.parts).toEqual([expect.objectContaining({ id: "t1", status: "denied", denial: { by: "classifier", reason: "[Git Destructive]", allowed: true } })]);
+    expect(a.allowRetry("t1")).toBeUndefined();
+    const b = createAdapter();
+    b.convert(bash());
+    b.convert(denial({ decision_reason_type: "rule" }));
+    expect(b.allowRetry("t1")).toBeUndefined();
   });
 });
 
