@@ -596,10 +596,7 @@ export class ClaudeSession implements EngineSession {
     const agent = this.opts.agent?.(this.id);
     // A worker's Bash starts in its cwd every time (`cd` does not carry over), so a read-only git command is judged by that cwd.
     this.bashPinned = !!this.opts.worker?.(this.id);
-    // A worker's scratch folder is a link to the main checkout (shared-dirs.ts): a write through it resolves outside the cwd,
-    // which the CLI asks about even in auto mode. As a working directory it needs no prompt.
-    const shared = this.bashPinned ? sharedDirs(this.cwd) : [];
-    const dirs = [...new Set([...(up ? [up] : []), ...sessionDirs(this.grants), ...shared])];
+    const dirs = this.workingDirs(up);
     const rules = sessionRules(this.grants);
     const disallowed = this.opts.disallowedTools?.(this.id);
     const visualize = this.opts.visualizePlugin?.();
@@ -947,13 +944,21 @@ export class ClaudeSession implements EngineSession {
     this.session.setState("idle");
   }
 
+  /** Additional working directories of a query: upload folder, session grants, and (worker only) the shared scratch folders. The inline task (GH-792) gets the same list. */
+  private workingDirs(up: string | undefined): string[] {
+    // A worker's scratch folder is a link to the main checkout (shared-dirs.ts): a write through it resolves outside the cwd,
+    // which the CLI asks about even in auto mode. As a working directory it needs no prompt.
+    const shared = this.bashPinned ? sharedDirs(this.cwd) : [];
+    return [...new Set([...(up ? [up] : []), ...sessionDirs(this.grants), ...shared])];
+  }
+
   /** Inline task (GH-734): a minimized query on a small model; its steps are child parts of the running `inline_task` call. */
   inlineTask = (spec: InlineSpec, hooks: InlineHooks): Promise<InlineResult> =>
     runInlineClaude(
       {
         query: (p) => (this.opts.query ?? sdkQuery)(p as never),
         parent: () => {
-          const dirs = [...(this.opts.uploadDir?.(this.id) ? [this.opts.uploadDir!(this.id)!] : []), ...sessionDirs(this.grants)];
+          const dirs = this.workingDirs(this.opts.uploadDir?.(this.id));
           const rules = sessionRules(this.grants);
           const disallowed = this.opts.disallowedTools?.(this.id);
           return {
