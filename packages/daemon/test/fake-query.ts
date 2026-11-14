@@ -576,6 +576,8 @@ export function limitQuery({ prompt, options }: { prompt: AsyncIterable<SDKUserM
 
 /** PreToolUse hook answers of deniedQuery, in call order. */
 export const hookResults: unknown[] = [];
+/** deniedQuery's listPermissionRules(): `omit` hides the flag rules (auto mode ignores them), `managedOnly`, `fail`; `seen`: the options of each asking query. */
+export const ruleCheck = { omit: false, managedOnly: false, fail: false, failApply: false, seen: [] as Options[] };
 
 /**
  * Fake query() for Allow and retry (GH-711), shapes of live SDK 0.3.285: the first prompt makes Bash call `dn-1` that the auto mode
@@ -601,7 +603,7 @@ export function deniedQuery({ prompt, options }: { prompt: AsyncIterable<SDKUser
       const text = JSON.stringify(input.message.content);
       if (!first) emit({ ...input, session_id: "x", isReplay: true });
       const command = text.includes("run-ls") ? "ls" : "git push --force";
-      emit({ type: "assistant", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { id: `msg_${id}`, content: [{ type: "tool_use", id, name: "Bash", input: { command, description: `try ${n}` } }] } });
+      emit({ type: "assistant", uuid: randomUUID(), session_id: "x", parent_tool_use_id: null, message: { id: `msg_${id}`, content: [{ type: "tool_use", id, name: text.includes("run-monitor") ? "Monitor" : "Bash", input: { command, description: `try ${n}` } }] } });
       const hook = options?.hooks?.PreToolUse?.[0]?.hooks[0];
       const r = hook ? await hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command, description: `try ${n}` }, tool_use_id: id } as never, id, { signal: new AbortController().signal }) : {};
       hookResults.push(r);
@@ -623,6 +625,16 @@ export function deniedQuery({ prompt, options }: { prompt: AsyncIterable<SDKUser
     supportedCommands: async () => [],
     getContextUsage: async () => fakeUsage,
     interrupt: async () => {},
+    applyFlagSettings: async (settings: object) => {
+      if (ruleCheck.failApply) throw new Error("CLI closed");
+      controlCalls.push({ applyFlagSettings: settings });
+    },
+    listPermissionRules: async () => {
+      ruleCheck.seen.push(options ?? {});
+      if (ruleCheck.fail) throw new Error("CLI did not start");
+      const allow = ((options?.settings as { permissions?: { allow?: string[] } } | undefined)?.permissions?.allow ?? []).filter(() => !ruleCheck.omit);
+      return { state: { rules: allow.map((rule) => ({ behavior: "allow", source: "flagSettings", rule, editability: "readonly" })), workspaceDirectories: [], originalCwd: "/repo", managedOnly: ruleCheck.managedOnly } };
+    },
     close: () => void (closed++, (ended = true), wake()),
   });
 }

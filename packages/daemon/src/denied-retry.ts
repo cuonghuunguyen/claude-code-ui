@@ -24,14 +24,24 @@ function stable(v: unknown): string {
   return JSON.stringify(v) ?? "null";
 }
 
-/** The user message that asks Claude to run the denied call again. */
-export function followUp(tool: string, input: unknown): string {
+function fenced(tool: string, input: unknown): string {
   const obj = input && typeof input === "object" ? (input as Record<string, unknown>) : undefined;
   let body = SHELLS.has(tool) && typeof obj?.command === "string" ? obj.command : (JSON.stringify(input, null, 2) ?? "");
   if (body.length > INPUT_CAP) body = `${body.slice(0, INPUT_CAP)}\n… (truncated)`;
   const longest = Math.max(2, ...[...body.matchAll(/`+/g)].map((m) => m[0].length));
   const fence = "`".repeat(longest + 1);
-  return `Auto mode denied your ${tool} call. I allow it once. Run it again with the same input:\n${fence}\n${body}\n${fence}`;
+  return `${fence}\n${body}\n${fence}`;
+}
+
+/** The user message that asks Claude to run the denied call again. */
+export function followUp(tool: string, input: unknown): string {
+  return `Auto mode denied your ${tool} call. I allow it once. Run it again with the same input:\n${fenced(tool, input)}`;
+}
+
+/** Always allow (GH-756): the same, naming the saved rule and its scope. */
+export function followUpAlways(tool: string, input: unknown, rule: string, scope: "session" | "local"): string {
+  const where = scope === "session" ? "this session" : "this project";
+  return `Auto mode denied your ${tool} call. I added the allow rule \`${rule}\` for ${where}. Run it again with the same input:\n${fenced(tool, input)}`;
 }
 
 /** Armed approvals: each `take` of a key consumes one `arm`. */
@@ -57,7 +67,7 @@ export class OneShots {
 /** A refused Allow and retry; `code` is the wire error code. */
 export class DeniedRetryError extends Error {
   constructor(
-    readonly code: "unknown_call" | "unsupported" | "session_not_live" | "bash_running" | "session_busy",
+    readonly code: "unknown_call" | "unsupported" | "session_not_live" | "bash_running" | "session_busy" | "no_rule" | "ignored_in_auto" | "managed_only" | "check_failed" | "settings_write_failed" | "rule_saved",
     message: string,
   ) {
     super(message);

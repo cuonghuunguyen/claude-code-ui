@@ -21,6 +21,12 @@ let hookId; // hooks.PreToolUse[0].hookCallbackIds[0] of the initialize request 
 const waiting = new Map(); // request_id -> resolve of a control request this CLI sent to the SDK
 const DENY = "Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Git Destructive].";
 const COMMAND = "git push --force origin main";
+// Always allow (GH-756): flag allow rules (the --settings JSON at start, apply_flag_settings later). A retry whose Bash(<command>) is in the list runs without the hook.
+let command = COMMAND;
+let flagAllow = [];
+try {
+  flagAllow = JSON.parse(arg("--settings") ?? "{}").permissions?.allow ?? [];
+} catch {}
 const textOf = (user) => {
   const c = user.message?.content;
   return typeof c === "string" ? c : Array.isArray(c) ? c.map((b) => b.text ?? "").join("\n") : "";
@@ -46,6 +52,8 @@ async function turn(user) {
   const usage = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
   const prompt = textOf(user);
   const retry = prompt.startsWith("Auto mode denied your");
+  // DENY-PROBE-IGNORED: its command holds IGNORED-PROBE, the text the fake `list_permission_rules` leaves out (stands in for auto mode dropping a rule).
+  if (prompt.includes("DENY-PROBE")) command = prompt.includes("DENY-PROBE-IGNORED") ? `${COMMAND} IGNORED-PROBE` : COMMAND;
   if (prompt.includes("DENY-PROBE") || retry) await bashCall(n, retry, usage);
   const suggestion = await released();
   out({ type: "assistant", uuid: randomUUID(), session_id: sessionId, parent_tool_use_id: null, message: { id: `msg_fake_${n}`, type: "message", role: "assistant", model: "claude-haiku-4-5", content: [{ type: "text", text: "Done." }], stop_reason: "end_turn", stop_sequence: null, usage } });
@@ -62,10 +70,10 @@ const denied = (id) => {
 /** Allow and retry (GH-711): the first Bash call is denied by the auto mode classifier; the retry asks the SDK's PreToolUse hook first. */
 async function bashCall(n, retry, usage) {
   const id = `dn-${n}`;
-  const input = { command: COMMAND, description: retry ? "Retry the force push" : "Force push main" };
+  const input = { command, description: retry ? "Retry the force push" : "Force push main" };
   out({ type: "assistant", uuid: randomUUID(), session_id: sessionId, parent_tool_use_id: null, message: { id: `msg_fake_tool_${n}`, type: "message", role: "assistant", model: "claude-haiku-4-5", content: [{ type: "tool_use", id, name: "Bash", input }], stop_reason: "tool_use", stop_sequence: null, usage } });
-  let allowed = false;
-  if (retry && hookId) {
+  let allowed = retry && flagAllow.includes(`Bash(${command})`);
+  if (retry && hookId && !allowed) {
     const request_id = randomUUID();
     const answer = new Promise((resolve) => waiting.set(request_id, resolve));
     out({ type: "control_request", request_id, request: { subtype: "hook_callback", callback_id: hookId, tool_use_id: id, input: { hook_event_name: "PreToolUse", session_id: sessionId, transcript_path: "", cwd: process.cwd(), tool_name: "Bash", tool_input: input, tool_use_id: id } } });
@@ -80,6 +88,12 @@ function control(m) {
   const { subtype } = m.request;
   if (subtype === "set_permission_mode") mode = m.request.mode;
   const ok = (response) => out({ type: "control_response", response: { subtype: "success", request_id: m.request_id, response } });
+  if (subtype === "apply_flag_settings" && m.request.settings?.permissions?.allow) flagAllow = m.request.settings.permissions.allow;
+  if (subtype === "list_permission_rules") {
+    // Only in auto mode, and the rules auto mode would ignore are left out.
+    const rules = mode === "auto" ? flagAllow.filter((r) => !r.includes("IGNORED-PROBE")) : [];
+    return ok({ state: { rules: rules.map((rule) => ({ behavior: "allow", source: "flagSettings", rule, editability: "readonly" })), workspaceDirectories: [], originalCwd: process.cwd(), managedOnly: false } });
+  }
   if (subtype === "initialize") hookId = m.request.hooks?.PreToolUse?.[0]?.hookCallbackIds?.[0];
   if (subtype === "initialize") return ok({ commands: [], agents: [], models: [], account: {}, output_style: "default", available_output_styles: ["default"] });
   if (subtype === "get_context_usage") return out({ type: "control_response", response: { subtype: "error", request_id: m.request_id, error: "the fake CLI has no context usage" } });

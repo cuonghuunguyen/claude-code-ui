@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { parseOmitted, type Event } from "@claude-ui/protocol";
 import { CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, INTERRUPT_GRACE_MS, queuedQuery, Session, STALE_TURN_MS, THROWAWAY_TIMEOUT_MS } from "../src/session.ts";
@@ -12,7 +12,7 @@ import { canSymlink } from "./symlink-support.ts";
 import { sharedFixture } from "./shared-dirs-fixture.ts";
 import { createPerf, setPerf } from "../src/perf.ts";
 import { createUpdater, RESTART_CODE } from "../src/update.ts";
-import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, clearState, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, limitQuery, limitState, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, parallelPermissionQuery, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped, foregroundBashQuery, backgrounded, deniedQuery, hookResults } from "./fake-query.ts";
+import { aborts, askInput, bashSuggestion, calls, checkpointFiles, clearQuery, clearState, closed, controlCalls, fakeCommands, fakeQuery, fakeUsage, limitQuery, limitState, usageCalls, firstTurnLastAssistant, history, inputs, interruptQuery, interrupts, parallelPermissionQuery, permissionQuery, permissionResults, questionQuery, rewinds, setModelCalls, stopped, foregroundBashQuery, backgrounded, deniedQuery, hookResults, ruleCheck } from "./fake-query.ts";
 
 const until = (events: Event[], pred: (e: Event) => boolean) =>
   new Promise<void>((resolve) => {
@@ -3223,6 +3223,130 @@ describe("Allow and retry (GH-711)", () => {
     await s.interrupt();
     await waitIdle(events, 2);
     expect(hasAllow(hookResults.at(-1))).toBe(false);
+    await s.close();
+  });
+});
+
+describe("Always allow (GH-756)", () => {
+  const idles = (events: Event[]) => events.filter((e) => e.part.type === "session_state" && e.part.state === "idle").length;
+  const waitIdle = (events: Event[], count: number) => until(events, () => idles(events) >= count);
+  let tmp: string;
+  const open = async (cwd = tmp) => {
+    hookResults.length = 0;
+    controlCalls.length = 0;
+    Object.assign(ruleCheck, { omit: false, managedOnly: false, fail: false, failApply: false, seen: [] });
+    const s = new Session(cwd, { query: deniedQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("go");
+    await waitIdle(events, 1);
+    return { s, events };
+  };
+  const sentText = (events: Event[]) => (events.find((e) => e.part.type === "user_text" && e.part.text.startsWith("Auto mode denied your"))?.part as { text: string } | undefined)?.text;
+  beforeEach(() => void (tmp = realpathSync(mkdtempSync(join(tmpdir(), "always-allow-")))));
+  afterEach(() => rmSync(tmp, { recursive: true, force: true }));
+
+  it("this session: checks auto mode, applies the rule live, emits always, sends the follow-up naming the rule", async () => {
+    const { s, events } = await open();
+    expect(lastPart(events, "dn-1")).toMatchObject({ denial: { rule: "Bash(git push --force)" } });
+    await s.alwaysAllowDenied("dn-1", "session");
+    expect(ruleCheck.seen.at(-1)).toMatchObject({ permissionMode: "auto", settings: { disableAllHooks: true, permissions: { allow: ["Bash(git push --force)"] } } });
+    expect(controlCalls).toContainEqual({ applyFlagSettings: { permissions: { allow: ["Bash(git push --force)"] } } });
+    expect(lastPart(events, "dn-1")).toMatchObject({ denial: { allowed: true, always: "session" } });
+    expect(sentText(events)).toContain("I added the allow rule `Bash(git push --force)` for this session");
+    expect(sentText(events)).toContain("git push --force");
+    expect(existsSync(join(tmp, ".claude", "settings.local.json"))).toBe(false);
+    await waitIdle(events, 2);
+    // The next CLI start gets the rule as allowedTools.
+    await s.releaseQuery();
+    s.prompt("again");
+    await waitIdle(events, 3);
+    expect(calls.filter((o) => o.allowedTools).at(-1)?.allowedTools).toEqual(["Bash(git push --force)"]);
+    await s.close();
+  });
+
+  it("this project: writes the local settings file, then as this session", async () => {
+    const { s, events } = await open();
+    await s.alwaysAllowDenied("dn-1", "local");
+    expect(JSON.parse(readFileSync(join(tmp, ".claude", "settings.local.json"), "utf8"))).toEqual({ permissions: { allow: ["Bash(git push --force)"] } });
+    expect(lastPart(events, "dn-1")).toMatchObject({ denial: { allowed: true, always: "local" } });
+    expect(sentText(events)).toContain("for this project");
+    expect(controlCalls).toContainEqual({ applyFlagSettings: { permissions: { allow: ["Bash(git push --force)"] } } });
+    await s.close();
+  });
+
+  it("auto mode would ignore the rule: nothing saved, no follow-up, the card unchanged and still retryable", async () => {
+    const { s, events } = await open();
+    ruleCheck.omit = true;
+    await expect(s.alwaysAllowDenied("dn-1", "local")).rejects.toMatchObject({ code: "ignored_in_auto", message: expect.stringContaining("classifier") });
+    expect(existsSync(join(tmp, ".claude"))).toBe(false);
+    expect(sentText(events)).toBeUndefined();
+    expect(lastPart(events, "dn-1")).toMatchObject({ denial: { by: "classifier" } });
+    expect(lastPart(events, "dn-1")).not.toMatchObject({ denial: { allowed: true } });
+    expect(controlCalls.some((c) => "applyFlagSettings" in (c as object))).toBe(false);
+    expect(() => s.allowDenied("dn-1")).not.toThrow();
+    await s.close();
+  });
+
+  it("managed-only policy and a failed check save nothing", async () => {
+    const { s } = await open();
+    ruleCheck.managedOnly = true;
+    await expect(s.alwaysAllowDenied("dn-1", "local")).rejects.toMatchObject({ code: "managed_only" });
+    ruleCheck.managedOnly = false;
+    ruleCheck.fail = true;
+    await expect(s.alwaysAllowDenied("dn-1", "local")).rejects.toMatchObject({ code: "check_failed", message: expect.stringContaining("CLI did not start") });
+    expect(existsSync(join(tmp, ".claude"))).toBe(false);
+    await s.close();
+  });
+
+  it("a write failure is settings_write_failed and sends nothing", async () => {
+    const { s, events } = await open();
+    writeFileSync(join(tmp, ".claude"), "not a directory");
+    await expect(s.alwaysAllowDenied("dn-1", "local")).rejects.toMatchObject({ code: "settings_write_failed" });
+    expect(sentText(events)).toBeUndefined();
+    await s.close();
+  });
+
+  it("a failure after the rule is saved is rule_saved, says what failed, and keeps the card retryable", async () => {
+    const { s, events } = await open();
+    ruleCheck.failApply = true;
+    await expect(s.alwaysAllowDenied("dn-1", "local")).rejects.toMatchObject({ code: "rule_saved", message: expect.stringContaining("CLI closed") });
+    expect(JSON.parse(readFileSync(join(tmp, ".claude", "settings.local.json"), "utf8"))).toEqual({ permissions: { allow: ["Bash(git push --force)"] } });
+    expect(sentText(events)).toBeUndefined();
+    expect(lastPart(events, "dn-1")).not.toMatchObject({ denial: { allowed: true } });
+    await s.close();
+  });
+
+  it("Always allow again after rule_saved adds the rule once", async () => {
+    const { s } = await open();
+    ruleCheck.failApply = true;
+    await expect(s.alwaysAllowDenied("dn-1", "local")).rejects.toMatchObject({ code: "rule_saved" });
+    ruleCheck.failApply = false;
+    await s.alwaysAllowDenied("dn-1", "local");
+    expect(controlCalls.filter((c) => "applyFlagSettings" in (c as object)).at(-1)).toEqual({ applyFlagSettings: { permissions: { allow: ["Bash(git push --force)"] } } });
+    expect(JSON.parse(readFileSync(join(tmp, ".claude", "settings.local.json"), "utf8")).permissions.allow).toEqual(["Bash(git push --force)"]);
+    await s.close();
+  });
+
+  it("errors: unknown call, no rule, a save already running, a second use", async () => {
+    const { s } = await open();
+    await expect(s.alwaysAllowDenied("nope", "session")).rejects.toMatchObject({ code: "unknown_call" });
+    const first = s.alwaysAllowDenied("dn-1", "session");
+    await expect(s.alwaysAllowDenied("dn-1", "session")).rejects.toMatchObject({ code: "session_busy" });
+    await first;
+    await expect(s.alwaysAllowDenied("dn-1", "session")).rejects.toMatchObject({ code: "unknown_call" });
+    await s.close();
+  });
+
+  it("a call without a rule is no_rule", async () => {
+    hookResults.length = 0;
+    const s = new Session(tmp, { query: deniedQuery as never });
+    const events: Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    s.prompt("go run-monitor");
+    await waitIdle(events, 1);
+    expect(lastPart(events, "dn-1")).toMatchObject({ tool: "Monitor", denial: { by: "classifier" } });
+    await expect(s.alwaysAllowDenied("dn-1", "session")).rejects.toMatchObject({ code: "no_rule" });
     await s.close();
   });
 });
