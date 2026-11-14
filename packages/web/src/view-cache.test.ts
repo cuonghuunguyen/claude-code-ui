@@ -1,5 +1,5 @@
 import type { Part, SessionInfo } from "@claude-ui/protocol";
-import { IDBFactory, IDBObjectStore as FDBObjectStore } from "fake-indexeddb";
+import { IDBFactory, IDBObjectStore as FDBObjectStore, IDBTransaction as FDBTransaction } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emptySession, type SessionView } from "./store.ts";
 import {
@@ -231,6 +231,25 @@ describe("createViewCache", () => {
     expect(h.views.get("s1")!.view.order).toEqual(["u1", "a1"]);
     expect((await c.readView("s3"))!.info.id).toBe("s3");
     expect(await c.readView("zzz")).toBeUndefined();
+  });
+
+  it("a save puts and commits in the task it starts, before any read (a pagehide flush must not wait for a callback the unload drops)", async () => {
+    const c = fresh();
+    await c.writeMeta({ daemonId: "d1", tokenHash: H });
+    const commit = vi.spyOn(FDBTransaction.prototype, "commit");
+    try {
+      const saved = Promise.all([c.saveViews([entry("s1")]), c.saveList('{"sessions":[]}', 4)]);
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      const scopes = commit.mock.contexts.map((t) => [...(t as IDBTransaction).objectStoreNames].sort().join());
+      expect(scopes).toContain("viewData,viewMeta");
+      expect(scopes).toContain("list");
+      await saved;
+      const h = await c.hydrate({ tokenHash: H, tabIds: ["s1"] });
+      expect(h.views.has("s1")).toBe(true);
+      expect(h.list?.version).toBe(4);
+    } finally {
+      commit.mockRestore();
+    }
   });
 
   it("remove and clear delete entries", async () => {

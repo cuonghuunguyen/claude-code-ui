@@ -70,7 +70,7 @@ import { Button } from "@/components/ui/button";
 import { QueueChips } from "./queue-chips.tsx";
 import { followed } from "./follow.ts";
 import { storedToken } from "./pairing.ts";
-import { createSaveScheduler, createViewCache, tokenHash, type CacheMeta, type CachedView, type Hydrated } from "./view-cache.ts";
+import { createSaveScheduler, createViewCache, idbFactory, tokenHash, type CacheMeta, type CachedView, type Hydrated } from "./view-cache.ts";
 import { connect, type ConnectionStatus, type DaemonHello, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
 import { PastedBlock, pastedBlockId, PasteChips } from "./pasted-text.tsx";
@@ -389,7 +389,7 @@ export function App() {
   // View cache (GH-771, docs/spec.md "Client state"): the views and the session list of the last page life, in IndexedDB, shown before the socket opens. Not a source of truth.
   // Absent where the browser has no IndexedDB. `cachedMeta`: the daemon the cache was written for; `fromCache`: sessions whose view came from it and has not been resubscribed yet
   // (not a SessionView field); `cacheGate`: the last clear, so a read or save never goes ahead of it; `savedSeq`: lastSeq of the view each session was last marked for saving.
-  const [cache] = useState(() => (typeof indexedDB === "undefined" ? undefined : createViewCache()));
+  const [cache] = useState(() => (idbFactory() ? createViewCache() : undefined));
   const cachedMeta = useRef<CacheMeta>(undefined);
   const fromCache = useRef(new Set<string>());
   const cacheGate = useRef<Promise<unknown>>(Promise.resolve());

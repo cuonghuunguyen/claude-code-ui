@@ -231,7 +231,7 @@ export type ViewCache = {
   /** One read of meta, list, viewMeta, then viewData of `tabIds`; empty on any failure, on timeout (late result dropped), on token or schema mismatch (cache cleared). */
   hydrate(o: { tokenHash: string; tabIds: string[]; timeoutMs?: number }): Promise<Hydrated>;
   readView(id: string): Promise<CachedView | undefined>;
-  /** One readwrite transaction: put every cacheable entry, then evict (age, caps; the not listed rule only when `listedIds` is given). */
+  /** Puts every cacheable entry (committed at once), then evicts in a second transaction (age, caps; the not listed rule only when `listedIds` is given). */
   saveViews(entries: SaveEntry[], o?: SaveOptions): Promise<void>;
   /** Put the list, then evict like `saveViews`; pass the ids of the list so unlisted sessions are removed. */
   saveList(json: string, version: string | number, o?: SaveOptions): Promise<void>;
@@ -255,6 +255,15 @@ const txDone = (tx: IDBTransaction) =>
     tx.onabort = () => reject(tx.error ?? new Error("aborted"));
   });
 
+/** The page's IndexedDB factory; undefined where there is none or where reading it throws (storage blocked: the `indexedDB` getter throws). */
+export function idbFactory(): IDBFactory | undefined {
+  try {
+    return typeof indexedDB === "undefined" ? undefined : indexedDB;
+  } catch {
+    return undefined;
+  }
+}
+
 export function createViewCache(opt: ViewCacheOptions = {}): ViewCache {
   const now = opt.now ?? Date.now;
   const setTimer = opt.setTimer ?? realTimer;
@@ -265,7 +274,7 @@ export function createViewCache(opt: ViewCacheOptions = {}): ViewCache {
   const open = (): Promise<IDBDatabase> => {
     dbp ??= new Promise<IDBDatabase>((resolve, reject) => {
       try {
-        const f = opt.factory ?? (typeof indexedDB === "undefined" ? undefined : indexedDB);
+        const f = opt.factory ?? idbFactory();
         if (!f) throw new Error("indexedDB unavailable");
         const req = f.open(DB_NAME, 1);
         let cancelBlocked: (() => void) | undefined;
@@ -312,17 +321,30 @@ export function createViewCache(opt: ViewCacheOptions = {}): ViewCache {
     return txDone(tx);
   };
 
-  /** Inside a readwrite transaction on viewMeta/viewData: evict by the rules; resolves once the delete requests are queued. */
-  const evict = async (tx: IDBTransaction, o: SaveOptions | undefined, extra: ViewMeta[] = []): Promise<void> => {
+  /** Its own readwrite transaction after the puts: evict by the rules. */
+  const evict = async (db: IDBDatabase, o: SaveOptions | undefined): Promise<void> => {
+    const tx = db.transaction([VIEW_META, VIEW_DATA], "readwrite");
+    const done = txDone(tx);
     const metaStore = tx.objectStore(VIEW_META);
     const stored = (await reqP(metaStore.getAll())) as ViewMeta[];
-    const byId = new Map(stored.map((m) => [m.id, m]));
-    for (const m of extra) byId.set(m.id, m);
-    const doomed = chooseEvictions([...byId.values()], o?.listedIds ? new Set(o.listedIds) : undefined, o?.openTabsByUsed ?? [], now());
+    const doomed = chooseEvictions(stored, o?.listedIds ? new Set(o.listedIds) : undefined, o?.openTabsByUsed ?? [], now());
     for (const id of doomed) {
       metaStore.delete(id);
       tx.objectStore(VIEW_DATA).delete(id);
     }
+    await done;
+  };
+
+  /**
+   * The puts of a save, committed in the task the save starts: no read, no callback in between. A flush on pagehide (a reload) gets its
+   * writes to the database before the page goes; a transaction still waiting for a request callback at that moment is aborted by the unload.
+   */
+  const putNow = (db: IDBDatabase, stores: string[], fill: (tx: IDBTransaction) => void): Promise<void> => {
+    const tx = db.transaction(stores, "readwrite");
+    const done = txDone(tx);
+    fill(tx);
+    tx.commit?.();
+    return done;
   };
 
   return {
@@ -378,28 +400,22 @@ export function createViewCache(opt: ViewCacheOptions = {}): ViewCache {
           const json = serializeView(e.view, e.info, e.title);
           return json === undefined ? [] : [{ id: e.id, json, meta: { id: e.id, savedAt: t, chars: json.length, trimmed: json.includes('"trimmed":true') } satisfies ViewMeta }];
         });
-        const tx = db.transaction([VIEW_META, VIEW_DATA], "readwrite");
-        const done = txDone(tx);
-        for (const r of rows) {
-          tx.objectStore(VIEW_META).put(r.meta, r.id);
-          tx.objectStore(VIEW_DATA).put({ json: r.json }, r.id);
-        }
-        await evict(tx, o, rows.map((r) => r.meta));
-        await done;
+        await putNow(db, [VIEW_META, VIEW_DATA], (tx) => {
+          for (const r of rows) {
+            tx.objectStore(VIEW_META).put(r.meta, r.id);
+            tx.objectStore(VIEW_DATA).put({ json: r.json }, r.id);
+          }
+        });
+        await evict(db, o);
       }),
     saveList: (json, version, o) =>
       guard<void>(undefined, async (db) => {
-        const tx = db.transaction([LIST, VIEW_META, VIEW_DATA], "readwrite");
-        const done = txDone(tx);
-        tx.objectStore(LIST).put({ json, version } satisfies CachedList, "list");
-        await evict(tx, o);
-        await done;
+        await putNow(db, [LIST], (tx) => tx.objectStore(LIST).put({ json, version } satisfies CachedList, "list"));
+        await evict(db, o);
       }),
     writeMeta: (m) =>
       guard<void>(undefined, async (db) => {
-        const tx = db.transaction(META, "readwrite");
-        tx.objectStore(META).put({ schema: SCHEMA, ...m } satisfies CacheMeta, "meta");
-        await txDone(tx);
+        await putNow(db, [META], (tx) => tx.objectStore(META).put({ schema: SCHEMA, ...m } satisfies CacheMeta, "meta"));
       }),
     remove: (id) =>
       guard<void>(undefined, async (db) => {
@@ -414,7 +430,7 @@ export function createViewCache(opt: ViewCacheOptions = {}): ViewCache {
       unavailable = true;
       try {
         (await prior?.catch(() => undefined))?.close();
-        const f = opt.factory ?? (typeof indexedDB === "undefined" ? undefined : indexedDB);
+        const f = opt.factory ?? idbFactory();
         if (!f) return;
         await new Promise<void>((resolve) => {
           const r = f.deleteDatabase(DB_NAME);

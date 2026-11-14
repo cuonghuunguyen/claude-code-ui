@@ -205,6 +205,23 @@ describe("view cache in the app (GH-771)", () => {
     expect(h.list?.version).toBe("v2");
   });
 
+  it("storage blocked (the indexedDB getter throws): the app renders and loads the session without a cache", async () => {
+    const own = Object.getOwnPropertyDescriptor(globalThis, "indexedDB");
+    Object.defineProperty(globalThis, "indexedDB", { configurable: true, get() {
+      throw new Error("blocked");
+    } });
+    try {
+      hold = false;
+      replies["session.subscribe"] = { logEpoch: "e1", seq: 2, session: info, snapshot: { heads: [], attentionSeq: 0, page: { parts: [user, answer] }, aux: [] } };
+      await mount();
+      expect(el.querySelector('[data-testid="tab-strip"]')).not.toBeNull();
+      expect(el.textContent).toContain("cached answer");
+    } finally {
+      if (own) Object.defineProperty(globalThis, "indexedDB", own);
+      else delete (globalThis as { indexedDB?: unknown }).indexedDB;
+    }
+  });
+
   it("a deleted session leaves the cache", async () => {
     await seed();
     await mount();
