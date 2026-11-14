@@ -1355,3 +1355,20 @@ it("GH-757 3 rows, the 2nd rename rejects: the alert lists it, the other two mov
   expect(onMoved).toHaveBeenCalledTimes(2);
   t.unmount();
 });
+
+it("GH-757 a drop of 2 rows that ends with only a whole-batch error shows that error as one plain line", async () => {
+  const t = setup({}, { ...copyReplies, "fs.walk": () => Promise.reject(Object.assign(new Error("boom"), { code: "too_many" })) });
+  await t.render();
+  await act(async () => {
+    const e = new Event("drop", { bubbles: true, cancelable: true }) as Event & { dataTransfer: unknown; altKey: boolean };
+    e.altKey = true;
+    const data: Record<string, string> = { [DRAG_TYPE]: JSON.stringify([rowOf("/p/README.md"), rowOf("/p/package.json")]) };
+    e.dataTransfer = { types: Object.keys(data), getData: (k: string) => data[k] ?? "", files: [], items: [] };
+    t.row("/p/src").dispatchEvent(e);
+  });
+  await confirmDrop();
+  expect(alertText(t)).not.toBe("");
+  expect(alertText(t)).not.toContain("items were not");
+  expect(t.el.querySelectorAll("[data-testid=tree-op-error] li")).toHaveLength(0);
+  t.unmount();
+});

@@ -599,8 +599,9 @@ export function FileTree({
     const report = () => {
       const all = [...rowLines, ...batchLines];
       if (!all.length) return false;
-      if (all.length === 1 && (batchLines.length || total < 2)) setOpError(all[0]);
-      else setOpErr({ text: tr(op === "cut" ? "files.paste.someFailedMove" : "files.paste.someFailedCopy", { count: rowLines.length || all.length, total }), list: all });
+      // No failed row: the whole-batch error (or the one refusal of a single row) is the line, without a heading.
+      if (!rowLines.length || (all.length === 1 && total < 2)) setOpError(all.join(" "));
+      else setOpErr({ text: tr(op === "cut" ? "files.paste.someFailedMove" : "files.paste.someFailedCopy", { count: rowLines.length, total }), list: all });
       return true;
     };
     if (!plan.items.length) return void (!report() && warn && setOpError(warn));
