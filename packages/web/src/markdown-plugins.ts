@@ -77,8 +77,8 @@ function inRanges(ranges: Array<[number, number]>, at: number): boolean {
 /**
  * `\( x \)` and `\[ x \]` as `$$ x $$`, outside code (fences, code spans, indented code). Markdown eats the backslash of `\(`
  * as an escape, so remark-math never sees these forms; the source is rewritten before the parser runs. A `\[` and `\]` that
- * each stand alone on their line are replaced in place (same length, list indent and `>` prefix kept); in a table row `\[ x \]`
- * is inline math (a block would split the row); elsewhere in a line it becomes a `$$` block of its own. Pure, so a test can pin it.
+ * each stand alone on their line are replaced in place (same length, list indent and `>` prefix kept); in a table row, list item or quote `\[ x \]`
+ * is inline math (a block would split the row, list or quote); elsewhere in a line it becomes a `$$` block of its own. Pure, so a test can pin it.
  */
 export function backslashMathToDollars(text: string): string {
   if (!text.includes("\\")) return text;
@@ -91,7 +91,7 @@ export function backslashMathToDollars(text: string): string {
     // Standalone: only blanks or `>` before `\[`, a line end after it, only blanks or `>` before `\]`, a line end after it.
     const after = text.slice(offset + m.length, offset + m.length + 200);
     if (/^[ \t>]*$/.test(before) && /^[ \t]*\n/.test(block) && /\n[ \t>]*$/.test(block) && /^[ \t]*(?:\r?\n|$)/.test(after)) return `$$${block}$$`;
-    if (/^\s*\|/.test(before)) return `$$${String(block).replace(/\s*\n\s*/g, " ")}$$`;
+    if (/^\s*(?:\||>|[-*+][ \t]|\d{1,9}[.)][ \t])/.test(before)) return `$$${String(block).replace(/\s*\n\s*/g, " ")}$$`;
     return `\n\n$$\n${String(block).trim()}\n$$\n\n`;
   });
 }

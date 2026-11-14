@@ -102,6 +102,11 @@ describe("backslash math delimiters (GH-798)", () => {
   it("\\[ \\] in a table cell is inline math, the row stays one line", () => {
     expect(backslashMathToDollars("| a | b |\n|---|---|\n| \\[y\\] | 2 |")).toBe("| a | b |\n|---|---|\n| $$y$$ | 2 |");
   });
+  it("\\[ \\] inside a line of a list item or quote is inline math, so the list or quote is not split", () => {
+    expect(backslashMathToDollars("- one \\[ p^2 \\]\n- two")).toBe("- one $$ p^2 $$\n- two");
+    expect(backslashMathToDollars("1. one \\[p\\]\n2. two")).toBe("1. one $$p$$\n2. two");
+    expect(backslashMathToDollars("> see \\[p\\]")).toBe("> see $$p$$");
+  });
   it("a stray opener does not pair across a blank line, and an unclosed one is fast", () => {
     expect(backslashMathToDollars("group with \\( only\n\nlater \\(x\\)")).toBe("group with \\( only\n\nlater $$x$$");
     expect(backslashMathToDollars("a ` b\n\n\\(x\\)")).toBe("a ` b\n\n$$x$$");
