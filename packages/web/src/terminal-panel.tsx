@@ -504,7 +504,7 @@ function TerminalView({
           source={() => box.current}
           onDismiss={dismissMenu}
           anchor={selectionAnchor}
-          keepOnPointerDown={onScrollbar}
+          keepOnPointerDown={(el) => !!box.current?.contains(el) && onScrollbar(el)}
           actions={[{ id: "add", label: tr("common.selection.addToChat"), icon: <MessageSquarePlusIcon />, onSelect: send }]}
         />
       )}

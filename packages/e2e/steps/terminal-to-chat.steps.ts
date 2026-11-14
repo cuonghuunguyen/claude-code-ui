@@ -159,19 +159,19 @@ When("I open the terminal pane on the phone", async ({ page }) => {
   await expect(view(page).locator(".xterm")).toBeVisible({ timeout: 30_000 });
 });
 
-const rowGone = (page: Page, text: string) => rows(page).filter({ hasText: new RegExp(`^\\s*${text}\\s*$`) });
+const rowsWith = (page: Page, text: string) => rows(page).filter({ hasText: new RegExp(`^\\s*${text}\\s*$`) });
 
 // GH-762: the menu stays while the selection end is scrolled out of view.
 When("I scroll the terminal up until {string} is out of view", async ({ page }, text: string) => {
   const screen = (await view(page).locator(".xterm-screen").boundingBox())!;
   await page.mouse.move(screen.x + screen.width / 2, screen.y + screen.height / 2);
-  await expect.poll(async () => (await page.mouse.wheel(0, -120), await rowGone(page, text).count()), { timeout: 30_000, intervals: [100] }).toBe(0);
+  await expect.poll(async () => (await page.mouse.wheel(0, -120), await rowsWith(page, text).count()), { timeout: 30_000, intervals: [100] }).toBe(0);
 });
 
 When("I scroll the terminal to the bottom", async ({ page }) => {
   const screen = (await view(page).locator(".xterm-screen").boundingBox())!;
   await page.mouse.move(screen.x + screen.width / 2, screen.y + screen.height / 2);
-  await expect.poll(async () => (await page.mouse.wheel(0, 300), await rowGone(page, "300").count()), { timeout: 30_000, intervals: [100] }).toBeGreaterThan(0);
+  await expect.poll(async () => (await page.mouse.wheel(0, 300), await rowsWith(page, "300").count()), { timeout: 30_000, intervals: [100] }).toBeGreaterThan(0);
 });
 
 When("I drag the terminal scrollbar up", async ({ page }) => {
@@ -204,7 +204,7 @@ When("I drag a terminal selection upward from {string} until {string} is out of 
   await page.mouse.down();
   await page.mouse.move(x, screen.y + 5, { steps: 8 });
   await expect
-    .poll(async () => (await page.mouse.wheel(0, -300), await page.mouse.move(x, screen.y + 5 + (Date.now() % 2)), await rowGone(page, gone).count()), { timeout: 30_000, intervals: [100] })
+    .poll(async () => (await page.mouse.wheel(0, -300), await page.mouse.move(x, screen.y + 5 + (Date.now() % 2)), await rowsWith(page, gone).count()), { timeout: 30_000, intervals: [100] })
     .toBe(0);
   await page.mouse.up();
 });
