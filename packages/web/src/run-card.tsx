@@ -8,6 +8,7 @@ import { ToolChevron, ToolContent, ToolHeader, Tool } from "@/components/ai-elem
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { tokens } from "./status-bar.tsx";
+import { InlineStepContext } from "./viewer.ts";
 import { inlineTaskResult, inlineTaskSummary, inlineTokens, type InlineTokens } from "./tools.ts";
 import { MessageResponse } from "@/components/ai-elements/message";
 import type { Part } from "@claude-ui/protocol";
@@ -194,7 +195,7 @@ export function InlineTaskCard({ call, result, awaiting, run }: { call: ToolCall
       turns={out?.turns !== undefined ? { used: out.turns, max: typeof input.maxTurns === "number" ? input.maxTurns : undefined } : undefined}
       filesChanged={out?.filesChanged}
       stepCount={run?.stepCount ?? 0}
-      steps={run?.steps}
+      steps={run && <InlineStepContext value>{run.steps}</InlineStepContext>}
       stepsKept={(run?.hasParts ?? true) || active}
       awaiting={awaiting}
       onCancel={stop && (() => stop(call.toolUseId))}
