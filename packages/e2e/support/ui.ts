@@ -37,6 +37,12 @@ export async function waitConnected(page: Page): Promise<void> {
 
 /** Clicks the sidebar Settings button; on a phone it sits in a drawer that slides in, so the click retries until it lands. */
 export async function openSettings(page: Page): Promise<void> {
+  await clickSettings(page);
+  // The dialog is a lazy chunk (GH-775): it draws a moment after the click, and Esc before that closes nothing.
+  await expect(page.getByTestId("settings-dialog")).toBeVisible();
+}
+
+async function clickSettings(page: Page): Promise<void> {
   const drawer = page.getByTestId("open-drawer");
   const settings = page.getByTestId("open-settings").last(); // the drawer copy on a phone
   if (!(await drawer.isVisible())) return settings.click();
