@@ -84,14 +84,17 @@ export function createFeeds(conn: FeedConn, send: (e: Event) => void, o: FeedOpt
     }
   }
   /**
-   * Resumes the paused feeds once the buffer drained, in turns of SLICE events: the shown tabs first, in the order they were subscribed
-   * (the page subscribes the visible tab first), then the background feeds, whose first one differs from tick to tick.
+   * Resumes the paused feeds once the buffer drained: the first shown tab (the visible one) fully, the other shown tabs in turns of SLICE
+   * events in the order they were subscribed, then the background feeds in turns, whose first one differs from tick to tick.
    */
   function tick() {
     if (conn.readyState !== conn.OPEN) return void (clearInterval(timer), (timer = undefined));
     if (conn.bufferedAmount >= low) return;
     const paused = [...feeds].filter((f) => f.paused);
-    rounds(paused.filter((f) => f.held), 0);
+    // The first shown feed is the visible tab (the page subscribes it first): it catches up before the others get a turn.
+    const shown = paused.filter((f) => f.held);
+    if (shown[0] && conn.bufferedAmount <= high) pump(shown[0]);
+    rounds(shown.slice(1), 0);
     rounds(paused.filter((f) => !f.held), turn++);
     idle();
   }
