@@ -24,7 +24,8 @@ export function markdownNeeds(text: string): Record<Need, boolean> {
 
 const loaders: { [K in Need]: () => Promise<NonNullable<MarkdownPlugins[K]>> } = {
   code: () => import("@streamdown/code").then((m) => m.code),
-  math: () => import("@streamdown/math").then((m) => m.math),
+  // The KaTeX stylesheet comes with the plugin: without it the MathML copy shows beside the formula and the fonts are missing.
+  math: () => Promise.all([import("katex/dist/katex.min.css"), import("@streamdown/math")]).then(([, m]) => m.math),
   mermaid: () => import("@streamdown/mermaid").then((m) => m.mermaid),
 };
 const loaded: { [K in Need]?: NonNullable<MarkdownPlugins[K]> } = {};

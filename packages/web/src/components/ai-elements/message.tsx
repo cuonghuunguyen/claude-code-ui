@@ -31,7 +31,8 @@ import { useAddonFenceRenderers } from "../../addon-render.tsx";
 import { VisualizeContext, VisualizeFence } from "../../visualize-block.tsx";
 import { useDark } from "../../theme.ts";
 import { useT } from "../../i18n.ts";
-import { useMarkdownPlugins } from "../../markdown-plugins.ts";
+import { markdownNeeds, useMarkdownPlugins } from "../../markdown-plugins.ts";
+import { MathPlaceholderParagraph, MermaidPlaceholder } from "../../markdown-placeholders.tsx";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -333,12 +334,25 @@ export const MessageResponse = memo(
     const addonRenderers = useAddonFenceRenderers();
     // The built-in `visualize` renderer (GH-690) goes first: it wins over an addon claiming the same fence.
     const on = use(VisualizeContext);
-    const renderers = useMemo(() => (on ? [{ language: ["visualize"], component: VisualizeFence as never }, ...addonRenderers] : addonRenderers), [on, addonRenderers]);
     // Mermaid draws with its own palette: without the dark theme its lines vanish on a dark background.
     const dark = useDark();
     const mermaid = useMemo(() => ({ config: { theme: dark ? ("dark" as const) : ("default" as const) } }), [dark]);
     // katex, mermaid and shiki load only for a text that has math, a mermaid fence or a code fence (markdown-plugins.ts).
-    const streamdownPlugins = useMarkdownPlugins(typeof props.children === "string" ? props.children : "");
+    const text = typeof props.children === "string" ? props.children : "";
+    const streamdownPlugins = useMarkdownPlugins(text);
+    // While a plugin loads, its block reserves about the height of the final render (GH-790), so the content below does not jump.
+    const needs = useMemo(() => markdownNeeds(text), [text]);
+    const waitMermaid = needs.mermaid && !streamdownPlugins.mermaid;
+    const waitMath = needs.math && !streamdownPlugins.math;
+    const renderers = useMemo(
+      () => [
+        ...(on ? [{ language: ["visualize"], component: VisualizeFence as never }] : []),
+        ...addonRenderers,
+        ...(waitMermaid ? [{ language: ["mermaid"], component: MermaidPlaceholder as never }] : []),
+      ],
+      [on, waitMermaid, addonRenderers],
+    );
+    const components = useMemo(() => (waitMath ? { p: MathPlaceholderParagraph, ...props.components } : props.components), [waitMath, props.components]);
     return (
       <Streamdown
         className={cn(
@@ -348,6 +362,7 @@ export const MessageResponse = memo(
         mermaid={mermaid}
         plugins={renderers.length ? { ...streamdownPlugins, renderers } : streamdownPlugins}
         {...props}
+        components={components}
       />
     );
   },
