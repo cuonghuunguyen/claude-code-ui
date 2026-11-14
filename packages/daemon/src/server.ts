@@ -136,6 +136,8 @@ const IDLE_CHECK_MS = 60_000;
 /** A new connection gets a fresh plan usage read when the last one is older (reset times pass without a turn). */
 const PLAN_STALE_MS = 5 * 60_000;
 const PING_MS = 15_000;
+/** A socket without a pong for this many ticks is dropped even while it takes data or sends messages (a slow drip must not keep it forever). */
+const PING_MAX_SILENT_TICKS = 8;
 const LAG_TICK_MS = 500;
 const LAG_LOG_MS = 1_000;
 const MEM_LOG_MS = 10 * 60_000;
@@ -2054,7 +2056,8 @@ export function createDaemon(opts: {
 
   // Ping each socket every interval; one that did not pong since the previous tick is half-open (phone asleep, wifi gone, no FIN):
   // terminate it so its close handler runs (focused tab, subscriptions, watches), else its stale "focused" entry mutes push.
-  const answered = new WeakSet<Conn>();
+  // A pong is not the only sign of life: the ping queues behind what the daemon already wrote (a resync burst on a slow link), so a socket
+  // that takes data (buffer shrinks) or sends messages is alive; only silence on all three drops it, and a hard cap bounds a slow drip.
   // A socket that cannot be pinged or terminated must not take the process down (an uncaught exception in this timer): drop it instead.
   const drop = (ws: Conn) => {
     try {
@@ -2068,13 +2071,28 @@ export function createDaemon(opts: {
     }
   };
   const pinger = setInterval(() => {
+    const secs = (opts.pingMs ?? PING_MS) / 1000;
     for (const ws of [...connections]) {
-      if (!answered.has(ws)) {
-        console.warn(`${new Date().toISOString()} ws: no pong in ${(opts.pingMs ?? PING_MS) / 1000}s, dropped (${connections.size - 1} left)`);
-        drop(ws);
-        continue;
+      const st = connStats.get(ws);
+      if (st) {
+        const buffered = ws.bufferedAmount;
+        if (!st.ponged) {
+          st.silent++;
+          const received = st.recvMsgs - st.recvAtTick;
+          const draining = buffered < st.bufAtTick;
+          const cap = st.silent >= PING_MAX_SILENT_TICKS;
+          if (cap || (!received && !draining)) {
+            const why = cap ? `no pong for ${st.silent} ticks (${st.silent * secs}s)` : `no pong in ${secs}s`;
+            console.warn(`${new Date().toISOString()} ws: ${why}, dropped (${connections.size - 1} left); open ${Math.round((Date.now() - st.openedAt) / 1000)}s, ${statText(st, `buffered ${mbText(buffered)} (prev tick ${mbText(st.bufAtTick)})`)}`);
+            drop(ws);
+            continue;
+          }
+          console.warn(`${new Date().toISOString()} ws: no pong in ${secs}s, kept: ${received ? `${received} msgs received` : `draining ${mbText(st.bufAtTick)} -> ${mbText(buffered)}`}`);
+        } else st.silent = 0;
+        st.ponged = false;
+        st.recvAtTick = st.recvMsgs;
+        st.bufAtTick = buffered;
       }
-      answered.delete(ws);
       try {
         ws.ping();
       } catch {
@@ -2106,9 +2124,11 @@ export function createDaemon(opts: {
     // Before `connections.add`: a sleep found now is broadcast to the others, then sent once to this connection below.
     sleepWatch?.check();
     connections.add(ws);
-    answered.add(ws);
     const openedAt = Date.now();
-    ws.on("pong", () => answered.add(ws));
+    const stat: ConnStat = { openedAt, sentMsgs: 0, sentBytes: 0, recvMsgs: 0, lastRecvAt: undefined, ua: String(req?.headers["user-agent"] ?? "-").slice(0, 160), ponged: true, silent: 0, recvAtTick: 0, bufAtTick: 0 };
+    connStats.set(ws, stat);
+    ws.on("pong", () => (stat.ponged = true));
+    ws.on("message", () => (stat.recvMsgs++, (stat.lastRecvAt = Date.now())));
     const usage = plan.current();
     if (usage !== undefined) send(ws, { type: "plan_usage", usage });
     if (plan.age() > PLAN_STALE_MS) void plan.reread();
@@ -2163,7 +2183,7 @@ export function createDaemon(opts: {
     // Without a listener a socket error (e.g. a frame above maxPayload) is thrown and the daemon exits; ws closes the socket itself.
     ws.on("error", (err) => console.warn("ws:", err.message));
     ws.on("close", (code) => {
-      console.log(`${new Date().toISOString()} ws: closed${code ? ` code ${code}` : ""} after ${Math.round((Date.now() - openedAt) / 1000)}s (${connections.size - 1} left)`);
+      console.log(`${new Date().toISOString()} ws: closed${code ? ` code ${code}` : ""} after ${Math.round((Date.now() - openedAt) / 1000)}s (${connections.size - 1} left); ${statText(stat)}`);
       router?.close();
       connections.delete(ws);
       mediaNonces.forEach((n) => (media.get(n)?.live?.forEach((r) => r.destroy()), media.delete(n)));
@@ -2191,7 +2211,7 @@ export function createDaemon(opts: {
       }
       if (typeof msg !== "object" || msg === null || Array.isArray(msg))
         return send(ws, { type: "error", code: "bad_message", message: "message must be a JSON object" });
-      if (msg.type === "ping" && msg.note) console.warn(`${new Date().toISOString()} ws: page reconnected after: ${String(msg.note).slice(0, 300)}`);
+      if (msg.type === "ping" && msg.note) console.warn(`${new Date().toISOString()} ws: page reconnected after: ${String(msg.note).slice(0, 600)}`);
       if (msg.type === "ping") return send(ws, { type: "reply", reqId: msg.reqId, result: {} });
       // Timed here, before the router, so a request a side serves or the router answers itself is attributed too.
       const end = perfMon.request(String(msg.type), typeof (msg as { cwd?: unknown }).cwd === "string" ? (msg as { cwd: string }).cwd : undefined);
@@ -3995,6 +4015,32 @@ function isOwnOrigin(req: IncomingMessage, hostnames: Set<string>) {
   }
 }
 
+/** What the keep-alive and the drop and close log lines know of one connection (docs/spec.md "Daemon WebSocket keep-alive"). */
+interface ConnStat {
+  openedAt: number;
+  sentMsgs: number;
+  sentBytes: number;
+  recvMsgs: number;
+  lastRecvAt: number | undefined;
+  ua: string;
+  /** A pong came since the previous tick. */
+  ponged: boolean;
+  /** Ticks in a row without a pong. */
+  silent: number;
+  /** `recvMsgs` and `bufferedAmount` at the previous tick. */
+  recvAtTick: number;
+  bufAtTick: number;
+}
+const connStats = new WeakMap<Conn, ConnStat>();
+const mbText = (n: number) => `${(n / 2 ** 20).toFixed(1)}MB`;
+/** Counters of the drop and close lines: `sent 412 msgs 3.1MB, ... recv 37 msgs, last recv 12s ago`. */
+const statText = (st: ConnStat, buffered?: string) =>
+  `sent ${st.sentMsgs} msgs ${mbText(st.sentBytes)}${buffered ? `, ${buffered}` : ""}, recv ${st.recvMsgs} msgs${buffered ? `, last recv ${st.lastRecvAt === undefined ? "never" : `${Math.round((Date.now() - st.lastRecvAt) / 1000)}s ago`}` : ""}, ua ${JSON.stringify(st.ua)}`;
+
 function send(ws: Conn, m: ServerMessage) {
-  if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m));
+  if (ws.readyState !== ws.OPEN) return;
+  const data = JSON.stringify(m);
+  ws.send(data);
+  const st = connStats.get(ws);
+  if (st) (st.sentMsgs++, (st.sentBytes += Buffer.byteLength(data)));
 }

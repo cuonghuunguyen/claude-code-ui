@@ -35,8 +35,8 @@ let emitSettings: (m: unknown) => void = () => {};
 const sent: { type: string; [k: string]: unknown }[] = [];
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
-  connect: (opts: { onEvent: (e: unknown) => void; onSettingsChanged?: (m: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
-    emit = opts.onEvent;
+  connect: (opts: { onEvents: (es: unknown[]) => void; onSettingsChanged?: (m: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
+    emit = (e) => opts.onEvents([e]);
     emitSettings = (m) => opts.onSettingsChanged?.(m);
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
     return {

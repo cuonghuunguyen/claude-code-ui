@@ -57,8 +57,8 @@ vi.mock("@xterm/xterm", () => ({
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
-  connect: (opts: { onEvent: (e: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
-    emit = opts.onEvent;
+  connect: (opts: { onEvents: (es: unknown[]) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
+    emit = (e) => opts.onEvents([e]);
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
     return { request: async (m: { type: string }) => replies[m.type] ?? {}, onFsChanged: () => () => {}, onTerminal: () => () => {}, close() {} };
   },

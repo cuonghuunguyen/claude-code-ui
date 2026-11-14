@@ -28,7 +28,7 @@ const replies: Record<string, (m: { [k: string]: unknown }) => unknown> = {};
 const sent: { type: string; [k: string]: unknown }[] = [];
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
-  connect: (opts: { onEvent: (e: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
+  connect: (opts: { onEvents: (es: unknown[]) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
     reopen = () => opts.onOpen?.();
     setStatus = (s) => opts.onStatus?.(s);
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));

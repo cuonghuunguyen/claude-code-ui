@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type WebSocket as ServerSocket } from "ws";
 import { backoffMs, connect, type ConnectionStatus } from "./client.ts";
 
@@ -240,5 +240,227 @@ describe("redial on wake", () => {
     expect(statuses).toEqual(["unauthorized"]);
     c.close();
     http.close();
+  });
+});
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+describe("batched apply of received messages (GH-760)", () => {
+  const ev = (seq: number) => ({ type: "event", sessionId: "s", seq, part: { type: "text", id: `p${seq}`, text: "x" } });
+  /** A daemon whose first socket runs `onSocket`; every message the client sends is kept. */
+  async function daemon(onSocket: (s: ServerSocket) => void) {
+    const http = createServer((_req, res) => res.writeHead(204).end());
+    const w = new WebSocketServer({ noServer: true });
+    const received: { type: string; reqId?: string; note?: string }[] = [];
+    http.on("upgrade", (req, socket, head) =>
+      w.handleUpgrade(req, socket, head, (s) => {
+        s.on("message", (d) => received.push(JSON.parse(String(d))));
+        onSocket(s);
+      }),
+    );
+    await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
+    return { received, url: `ws://127.0.0.1:${(http.address() as AddressInfo).port}/ws`, stop: () => (w.clients.forEach((c) => c.terminate()), http.close()) };
+  }
+  const noWake = () => () => {};
+
+  it("applies a burst of events in order, in batches, through onEvents", async () => {
+    const batches: number[][] = [];
+    let opens = 0;
+    const d = await daemon((s) => {
+      for (let i = 1; i <= 500; i++) s.send(JSON.stringify(ev(i)));
+    });
+    const c = connect({ url: d.url, token: "t", wakeEvents: noWake, onOpen: () => opens++, onEvents: (es) => batches.push(es.map((e) => e.seq)) });
+    await until(() => batches.flat().length === 500);
+    expect(batches.flat()).toEqual(Array.from({ length: 500 }, (_, i) => i + 1));
+    expect(batches.every((b) => b.length > 0)).toBe(true);
+    c.close();
+    d.stop();
+  });
+
+  it("onEvent still gets every event one by one when onEvents is not given", async () => {
+    const seen: number[] = [];
+    const d = await daemon((s) => [1, 2, 3].forEach((i) => s.send(JSON.stringify(ev(i)))));
+    const c = connect({ url: d.url, token: "t", wakeEvents: noWake, onEvent: (e) => seen.push(e.seq) });
+    await until(() => seen.length === 3);
+    expect(seen).toEqual([1, 2, 3]);
+    c.close();
+    d.stop();
+  });
+
+  it("a reply ends the drain: its continuation runs before the events that follow it", async () => {
+    const log: string[] = [];
+    let first!: ServerSocket;
+    const d = await daemon((s) => (first = s));
+    const c = connect({ url: d.url, token: "t", wakeEvents: noWake, onEvents: (es) => log.push(`events ${es.map((e) => e.seq).join(",")}`) });
+    const reply = c.request({ type: "ping" }).then(() => log.push("reply continuation"));
+    await until(() => d.received.some((m) => m.type === "ping"));
+    const reqId = d.received.find((m) => m.type === "ping")!.reqId;
+    // One burst: the reply is in the middle of the events.
+    [ev(1), ev(2), { type: "reply", reqId, result: {} }, ev(3), ev(4)].forEach((m) => first.send(JSON.stringify(m)));
+    await reply;
+    await until(() => log.join().includes("events 3,4") || log.filter((l) => l.startsWith("events")).join().includes("4"));
+    expect(log[0]).toBe("events 1,2");
+    expect(log[1]).toBe("reply continuation");
+    expect(log.slice(2).join(" ").replace(/events /g, "")).toBe("3,4");
+    c.close();
+    d.stop();
+  });
+
+  it("a non-event message between events flushes the batch first: order kept", async () => {
+    const log: string[] = [];
+    const d = await daemon((s) => [ev(1), ev(2), { type: "sessions.changed" }, ev(3)].forEach((m) => s.send(JSON.stringify(m))));
+    const c = connect({
+      url: d.url,
+      token: "t",
+      wakeEvents: noWake,
+      onEvents: (es) => log.push(`events ${es.map((e) => e.seq).join(",")}`),
+      onSessionsChanged: () => log.push("changed"),
+    });
+    await until(() => log.length === 3);
+    expect(log).toEqual(["events 1,2", "changed", "events 3"]);
+    c.close();
+    d.stop();
+  });
+
+  it("yields to the page after 8 ms of work, then goes on in the next task", async () => {
+    let clock = 0;
+    const batches: number[][] = [];
+    const d = await daemon((s) => {
+      for (let i = 1; i <= 40; i++) s.send(JSON.stringify(ev(i)));
+    });
+    // Every clock read costs 3 ms: two reads per parsed message, so a drain handles about two messages.
+    const c = connect({ url: d.url, token: "t", wakeEvents: noWake, now: () => (clock += 3), onEvents: (es) => batches.push(es.map((e) => e.seq)) });
+    await until(() => batches.flat().length === 40);
+    expect(batches.length).toBeGreaterThan(5);
+    expect(batches.flat()).toEqual(Array.from({ length: 40 }, (_, i) => i + 1));
+    c.close();
+    d.stop();
+  });
+
+  it("the reconnect note carries the page's lag of the last 30 s and what arrived since open", async () => {
+    let opens = 0;
+    const d = await daemon((s) => {
+      if (++opens === 1) (s.send(JSON.stringify(ev(1))), s.send(JSON.stringify(ev(2))), setTimeout(() => s.terminate(), 50));
+    });
+    const reported: [number, number][] = [];
+    const c = connect({ url: d.url, token: "t", wakeEvents: noWake, onEvents: () => {}, stall: { message: (b, p) => reported.push([b, p]), lag30: () => ({ max: 1900, total: 4200 }) } });
+    await until(() => d.received.some((m) => m.type === "ping" && m.note));
+    const note = d.received.find((m) => m.type === "ping" && m.note)!.note!;
+    expect(note).toContain("page: lag max 1.9s total 4.2s (30s), msgs 2 (");
+    expect(note).toMatch(/parse \d+ms since open/);
+    expect(reported).toHaveLength(2);
+    expect(reported[0][0]).toBeGreaterThan(20);
+    c.close();
+    d.stop();
+  });
+
+  it("messages queued from a socket that closed are not applied, not even after the next socket opened", async () => {
+    type Listener = (ev: { data?: string; type: string; code?: number }) => void;
+    const made: FakeSocket[] = [];
+    class FakeSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+      readyState = 0;
+      listeners = new Map<string, Listener[]>();
+      constructor() {
+        made.push(this);
+      }
+      addEventListener(t: string, l: Listener) {
+        this.listeners.set(t, [...(this.listeners.get(t) ?? []), l]);
+      }
+      fire(type: string, ev: object = {}) {
+        this.listeners.get(type)?.forEach((l) => l({ type, ...ev }));
+      }
+      send() {}
+      close() {
+        this.readyState = 3;
+      }
+    }
+    vi.stubGlobal("WebSocket", FakeSocket);
+    try {
+      const applied: number[] = [];
+      let opens = 0;
+      const c = connect({ url: "ws://fake", token: "t", wakeEvents: noWake, onOpen: () => opens++, onEvents: (es) => applied.push(...es.map((e) => e.seq)) });
+      const first = made[0]!;
+      first.readyState = 1;
+      first.fire("open");
+      // A burst is queued, then the socket closes before the drain task runs.
+      for (let i = 1; i <= 50; i++) first.fire("message", { data: JSON.stringify(ev(i)) });
+      first.readyState = 3;
+      first.fire("close", { code: 1006 });
+      await until(() => made.length === 2);
+      const second = made[1]!;
+      second.readyState = 1;
+      second.fire("open");
+      second.fire("message", { data: JSON.stringify(ev(51)) });
+      await until(() => applied.length > 0);
+      await sleep(50);
+      expect(opens).toBe(2);
+      expect(applied).toEqual([51]);
+      c.close();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("messages queued from a socket that a wake probe replaced are not applied, though it never reported down", async () => {
+    type Listener = (ev: { data?: string; type: string }) => void;
+    const made: FakeSocket[] = [];
+    class FakeSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+      readyState = 1;
+      listeners = new Map<string, Listener[]>();
+      constructor() {
+        made.push(this);
+      }
+      addEventListener(t: string, l: Listener) {
+        this.listeners.set(t, [...(this.listeners.get(t) ?? []), l]);
+      }
+      fire(type: string, ev: object = {}) {
+        this.listeners.get(type)?.forEach((l) => l({ type, ...ev }));
+      }
+      send() {}
+      close() {
+        this.readyState = 3;
+      }
+    }
+    // A MessageChannel the test runs by hand: the drain task waits until the probe has replaced the socket.
+    const channels: { port1: { onmessage?: () => void; close: () => void; unref: () => void } }[] = [];
+    class ManualChannel {
+      port1 = { onmessage: undefined as (() => void) | undefined, close() {}, unref() {} };
+      port2 = { postMessage() {} };
+      constructor() {
+        channels.push(this);
+      }
+    }
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.stubGlobal("MessageChannel", ManualChannel);
+    try {
+      const applied: number[] = [];
+      let wake!: (force?: boolean) => void;
+      const c = connect({
+        url: "ws://fake",
+        token: "t",
+        wakeEvents: (w) => ((wake = w), () => {}),
+        probeTimeoutMs: 10,
+        onEvents: (es) => applied.push(...es.map((e) => e.seq)),
+      });
+      const first = made[0]!;
+      first.fire("open");
+      for (let i = 1; i <= 5; i++) first.fire("message", { data: JSON.stringify(ev(i)) });
+      // No reply to the ping: the probe abandons the first socket and dials a second one (no close event of the first).
+      wake(true);
+      await until(() => made.length === 2);
+      channels[0]!.port1.onmessage!();
+      expect(applied).toEqual([]);
+      c.close();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
