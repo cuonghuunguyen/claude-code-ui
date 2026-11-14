@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, existsSync, fstatSync, lstatSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { lstat, open, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { tagCreateArgv } from "@claude-ui/protocol";
+import { rewordArgv, tagCreateArgv } from "@claude-ui/protocol";
 import type { GitCommitMenu, GitTagInfo, GitTagSigning, GitCommitted, GitOperation, GitOperationKind, GitRollbackFile, GitRollbackPreview, GitStash, HistoryReason } from "@claude-ui/protocol";
 import { gitOperation, gitRefs, hostOf, isHash, pinScope, repoPath, topIn, WorktreeError } from "./git.ts";
 import { branchInfo, branchRef, checkTagName, exclusive, gitBranch, HARDEN, localTagHash, MAX_ERROR, remoteConfigOf, tidy, writeEnv, type RemoteOptions } from "./git-remote.ts";
@@ -119,9 +119,9 @@ export type Written = { output: string; refs: string | null; operation?: GitOper
 const writeEnvNoEditor = async (top: string): Promise<NodeJS.ProcessEnv> => ({ ...(await writeEnv(top)), GIT_EDITOR: "true" });
 
 /** One git call that may stop on conflicts: git fails and the repository has conflicted files = a stop (a success with `operation`), else the failure. */
-async function runStop(top: string, args: string[], env: NodeJS.ProcessEnv, allowed: (p: string) => boolean): Promise<Written> {
+async function runStop(top: string, args: string[], env: NodeJS.ProcessEnv, allowed: (p: string) => boolean, o: { timeout?: number; signal?: AbortSignal; onTimeout?: string } = {}): Promise<Written> {
   try {
-    const { out } = await run(top, args, env);
+    const { out } = await run(top, args, env, o);
     return { output: out, refs: await gitRefs(top, allowed) };
   } catch (e) {
     if (!(e instanceof WorktreeError) || e.code !== "git_failed") throw e;
@@ -253,19 +253,58 @@ export async function gitAbort(cwd: string, o: { kind: unknown; snapshot: Snapsh
 const MAX_LOSE = 50;
 const shortRef = (r: string) => r.replace(/^refs\/(heads|remotes)\//, "");
 
+/** `git version` is at least 2.32 (`amend!` commits), read once per repository top per daemon run. */
+const gitNew = new Map<string, Promise<boolean>>();
+function hasAmendBang(top: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+  let known = gitNew.get(top);
+  if (!known) {
+    known = run(top, ["version"], env).then(
+      (r) => {
+        const m = /(\d+)\.(\d+)/.exec(r.out);
+        return !!m && (Number(m[1]) > 2 || (Number(m[1]) === 2 && Number(m[2]) >= 32));
+      },
+      () => {
+        gitNew.delete(top); // a failed read is not cached as "too old"
+        return false;
+      },
+    );
+    gitNew.set(top, known);
+  }
+  return known;
+}
+
+/** Edit Commit Message: the mode that works for `hash`, or the reason it does not (checks in the order of docs/spec.md `git.commitMenu`). */
+async function rewordCheck(top: string, hash: string, head: string, parents: number, current: string, env: NodeJS.ProcessEnv, ancestor: (a: string, b: string) => Promise<boolean>, upstream = ""): Promise<"amend" | "rebase" | string> {
+  if (parents > 1) return "Merge commit: edit its message in a terminal";
+  if (!(await ancestor(hash, "HEAD"))) return `Not on ${current}`;
+  const remotes = (await run(top, ["for-each-ref", "--contains", hash, "--count=50", "--format=%(refname)", "refs/remotes"], env)).out.split("\n").filter(Boolean);
+  // The branch's own upstream first: it is the remote ref the user expects to read.
+  const pushed = remotes.find((r) => r === upstream) ?? remotes.find((r) => !r.endsWith("/HEAD")) ?? remotes[0];
+  if (pushed) return `Already pushed to ${shortRef(pushed)}`;
+  if (hash === head) return "amend";
+  if ((await run(top, ["rev-list", "--merges", "--count", `${hash}..HEAD`], env)).out !== "0") return "A merge commit follows it: edit its message in a terminal";
+  // Asked of git, not read from a subject list: `run` keeps only the last 8000 characters, which would cut the newest subjects.
+  if ((await run(top, ["rev-list", "--count", "-E", "--grep=^(fixup|squash|amend)! ", `${hash}..HEAD`], env)).out !== "0") return "A fixup!/squash!/amend! commit follows it: edit its message in a terminal";
+  if (!(await hasAmendBang(top, env))) return "Needs git 2.32 or newer";
+  return "rebase";
+}
+
 /** Everything the commit menu shows for `hash` and the exact argv of each action, re-read from git. `hard`: also the files a hard reset would lose. */
 async function commitInfo(top: string, hash: string, env: NodeJS.ProcessEnv, hard: boolean): Promise<{ menu: GitCommitMenu; lost: string[] }> {
   const known = await ask(top, ["rev-parse", "--verify", "-q", `${hash}^{commit}`], env);
   if (known.code === 1) throw bad("Unknown commit");
-  const parents = (await run(top, ["rev-list", "--parents", "-n", "1", hash], env)).out.split(" ").length - 1;
+  const chain = (await run(top, ["rev-list", "--parents", "-n", "1", hash], env)).out.split(" ");
+  const parents = chain.length - 1;
   const head = (await ask(top, ["rev-parse", "--verify", "-q", "HEAD"], env)).out;
   const headRef = (await ask(top, ["symbolic-ref", "-q", "HEAD"], env)).out;
   const info: GitCommitMenu = { hash, parents };
+  if (chain[1]) info.parent = chain[1];
+  if ((await setting(top, "commit.gpgSign", env, "bool")) === "true") info.signs = true;
   if (headRef) info.headRef = headRef;
   if (head) info.headHash = head;
   const op = await gitOperation(top);
   const blocked = !headRef ? "HEAD is detached" : !head ? "No commits yet" : op ? (op.conflicted.length ? "Resolve the conflicts first" : `Finish or abort the ${op.kind} first`) : undefined;
-  if (blocked) return { menu: { ...info, why: { undo: blocked, revert: blocked, cherryPick: blocked, reset: blocked } }, lost: [] };
+  if (blocked) return { menu: { ...info, why: { undo: blocked, revert: blocked, cherryPick: blocked, reset: blocked, reword: blocked } }, lost: [] };
   const current = shortRef(headRef);
   const why: NonNullable<GitCommitMenu["why"]> = {};
   let lost: string[] = [];
@@ -289,6 +328,9 @@ async function commitInfo(top: string, hash: string, env: NodeJS.ProcessEnv, har
   else info.cherryPick = [...HARDEN, "cherry-pick", hash];
   // --no-recurse-submodules: a user's `submodule.recurse=true` would reset submodule work the preview does not list.
   info.reset = { soft: [...HARDEN, "reset", "--soft", hash], mixed: [...HARDEN, "reset", "--mixed", hash], hard: [...HARDEN, "reset", "--hard", "--no-recurse-submodules", hash] };
+  const reason = await rewordCheck(top, hash, head, parents, current, env, ancestor, upstream);
+  if (reason === "amend" || reason === "rebase") info.reword = reason;
+  else why.reword = reason;
   if (hard) {
     // Tracked changes of the index and work tree, plus untracked files the target tree would overwrite.
     // Raw stdout: `run` keeps only the last 8000 chars, which would cut the list the dialog and the fingerprint rest on.
@@ -741,6 +783,61 @@ export async function gitTagCreate(cwd: string, o: { hash: unknown; name: unknow
     }
   });
   });
+}
+
+const MAX_REWORD = 10_000;
+/**
+ * Graph Edit Commit Message (docs/spec.md `git.reword`): `commit --amend` of HEAD, or an `amend! <hash>` commit and an autosquash rebase for an older commit,
+ * as the menu showed it (`commitInfo`). A stop on conflicts is a success whose reply has `operation`.
+ * A signing repository (`commit.gpgSign`): every git call ends at `writeConfig.signTimeout` or on `signal` with "signing did not finish", and the repository is put back as before.
+ */
+export async function gitReword(cwd: string, o: { hash: unknown; message: unknown; headRef: unknown; headHash: unknown; argv: unknown; signal?: AbortSignal } & RemoteOptions): Promise<Written | null> {
+  const { hash, message, headRef, headHash } = o;
+  if (!isHash(hash) || !isHash(headHash) || typeof headRef !== "string") throw bad("hash, headHash and headRef must be commit hashes and the shown HEAD");
+  if (typeof message !== "string" || !message.trim() || message.length > MAX_REWORD || message.includes("\0")) throw bad("message must be text of at most 10000 characters");
+  const shown = o.argv;
+  if (!Array.isArray(shown) || shown.length < 1 || shown.length > 2 || !shown.every((c) => Array.isArray(c) && c.length <= 64 && c.every((a) => typeof a === "string"))) throw bad("Missing command");
+  return pinScope(async () => {
+    const top = await topIn(cwd, o.allowed);
+    if (!top) return null;
+    // An env value of GIT_SEQUENCE_EDITOR would override the `-c sequence.editor=:` of the shown command.
+    const { GIT_SEQUENCE_EDITOR: _ignored, ...env } = await writeEnvNoEditor(top);
+    return exclusive(top, async () => {
+      const { menu } = await commitInfo(top, hash, env, false);
+      if (menu.headRef !== headRef || menu.headHash !== headHash) throw new WorktreeError("stale", "HEAD moved since the menu opened: reopen it");
+      if (!menu.reword) throw bad(menu.why?.reword ?? "Edit Commit Message is not available");
+      const argv = rewordArgv(menu.reword, hash, message, menu.parent);
+      if (shown.length !== argv.length || shown.some((c: string[], i) => c.length !== argv[i]!.length || c.some((a, j) => a !== argv[i]![j]))) throw new WorktreeError("stale", "The command changed since the dialog opened");
+      const signs = menu.signs === true;
+      const head = `signing did not finish: ${(await setting(top, "gpg.format", env)) === "ssh" ? "ssh key" : "gpg"} passphrase prompt?`;
+      const opts = signs ? { timeout: writeConfig.signTimeout, signal: o.signal, onTimeout: head } : {};
+      let temporary = "";
+      try {
+        if (menu.reword === "amend") return await runStop(top, argv[0]!, env, o.allowed, opts);
+        await run(top, argv[0]!, env, opts);
+        temporary = (await run(top, ["rev-parse", "HEAD"], env)).out;
+        return await runStop(top, argv[1]!, env, o.allowed, opts);
+      } catch (e) {
+        // A killed signing commit (timeout, cancel) leaves its index lock behind: the exclusive lock means no write of this daemon holds it.
+        // Accepted risk: another git process (terminal, IDE) that took the lock in the instant after the kill loses it.
+        if (signs && (o.signal?.aborted || (e instanceof WorktreeError && e.message === head))) await rm(hostOf(top, (await run(top, ["rev-parse", "--git-path", "index.lock"], env).catch(() => ({ out: "" }))).out || join(top, ".git", "index.lock")), { force: true }).catch(() => undefined);
+        if (temporary) await undoReword(top, env, temporary, headHash);
+        if (signs && e instanceof WorktreeError && e.code === "git_failed" && e.message !== head && /gpg|sign|pinentry|passphrase|ssh-keygen/i.test(e.message)) throw new WorktreeError("git_failed", `${head}\n${e.message}`);
+        throw e;
+      }
+    });
+  });
+}
+
+/** After a failed reword rebase: drops what it left (an operation without a conflict stop, then the temporary `amend!` commit) so the branch is as before. Best effort. */
+async function undoReword(top: string, env: NodeJS.ProcessEnv, temporary: string, headHash: string): Promise<void> {
+  try {
+    if (await gitOperation(top)) await run(top, ["rebase", "--abort"], env);
+    const now = (await run(top, ["rev-parse", "HEAD"], env)).out;
+    if (now === temporary) await run(top, ["reset", "--soft", headHash], env);
+  } catch {
+    // The original failure is the answer.
+  }
 }
 
 /** The local tag and the configured remotes (no network), for the Remove Tag dialog. Null outside a work tree. */

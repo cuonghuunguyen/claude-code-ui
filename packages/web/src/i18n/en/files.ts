@@ -324,6 +324,11 @@ export default {
   "files.graph.submodule": "Submodule {path}",
   "files.graph.showGraphOf": "Show graph of {target}",
   "files.graph.commit": "Commit",
+  "files.graph.compareTitle": "{hash} ↔ Local",
+  "files.graph.compareBeforeTitle": "Before {hash} ({parent}) ↔ Local",
+  "files.graph.compareEmpty": "No differences",
+  "files.graph.compareLoading": "Loading changes…",
+  "files.graph.untracked": "untracked",
   // image-diff.tsx, images.tsx, media-notice.tsx, media-view.tsx, media.ts
   "files.imageDiff.before": "Before",
   "files.imageDiff.after": "After",

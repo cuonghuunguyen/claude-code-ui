@@ -1713,8 +1713,9 @@ export async function gitOperationOf(cwd: string, allowed: (p: string) => boolea
 export type GitDiffOptions = { base: unknown; ref?: unknown; allowed: (p: string) => boolean; ignoreSubmodules?: boolean };
 /** The working tree (staged, unstaged, untracked) against HEAD or a merge base (docs/spec.md "Layout", changes tab); null outside a git work tree. */
 export async function gitDiff(cwd: string, o: GitDiffOptions): Promise<GitDiff | null> {
-  if (o.base !== "head" && o.base !== "branch") throw bad("Invalid base");
+  if (o.base !== "head" && o.base !== "branch" && o.base !== "commit") throw bad("Invalid base");
   if (o.ref !== undefined && typeof o.ref !== "string") throw bad("Invalid ref");
+  if (o.base === "commit" && !isHash(o.ref)) throw bad("Invalid commit hash");
   const top = await topIn(cwd, o.allowed);
   if (!top) return null;
   const prefix = await g(cwd, ["rev-parse", "--show-prefix"]);
@@ -1723,7 +1724,14 @@ export async function gitDiff(cwd: string, o: GitDiffOptions): Promise<GitDiff |
   let ref: string | undefined;
   let branches: string[] | undefined;
   if (o.base === "head") base = head || undefined;
-  else {
+  else if (o.base === "commit") {
+    // Compare with Local: the work tree against one commit (same body as `head`).
+    const hash = o.ref as string;
+    await g(top, ["rev-parse", "--verify", "-q", `${hash}^{commit}`]).catch(() => {
+      throw bad("Unknown commit");
+    });
+    base = hash;
+  } else {
     if (!head) throw new WorktreeError("bad_base", "No commits yet");
     ref = o.ref === undefined ? await defaultBranch(top) : await checkBranchRef(top, o.ref);
     if (!ref) throw new WorktreeError("bad_base", "No default branch (origin/HEAD, main or master): pick a branch");
