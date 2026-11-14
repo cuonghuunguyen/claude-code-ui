@@ -108,6 +108,26 @@ describe("send feeds", () => {
     expect(c.bufferedAmount).toBeLessThanOrEqual(FEED_HIGH + 1000);
   });
 
+  it("open tabs' backlogs go in turns of 50 events, the first subscribed tab first: a long gap of one tab does not hold the others back", () => {
+    const [visible, other, third] = [new FakeSource(), new FakeSource(), new FakeSource()];
+    const { c, sent, send } = conn(1000);
+    const feeds = createFeeds(c, send);
+    c.bufferedAmount = FEED_HIGH + 1;
+    for (const src of [visible, other, third]) for (let i = 0; i < 400; i++) src.emit();
+    const named = (src: FakeSource, id: string): FeedSource => ({ eventsAfter: function* (n) { for (const e of src.eventsAfter(n)) yield { ...e, sessionId: id }; }, subscribe: (since, l) => src.subscribe(since, l) });
+    feeds.follow(named(visible, "visible"), 0, true);
+    feeds.follow(named(other, "other"), 0, true);
+    feeds.follow(named(third, "third"), 0, true);
+    expect(sent).toHaveLength(0);
+    c.bufferedAmount = 0;
+    vi.advanceTimersByTime(60);
+    const order = sent.map((e) => e.sessionId);
+    expect(order.slice(0, 50)).toEqual(Array(50).fill("visible"));
+    expect(order.slice(50, 100)).toEqual(Array(50).fill("other"));
+    expect(order.slice(100, 150)).toEqual(Array(50).fill("third"));
+    expect(order.slice(150, 200)).toEqual(Array(50).fill("visible"));
+  });
+
   it("writes a long replay in pieces: never more than HIGH + one event above the buffer, and every event arrives once", () => {
     const s = new FakeSource();
     for (let i = 0; i < 2000; i++) s.emit();

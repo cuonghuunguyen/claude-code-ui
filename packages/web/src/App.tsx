@@ -1623,7 +1623,9 @@ export function App() {
           return !s || followed(s) || unreadRef.current.has(id);
         };
         const background: string[] = [];
-        for (const id of Object.keys(viewsRef.current)) {
+        // The visible tab goes first, then asides (an open popup), then the other open tabs: on a slow link the daemon sends their backlogs in this order (GH-767).
+        const rank = (id: string) => (id === h ? 0 : asidesRef.current.some((x) => x.id === id) ? 1 : 2);
+        for (const id of Object.keys(viewsRef.current).sort((x, y) => rank(x) - rank(y))) {
           if (isShown(id)) resync.push(subscribe(id));
           else if (live(id)) background.push(id);
           else drop(id, false);

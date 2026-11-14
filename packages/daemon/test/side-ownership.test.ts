@@ -832,7 +832,7 @@ describe("hub session list versions (GH-767)", () => {
     const localSeen: any[] = [];
     const t = await setup(a, undefined, undefined, {
       router: {
-        encodeList: (r, since) => versions.encode(r as never, since),
+        encodeList: (r, since) => versions.encode(r, since),
         localCall: async (m) => (localSeen.push(m), { type: "reply", reqId: m.reqId, result: { sessions: [{ id: LOCAL, cwd: "/host", lastActivity: 2, title }], projects: ["/host"], recentProjects: [] } }),
       },
     });

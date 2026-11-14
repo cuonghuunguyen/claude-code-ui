@@ -3975,7 +3975,7 @@ export function createDaemon(opts: {
         sides: opts.sides,
         send: (m) => send(ws, m),
         local: (msg) => local(msg, (m) => send(ws, m)),
-        encodeList: (result, since) => listVersions.encode(result as never, since),
+        encodeList: (result, since) => listVersions.encode(result, since),
         localCall: (msg) =>
           new Promise<ServerMessage>((resolve) =>
             local(msg, resolve).catch((err) => (console.error("request handler failed:", err), resolve({ type: "error", reqId: msg.reqId, code: "internal_error", message: "request failed" }))),

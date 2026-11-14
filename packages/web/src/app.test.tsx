@@ -1479,6 +1479,31 @@ it("a page-load link does not re-add a removed project; opening the session (cli
   replies["session.subscribe"] = { logEpoch: "e1", session };
 });
 
+it("a reconnect subscribes the visible tab first, then the other open tabs (GH-767)", async () => {
+  const subscribes = () => sent.filter((m) => m.type === "session.subscribe") as unknown as { sessionId: string; background?: boolean }[];
+  const mk = (id: string) => ({ ...session, id, title: id });
+  const [a, b, c] = ["aaaaaaaa-2222-3333-4444-555555555555", "bbbbbbbb-2222-3333-4444-555555555555", "cccccccc-2222-3333-4444-555555555555"].map(mk);
+  const all = [session, a!, b!, c!];
+  replies["session.list"] = { sessions: all, projects: ["/p/demo"] };
+  replies["session.subscribe"] = (m: { sessionId: string }) => ({ logEpoch: "e1", session: all.find((x) => x.id === m.sessionId) });
+  try {
+    // Open a, b, c in that order, then show the first one again: the visible tab is the oldest view, not the last.
+    for (const x of [a!, b!, c!, a!]) {
+      await act(async () => (location.hash = `#${x.id}`, window.dispatchEvent(new PopStateEvent("popstate"))));
+      await act(async () => {});
+    }
+    sent.length = 0;
+    await act(async () => reconnect());
+    await act(async () => {});
+    const ids = subscribes().filter((m) => !m.background).map((m) => m.sessionId);
+    expect(new Set(ids)).toEqual(new Set([ID, a!.id, b!.id, c!.id]));
+    expect(ids[0]).toBe(a!.id);
+  } finally {
+    replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
+    replies["session.subscribe"] = { logEpoch: "e1", session };
+  }
+});
+
 it("opening the page-load session of a removed project (popstate, tab click) adds the project, though its view exists", async () => {
   const subscribes = () => sent.filter((m) => m.type === "session.subscribe");
   // The session is in the hash but not in the list: its project is not added.

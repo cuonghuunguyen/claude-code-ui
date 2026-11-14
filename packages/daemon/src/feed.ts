@@ -71,24 +71,28 @@ export function createFeeds(conn: FeedConn, send: (e: Event) => void, o: FeedOpt
   function idle() {
     if (timer && ![...feeds].some((f) => f.paused)) (clearInterval(timer), (timer = undefined));
   }
-  /** Resumes the paused feeds once the buffer drained: shown ones fully, then the background ones in turns of SLICE events. */
-  function tick() {
-    if (conn.readyState !== conn.OPEN) return void (clearInterval(timer), (timer = undefined));
-    if (conn.bufferedAmount >= low) return;
-    const paused = [...feeds].filter((f) => f.paused);
-    for (const f of paused.filter((x) => x.held)) if (conn.bufferedAmount <= high) pump(f);
-    const background = paused.filter((f) => !f.held);
-    for (let more = background.length > 0; more && conn.readyState === conn.OPEN && conn.bufferedAmount <= high; ) {
+  /** Gives each paused feed of `list` SLICE events per round, from index `start`, until the buffer is above HIGH or all caught up. */
+  function rounds(list: Feed[], start: number) {
+    for (let more = list.length > 0; more && conn.readyState === conn.OPEN && conn.bufferedAmount <= high; ) {
       more = false;
-      // The first feed of a round differs from tick to tick, so a slow link does not always serve the same one first.
-      for (let i = 0; i < background.length && conn.bufferedAmount <= high; i++) {
-        const f = background[(i + turn) % background.length]!;
+      for (let i = 0; i < list.length && conn.bufferedAmount <= high; i++) {
+        const f = list[(i + start) % list.length]!;
         if (!f.paused) continue;
         pump(f, SLICE);
         more ||= f.paused;
       }
     }
-    turn++;
+  }
+  /**
+   * Resumes the paused feeds once the buffer drained, in turns of SLICE events: the shown tabs first, in the order they were subscribed
+   * (the page subscribes the visible tab first), then the background feeds, whose first one differs from tick to tick.
+   */
+  function tick() {
+    if (conn.readyState !== conn.OPEN) return void (clearInterval(timer), (timer = undefined));
+    if (conn.bufferedAmount >= low) return;
+    const paused = [...feeds].filter((f) => f.paused);
+    rounds(paused.filter((f) => f.held), 0);
+    rounds(paused.filter((f) => !f.held), turn++);
     idle();
   }
 
