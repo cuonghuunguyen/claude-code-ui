@@ -819,7 +819,7 @@ export async function gitReword(cwd: string, o: { hash: unknown; message: unknow
         return await runStop(top, argv[1]!, env, o.allowed, opts);
       } catch (e) {
         // A killed signing commit (timeout, cancel) leaves its index lock behind: the exclusive lock means no write of this daemon holds it.
-        // Accepted risk (recorded in notes.md): another git process (terminal, IDE) that took the lock in the instant after the kill loses it.
+        // Accepted risk: another git process (terminal, IDE) that took the lock in the instant after the kill loses it.
         if (signs && (o.signal?.aborted || (e instanceof WorktreeError && e.message === head))) await rm(hostOf(top, (await run(top, ["rev-parse", "--git-path", "index.lock"], env).catch(() => ({ out: "" }))).out || join(top, ".git", "index.lock")), { force: true }).catch(() => undefined);
         if (temporary) await undoReword(top, env, temporary, headHash);
         if (signs && e instanceof WorktreeError && e.code === "git_failed" && e.message !== head && /gpg|sign|pinentry|passphrase|ssh-keygen/i.test(e.message)) throw new WorktreeError("git_failed", `${head}\n${e.message}`);
