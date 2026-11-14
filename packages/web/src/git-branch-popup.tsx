@@ -57,6 +57,9 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
   const setSub = (v: string | undefined) => void (!pick && setSubRaw(v));
   const input = useRef<HTMLInputElement>(null);
   const subEl = useRef<HTMLDivElement>(null);
+  // GH-777: hover opens on a pointer move to new coordinates, not on pointerenter: layout moving a row under a still pointer fires pointerenter
+  // (WebKit also a move on scroll, at the same coordinates) without the user moving the mouse, which reopened the pane right after Escape closed it.
+  const lastPos = useRef<string | undefined>(undefined);
   // Hover opens the actions without moving focus, so typing stays in the search box.
   const hovered = useRef(false);
   const needle = q.trim();
@@ -95,6 +98,12 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
   useEffect(() => {
     if (sub && !hovered.current) subEl.current?.querySelector<HTMLElement>("[role=menuitem]:not([aria-disabled])")?.focus();
   }, [sub]);
+  const onRowMove = (e: React.PointerEvent, r: Row) => {
+    const pos = `${e.clientX},${e.clientY}`;
+    const moved = pos !== lastPos.current;
+    lastPos.current = pos;
+    if (e.pointerType === "mouse" && moved && sub !== refOf(r)) (hovered.current = true), setSub(refOf(r));
+  };
   const close = () => (setOpen(false), setQ(""), setSubRaw(undefined), setPick(undefined), setPickNote(undefined));
   // Picked branch: Checkout runs at once; Merge and Rebase read the branch first (their command and the reason one is blocked).
   const pickBranch = (ref: string) => {
@@ -203,7 +212,7 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
                     r.kind === "title" ? (
                       <div key={r.id} className="px-2 pt-1 font-medium text-muted-foreground text-xs">{r.label}</div>
                     ) : (
-                      <div key={r.id} id={`bp-${r.id}`} role={r.kind === "remotes" ? "button" : "option"} aria-selected={r.kind === "remotes" ? undefined : r.value === value} aria-expanded={r.kind === "remotes" ? needle !== "" || remotesOpen : undefined} onClick={() => choose(r)} onPointerEnter={(e) => e.pointerType === "mouse" && sub !== refOf(r) && ((hovered.current = true), setSub(refOf(r)))} className={cn("group/row flex h-8 cursor-pointer select-none items-center gap-1 rounded-md pr-0.5 pl-2 hover:bg-secondary max-md:min-h-11", r === cur && "bg-secondary", r.kind === "remotes" && "font-medium text-muted-foreground text-xs")} data-testid="branch-popup-row" data-ref={r.kind === "head" ? undefined : refOf(r)}>
+                      <div key={r.id} id={`bp-${r.id}`} role={r.kind === "remotes" ? "button" : "option"} aria-selected={r.kind === "remotes" ? undefined : r.value === value} aria-expanded={r.kind === "remotes" ? needle !== "" || remotesOpen : undefined} onClick={() => choose(r)} onPointerMove={(e) => onRowMove(e, r)} className={cn("group/row flex h-8 cursor-pointer select-none items-center gap-1 rounded-md pr-0.5 pl-2 hover:bg-secondary max-md:min-h-11", r === cur && "bg-secondary", r.kind === "remotes" && "font-medium text-muted-foreground text-xs")} data-testid="branch-popup-row" data-ref={r.kind === "head" ? undefined : refOf(r)}>
                         {r.kind === "remotes" && <ChevronRightIcon className={cn("size-3.5 shrink-0 transition-transform motion-reduce:transition-none", (needle || remotesOpen) && "rotate-90")} aria-hidden />}
                         <span className="min-w-0 flex-1 truncate"><Highlight text={r.label} q={needle} /></span>
                         {r.kind === "local" && r.value === head && <CheckIcon className="size-4 shrink-0 text-ref-head" aria-label={t("files.graph.currentBranch")} data-testid="branch-popup-current" />}
