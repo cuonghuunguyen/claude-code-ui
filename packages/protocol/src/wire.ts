@@ -158,6 +158,12 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.stopSubagent"; sessionId: string; subagentId: string }
   /** Run in background (GH-440): moves the running foreground Bash call `toolUseId` to the background (`backgroundTasks()`, Ctrl+B in Claude Code); the turn goes on. Also the running bash mode command whose `bash` part id is `toolUseId` (GH-485): the session is free, the command runs on as a background shell. Errors `unknown_shell` (no foreground task of that call runs), `background_failed`. */
   | { type: "session.backgroundShell"; sessionId: string; toolUseId: string }
+  /** Allow and retry (GH-711): the tool call `toolUseId` (`denial.by` "classifier" on its part) was denied by the auto mode classifier: arms a one-shot approval for that exact call (same tool and command/input) and sends a follow-up user message that asks Claude to run it again; the part is re-emitted with `denial.allowed`. The approval lives until the call matches, the follow-up's turn ends, Stop, or the CLI closes. Reply `{}`. Errors `unknown_call` (no such denied main-thread call, or already allowed), `unsupported` (OpenCode), `session_not_live`, `external_turn`, `bash_running`. */
+  | { type: "session.allowDenied"; sessionId: string; toolUseId: string }
+  /** Always allow (GH-756): like `session.allowDenied`, and saves the allow rule `denial.rule` of the denied call first: `scope` "session" (this session's CLI and restarts) or "local" (also `.claude/settings.local.json` at the repository root). Only after a throwaway auto mode CLI confirmed it keeps the rule; then sends the follow-up and re-emits the part with `denial.always`. Reply `{}`. Errors: those of `session.allowDenied`, plus `no_rule` (no rule fits this call), `ignored_in_auto` (auto mode would ignore the rule; the message says why), `managed_only`, `check_failed`, `settings_write_failed`, `rule_saved` (the rule is saved, a later step failed: the message says which; the call was not retried), `session_busy` (also: a save for that call runs). */
+  /** The local settings file Always allow with scope "local" writes for this session (the repository root or main checkout; else the session folder). Reply `{ file }`. */
+  | { type: "session.localSettingsFile"; sessionId: string }
+  | { type: "session.alwaysAllowDenied"; sessionId: string; toolUseId: string; scope: "session" | "local" }
   /** Shells list (GH-442): the tail of background Bash call `toolUseId`'s output file (stdout and stderr merged, at most MAX_BASH_OUTPUT_CHARS chars); reply ShellOutputResult. Error `no_output` (no file known, it lies outside the CLI's task folder, or it is gone). */
   | { type: "session.shellOutput"; sessionId: string; toolUseId: string }
   /** Kill (GH-442): stops the running background shell `toolUseId` (`stopTask()`); its task_notification ends it. Also a bash mode command moved to the background (kills its process group). Errors `unknown_shell` (no task of that call runs), `stop_failed`. */
@@ -338,7 +344,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Annotate (GH-564): `git blame` of the working-tree file (`path` relative to the repository top), so uncommitted lines come back `null`. Reply GitBlameResult. `too_large` (with `size`) over the editor read limit (2 MiB), `not_found`, `not_a_file`, `cwd_not_allowed`, `bad_request` bad path. */
   | { type: "git.blame"; cwd: string; path: string; exact?: true }
   /** Changes tab git modes (docs/spec.md "Layout"): the working tree (staged, unstaged, untracked) against HEAD (`base: "head"`) or against the merge base of HEAD and `ref` (`base: "branch"`; full ref under refs/heads or refs/remotes; omitted: the default branch). Reply GitDiffResult. */
-  | { type: "git.diff"; cwd: string; base: "head" | "branch"; ref?: string; exact?: true }
+  | { type: "git.diff"; cwd: string; base: "head" | "branch" | "commit"; ref?: string; exact?: true }
   /** Graph tab Fetch: `git fetch --all` in `cwd`'s repository (docs/spec.md "Layout", Graph tab). Reply GitRemoteResult; `remote` null outside a git work tree. */
   | { type: "git.fetch"; cwd: string; exact?: true; /** Fetch only the default branch's remote with `--prune` (Clean up). */ defaultRemote?: boolean }
   /** Branch menu data (docs/spec.md "Layout", Graph tab): where push/pull go and the exact git argv of each; `ref` a full refs/heads/ name. Reply GitBranchResult. */
@@ -363,12 +369,28 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.abort"; cwd: string; kind: GitOperationKind; exact?: true }
   /** Branch menu New branch: `git branch <name> <at|HEAD>`, or with `checkout` `git switch -c <name> [<at>]`. `at`: a full commit hash (absent = HEAD). Tracked local changes that would be overwritten: error code `local_changes`; `smart` stashes them, switches and applies them again (a conflict is a success whose reply carries `operation`). Refused while a merge, rebase or conflict is unfinished. Reply GitWriteResult. */
   | { type: "git.branchCreate"; cwd: string; name: string; at?: string; checkout?: boolean; smart?: boolean; exact?: true }
+  /** Graph New Tag: `git tag <name> <hash>`, or `git tag -a -m <message> <name> <hash>` when `message` has text. `hash`: a full commit hash. `argv` must equal `tagCreateArgv(name, hash, message)` (else `stale`). Existing or invalid name: `bad_request`. Allowed during an unfinished operation. Reply GitWriteResult. */
+  | { type: "git.tagCreate"; cwd: string; hash: string; name: string; message?: string; sign?: boolean; argv: string[]; exact?: true }
+  /** Graph New Tag dialog data: the effective signing config (`tag.gpgSign`, `gpg.format`, `user.signingKey`), no signer is run. Reply GitTagSigningResult. */
+  | { type: "git.tagSigning"; cwd: string; exact?: true }
+  /** Stops this connection's running signed `git.tagCreate` (it replies `cancelled`, nothing is created). Reply {}. */
+  | { type: "git.tagCancel"; cwd: string; exact?: true }
+  /** Graph Remove Tag dialog data: the local tag and the configured remotes (no network). Unknown tag: `bad_request`. Reply GitTagResult. */
+  | { type: "git.tag"; cwd: string; name: string; exact?: true }
+  /** Graph Remove Tag dialog: whether `remote` has the tag (`git ls-remote`, network, credentials never asked). Reply GitTagRemoteResult. */
+  | { type: "git.tagRemote"; cwd: string; name: string; remote: string; exact?: true }
+  /** Graph Remove Tag: deletes `name` on each of `remotes` (lease on the shown `hash`), then locally. `hash` and every `argv` are what `git.tag`/`git.tagRemote` and the dialog showed (a change is `stale`). A remote failure stops before the local delete. Reply GitWriteResult. */
+  | { type: "git.tagDelete"; cwd: string; name: string; hash: string; argv: string[]; remotes?: { remote: string; hash: string; argv: string[] }[]; exact?: true }
   /** Branch menu Checkout: `git switch --no-guess <branch>` for `refs/heads/x`, `git switch --track <ref>` for `refs/remotes/r/b` (a new local branch). Errors, `smart` and the reply as `git.branchCreate`. */
   | { type: "git.checkout"; cwd: string; ref: string; smart?: boolean; exact?: true }
   /** Graph commit menu data (GH-562): what Undo Commit, Revert Commit, Cherry-Pick and Reset Current Branch to Here can do for `hash`, with the exact git argv of each. `hard`: also the files a hard reset would lose (`lose`, `loseCount`, `dirty`). Reply GitCommitMenuResult. */
   | { type: "git.commitMenu"; cwd: string; hash: string; hard?: true; exact?: true }
   /** Commit menu Undo Commit, Revert Commit, Cherry-Pick: run the `argv` `git.commitMenu` showed against the shown HEAD (`headRef`, `headHash`); a change is `stale`. A conflict is a success whose reply carries `operation`. Reply GitWriteResult. */
   | { type: "git.undoCommit" | "git.revert" | "git.cherryPick"; cwd: string; hash: string; headRef: string; headHash: string; argv: string[]; exact?: true }
+  /** Graph Edit Commit Message: `argv` = `rewordArgv(mode, hash, message, parent)` as shown, against the shown HEAD (`headRef`, `headHash`); a change is `stale`. A signing commit (`commit.gpgSign`) ends at a short timeout or on `git.rewordCancel` with "signing did not finish". Reply GitWriteResult. */
+  | { type: "git.reword"; cwd: string; hash: string; message: string; headRef: string; headHash: string; argv: string[][]; exact?: true }
+  /** Aborts this connection's running `git.reword` (also on connection close); the repository is put back as before. */
+  | { type: "git.rewordCancel"; cwd: string; exact?: true }
   /** Commit menu Reset Current Branch to Here: `mode` and `argv` as shown; `dirty` (required for `hard`): the `git.commitMenu` fingerprint of the files the reset would lose. Reply GitWriteResult. */
   | { type: "git.reset"; cwd: string; hash: string; mode: "soft" | "mixed" | "hard"; headRef: string; headHash: string; argv: string[]; dirty?: string; exact?: true }
   /** The unfinished git operation of `cwd`'s repository (the Changes tab banner in Session mode, which has no `git.diff`). Reply GitOperationResult. */
@@ -887,6 +909,14 @@ export type GitOperation = { kind: GitOperationKind; conflicted: string[] };
 export type GitOperationResult = { operation: GitOperation | null };
 /** A merge, rebase, continue or abort: git's output and the refs stamp; `operation` is set when it stopped on conflicts. `written` null outside a work tree. */
 export type GitWriteResult = { written: { output: string; refs: string | null; operation?: GitOperation } | null };
+/** A tag as `git.tag` read it: `hash` the ref value (tag object or commit), `commit` the peeled commit, `remotes` the configured remote names (at most 20). */
+export type GitTagInfo = { name: string; hash: string; commit: string; annotated: boolean; remotes: string[] };
+export type GitTagResult = { tag: GitTagInfo | null };
+/** What `git tag` would sign with: `gpgSign` is `tag.gpgSign`, `format` `gpg.format` (unknown values read as openpgp), `key` `user.signingKey` when set. */
+export type GitTagSigning = { gpgSign: boolean; format: "openpgp" | "ssh" | "x509"; key?: string };
+export type GitTagSigningResult = { signing: GitTagSigning | null };
+/** `remoteTag.hash` absent: the remote has no such tag. `null` outside a work tree. */
+export type GitTagRemoteResult = { remoteTag: { remote: string; hash?: string } | null };
 /** One stash entry: `message` is the reflog subject ("On main: wip"), `time` seconds like \`GitCommit.time\`. */
 export type GitStash = { index: number; hash: string; message: string; time: number };
 /** `stashes` null outside a git work tree. */
@@ -951,7 +981,13 @@ export type GitCommitMenu = {
   lose?: string[];
   loseCount?: number;
   dirty?: string;
-  why?: { undo?: string; revert?: string; cherryPick?: string; reset?: string };
+  /** First parent, full hash; absent on a root commit. */
+  parent?: string;
+  /** Edit Commit Message: `amend` (HEAD's commit) or `rebase` (an older commit of the current branch). Absent: unavailable, `why.reword` says why. */
+  reword?: "amend" | "rebase";
+  /** `commit.gpgSign` is on: Edit Commit Message signs, and may wait for a passphrase. */
+  signs?: boolean;
+  why?: { undo?: string; revert?: string; cherryPick?: string; reset?: string; reword?: string };
 };
 /** `commitMenu` null outside a git work tree. */
 export type GitCommitMenuResult = { commitMenu: GitCommitMenu | null };
@@ -1060,6 +1096,8 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
     commitMessageInstruction: string;
     /** Per project (key: project cwd) instruction; wins over `commitMessageInstruction`. Value 1..COMMIT_INSTRUCTION_MAX chars. A patch replaces the whole map. */
     commitMessageInstructions: Record<string, string>;
+    /** GH-668: the daemon keeps one Haiku process ready for Generate (faster start, one idle process). Default off. */
+    commitMessageWarm: boolean;
   };
   /** Custom names and icons (GH-515), shared by every browser. Key: project cwd, or side id (`local`, `wsl:<distro>`, `docker:<name>`). A patch replaces the whole map. */
   labels: { projects: Record<string, Label>; sides: Record<string, Label> };

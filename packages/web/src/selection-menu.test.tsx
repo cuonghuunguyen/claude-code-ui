@@ -10,7 +10,7 @@ const onDismiss = vi.fn();
 let anchor: DOMRect | undefined;
 let unmount = () => {};
 const q = (s: string) => document.querySelector<HTMLElement>(s);
-const mount = (props: { onScroll?: "hide" | "follow" } = {}) => {
+const mount = (props: { onScroll?: "hide" | "follow"; keepOnPointerDown?: (el: Element) => boolean } = {}) => {
   const root = createRoot(document.getElementById("app")!);
   act(() =>
     root.render(
@@ -77,6 +77,13 @@ it("Escape dismisses; it is default-prevented only from the body or the source",
 it("pointerdown outside dismisses; on the menu it does not", () => {
   mount();
   act(() => void q('[data-testid="selection-menu"]')!.dispatchEvent(new Event("pointerdown", { bubbles: true })));
+  expect(onDismiss).not.toHaveBeenCalled();
+  act(() => void q("#out")!.dispatchEvent(new Event("pointerdown", { bubbles: true })));
+  expect(onDismiss).toHaveBeenCalledOnce();
+});
+it("keepOnPointerDown: pointerdown on a kept element does not dismiss; elsewhere it does", () => {
+  mount({ keepOnPointerDown: (el) => el.id === "in" });
+  act(() => void q("#in")!.dispatchEvent(new Event("pointerdown", { bubbles: true })));
   expect(onDismiss).not.toHaveBeenCalled();
   act(() => void q("#out")!.dispatchEvent(new Event("pointerdown", { bubbles: true })));
   expect(onDismiss).toHaveBeenCalledOnce();

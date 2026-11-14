@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendQuote, quoteText } from "./quote.ts";
+import { appendQuote, isBlockInsert, quoteText } from "./quote.ts";
 
 describe("quote", () => {
   it('quoteText prefixes each line with "> " and ends with an empty line', () => {
@@ -31,5 +31,14 @@ describe("quote", () => {
       "> ````\n> a ```b``` c\n> ````\n\n",
     );
     expect(quoteText("a😀", 2)).toBe("> a…\n\n");
+  });
+  it("isBlockInsert: a quote or any fenced block is a paragraph, a mention or command is not", () => {
+    expect(isBlockInsert("> a\n\n")).toBe(true);
+    expect(isBlockInsert("Changes in `x`:\n```diff\n+a\n```\n")).toBe(true);
+    expect(isBlockInsert('Output of terminal "T" in `/p`:\n```text\nx\n```\n')).toBe(true);
+    expect(isBlockInsert("```\nx\n```")).toBe(true);
+    expect(isBlockInsert("@src/a.ts#L1-2")).toBe(false);
+    expect(isBlockInsert("/clear")).toBe(false);
+    expect(isBlockInsert("use `code` here")).toBe(false);
   });
 });

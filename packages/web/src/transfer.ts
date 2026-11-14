@@ -14,7 +14,7 @@ export type Item = { kind: "daemon"; name: string; isDir: boolean; side: string;
 export type Clash = "replace" | "skip" | "keep";
 export type Progress = { files: number; totalFiles: number; bytes: number; totalBytes: number };
 /** `moved`: source and new path of each finished item that came from a Daemon. */
-export type TransferResult = { done: string[]; moved: { from: string; to: string }[]; skipped: string[]; linksSkipped: number; /** Cut items whose source stays because a link inside was not copied. */ kept: string[]; cancelled?: boolean; error?: { code: string; message: string; name: string } };
+export type TransferResult = { done: string[]; moved: { from: string; to: string }[]; skipped: string[]; linksSkipped: number; /** Cut items whose source stays because a link inside was not copied. */ kept: string[]; /** GH-757: items that failed one by one; the others still ran. */ failed: { name: string; code: string; message: string }[]; cancelled?: boolean; error?: { code: string; message: string; name: string } };
 export type Refusal = { name: string; code: "into_itself" | "too_many" | "too_large" };
 
 export const parentOf = (p: string) => {
@@ -33,6 +33,8 @@ export function planPaste(items: Item[], target: { side: string; dir: string }, 
   let entries = 0;
   let bytes = 0;
   for (const it of items) {
+    // GH-757: a row inside another carried folder travels with that folder.
+    if (it.kind === "daemon" && items.some((o) => o !== it && o.kind === "daemon" && o.isDir && o.side === it.side && norm(o.path) !== norm(it.path) && inside(it.path, o.path))) continue;
     if (it.kind === "daemon" && it.side === target.side) {
       if (it.isDir && inside(target.dir, it.path)) {
         refused.push({ name: it.name, code: "into_itself" });
@@ -75,7 +77,9 @@ export async function runTransfer(o: {
   const call = <T>(side: string, msg: { type: string; [k: string]: unknown }) => send<T>({ ...msg, side });
   const key = (n: string) => (isWinPath(target.dir) ? n.toLowerCase() : n);
   const taken = new Set(target.names.map(key));
-  const res: TransferResult = { done: [], moved: [], skipped: [], linksSkipped: 0, kept: [] };
+  const res: TransferResult = { done: [], moved: [], skipped: [], linksSkipped: 0, kept: [], failed: [] };
+  const fail = (name: string, e: unknown) => res.failed.push({ name, code: (e as { code?: string }).code ?? "", message: (e as Error).message });
+  const bad = new Set<number>();
   const stop = () => {
     if (signal?.aborted) throw new Cancelled();
   };
@@ -86,12 +90,21 @@ export async function runTransfer(o: {
     let totalFiles = 0;
     let totalBytes = 0;
     let count = 0;
-    for (const it of o.items) {
+    for (const [wi, it] of o.items.entries()) {
       stop();
       current = it.name;
       let entries: FsWalkEntry[] | undefined;
       if (it.kind === "browser") entries = it.items.map((x) => ({ rel: x.rel, kind: x.kind, size: x.size, mode: 0o644 }));
-      else if (!(it.side === target.side && op === "cut")) entries = (await call<FsWalkResult>(it.side, { type: "fs.walk", path: it.path })).entries;
+      else if (!(it.side === target.side && op === "cut")) {
+        try {
+          entries = (await call<FsWalkResult>(it.side, { type: "fs.walk", path: it.path })).entries;
+        } catch (e) {
+          // A limit hit by the Daemon (too_many, too_large) stops the whole batch.
+          if (e instanceof Cancelled || /^too_(many|large)$/.test((e as { code?: string }).code ?? "")) throw e;
+          fail(it.name, e);
+          bad.add(wi);
+        }
+      }
       walks.push(entries);
       for (const e of entries ?? []) {
         count++;
@@ -106,92 +119,101 @@ export async function runTransfer(o: {
 
     for (const [i, it] of o.items.entries()) {
       stop();
+      if (bad.has(i)) continue;
       current = it.name;
-      let name = it.name;
-      let replace = false;
-      if (taken.has(key(name))) {
-        if (it.kind === "daemon" && it.side === target.side && norm(parentOf(it.path)) === norm(target.dir)) name = free(taken, key, name);
-        else {
-          let choice = all;
-          if (!choice) {
-            const remaining = o.items.slice(i + 1).filter((x) => taken.has(key(x.name))).length;
-            const r = await o.resolve(name, remaining);
-            choice = r.choice;
-            if (r.all) all = choice;
+      try {
+        let name = it.name;
+        let replace = false;
+        if (taken.has(key(name))) {
+          if (it.kind === "daemon" && it.side === target.side && norm(parentOf(it.path)) === norm(target.dir)) name = free(taken, key, name);
+          else {
+            let choice = all;
+            if (!choice) {
+              const remaining = o.items.slice(i + 1).filter((x) => taken.has(key(x.name))).length;
+              const r = await o.resolve(name, remaining);
+              choice = r.choice;
+              if (r.all) all = choice;
+            }
+            if (choice === "skip") {
+              res.skipped.push(name);
+              continue;
+            }
+            if (choice === "keep") name = free(taken, key, name);
+            else replace = true;
           }
-          if (choice === "skip") {
-            res.skipped.push(name);
+        }
+        let entries = walks[i];
+        if (it.kind === "daemon" && it.side === target.side && op === "cut") {
+          let renamed: FsPathResult | undefined;
+          try {
+            renamed = await call<FsPathResult>(target.side, { type: "fs.rename", path: it.path, name, dir: target.dir, ...(replace && { replace: true }) });
+          } catch (e) {
+            // Another volume or mount: a rename cannot cross it, so copy and delete like a move between Daemons.
+            if (!/EXDEV|cross-device/i.test((e as Error).message)) throw e;
+          }
+          if (renamed) {
+            res.done.push(renamed.path);
+            res.moved.push({ from: it.path, to: renamed.path });
+            taken.add(key(name));
             continue;
           }
-          if (choice === "keep") name = free(taken, key, name);
-          else replace = true;
+          entries = (await call<FsWalkResult>(it.side, { type: "fs.walk", path: it.path })).entries;
         }
-      }
-      let entries = walks[i];
-      if (it.kind === "daemon" && it.side === target.side && op === "cut") {
-        let renamed: FsPathResult | undefined;
-        try {
-          renamed = await call<FsPathResult>(target.side, { type: "fs.rename", path: it.path, name, dir: target.dir, ...(replace && { replace: true }) });
-        } catch (e) {
-          // Another volume or mount: a rename cannot cross it, so copy and delete like a move between Daemons.
-          if (!/EXDEV|cross-device/i.test((e as Error).message)) throw e;
-        }
-        if (renamed) {
-          res.done.push(renamed.path);
-          res.moved.push({ from: it.path, to: renamed.path });
-          taken.add(key(name));
+        const same = it.kind === "daemon" && it.side === target.side;
+        if (it.kind === "daemon" && !same && entries![0]?.kind === "link") {
+          res.linksSkipped++;
           continue;
         }
-        entries = (await call<FsWalkResult>(it.side, { type: "fs.walk", path: it.path })).entries;
-      }
-      const same = it.kind === "daemon" && it.side === target.side;
-      if (it.kind === "daemon" && !same && entries![0]?.kind === "link") {
-        res.linksSkipped++;
-        continue;
-      }
-      const linksBefore = res.linksSkipped;
-      const staging = joinPath(target.dir, `.${name}.partial-${Math.random().toString(16).slice(2, 8).padEnd(6, "0")}`);
-      try {
-        for (const e of entries!) {
-          stop();
-          const dest = below(staging, e.rel);
-          if (e.kind === "dir") await call(target.side, { type: "fs.create", path: dest, dir: true });
-          else if (it.kind === "daemon" && same) await call(target.side, { type: "fs.copy", from: below(it.path, e.rel), to: dest });
-          else if (e.kind === "link") res.linksSkipped++;
-          else {
-            const read =
-              it.kind === "daemon"
-                ? (at: number) => call<FsChunkResult>(it.side, { type: "fs.readChunk", path: below(it.path, e.rel), offset: at, length: CHUNK_BYTES })
-                : async (at: number): Promise<FsChunkResult> => {
-                    const file = it.items.find((x) => x.rel === e.rel)!.file!;
-                    return { data: toBase64(new Uint8Array(await file.slice(at, at + CHUNK_BYTES).arrayBuffer())), size: file.size };
-                  };
-            for (let at = 0; ; ) {
-              stop();
-              const c = await read(at);
-              const n = byteLength(c.data);
-              await call(target.side, { type: "fs.writeChunk", path: dest, offset: at, data: c.data, mode: e.mode });
-              at += n;
-              prog.bytes += n;
-              report();
-              if (n === 0 || at >= c.size) break;
+        const linksBefore = res.linksSkipped;
+        let moved: { from: string; to: string } | undefined;
+        const staging = joinPath(target.dir, `.${name}.partial-${Math.random().toString(16).slice(2, 8).padEnd(6, "0")}`);
+        try {
+          for (const e of entries!) {
+            stop();
+            const dest = below(staging, e.rel);
+            if (e.kind === "dir") await call(target.side, { type: "fs.create", path: dest, dir: true });
+            else if (it.kind === "daemon" && same) await call(target.side, { type: "fs.copy", from: below(it.path, e.rel), to: dest });
+            else if (e.kind === "link") res.linksSkipped++;
+            else {
+              const read =
+                it.kind === "daemon"
+                  ? (at: number) => call<FsChunkResult>(it.side, { type: "fs.readChunk", path: below(it.path, e.rel), offset: at, length: CHUNK_BYTES })
+                  : async (at: number): Promise<FsChunkResult> => {
+                      const file = it.items.find((x) => x.rel === e.rel)!.file!;
+                      return { data: toBase64(new Uint8Array(await file.slice(at, at + CHUNK_BYTES).arrayBuffer())), size: file.size };
+                    };
+              for (let at = 0; ; ) {
+                stop();
+                const c = await read(at);
+                const n = byteLength(c.data);
+                await call(target.side, { type: "fs.writeChunk", path: dest, offset: at, data: c.data, mode: e.mode });
+                at += n;
+                prog.bytes += n;
+                report();
+                if (n === 0 || at >= c.size) break;
+              }
             }
+            if (e.kind === "file") (prog.files++, report());
           }
-          if (e.kind === "file") (prog.files++, report());
+          stop();
+          const r = await call<FsPathResult>(target.side, { type: "fs.rename", path: staging, name, ...(replace && { replace: true }) });
+          res.done.push(r.path);
+          // A skipped link would be lost with the source: the source stays.
+          const keep = op === "cut" && res.linksSkipped > linksBefore;
+          if (keep) res.kept.push(it.name);
+          taken.add(key(name));
+          moved = it.kind === "daemon" && !keep ? { from: it.path, to: r.path } : undefined;
+        } catch (e) {
+          await call(target.side, { type: "fs.delete", path: staging }).catch(() => {});
+          throw e;
         }
-        stop();
-        const r = await call<FsPathResult>(target.side, { type: "fs.rename", path: staging, name, ...(replace && { replace: true }) });
-        res.done.push(r.path);
-        // A skipped link would be lost with the source: the source stays.
-        const keep = op === "cut" && res.linksSkipped > linksBefore;
-        if (it.kind === "daemon" && !keep) res.moved.push({ from: it.path, to: r.path });
-        if (keep) res.kept.push(it.name);
-        taken.add(key(name));
+        if (op === "cut" && it.kind === "daemon" && !res.kept.includes(it.name)) await call(it.side, { type: "fs.delete", path: it.path });
+        // Reported as moved only when the source is gone too (a failed delete leaves a copy and a "not moved" line).
+        if (moved) res.moved.push(moved);
       } catch (e) {
-        await call(target.side, { type: "fs.delete", path: staging }).catch(() => {});
-        throw e;
+        if (e instanceof Cancelled) throw e;
+        fail(it.name, e);
       }
-      if (op === "cut" && it.kind === "daemon" && !res.kept.includes(it.name)) await call(it.side, { type: "fs.delete", path: it.path });
     }
   } catch (e) {
     if (e instanceof Cancelled) res.cancelled = true;

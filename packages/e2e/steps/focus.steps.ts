@@ -1,4 +1,5 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page } from "@playwright/test";
@@ -134,6 +135,16 @@ Given("the app is open on a daemon whose Claude sessions run the fake CLI", asyn
 
 Given("I start a new Haiku session on the fake CLI", async ({ page }) => {
   await prepareHaikuSession(page, fake!.project);
+});
+
+// Always allow (GH-756): the daemon saves the local settings at the repository root. The run folder may sit inside a checkout, so the project is its own repository.
+Given("the fake CLI project is a git repository", async () => {
+  execFileSync("git", ["init", "-q"], { cwd: join(projectsRoot(runDir()), fake!.project) });
+});
+
+Then("the project's local settings allow {string}", async ({}, rule: string) => {
+  const file = join(projectsRoot(runDir()), fake!.project, ".claude", "settings.local.json");
+  await expect.poll(() => (existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")).permissions?.allow ?? []) : [])).toContain(rule);
 });
 
 When("the fake CLI ends the turn with the suggestion {string}", async ({}, text: string) => {

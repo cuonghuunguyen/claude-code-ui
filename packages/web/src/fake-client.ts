@@ -36,7 +36,7 @@ export function connect(opts: Opts): Client {
   const terminal = new Set<(m: Extract<ServerMessage, { type: "terminal.output" | "terminal.exit" }>) => void>();
 
   const dispatch = (m: ServerMessage) => {
-    if (m.type === "event") return opts.onEvent(m);
+    if (m.type === "event") return opts.onEvents ? opts.onEvents([m]) : opts.onEvent?.(m);
     if (m.type === "fs.changed") return fs.forEach((l) => l(m));
     if (m.type === "terminal.output" || m.type === "terminal.exit") return terminal.forEach((l) => l(m));
     if (m.type === "sessions.changed") return opts.onSessionsChanged?.(m);

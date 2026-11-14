@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { git, makeRepoWithOrigin } from "../support/git-fixture.ts";
@@ -101,4 +102,33 @@ Then("the {string} tool card shows an error that names no such project", async (
   if (await open.count()) await open.click();
   // The parameters hold the name too: the error is the part that says the name matches nothing.
   await expect(card).toContainText(/no (project|worktree)|not (found|a project)|unknown|did not match|candidates/i, { timeout: 15_000 });
+});
+
+// GH-755: `worktree.symlinkDirectories` links `development-docs` into every worktree the daemon creates; the folder is ignored, so the
+// fixture commit (pushed: a new worktree branches from origin/main) only adds the ignore line. `.claude/` is ignored for the settings file.
+Given("the scratch project shares an ignored development-docs folder with its worktrees", async ({ project }) => {
+  const dir = project.path;
+  writeFileSync(join(dir, ".gitignore"), "development-docs/\n.claude/\n");
+  git(dir, "add", ".gitignore");
+  git(dir, "commit", "-m", "ignore the scratch folder");
+  git(dir, "push", "origin", "main");
+  mkdirSync(join(dir, "development-docs"), { recursive: true });
+  writeFileSync(join(dir, ".claude", "settings.local.json"), JSON.stringify({ worktree: { symlinkDirectories: ["development-docs"] } }));
+});
+
+Then("the {string} tool card result says mode {string}", async ({ page }, text: string, mode: string) => {
+  const card = toolCard(page, text).first();
+  await expect(card).toHaveAttribute("data-status", "done", { timeout: TURN_MS });
+  // The card re-renders as it finishes: expand again until the result text is there.
+  await expect(async () => {
+    const open = card.locator("button[aria-expanded='false']").first();
+    if (await open.count()) await open.click({ timeout: 2_000 });
+    await expect(card).toContainText(new RegExp(`"mode":\\s*"${mode}"`), { timeout: 3_000 });
+  }).toPass({ timeout: 30_000 });
+});
+
+Then("the worker wrote {string} in the main checkout of the scratch project", async ({ project }, file: string) => {
+  const dst = join(project.path, file);
+  await expect(async () => expect(existsSync(dst), `${dst} exists`).toBe(true)).toPass({ timeout: 240_000 });
+  expect(readFileSync(dst, "utf8")).toContain("OK");
 });

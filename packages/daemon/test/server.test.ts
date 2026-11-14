@@ -1329,6 +1329,45 @@ describe("daemon", () => {
     }
   });
 
+  it("git.commitMessage with commitMessageWarm: a ready process answers, switching it off stops it", async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), "cm-")));
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    writeFileSync(join(repo, "a.txt"), "hello\n");
+    const procs = { spawned: 0, aborted: 0, tokens: [] as (string | undefined)[] };
+    const query = ((a: { prompt: unknown; options: { abortController?: AbortController; systemPrompt?: string; env?: Record<string, string | undefined> } }) => {
+      if (typeof a.prompt === "string" || !a.options.systemPrompt?.includes("git commit messages")) return (fakeQuery as never as (x: unknown) => unknown)(a);
+      procs.spawned++;
+      procs.tokens.push(a.options.env?.CLAUDE_CODE_OAUTH_TOKEN);
+      a.options.abortController!.signal.addEventListener("abort", () => procs.aborted++, { once: true });
+      return (async function* () {
+        for await (const _ of a.prompt as AsyncIterable<unknown>) yield { type: "result", subtype: "success", is_error: false, result: "feat: warm" };
+      })();
+    }) as never;
+    const appSettings = createSettings();
+    const d = createDaemon({ webRoot, token, roots: [repo], query, appSettings });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const m = { type: "git.commitMessage", cwd: repo, paths: ["a.txt"] };
+      await c.request({ type: "settings.set", patch: { git: { commitMessageWarm: true } } });
+      await vi.waitFor(() => expect(procs.spawned).toBe(1));
+      expect(await c.request(m)).toMatchObject({ result: { message: "feat: warm" } });
+      expect(procs.spawned).toBe(2);
+      // A switched Claude account replaces the ready process: it holds the old token in its env.
+      const added = (await c.request({ type: "claude.account.add", name: "Work", token: "tok-work" })) as { result: { claudeAccounts: { id: string }[] } };
+      await c.request({ type: "settings.set", patch: { claude: { account: added.result.claudeAccounts[0]!.id } } });
+      await vi.waitFor(() => expect(procs.spawned).toBe(3));
+      expect(procs.tokens.at(-1)).toBe("tok-work");
+      expect(procs.aborted).toBe(2);
+      await c.request({ type: "settings.set", patch: { git: { commitMessageWarm: false } } });
+      await vi.waitFor(() => expect(procs.aborted).toBe(3));
+      await c.request(m);
+      expect(procs.spawned).toBe(3); // off: the cold path, no warm process
+    } finally {
+      d.close();
+    }
+  });
+
   it("git.checkout with local changes that the branch would overwrite replies local_changes", async () => {
     const c = await client();
     const repo = join(webRoot, "coproj");
@@ -4788,6 +4827,33 @@ describe("default permission mode from Claude settings (permissions.defaultMode)
     t.d.close();
   });
 
+  it.skipIf(process.platform === "win32")("a session in a linked worktree reads the main checkout's local file", async () => {
+    const t = await setup();
+    const git = (...args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: t.project, stdio: "pipe" });
+    git("init", "-q");
+    git("commit", "-q", "--allow-empty", "-m", "init");
+    const wt = join(t.project, "wt");
+    git("worktree", "add", "-q", wt, "-b", "feature");
+    write(t.local, "plan");
+    expect(await t.mode(wt)).toBe("plan");
+    t.d.close();
+  });
+
+  it.skipIf(process.platform === "win32")("session.subscribe sends the plan folders of a worktree session from the main checkout's local file", async () => {
+    const t = await setup();
+    const git = (...args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: t.project, stdio: "pipe" });
+    git("init", "-q");
+    git("commit", "-q", "--allow-empty", "-m", "init");
+    const wt = join(t.project, "wt-plans");
+    git("worktree", "add", "-q", wt, "-b", "feature-plans");
+    mkdirSync(join(t.project, ".claude"), { recursive: true });
+    writeFileSync(t.local, JSON.stringify({ plansDirectory: "docs/plans" }));
+    const created = (await t.c.request({ type: "session.create", cwd: wt })) as { result: { session: { id: string } } };
+    const sub = (await t.c.request({ type: "session.subscribe", sessionId: created.result.session.id, sinceSeq: 0 })) as { result: { planDirs: string[] } };
+    expect(sub.result.planDirs[0]).toBe(join(wt, "docs", "plans"));
+    t.d.close();
+  });
+
   it("an invalid higher-precedence value is skipped for the next valid one, like Claude Code", async () => {
     const t = await setup();
     write(t.user, "plan");
@@ -5541,6 +5607,135 @@ describe("keep-alive ping on a side's virtual connection (GH-263)", () => {
       expect(uncaught).not.toHaveBeenCalled();
     } finally {
       process.off("uncaughtException", uncaught);
+      d.close();
+    }
+  });
+});
+
+describe("keep-alive counts progress (GH-760)", () => {
+  const nap = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const pingDaemon = () => createDaemon({ webRoot, roots: [webRoot], query: fakeQuery as never, token, pingMs: 30, history: { ...history, getSessionInfo: async () => undefined } as never });
+  /** A socket that never pongs; `buffered` is read at every tick. */
+  const mute = (buffered: () => number = () => 0) => {
+    const terminate = vi.fn(() => void ws.emit("close"));
+    const ws = Object.assign(new EventEmitter(), { OPEN: 1, readyState: 1, bufferedAmount: 0, send: vi.fn(), close: vi.fn(), ping: vi.fn(), terminate });
+    // Object.assign would copy the getter's value once.
+    Object.defineProperty(ws, "bufferedAmount", { get: buffered });
+    return { ws, terminate };
+  };
+  const warnings = () => vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  it("drops a socket with no pong, no message and no buffer progress; the line has the counters", async () => {
+    const warn = warnings();
+    const d = pingDaemon();
+    const { ws, terminate } = mute(() => 5 * 2 ** 20);
+    try {
+      d.accept(ws);
+      await vi.waitFor(() => expect(terminate).toHaveBeenCalledTimes(1));
+      const line = warn.mock.calls.map((c) => String(c[0])).find((l) => l.includes("no pong"))!;
+      expect(line).toMatch(/dropped \(0 left\); open \d+s, sent \d+ msgs [\d.]+MB, buffered 5\.0MB \(prev tick [\d.]+MB\), recv 0 msgs, last recv never, ua "-"/);
+    } finally {
+      warn.mockRestore();
+      d.close();
+    }
+  });
+
+  it("keeps a socket without pong that sends a message every tick", async () => {
+    const warn = warnings();
+    const d = pingDaemon();
+    const { ws, terminate } = mute(() => 1000);
+    try {
+      d.accept(ws);
+      for (let i = 0; i < 8; i++) {
+        ws.emit("message", JSON.stringify({ type: "ping", reqId: `r${i}` }));
+        await nap(25);
+      }
+      expect(terminate).not.toHaveBeenCalled();
+      expect(warn.mock.calls.map((c) => String(c[0])).some((l) => /kept: \d+ msgs received/.test(l))).toBe(true);
+    } finally {
+      warn.mockRestore();
+      d.close();
+    }
+  });
+
+  it("keeps a socket without pong whose send buffer drains; logs the drain", async () => {
+    const warn = warnings();
+    const d = pingDaemon();
+    let n = 4 * 2 ** 20;
+    const { ws, terminate } = mute(() => (n = Math.max(n - 2 ** 18, 2 ** 18)));
+    try {
+      d.accept(ws);
+      await nap(200);
+      expect(terminate).not.toHaveBeenCalled();
+      expect(warn.mock.calls.map((c) => String(c[0])).some((l) => /no pong in 0\.03s, kept: draining [\d.]+MB -> [\d.]+MB/.test(l))).toBe(true);
+    } finally {
+      warn.mockRestore();
+      d.close();
+    }
+  });
+
+  it("drops a draining socket after 8 ticks without a pong", async () => {
+    const warn = warnings();
+    const d = pingDaemon();
+    let n = 2 ** 30;
+    const { ws, terminate } = mute(() => (n -= 1000));
+    try {
+      d.accept(ws);
+      await vi.waitFor(() => expect(terminate).toHaveBeenCalledTimes(1), { timeout: 2000 });
+      expect(warn.mock.calls.map((c) => String(c[0])).some((l) => l.includes("no pong for 8 ticks"))).toBe(true);
+    } finally {
+      warn.mockRestore();
+      d.close();
+    }
+  });
+
+  it("a pong resets the count of ticks without one", async () => {
+    const d = pingDaemon();
+    let n = 2 ** 30;
+    const { ws, terminate } = mute(() => (n -= 1000));
+    try {
+      d.accept(ws);
+      for (let i = 0; i < 20; i++) {
+        await nap(20);
+        ws.emit("pong");
+      }
+      expect(terminate).not.toHaveBeenCalled();
+    } finally {
+      d.close();
+    }
+  });
+
+  it("the close line has the counters and the user agent", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const d = createDaemon({ webRoot, roots: [webRoot], query: fakeQuery as never, token, history: { ...history, getSessionInfo: async () => undefined } as never });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const p = (d.address() as AddressInfo).port;
+      const ws = new WebSocket(`ws://127.0.0.1:${p}/ws`, protocols(), { origin: `http://127.0.0.1:${p}`, headers: { "user-agent": "Mozilla/5.0 (iPhone) test" } });
+      await new Promise((r) => ws.once("open", r));
+      ws.send(JSON.stringify({ type: "ping", reqId: "1" }));
+      await new Promise((r) => ws.once("message", r));
+      ws.close();
+      await vi.waitFor(() => expect(log.mock.calls.map((c) => String(c[0])).some((l) => /ws: closed code \d+ after \d+s \(0 left\); sent \d+ msgs [\d.]+MB, recv 1 msgs, ua "Mozilla\/5\.0 \(iPhone\) test"/.test(l))).toBe(true));
+    } finally {
+      log.mockRestore();
+      d.close();
+    }
+  });
+
+  it("logs a page note up to 600 characters", async () => {
+    const warn = warnings();
+    const d = createDaemon({ webRoot, roots: [webRoot], query: fakeQuery as never, token, history: { ...history, getSessionInfo: async () => undefined } as never });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "ping", note: "x".repeat(700) });
+      const line = warn.mock.calls.map((x) => String(x[0])).find((l) => l.includes("page reconnected after"))!;
+      expect(line.endsWith("x".repeat(600))).toBe(true);
+      expect(line.endsWith("x".repeat(601))).toBe(false);
+      c.ws.close();
+    } finally {
+      warn.mockRestore();
       d.close();
     }
   });
