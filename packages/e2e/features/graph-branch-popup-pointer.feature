@@ -1,4 +1,4 @@
-Feature: The Graph branch popup opens a branch's actions for a moving mouse only (GH-777)
+Feature: The Graph branch popup opens a branch's actions for a moving mouse only (GH-777, GH-787)
 
   Scenario: A still mouse pointer over the popup opens no actions, a moving one does, and Escape on a phone keeps the list
     Given the viewport is 1440x900
@@ -30,4 +30,5 @@ Feature: The Graph branch popup opens a branch's actions for a moving mouse only
     When I press "Escape" in the branch popup actions
     Then the branch popup actions stay closed
     And the branch popup lists "topic"
+    And the branch popup search box has focus
     And I capture "pointer-escape-phone"
