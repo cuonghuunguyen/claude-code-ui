@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
+import { assetsInlineLimit } from "./assets-inline.ts";
 import { precompress } from "./precompress.ts";
 
 /** Bundled packages' license and NOTICE texts into THIRD_PARTY_LICENSES.txt (MIT, Apache-2.0, OFL require them in copies). */
@@ -50,6 +51,7 @@ const appVersion: string = JSON.parse(readFileSync(fileURLToPath(new URL("../cla
 export default defineConfig({
   define: { __APP_VERSION__: JSON.stringify(appVersion) },
   plugins: [react(), tailwindcss(), preloadInter(), thirdPartyLicenses(), precompress()],
+  build: { assetsInlineLimit },
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   server: { host: "127.0.0.1", proxy: { "/media": { target: `http://127.0.0.1:${process.env.PORT ?? 4280}` }, "/app-icon": { target: `http://127.0.0.1:${process.env.PORT ?? 4280}` }, "/ws": { target: `ws://127.0.0.1:${process.env.PORT ?? 4280}`, ws: true } } },
 });

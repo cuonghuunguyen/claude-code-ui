@@ -16,7 +16,7 @@ export const APP_CSP = [
   "style-src 'self' 'unsafe-inline'", // Tailwind/Base UI/CodeMirror/Shiki/KaTeX/Mermaid set style attributes and <style>
   "img-src 'self' data: blob:", // own /media, pasted/attached images (data:), previews (blob:); no http(s): remote images
   "media-src 'self'", // audio/video from /media (the app plays no blob: media)
-  "font-src 'self'", // bundled woff2 files (KaTeX, terminal font); the build inlines no data: font
+  "font-src 'self'", // bundled woff2 files (KaTeX, terminal font); the build inlines no font as data: (assets-inline.ts)
   "connect-src 'self'", // fetch + WebSocket to the own origin (ws/wss on the same host are covered by 'self')
   "worker-src 'self'", // service worker (/sw.js); the app starts no Worker
   "manifest-src 'self'", // /manifest.webmanifest
