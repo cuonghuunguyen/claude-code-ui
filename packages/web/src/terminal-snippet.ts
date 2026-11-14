@@ -67,3 +67,8 @@ export function cellRect(pos: { x: number; y: number }, screen: { left: number; 
   const height = screen.height / rows;
   return { left: screen.left + pos.x * width, top: screen.top + row * height, width, height };
 }
+
+/** The cell the selection menu anchors at: the selection end, its row clamped into the visible rows (GH-762). */
+export function selectionAnchorCell(end: { x: number; y: number }, cols: number, rows: number, viewportY: number) {
+  return { x: Math.min(end.x, cols - 1), y: Math.min(Math.max(end.y, viewportY), viewportY + rows - 1) };
+}

@@ -127,7 +127,7 @@ Then("the terminal menu offers Add to chat enabled", async ({ page }) => {
   await expect(page.getByTestId("terminal-menu-add")).not.toHaveAttribute("aria-disabled", "true");
 });
 
-// The menu anchors at the selection end and is not rendered when that row is scrolled out of view: select from far up down to the last row.
+// Select from far up down to the last visible row. The end row must be on screen at release for the scrollbar-less drag in the cap scenario.
 When("I select the terminal output over the cap down to the last visible row", async ({ page }) => {
   const screen = (await view(page).locator(".xterm-screen").boundingBox())!;
   const x = screen.x + 4;
@@ -144,7 +144,7 @@ When("I select the terminal output over the cap down to the last visible row", a
   await expect
     .poll(async () => (await wheel(3_000), await page.mouse.move(x, screen.y + screen.height - 8 - (Date.now() % 2)), await top()), { timeout: 60_000, intervals: [100] })
     .toBeGreaterThanOrEqual(4990);
-  // A wheel scroll dismisses the selection menu, and it returns only when the selection changes: move across rows before releasing.
+  // Move across rows before releasing so the selection end is the last visible row.
   await page.mouse.move(x, screen.y + screen.height - 40, { steps: 4 });
   await page.mouse.move(x, screen.y + screen.height - 8, { steps: 4 });
   await page.mouse.up();
@@ -157,4 +157,54 @@ Then("the session tab is the selected tab", async ({ page }) => {
 When("I open the terminal pane on the phone", async ({ page }) => {
   await pickPane(page, "terminal");
   await expect(view(page).locator(".xterm")).toBeVisible({ timeout: 30_000 });
+});
+
+const rowGone = (page: Page, text: string) => rows(page).filter({ hasText: new RegExp(`^\\s*${text}\\s*$`) });
+
+// GH-762: the menu stays while the selection end is scrolled out of view.
+When("I scroll the terminal up until {string} is out of view", async ({ page }, text: string) => {
+  const screen = (await view(page).locator(".xterm-screen").boundingBox())!;
+  await page.mouse.move(screen.x + screen.width / 2, screen.y + screen.height / 2);
+  await expect.poll(async () => (await page.mouse.wheel(0, -120), await rowGone(page, text).count()), { timeout: 30_000, intervals: [100] }).toBe(0);
+});
+
+When("I scroll the terminal to the bottom", async ({ page }) => {
+  const screen = (await view(page).locator(".xterm-screen").boundingBox())!;
+  await page.mouse.move(screen.x + screen.width / 2, screen.y + screen.height / 2);
+  await expect.poll(async () => (await page.mouse.wheel(0, 300), await rowGone(page, "300").count()), { timeout: 30_000, intervals: [100] }).toBeGreaterThan(0);
+});
+
+When("I drag the terminal scrollbar up", async ({ page }) => {
+  const slider = view(page).locator(".scrollbar.vertical .slider");
+  const box = (await slider.boundingBox())!;
+  const first = await rows(page).first().innerText();
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x, y - 30, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(() => rows(page).first().innerText()).not.toBe(first);
+});
+
+Then("the terminal selection menu sits inside the terminal screen", async ({ page }) => {
+  const screen = (await view(page).locator(".xterm-screen").boundingBox())!;
+  const m = (await floating(page).boundingBox())!;
+  expect(m.y).toBeGreaterThanOrEqual(screen.y - m.height - 16);
+  expect(m.y).toBeLessThanOrEqual(screen.y + screen.height + m.height + 16);
+  expect(m.x + m.width / 2).toBeGreaterThanOrEqual(screen.x);
+  expect(m.x + m.width / 2).toBeLessThanOrEqual(screen.x + screen.width);
+});
+
+When("I drag a terminal selection upward from {string} until {string} is out of view", async ({ page }, from: string, gone: string) => {
+  const screen = (await view(page).locator(".xterm-screen").boundingBox())!;
+  const { box, cell } = await rowBox(page, from);
+  const x = box.x + cell * (from.length + 0.5);
+  await page.mouse.move(x, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(x, screen.y + 5, { steps: 8 });
+  await expect
+    .poll(async () => (await page.mouse.wheel(0, -300), await page.mouse.move(x, screen.y + 5 + (Date.now() % 2)), await rowGone(page, gone).count()), { timeout: 30_000, intervals: [100] })
+    .toBe(0);
+  await page.mouse.up();
 });

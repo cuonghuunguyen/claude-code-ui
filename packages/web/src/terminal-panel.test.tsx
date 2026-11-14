@@ -23,6 +23,7 @@ type FakeTerm = {
   mouse: string;
   pasted: string[];
   onSel?: () => void;
+  onScroll?: () => void;
   data?: (d: string) => void;
   resize?: (s: { cols: number; rows: number }) => void;
   key?: (e: KeyboardEvent) => boolean;
@@ -82,7 +83,9 @@ vi.mock("@xterm/xterm", () => ({
     onSelectionChange(f: () => void) {
       this.t.onSel = f;
     }
-    onScroll() {}
+    onScroll(f: () => void) {
+      this.t.onScroll = f;
+    }
     paste(s: string) {
       this.t.pasted.push(s);
     }
@@ -620,11 +623,53 @@ it("GH-710 no selection shows no floating menu; a cleared selection hides it", a
   expect(byId("terminal-selection")).toBeNull();
 });
 
-it("GH-710 a selection end row scrolled out of the screen hides the menu", async () => {
+const top = () => byId("terminal-selection")!.style.top;
+
+it("GH-762 a selection end row above the screen anchors the menu at the top row", async () => {
   const t = await sending(vi.fn());
   t.viewportY = 100;
   await select(t, "x", { x: 5, y: 3 });
   await later(200);
+  // Top row: rect top 20, bottom 40; less than 40px above the rect, so the menu sits below it.
+  expect(top()).toBe("48px");
+});
+
+it("GH-762 a selection end row below the screen anchors the menu at the bottom row", async () => {
+  const t = await sending(vi.fn());
+  t.viewportY = 0;
+  await select(t, "x", { x: 5, y: 50 });
+  await later(200);
+  // Bottom row 23: rect top 20 + 23 * 20 = 480; the menu sits above it.
+  expect(top()).toBe("472px");
+});
+
+it("GH-762 scrolling keeps the menu and moves it with the selection end", async () => {
+  const t = await sending(vi.fn());
+  await select(t, "x", { x: 5, y: 3 });
+  await later(200);
+  expect(byId("terminal-selection")).not.toBeNull();
+  const before = top();
+  t.viewportY = 2;
+  await act(async () => t.onScroll?.());
+  await later(50);
+  expect(byId("terminal-selection")).not.toBeNull();
+  expect(top()).not.toBe(before);
+  t.viewportY = 100;
+  await act(async () => t.onScroll?.());
+  await later(50);
+  expect(byId("terminal-selection")).not.toBeNull();
+});
+
+it("GH-762 pointerdown on the terminal scrollbar keeps the menu; on the screen it dismisses", async () => {
+  const t = await sending(vi.fn());
+  await select(t, "x");
+  await later(200);
+  const box = el.querySelector("[data-testid=terminal-view] > div")!;
+  box.insertAdjacentHTML("beforeend", '<div class="xterm"><div class="scrollbar vertical"><div class="slider"></div></div></div>');
+  const down = (n: Element) => act(async () => void n.dispatchEvent(new Event("pointerdown", { bubbles: true })));
+  await down(box.querySelector(".slider")!);
+  expect(byId("terminal-selection")).not.toBeNull();
+  await down(box.querySelector(".xterm-screen")!);
   expect(byId("terminal-selection")).toBeNull();
 });
 
