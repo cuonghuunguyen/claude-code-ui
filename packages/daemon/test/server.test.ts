@@ -4827,6 +4827,18 @@ describe("default permission mode from Claude settings (permissions.defaultMode)
     t.d.close();
   });
 
+  it.skipIf(process.platform === "win32")("a session in a linked worktree reads the main checkout's local file", async () => {
+    const t = await setup();
+    const git = (...args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd: t.project, stdio: "pipe" });
+    git("init", "-q");
+    git("commit", "-q", "--allow-empty", "-m", "init");
+    const wt = join(t.project, "wt");
+    git("worktree", "add", "-q", wt, "-b", "feature");
+    write(t.local, "plan");
+    expect(await t.mode(wt)).toBe("plan");
+    t.d.close();
+  });
+
   it("an invalid higher-precedence value is skipped for the next valid one, like Claude Code", async () => {
     const t = await setup();
     write(t.user, "plan");

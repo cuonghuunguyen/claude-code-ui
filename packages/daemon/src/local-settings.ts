@@ -68,11 +68,24 @@ const ownedBy = (path: string, uid: number | undefined) => {
 };
 
 /**
- * Where Claude Code reads the local settings file of a session in `cwd`: in a git repository the repository root, resolved
- * through a worktree to the main checkout. It uses `<cwd>/.claude/` instead when `cwd` is no repository, on Windows, when the
- * root is the home directory, or when the root, its `.git` or its `.claude` belongs to another user.
+ * The local settings files Claude Code reads for a session in `cwd`, highest precedence first (per key). The first is the file it
+ * writes: in a git repository the repository root, resolved through a worktree to the main checkout. It uses `<cwd>/.claude/`
+ * instead when `cwd` is no repository, on Windows, when the root is the home directory, or when the root, its `.git` or its
+ * `.claude` belongs to another user. When `cwd` has its own `.claude/settings.local.json` that differs, the CLI still merges it
+ * (legacy file) under the first one: the second entry.
  */
+export async function localSettingsFiles(cwd: string, env: Env = REAL_ENV()): Promise<string[]> {
+  const own = join(cwd, ".claude", "settings.local.json");
+  const root = await rootFile(cwd, env);
+  return root === own ? [own] : [root, own];
+}
+
+/** The file Claude Code writes the local settings to for a session in `cwd` (first of `localSettingsFiles`). */
 export async function localSettingsFile(cwd: string, env: Env = REAL_ENV()): Promise<string> {
+  return (await localSettingsFiles(cwd, env))[0]!;
+}
+
+async function rootFile(cwd: string, env: Env): Promise<string> {
   const own = join(cwd, ".claude", "settings.local.json");
   if (env.platform === "win32") return own;
   let main: string;
