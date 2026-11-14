@@ -313,3 +313,7 @@ _Avoid_: bookmark, pin, reminder (a mark's optional part)
 **Brief turn**:
 The turn claude-ui sends to a marked session when the mark is made (or refreshed or retried), asking the session itself for a brief (About / Focus now / Next). A normal turn in the transcript, recognised by its tag line; the timeline shows it as one collapsed row.
 _Avoid_: summary turn, recap
+
+**Inline task**:
+A mid-size task run as one `inline_task` call by a small model with minimized context (no CLAUDE.md, memory or skills; only the prompt, files and granted tools). Only its result enters the parent context. Not a session: no entry in the session list, no transcript of its own.
+_Avoid_: mini agent, sub-session

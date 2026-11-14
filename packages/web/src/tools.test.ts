@@ -235,3 +235,44 @@ describe("terminal tools (GH-709)", () => {
     expect(terminalSummary("terminal_list", {})).toBe("");
   });
 });
+
+describe("inline task helpers (GH-734)", () => {
+  const ok = { status: "done", text: "found it", model: "haiku", turns: 3, tokens: { input: 1200, output: 300, cacheRead: 0, cacheWrite: 0 }, filesChanged: ["a.ts"], durationMs: 1500 };
+
+  it("inlineTaskTool matches only the claude-ui inline_task tool", async () => {
+    const { inlineTaskTool } = await import("./tools.ts");
+    expect(inlineTaskTool("mcp__claude-ui__inline_task")).toBe(true);
+    expect(inlineTaskTool("mcp__other__inline_task")).toBe(false);
+    expect(inlineTaskTool("Task")).toBe(false);
+  });
+
+  it("inlineTaskResult reads the JSON of a string or text-block output", async () => {
+    const { inlineTaskResult } = await import("./tools.ts");
+    expect(inlineTaskResult(JSON.stringify(ok))).toEqual(ok);
+    expect(inlineTaskResult([{ type: "text", text: JSON.stringify(ok) }])).toEqual(ok);
+  });
+
+  it("inlineTaskResult drops what is not a result: error text, no status, bad fields", async () => {
+    const { inlineTaskResult } = await import("./tools.ts");
+    expect(inlineTaskResult("Inline task files must be inside the project")).toBeUndefined();
+    expect(inlineTaskResult(undefined)).toBeUndefined();
+    expect(inlineTaskResult('{"text":"x"}')).toBeUndefined();
+    expect(inlineTaskResult('{"status":"weird"}')).toBeUndefined();
+    const r = inlineTaskResult(JSON.stringify({ status: "limit", limit: "turns", text: 5, turns: "x", tokens: { input: "a" }, filesChanged: [1, "b"] }))!;
+    expect(r).toMatchObject({ status: "limit", limit: "turns", text: "", filesChanged: ["b"] });
+    expect(r.turns).toBeUndefined();
+    expect(r.tokens).toBeUndefined();
+  });
+
+  it("inlineTaskSummary is the first line of the prompt, empty while the input streams in", async () => {
+    const { inlineTaskSummary } = await import("./tools.ts");
+    expect(inlineTaskSummary({ prompt: "Find the caller of foo\nmore detail", tools: ["Read"] })).toBe("Find the caller of foo");
+    expect(inlineTaskSummary({})).toBe("");
+    expect(inlineTaskSummary(undefined)).toBe("");
+  });
+
+  it("inlineTokens adds input, output and cache tokens", async () => {
+    const { inlineTokens } = await import("./tools.ts");
+    expect(inlineTokens({ input: 1200, output: 300, cacheRead: 500, cacheWrite: 0 })).toBe(2000);
+  });
+});

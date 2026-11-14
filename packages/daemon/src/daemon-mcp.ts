@@ -8,7 +8,7 @@ export const DAEMON_SERVER = "claude-ui";
 /** A tool's own error: its text goes back to the agent as a tool error result. */
 export class ToolError extends Error {}
 
-export type DaemonToolCtx = { sessionId: string; cwd: string; signal?: AbortSignal };
+export type DaemonToolCtx = { sessionId: string; cwd: string; signal?: AbortSignal; /** Claude: the SDK tool_use id of this call. */ toolUseId?: string };
 export type DaemonTool<S extends z.ZodRawShape = z.ZodRawShape> = {
   name: string;
   description: string;
@@ -49,7 +49,9 @@ export function createDaemonMcp(deps: { groups: DaemonToolGroup[]; session: (id:
           const s = deps.session(id);
           if (!s) return fail("This session is gone.");
           try {
-            return ok(await t.run({ sessionId: id, cwd: s.cwd, signal: (extra as { signal?: AbortSignal } | undefined)?.signal }, parsed.data));
+            const e = extra as { signal?: AbortSignal; _meta?: Record<string, unknown> } | undefined;
+            const toolUseId = e?._meta?.["claudecode/toolUseId"];
+            return ok(await t.run({ sessionId: id, cwd: s.cwd, signal: e?.signal, ...(typeof toolUseId === "string" && { toolUseId }) }, parsed.data));
           } catch (err) {
             if (err instanceof ToolError) return fail(err.message);
             console.error(`${DAEMON_SERVER}: ${t.name} failed:`, err);

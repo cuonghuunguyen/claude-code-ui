@@ -155,3 +155,57 @@ export function artifactTitle(call: { input: unknown }): string {
   const file = typeof i.file_path === "string" ? i.file_path : "";
   return title || file.split(/[\\/]/).pop() || file;
 }
+
+const INLINE_TOOL = "mcp__claude-ui__inline_task";
+/** The claude-ui `inline_task` tool (GH-734): its call renders as a run card. */
+export const inlineTaskTool = (tool: string) => tool === INLINE_TOOL;
+
+export type InlineTokens = { input: number; output: number; cacheRead: number; cacheWrite: number };
+/** The tool result of `inline_task` (daemon InlineResult); every field but `status` may be missing in a result of an older or odd daemon. */
+export type InlineTaskResult = {
+  status: "done" | "limit" | "stopped" | "error";
+  limit?: "turns" | "tokens" | "time";
+  error?: string;
+  text: string;
+  truncated?: boolean;
+  model?: string;
+  turns?: number;
+  tokens?: InlineTokens;
+  costUsd?: number;
+  filesChanged: string[];
+  durationMs?: number;
+};
+
+const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+
+/** The JSON `inline_task` returned (its result text), else undefined (an error text, a result still missing). */
+export function inlineTaskResult(output: unknown): InlineTaskResult | undefined {
+  const raw = terminalResult(output);
+  if (!raw || Array.isArray(raw)) return;
+  const status = raw.status;
+  if (status !== "done" && status !== "limit" && status !== "stopped" && status !== "error") return;
+  const tk = raw.tokens as Record<string, unknown> | null | undefined;
+  const parts = tk && typeof tk === "object" ? [num(tk.input), num(tk.output), num(tk.cacheRead), num(tk.cacheWrite)] : [];
+  return {
+    status,
+    ...(raw.limit === "turns" || raw.limit === "tokens" || raw.limit === "time" ? { limit: raw.limit } : {}),
+    ...(typeof raw.error === "string" ? { error: raw.error } : {}),
+    text: typeof raw.text === "string" ? raw.text : "",
+    ...(raw.truncated === true ? { truncated: true } : {}),
+    ...(typeof raw.model === "string" ? { model: raw.model } : {}),
+    ...(num(raw.turns) !== undefined ? { turns: num(raw.turns) } : {}),
+    ...(parts.every((n) => n !== undefined) ? { tokens: { input: parts[0]!, output: parts[1]!, cacheRead: parts[2]!, cacheWrite: parts[3]! } } : {}),
+    ...(num(raw.costUsd) !== undefined ? { costUsd: num(raw.costUsd) } : {}),
+    filesChanged: Array.isArray(raw.filesChanged) ? raw.filesChanged.filter((f): f is string => typeof f === "string") : [],
+    ...(num(raw.durationMs) !== undefined ? { durationMs: num(raw.durationMs) } : {}),
+  };
+}
+
+/** Header summary of an inline task call: the first line of its prompt (empty while the input streams in). */
+export const inlineTaskSummary = (input: unknown) => {
+  const p = (input as { prompt?: unknown } | null | undefined)?.prompt;
+  return typeof p === "string" ? (p.split("\n")[0] ?? "") : "";
+};
+
+/** All tokens of an inline run: input, output and cache. */
+export const inlineTokens = (t: InlineTokens) => t.input + t.output + t.cacheRead + t.cacheWrite;

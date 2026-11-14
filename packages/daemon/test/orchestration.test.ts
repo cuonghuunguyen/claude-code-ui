@@ -173,8 +173,8 @@ const claudeDir = mkdtempSync(join(tmpdir(), "orch-claude-"));
 writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({ permissions: { defaultMode: "acceptEdits" } }));
 mkdirSync(join(claudeDir, "sessions"));
 const appSettings = createSettings();
-// Terminal access (GH-709) gives every session the claude-ui server too: off here, so these tests see orchestration's server alone; "claude-ui server" turns it on.
-appSettings.set({ terminalAccess: { enabled: false } });
+// Terminal access (GH-709) and inline tasks (GH-734) give every session the claude-ui server too: off here, so these tests see orchestration's server alone; "claude-ui server" turns terminal access on.
+appSettings.set({ terminalAccess: { enabled: false }, inlineTask: { enabled: false } });
 const history = { listSessions: async () => [], getSessionInfo: async () => undefined, getSessionMessages: async () => [] };
 
 /** A fresh links file for a second daemon in a test: its workers must not appear in the shared one (closeAll). */
