@@ -78,7 +78,9 @@ describe("generateCommitMessage", () => {
     const s = stub(ok("feat: x"));
     expect(await gen(s.query)).toBe("feat: x");
     expect(s.seen.prompt).toBe("p");
-    expect(s.seen.options).toMatchObject({ tools: [], persistSession: false, maxTurns: 1, model: "haiku", cwd: "/x", settingSources: [], mcpServers: {}, strictMcpConfig: true, settings: { disableAllHooks: true } });
+    expect(s.seen.options).toMatchObject({ tools: [], persistSession: false, maxTurns: 1, model: "haiku", cwd: "/x", thinking: { type: "disabled" }, settingSources: [], mcpServers: {}, strictMcpConfig: true, settings: { disableAllHooks: true } });
+    expect(s.seen.options!.systemPrompt).toContain("length limit");
+    expect(s.seen.options!.systemPrompt).toContain("72");
     expect(s.seen.options!.env).not.toHaveProperty("ANTHROPIC_API_KEY");
     expect(s.seen.options!.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
   });
@@ -141,7 +143,7 @@ describe("warm commit message generator", () => {
     expect(await genWarm(w, "diff B")).toBe("msg for diff B");
     expect(s.log.spawned).toBe(3);
     expect(s.log.texts).toEqual(["diff A", "diff B"]); // each process got exactly one message
-    expect(s.log.options[0]).toMatchObject({ tools: [], persistSession: false, model: "haiku", settingSources: [], mcpServers: {}, strictMcpConfig: true, settings: { disableAllHooks: true } });
+    expect(s.log.options[0]).toMatchObject({ tools: [], persistSession: false, model: "haiku", thinking: { type: "disabled" }, settingSources: [], mcpServers: {}, strictMcpConfig: true, settings: { disableAllHooks: true } });
     w.stop();
     expect(s.log.aborted).toBe(3);
   });

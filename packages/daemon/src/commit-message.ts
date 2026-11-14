@@ -13,7 +13,7 @@ export const COMMIT_MESSAGE_MODEL = "haiku";
 export const generateConfig = { timeout: 120_000 };
 
 export const DEFAULT_INSTRUCTION = DEFAULT_COMMIT_INSTRUCTION;
-const SYSTEM = "You write git commit messages. Reply with the commit message only: no preamble, no code fence, no quotes.";
+const SYSTEM = "You write git commit messages. Reply with the commit message only: no preamble, no code fence, no quotes. Keep every length limit the instruction sets; count the characters of the subject line. Wrap body lines at 72 characters unless the instruction says otherwise.";
 
 /** The project's own instruction, else the global one, else the built-in; a blank value counts as unset. */
 export function instructionFor(git: Pick<Settings["git"], "commitMessageInstruction" | "commitMessageInstructions">, project?: string): string {
@@ -32,7 +32,7 @@ export function promptFor(instruction: string, d: CommitDiff): string {
 /** The reply text: trimmed, one surrounding code fence removed. */
 export const unfence = (text: string) => text.trim().replace(/^```[^\n]*\n([\s\S]*?)\n?```$/, "$1").trim();
 
-const optionsFor = (cwd: string, abortController: AbortController) => ({ systemPrompt: SYSTEM, tools: [], maxTurns: 1, persistSession: false, model: COMMIT_MESSAGE_MODEL, cwd, env: claudeEnv(), settingSources: [], mcpServers: {}, strictMcpConfig: true, settings: { disableAllHooks: true }, abortController });
+const optionsFor = (cwd: string, abortController: AbortController) => ({ systemPrompt: SYSTEM, thinking: { type: "disabled" as const }, tools: [], maxTurns: 1, persistSession: false, model: COMMIT_MESSAGE_MODEL, cwd, env: claudeEnv(), settingSources: [], mcpServers: {}, strictMcpConfig: true, settings: { disableAllHooks: true }, abortController });
 
 /** A started Claude CLI process that waits for its one message. */
 type Spare = { messages: AsyncIterable<SDKMessage>; ctl: AbortController; send: (text: string) => void };
