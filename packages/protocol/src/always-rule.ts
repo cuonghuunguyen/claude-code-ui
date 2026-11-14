@@ -32,7 +32,8 @@ export function alwaysRule(tool: string, input: unknown): AlwaysRule {
     const command = obj.command;
     if (typeof command !== "string" || !command.trim()) return { unavailable: "input" };
     // Probed (CLI 2.1.285): a rule with an escaped `*` (`\*`) never matched its own command, so no rule fits a command with a `*`.
-    return command.includes("*") ? { unavailable: "input" } : { toolName: tool, ruleContent: command };
+    // Probed likewise: a command with a pipe or a redirect (`|`, `<`, `>`) is asked again although its exact rule is saved (`&&` and `;` compounds match).
+    return /[*|<>]/.test(command) ? { unavailable: "input" } : { toolName: tool, ruleContent: command };
   }
   if (tool === "WebFetch") {
     try {

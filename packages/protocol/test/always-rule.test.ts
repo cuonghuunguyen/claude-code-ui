@@ -18,6 +18,10 @@ describe("alwaysRule", () => {
     expect(alwaysRule("PowerShell", { command: "ls *.txt" })).toEqual({ unavailable: "input" });
     expect(alwaysRule("Bash", { command: "echo a\\nb" })).toEqual({ toolName: "Bash", ruleContent: "echo a\\nb" });
   });
+  it("a pipe or a redirect has no rule; && and ; compounds keep one", () => {
+    for (const command of ["echo hi | tee x", "echo hi > f 2>&1", "cat < f"]) expect(alwaysRule("Bash", { command })).toEqual({ unavailable: "input" });
+    expect(alwaysRule("Bash", { command: "touch a && touch b; touch c" })).toEqual({ toolName: "Bash", ruleContent: "touch a && touch b; touch c" });
+  });
   it("rejects an empty or missing command", () => {
     expect(alwaysRule("Bash", { command: "  " })).toEqual({ unavailable: "input" });
     expect(alwaysRule("PowerShell", {})).toEqual({ unavailable: "input" });

@@ -420,7 +420,7 @@ Claude only; shown on the same cards as Allow and retry while the call is not al
 
 | Tool | Rule |
 |---|---|
-| `Bash`, `PowerShell` | `Tool(<command>)`. Empty command, or a command with a `*`: none (probed, CLI 2.1.285: the escaped form `\*` never matched its own command; backslash, parentheses, quotes and `&&` compounds match) |
+| `Bash`, `PowerShell` | `Tool(<command>)`. Empty command, or a command with `*`, `|`, `<` or `>`: none (probed, CLI 2.1.285: the escaped form `\*` never matched its own command, and a pipe or redirect is asked again; backslash, parentheses, quotes, `&&` and `;` compounds match) |
 | `WebFetch` | `WebFetch(domain:<host>)` (Claude Code's own suggestion; the whole domain). Bad URL: none |
 | `WebSearch`, `mcp__*` | the tool name (the whole tool, as Claude Code suggests) |
 | `Edit`, `Write`, `MultiEdit`, `NotebookEdit` | `Edit(//<abs path>)`; `Read` → `Read(//<abs path>)`. Windows `C:\a\b` → `//c/a/b`; `\ * ? [ ]` escaped. Relative path: none |
