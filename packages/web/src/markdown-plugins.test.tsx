@@ -80,6 +80,17 @@ describe("backslash math delimiters (GH-798)", () => {
     expect(backslashMathToDollars("so \\(a+b\\) holds")).toBe("so $$a+b$$ holds");
     expect(backslashMathToDollars("x \\[\n a^2 \n\\] y")).toBe("x \n\n$$\na^2\n$$\n\n y");
   });
+  it("a standalone \\[ \\] keeps its list indent and blockquote prefix, same length", () => {
+    expect(backslashMathToDollars("1. Step:\n   \\[\n   x = 1\n   \\]\n2. Next")).toBe("1. Step:\n   $$\n   x = 1\n   $$\n2. Next");
+    expect(backslashMathToDollars("> \\[\n> a^2\n> \\]")).toBe("> $$\n> a^2\n> $$");
+  });
+  it("a stray opener does not pair across a blank line, and an unclosed one is fast", () => {
+    expect(backslashMathToDollars("group with \\( only\n\nlater \\(x\\)")).toBe("group with \\( only\n\nlater $$x$$");
+    expect(backslashMathToDollars("a ` b\n\n\\(x\\)")).toBe("a ` b\n\n$$x$$");
+    const t = Date.now();
+    backslashMathToDollars("\\(".repeat(50000));
+    expect(Date.now() - t).toBeLessThan(500);
+  });
   it("leaves code spans, fences and escaped backslashes literal", () => {
     for (const t of ["`\\(a\\)`", "``x \\[a\\] ``", "```\n\\(a\\)\n```", "~~~tex\n\\[a\\]\n~~~", "\\\\(a\\\\)", "plain"]) expect(backslashMathToDollars(t)).toBe(t);
     expect(backslashMathToDollars("```\n\\(a\\)\n```\n\\(b\\)")).toBe("```\n\\(a\\)\n```\n$$b$$");

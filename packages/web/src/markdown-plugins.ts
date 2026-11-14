@@ -23,17 +23,32 @@ export function markdownNeeds(text: string): Record<Need, boolean> {
 }
 
 // Code first (fence to its end or the end of text, then a span of equal backtick runs), so a \( or \[ inside code is skipped.
-const BACKSLASH_MATH = /((?:^|\n)[ \t]{0,3}(`{3,}|~{3,})[^\n]*(?:\n[\s\S]*?(?:\n[ \t]{0,3}\2[`~]*[ \t]*(?=\n|$)|$)|$))|(`+)[\s\S]*?\3|(?<!\\)\\\(([\s\S]*?)(?<!\\)\\\)|(?<!\\)\\\[([\s\S]*?)(?<!\\)\\\]/g;
+// A body never crosses a blank line and has at most 2000 characters (BODY): a stray opener does not pair with a later closer, and an unclosed one costs a bounded scan.
+const BODY = String.raw`(?:(?!\n[ \t>]*\n)[\s\S]){0,2000}?`;
+const BACKSLASH_MATH = new RegExp(
+  String.raw`((?:^|\n)[ \t]{0,3}(` + "`{3,}|~{3,}" + String.raw`)[^\n]*(?:\n[\s\S]*?(?:\n[ \t]{0,3}\2[` + "`~" + String.raw`]*[ \t]*(?=\n|$)|$)|$))` +
+    String.raw`|(` + "`+" + String.raw`)${BODY}\3` +
+    String.raw`|(?<!\\)\\\((${BODY})(?<!\\)\\\)` +
+    String.raw`|(?<!\\)\\\[(${BODY})(?<!\\)\\\]`,
+  "g",
+);
 
 /**
- * `\( x \)` and `\[ x \]` as `$$ x $$` (inline) and a `$$` block, outside code. Markdown eats the backslash of `\(` as an escape,
- * so remark-math never sees these forms; the source is rewritten before the parser runs. Pure, so a test can pin it.
+ * `\( x \)` and `\[ x \]` as `$$ x $$`, outside code. Markdown eats the backslash of `\(` as an escape, so remark-math never
+ * sees these forms; the source is rewritten before the parser runs. A `\[` and `\]` that each stand alone on their line are
+ * replaced in place (same length, list indent and `>` prefix kept); a `\[ x \]` inside a line becomes a `$$` block of its own.
+ * Pure, so a test can pin it.
  */
 export function backslashMathToDollars(text: string): string {
   if (!text.includes("\\")) return text;
-  return text.replace(BACKSLASH_MATH, (m, fence, _f, _t, inline, block) =>
-    fence !== undefined ? m : inline !== undefined ? `$$${inline}$$` : block !== undefined ? `\n\n$$\n${String(block).trim()}\n$$\n\n` : m,
-  );
+  return text.replace(BACKSLASH_MATH, (m, fence, _f, _t, inline, block, offset: number) => {
+    if (fence !== undefined) return m;
+    if (inline !== undefined) return `$$${inline}$$`;
+    if (block === undefined) return m;
+    const before = text.slice(text.lastIndexOf("\n", offset - 1) + 1, offset);
+    if (/^[ \t>]*$/.test(before) && /^[ \t]*\n/.test(block) && /\n[ \t>]*$/.test(block)) return `$$${block}$$`;
+    return `\n\n$$\n${String(block).trim()}\n$$\n\n`;
+  });
 }
 
 type Pluggable = MathPlugin["remarkPlugin"];
