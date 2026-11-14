@@ -112,7 +112,8 @@ export function connect(opts: {
   }
 
   /** Messages received and not yet applied. Each socket message is its own task, so applying them there renders the page once per event of a replay. */
-  let queue: string[] = [];
+  const utf8 = new TextEncoder();
+  let queue: { sock: WebSocket; data: string }[] = [];
   let head = 0;
   let drainScheduled = false;
   // A MessageChannel task: setTimeout is clamped to 4 ms and later, requestAnimationFrame stops while the page is hidden.
@@ -168,7 +169,9 @@ export function connect(opts: {
       guard("event handler", () => (opts.onEvents ? opts.onEvents(batch) : batch.forEach((e) => opts.onEvent?.(e))));
     };
     while (head < queue.length) {
-      const data = queue[head++];
+      const { sock, data } = queue[head++]!;
+      // A socket that closed or was replaced: its resync is void, the next one resubscribes from the last applied seq.
+      if (sock !== ws || sockDown) continue;
       const t0 = clock();
       let parsed: ServerMessage;
       try {
@@ -180,9 +183,10 @@ export function connect(opts: {
       const m = parsed;
       const t1 = clock();
       since.msgs++;
-      since.bytes += data.length;
+      const bytes = utf8.encode(data).byteLength;
+      since.bytes += bytes;
       since.parseMs += t1 - t0;
-      stall.message(data.length, t1 - t0);
+      stall.message(bytes, t1 - t0);
       let settled = false;
       if (m.type === "event") events.push(m);
       else (flush(), guard("message handler", () => (settled = dispatch(m))));
@@ -223,7 +227,7 @@ export function connect(opts: {
     });
     sock.addEventListener("message", (ev) => {
       if (!current()) return;
-      queue.push(ev.data);
+      queue.push({ sock, data: ev.data });
       scheduleDrain();
     });
     // Node's WebSocket fires only error on a rejected upgrade, a browser error then close: handle the first, once.

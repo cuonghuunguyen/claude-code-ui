@@ -9,7 +9,7 @@ const WARN_AT_MS = 500;
 /** Closed windows kept for the 30 s summary. */
 const KEEP_WINDOWS = 3;
 
-interface Window {
+interface StallWindow {
   start: number;
   lagMax: number;
   lagTotal: number;
@@ -33,17 +33,20 @@ export interface StallSeams {
   visible: () => boolean;
   PerformanceObserver?: { new (cb: (list: EntryList) => void): ObserverLike; supportedEntryTypes?: readonly string[] };
   warn: (line: string) => void;
+  /** The page became visible again (visibilitychange, pageshow, resume); returns the unsubscribe. The timer wait of a suspended page is not lag. */
+  onVisible?: (cb: () => void) => () => void;
 }
 
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
 
 export function createStallLog(seams: StallSeams) {
-  const fresh = (start: number): Window => ({ start, lagMax: 0, lagTotal: 0, longTasks: 0, longMax: 0, msgs: 0, bytes: 0, parseMs: 0 });
-  let current = fresh(seams.now());
-  const closed: Window[] = [];
+  const fresh = (start: number): StallWindow => ({ start, lagMax: 0, lagTotal: 0, longTasks: 0, longMax: 0, msgs: 0, bytes: 0, parseMs: 0 });
+  let current: StallWindow = fresh(seams.now());
+  const closed: StallWindow[] = [];
   let last = seams.now();
   let timer: unknown;
   let observer: ObserverLike | undefined;
+  let offVisible: (() => void) | undefined;
   let longTasks = false;
 
   const roll = (now: number) => {
@@ -77,6 +80,7 @@ export function createStallLog(seams: StallSeams) {
       last = seams.now();
       current = fresh(last);
       timer = seams.setInterval(tick, TICK_MS);
+      offVisible = seams.onVisible?.(() => (last = seams.now()));
       const PO = seams.PerformanceObserver;
       if (PO?.supportedEntryTypes?.includes("longtask")) {
         try {
@@ -96,6 +100,8 @@ export function createStallLog(seams: StallSeams) {
     stop() {
       if (timer !== undefined) seams.clearInterval(timer);
       timer = undefined;
+      offVisible?.();
+      offVisible = undefined;
       observer?.disconnect();
       observer = undefined;
     },
@@ -121,4 +127,12 @@ export const stallLog = createStallLog({
   visible: () => typeof document === "undefined" || document.visibilityState === "visible",
   PerformanceObserver: typeof PerformanceObserver === "undefined" ? undefined : (PerformanceObserver as never),
   warn: (line) => console.warn(line),
+  onVisible: (cb) => {
+    if (typeof document === "undefined") return () => {};
+    const onVis = () => document.visibilityState === "visible" && cb();
+    document.addEventListener("visibilitychange", onVis);
+    document.addEventListener("resume", cb);
+    window.addEventListener("pageshow", cb);
+    return () => (document.removeEventListener("visibilitychange", onVis), document.removeEventListener("resume", cb), window.removeEventListener("pageshow", cb));
+  },
 });

@@ -18,7 +18,9 @@ function rig(over: Partial<StallSeams> & { longtask?: boolean } = {}) {
     }
     disconnect() {}
   }
+  let visibleCb: (() => void) | undefined;
   const log = createStallLog({
+    onVisible: (cb) => ((visibleCb = cb), () => (visibleCb = undefined)),
     now: () => t,
     setInterval: (f) => ((tickFn = f), 1 as never),
     clearInterval: () => (tickFn = undefined),
@@ -34,8 +36,11 @@ function rig(over: Partial<StallSeams> & { longtask?: boolean } = {}) {
     hide: (v: boolean) => (visible = !v),
     /** The timer fires `ms` after the previous tick. */
     tick: (ms: number) => ((t += ms), tickFn?.()),
+    advance: (ms: number) => void (t += ms),
     longtask: (...d: number[]) => entries.cb?.({ getEntries: () => d.map((duration) => ({ duration })) }),
     running: () => tickFn !== undefined,
+    /** The page became visible again (visibilitychange, pageshow, resume). */
+    becomeVisible: () => visibleCb?.(),
   };
 }
 
@@ -107,6 +112,30 @@ describe("stall log", () => {
     r.log.start();
     expect(r.running()).toBe(true);
     r.log.stop();
+    expect(r.running()).toBe(false);
+  });
+
+  it("a page resumed after a suspension does not count the suspension as lag", () => {
+    const r = rig();
+    r.log.start();
+    r.tick(250);
+    r.hide(true); // suspended: no tick runs
+    r.tick(0);
+    r.hide(false);
+    // 60 s pass without a tick, then the page is visible again.
+    r.advance(60_000);
+    r.becomeVisible();
+    r.tick(250);
+    expect(r.log.lag30().max).toBeLessThan(1000);
+    for (let i = 0; i < 40; i++) r.tick(250);
+    expect(r.warn).not.toHaveBeenCalled();
+  });
+
+  it("stop ends the visibility listener", () => {
+    const r = rig();
+    r.log.start();
+    r.log.stop();
+    r.becomeVisible();
     expect(r.running()).toBe(false);
   });
 });

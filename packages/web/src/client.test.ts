@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type WebSocket as ServerSocket } from "ws";
 import { backoffMs, connect, type ConnectionStatus } from "./client.ts";
 
@@ -243,6 +243,8 @@ describe("redial on wake", () => {
   });
 });
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 describe("batched apply of received messages (GH-760)", () => {
   const ev = (seq: number) => ({ type: "event", sessionId: "s", seq, part: { type: "text", id: `p${seq}`, text: "x" } });
   /** A daemon whose first socket runs `onSocket`; every message the client sends is kept. */
@@ -350,5 +352,56 @@ describe("batched apply of received messages (GH-760)", () => {
     expect(reported[0][0]).toBeGreaterThan(20);
     c.close();
     d.stop();
+  });
+
+  it("messages queued from a socket that closed are not applied, not even after the next socket opened", async () => {
+    type Listener = (ev: { data?: string; type: string; code?: number }) => void;
+    const made: FakeSocket[] = [];
+    class FakeSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+      readyState = 0;
+      listeners = new Map<string, Listener[]>();
+      constructor() {
+        made.push(this);
+      }
+      addEventListener(t: string, l: Listener) {
+        this.listeners.set(t, [...(this.listeners.get(t) ?? []), l]);
+      }
+      fire(type: string, ev: object = {}) {
+        this.listeners.get(type)?.forEach((l) => l({ type, ...ev }));
+      }
+      send() {}
+      close() {
+        this.readyState = 3;
+      }
+    }
+    vi.stubGlobal("WebSocket", FakeSocket);
+    try {
+      const applied: number[] = [];
+      let opens = 0;
+      const c = connect({ url: "ws://fake", token: "t", wakeEvents: noWake, onOpen: () => opens++, onEvents: (es) => applied.push(...es.map((e) => e.seq)) });
+      const first = made[0]!;
+      first.readyState = 1;
+      first.fire("open");
+      // A burst is queued, then the socket closes before the drain task runs.
+      for (let i = 1; i <= 50; i++) first.fire("message", { data: JSON.stringify(ev(i)) });
+      first.readyState = 3;
+      first.fire("close", { code: 1006 });
+      await until(() => made.length === 2);
+      const second = made[1]!;
+      second.readyState = 1;
+      second.fire("open");
+      second.fire("message", { data: JSON.stringify(ev(51)) });
+      await until(() => applied.length > 0);
+      await sleep(50);
+      expect(opens).toBe(2);
+      expect(applied).toEqual([51]);
+      c.close();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
