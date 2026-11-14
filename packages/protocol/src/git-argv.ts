@@ -28,3 +28,16 @@ export const tagDeleteRemoteArgv = (remote: string, name: string, hash: string):
   "--delete",
   `refs/tags/${name}`,
 ];
+
+/** Edit Commit Message of HEAD's commit: message only (`--only`: staged changes stay out), also for an empty commit. */
+export const rewordAmendArgv = (message: string): string[] => ["commit", "--amend", "--only", "--allow-empty", "-m", message];
+
+/** Edit Commit Message of an older commit: an empty `amend! <hash>` commit carrying the new message, then an autosquash rebase that folds it in. `parent` absent: root commit. */
+export const rewordRebaseArgv = (hash: string, message: string, parent?: string): string[][] => [
+  ["commit", "--only", "--allow-empty", "--no-verify", "-m", `amend! ${hash}\n\n${message}`],
+  ["-c", "sequence.editor=:", "rebase", "-i", "--autosquash", "--autostash", ...(parent ? [parent] : ["--root"])],
+];
+
+/** Both modes as a list of commands (what the dialog shows, one line each). */
+export const rewordArgv = (mode: "amend" | "rebase", hash: string, message: string, parent?: string): string[][] =>
+  mode === "amend" ? [rewordAmendArgv(message)] : rewordRebaseArgv(hash, message, parent);

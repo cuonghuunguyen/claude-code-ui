@@ -340,7 +340,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Annotate (GH-564): `git blame` of the working-tree file (`path` relative to the repository top), so uncommitted lines come back `null`. Reply GitBlameResult. `too_large` (with `size`) over the editor read limit (2 MiB), `not_found`, `not_a_file`, `cwd_not_allowed`, `bad_request` bad path. */
   | { type: "git.blame"; cwd: string; path: string; exact?: true }
   /** Changes tab git modes (docs/spec.md "Layout"): the working tree (staged, unstaged, untracked) against HEAD (`base: "head"`) or against the merge base of HEAD and `ref` (`base: "branch"`; full ref under refs/heads or refs/remotes; omitted: the default branch). Reply GitDiffResult. */
-  | { type: "git.diff"; cwd: string; base: "head" | "branch"; ref?: string; exact?: true }
+  | { type: "git.diff"; cwd: string; base: "head" | "branch" | "commit"; ref?: string; exact?: true }
   /** Graph tab Fetch: `git fetch --all` in `cwd`'s repository (docs/spec.md "Layout", Graph tab). Reply GitRemoteResult; `remote` null outside a git work tree. */
   | { type: "git.fetch"; cwd: string; exact?: true; /** Fetch only the default branch's remote with `--prune` (Clean up). */ defaultRemote?: boolean }
   /** Branch menu data (docs/spec.md "Layout", Graph tab): where push/pull go and the exact git argv of each; `ref` a full refs/heads/ name. Reply GitBranchResult. */
@@ -383,6 +383,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.commitMenu"; cwd: string; hash: string; hard?: true; exact?: true }
   /** Commit menu Undo Commit, Revert Commit, Cherry-Pick: run the `argv` `git.commitMenu` showed against the shown HEAD (`headRef`, `headHash`); a change is `stale`. A conflict is a success whose reply carries `operation`. Reply GitWriteResult. */
   | { type: "git.undoCommit" | "git.revert" | "git.cherryPick"; cwd: string; hash: string; headRef: string; headHash: string; argv: string[]; exact?: true }
+  /** Graph Edit Commit Message: `argv` = `rewordArgv(mode, hash, message, parent)` as shown, against the shown HEAD (`headRef`, `headHash`); a change is `stale`. A signing commit (`commit.gpgSign`) ends at a short timeout or on `git.rewordCancel` with "signing did not finish". Reply GitWriteResult. */
+  | { type: "git.reword"; cwd: string; hash: string; message: string; headRef: string; headHash: string; argv: string[][]; exact?: true }
+  /** Aborts this connection's running `git.reword` (also on connection close); the repository is put back as before. */
+  | { type: "git.rewordCancel"; cwd: string; exact?: true }
   /** Commit menu Reset Current Branch to Here: `mode` and `argv` as shown; `dirty` (required for `hard`): the `git.commitMenu` fingerprint of the files the reset would lose. Reply GitWriteResult. */
   | { type: "git.reset"; cwd: string; hash: string; mode: "soft" | "mixed" | "hard"; headRef: string; headHash: string; argv: string[]; dirty?: string; exact?: true }
   /** The unfinished git operation of `cwd`'s repository (the Changes tab banner in Session mode, which has no `git.diff`). Reply GitOperationResult. */
@@ -973,7 +977,13 @@ export type GitCommitMenu = {
   lose?: string[];
   loseCount?: number;
   dirty?: string;
-  why?: { undo?: string; revert?: string; cherryPick?: string; reset?: string };
+  /** First parent, full hash; absent on a root commit. */
+  parent?: string;
+  /** Edit Commit Message: `amend` (HEAD's commit) or `rebase` (an older commit of the current branch). Absent: unavailable, `why.reword` says why. */
+  reword?: "amend" | "rebase";
+  /** `commit.gpgSign` is on: Edit Commit Message signs, and may wait for a passphrase. */
+  signs?: boolean;
+  why?: { undo?: string; revert?: string; cherryPick?: string; reset?: string; reword?: string };
 };
 /** `commitMenu` null outside a git work tree. */
 export type GitCommitMenuResult = { commitMenu: GitCommitMenu | null };
