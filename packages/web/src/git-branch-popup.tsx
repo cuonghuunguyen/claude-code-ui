@@ -62,6 +62,8 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
   const lastPos = useRef<string | undefined>(undefined);
   // Hover opens the actions without moving focus, so typing stays in the search box.
   const hovered = useRef(false);
+  // GH-787: below md the actions replace the list and the box (display:none), so focus the box after the list is back, not in the same handler.
+  const refocus = useRef(false);
   const needle = q.trim();
   const rows = useMemo<Row[]>(() => {
     const ok = (l: string) => !needle || l.toLowerCase().includes(needle.toLowerCase());
@@ -96,6 +98,9 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
     if (open) document.getElementById(`bp-${cur?.id}`)?.scrollIntoView?.({ block: "nearest" });
   }, [cur?.id, open]);
   useEffect(() => {
+    if (!sub && refocus.current) (refocus.current = false), input.current?.focus();
+  }, [sub]);
+  useEffect(() => {
     if (sub && !hovered.current) subEl.current?.querySelector<HTMLElement>("[role=menuitem]:not([aria-disabled])")?.focus();
   }, [sub]);
   const onRowMove = (e: React.PointerEvent, r: Row) => {
@@ -104,6 +109,7 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
     lastPos.current = pos;
     if (e.pointerType === "mouse" && moved && sub !== refOf(r)) (hovered.current = true), setSub(refOf(r));
   };
+  const backToList = () => (refocus.current = true, setSub(undefined));
   const close = () => (setOpen(false), setQ(""), setSubRaw(undefined), setPick(undefined), setPickNote(undefined));
   // Picked branch: Checkout runs at once; Merge and Rebase read the branch first (their command and the reason one is blocked).
   const pickBranch = (ref: string) => {
@@ -143,7 +149,7 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
     if (o) return setOpen(true);
     // Esc: first the submenu, then the query, then the popup. An outside press or a focus loss closes at once.
     if (d?.reason === "escape-key") {
-      if (sub) return (setSub(undefined), input.current?.focus());
+      if (sub) return backToList();
       if (q) return setQ("");
     }
     close();
@@ -182,9 +188,7 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
   const onSubKey = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowLeft") {
       e.preventDefault();
-      setSub(undefined);
-      input.current?.focus();
-      return;
+      return backToList();
     }
     const d = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
     if (!d) return;
@@ -229,7 +233,7 @@ export function BranchPopup({ client, cwd, exact = false, repoName, busy, onRun,
               </div>
               {sub && subRow && (
                 <div ref={subEl} role="menu" aria-label={subRow.label} onKeyDown={onSubKey} className="flex w-72 max-w-full flex-1 flex-col overflow-y-auto md:w-60 md:flex-none md:border-l md:pl-1" data-testid="branch-popup-sub">
-                  <button type="button" onClick={() => (setSub(undefined), input.current?.focus())} className="flex h-11 shrink-0 items-center rounded-md px-2 text-left text-sm hover:bg-secondary md:hidden">‹ {t("files.graph.branch")}</button>
+                  <button type="button" onClick={backToList} className="flex h-11 shrink-0 items-center rounded-md px-2 text-left text-sm hover:bg-secondary md:hidden">‹ {t("files.graph.branch")}</button>
                   <BranchActions key={sub} client={client} cwd={cwd} exact={exact} gitRef={sub} host={subHost} Item={PopItem} Sep={PopSep} />
                 </div>
               )}
