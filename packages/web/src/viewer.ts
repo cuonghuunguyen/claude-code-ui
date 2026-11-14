@@ -90,6 +90,8 @@ export const BackgroundShellContext = createContext<((toolUseId: string) => Prom
 export const AllowDeniedContext = createContext<((toolUseId: string) => Promise<unknown>) | undefined>(undefined);
 /** Always allow (GH-756): saves the allow rule of that denied call for the scope, then retries it; absent = no button. */
 export const AlwaysAllowDeniedContext = createContext<((toolUseId: string, scope: "session" | "local") => Promise<unknown>) | undefined>(undefined);
+/** True inside the steps of an inline task run (GH-791): its denied steps cannot be retried. Subagent steps keep the buttons. */
+export const InlineStepContext = createContext(false);
 /** The local settings file Always allow "This project" writes (asked when the panel opens); absent = the generic hint. */
 export const LocalSettingsFileContext = createContext<(() => Promise<string>) | undefined>(undefined);
 export const ViewerContext = createContext<OpenViewer | undefined>(undefined);

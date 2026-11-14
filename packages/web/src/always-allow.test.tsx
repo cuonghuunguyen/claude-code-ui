@@ -53,12 +53,26 @@ it("shows Always allow next to Allow and retry, only with a handler, on a classi
   expect(q("allow-and-retry")?.textContent).toBe("Allowed once");
 });
 
-it("shows no Allow and retry or Always allow on a step inside an inline task, only the denial reason (GH-791)", async () => {
+it("a denied step inside an inline task shows the reason but no Allow and retry or Always allow; one inside a normal subagent keeps both (GH-791)", async () => {
   const h = async () => {};
-  await render(call({ parentId: "inline-1" }), h);
+  const inlineCall = { type: "tool_call", id: "i1", toolUseId: "i1", tool: "mcp__claude-ui__inline_task", input: { text: "x" }, status: "running" } as ToolCall;
+  const step = call({ id: "s1", toolUseId: "s1", parentId: "i1" });
+  await act(async () =>
+    root.render(
+      <AllowDeniedContext value={h}>
+        <AlwaysAllowDeniedContext value={async () => {}}>
+          <ToolCard call={inlineCall} awaiting run={{ steps: <ToolCard call={step} />, stepCount: 1, hasParts: true }} />
+        </AlwaysAllowDeniedContext>
+      </AllowDeniedContext>,
+    ),
+  );
+  expect(el.textContent).toContain("[Git Destructive]");
   expect(q("allow-and-retry")).toBeNull();
   expect(q("always-allow")).toBeNull();
-  expect(el.textContent).toContain("[Git Destructive]");
+  // The same step under a subagent (parentId, no inline run around it).
+  await render(call({ parentId: "agent-1" }), h);
+  expect(q("allow-and-retry")).not.toBeNull();
+  expect(q("always-allow")).not.toBeNull();
 });
 
 it("opens an inline panel with the exact rule, and Cancel closes it", async () => {

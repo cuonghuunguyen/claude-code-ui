@@ -22,7 +22,7 @@ import { relPath } from "./paths.ts";
 import { specOf } from "./keymap.ts";
 import { keyText } from "./shortcuts.ts";
 import { fileSize } from "./files.ts";
-import { AllowDeniedContext, AlwaysAllowDeniedContext, BackgroundShellContext, LocalSettingsFileContext, PlanTabContext, ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
+import { AllowDeniedContext, AlwaysAllowDeniedContext, BackgroundShellContext, InlineStepContext, LocalSettingsFileContext, PlanTabContext, ViewerContext, cardTarget, type OpenViewer, type ViewerTarget } from "./viewer.ts";
 import { ArtifactLinkMenu, ArtifactPreview, usePreviewOpen } from "./artifact-preview.tsx";
 import { ARTIFACT_TOOLS, artifactPreviewable, artifactSummary, artifactTitle, claudeUrl, diffStats, editFiles, filePath, inlineTaskTool, isClaudeUrl, readRange, terminalResult, terminalSummary, terminalTool, todoItems, todoSummary, toolSummary } from "./tools.ts";
 import { t as tr, useT } from "./i18n.ts";
@@ -116,7 +116,8 @@ function PlainToolCard({ call, result, awaiting, plan }: { call: ToolCall; resul
   const allowDenied = use(AllowDeniedContext);
   const autoDenied = call.status === "denied" && call.denial?.by === "classifier" ? call.denial : undefined;
   // A step inside an inline task (GH-791): its call is not in the main session and the run takes no follow-up message, so no retry.
-  const canAllow = !!allowDenied && !!autoDenied && !call.parentId;
+  const inlineStep = use(InlineStepContext);
+  const canAllow = !!allowDenied && !!autoDenied && !inlineStep;
   const [allowing, setAllowing] = useState<{ error?: string }>();
   // Always allow (GH-756): the inline panel, its pending scope and last error.
   const alwaysAllow = use(AlwaysAllowDeniedContext);
