@@ -1,6 +1,6 @@
 import { cjk } from "@streamdown/cjk";
 import type { code as codePlugin } from "@streamdown/code";
-import type { math as mathPlugin } from "@streamdown/math";
+import type { math as mathPlugin, MathPlugin } from "@streamdown/math";
 import type { mermaid as mermaidPlugin } from "@streamdown/mermaid";
 import { useEffect, useMemo, useState } from "react";
 
@@ -14,7 +14,7 @@ type Need = "code" | "math" | "mermaid";
 
 const FENCE = /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})/;
 const MERMAID_FENCE = /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})[ \t]*mermaid/i;
-// The math plugin has singleDollarTextMath off: only $$ blocks (and the \( \[ forms) are math, a lone $ is text.
+// The math plugin has singleDollarTextMath off: only $$ blocks and the \( \) \[ \] forms are math, a lone $ is text.
 const MATH = /\$\$|\\\(|\\\[|\\begin\{/;
 
 /** What `text` needs; pure, so a test can pin it. */
@@ -22,10 +22,99 @@ export function markdownNeeds(text: string): Record<Need, boolean> {
   return { code: FENCE.test(text), mermaid: MERMAID_FENCE.test(text), math: MATH.test(text) };
 }
 
+// Code first (fence to its end or the end of text, then a span of equal backtick runs), so a \( or \[ inside code is skipped.
+// A body never crosses a blank line and has at most 2000 characters (BODY): a stray opener does not pair with a later closer, and an unclosed one costs a bounded scan.
+const BODY = String.raw`(?:(?!\n[ \t>]*\n)[\s\S]){0,2000}?`;
+const BACKSLASH_MATH = new RegExp(
+  String.raw`((?:^|\n)[ \t]{0,3}(` + "`{3,}|~{3,}" + String.raw`)[^\n]*(?:\n[\s\S]*?(?:\n[ \t]{0,3}\2[` + "`~" + String.raw`]*[ \t]*(?=\n|$)|$)|$))` +
+    String.raw`|(` + "`+" + String.raw`)${BODY}\3` +
+    String.raw`|(?<!\\)\\\((${BODY})(?<!\\)\\\)` +
+    String.raw`|(?<!\\)\\\[(${BODY})(?<!\\)\\\]`,
+  "g",
+);
+
+const LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]/;
+const INDENTED = /^(?: {4}|\t)/;
+
+/** [start, end) offsets of indented code blocks: 4+ spaces or a tab after a blank line, not a list item's continuation. */
+function indentedCodeRanges(text: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  let pos = 0;
+  let prevBlank = true;
+  let inList = false;
+  let open: [number, number] | undefined;
+  for (const line of text.split("\n")) {
+    const end = pos + line.length;
+    if (!line.trim()) prevBlank = true;
+    else {
+      if (open && INDENTED.test(line)) open[1] = end;
+      else {
+        open = undefined;
+        if (LIST_ITEM.test(line)) inList = true;
+        else if (!/^[ \t]/.test(line)) inList = false;
+        if (prevBlank && !inList && INDENTED.test(line)) ranges.push((open = [pos, end]));
+      }
+      prevBlank = false;
+    }
+    pos = end + 1;
+  }
+  return ranges;
+}
+
+/** Binary search in sorted, disjoint ranges. */
+function inRanges(ranges: Array<[number, number]>, at: number): boolean {
+  let lo = 0;
+  let hi = ranges.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (at < ranges[mid][0]) hi = mid - 1;
+    else if (at >= ranges[mid][1]) lo = mid + 1;
+    else return true;
+  }
+  return false;
+}
+
+/**
+ * `\( x \)` and `\[ x \]` as `$$ x $$`, outside code (fences, code spans, indented code). Markdown eats the backslash of `\(`
+ * as an escape, so remark-math never sees these forms; the source is rewritten before the parser runs. A `\[` and `\]` that
+ * each stand alone on their line are replaced in place (same length, list indent and `>` prefix kept); in a table row, list item or quote `\[ x \]`
+ * is inline math (a block would split the row, list or quote); elsewhere in a line it becomes a `$$` block of its own. Pure, so a test can pin it.
+ */
+export function backslashMathToDollars(text: string): string {
+  if (!text.includes("\\")) return text;
+  const code = indentedCodeRanges(text);
+  return text.replace(BACKSLASH_MATH, (m, fence, _f, _t, inline, block, offset: number) => {
+    if (fence !== undefined || inRanges(code, offset)) return m;
+    if (inline !== undefined) return `$$${inline}$$`;
+    if (block === undefined) return m;
+    const before = text.slice(text.lastIndexOf("\n", offset - 1) + 1, offset);
+    // Standalone: only blanks or `>` before `\[`, a line end after it, only blanks or `>` before `\]`, a line end after it.
+    const after = text.slice(offset + m.length, offset + m.length + 200);
+    if (/^[ \t>]*$/.test(before) && /^[ \t]*\n/.test(block) && /\n[ \t>]*$/.test(block) && /^[ \t]*(?:\r?\n|$)/.test(after)) return `$$${block}$$`;
+    if (/^\s*(?:\||>|[-*+][ \t]|\d{1,9}[.)][ \t])/.test(before)) return `$$${String(block).replace(/\s*\n\s*/g, " ")}$$`;
+    return `\n\n$$\n${String(block).trim()}\n$$\n\n`;
+  });
+}
+
+type Pluggable = MathPlugin["remarkPlugin"];
+type Processor = { parser?: (doc: string, file: unknown) => unknown };
+type RemarkFn = (this: Processor, options?: unknown) => void;
+
+/** The math plugin with `\( \)` and `\[ \]` as math delimiters too. */
+function withBackslashDelimiters(base: typeof mathPlugin): typeof mathPlugin {
+  const [attach, options] = base.remarkPlugin as [RemarkFn, unknown];
+  function remarkMathBackslash(this: Processor) {
+    const parse = this.parser;
+    if (parse) this.parser = (doc, file) => parse(backslashMathToDollars(doc), file);
+    attach.call(this, options);
+  }
+  return { ...base, remarkPlugin: remarkMathBackslash as Pluggable };
+}
+
 const loaders: { [K in Need]: () => Promise<NonNullable<MarkdownPlugins[K]>> } = {
   code: () => import("@streamdown/code").then((m) => m.code),
   // The KaTeX stylesheet comes with the plugin: without it the MathML copy shows beside the formula and the fonts are missing.
-  math: () => Promise.all([import("katex/dist/katex.min.css"), import("@streamdown/math")]).then(([, m]) => m.math),
+  math: () => Promise.all([import("katex/dist/katex.min.css"), import("@streamdown/math")]).then(([, m]) => withBackslashDelimiters(m.math)),
   mermaid: () => import("@streamdown/mermaid").then((m) => m.mermaid),
 };
 const loaded: { [K in Need]?: NonNullable<MarkdownPlugins[K]> } = {};

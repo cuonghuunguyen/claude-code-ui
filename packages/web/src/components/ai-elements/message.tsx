@@ -31,7 +31,7 @@ import { useAddonFenceRenderers } from "../../addon-render.tsx";
 import { VisualizeContext, VisualizeFence } from "../../visualize-block.tsx";
 import { useDark } from "../../theme.ts";
 import { useT } from "../../i18n.ts";
-import { markdownNeeds, useMarkdownPlugins } from "../../markdown-plugins.ts";
+import { backslashMathToDollars, markdownNeeds, useMarkdownPlugins } from "../../markdown-plugins.ts";
 import { MathPlaceholderParagraph, MermaidPlaceholder } from "../../markdown-placeholders.tsx";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
@@ -363,6 +363,8 @@ export const MessageResponse = memo(
         plugins={renderers.length ? { ...streamdownPlugins, renderers } : streamdownPlugins}
         {...props}
         components={components}
+        // While the math plugin loads a `\[ \]` block is a `$$` block, so the placeholder paragraph reserves its height.
+        {...(waitMath && { children: backslashMathToDollars(text) })}
       />
     );
   },
