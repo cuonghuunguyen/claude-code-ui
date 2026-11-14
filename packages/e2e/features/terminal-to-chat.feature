@@ -33,8 +33,8 @@ Feature: Selected terminal output goes to the chat (GH-710)
   Scenario: C. A selection over the cap is truncated to its tail
     Given the viewport is 1440x900
     And I start a Haiku session with the terminal docked
-    When I type "seq 1 5000" in the terminal
-    And I select the terminal output from the last visible row to the top of its scrollback
+    When I run "seq 1 5000" in the terminal and wait for its output to end with "5000"
+    And I select the terminal output over the cap down to the last visible row
     Then the terminal selection menu offers "Add to chat"
     When I click Add to chat in the terminal selection menu
     Then the prompt box has the terminal output block for "Terminal 1" marked truncated
