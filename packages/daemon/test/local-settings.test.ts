@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { addLocalAllowRule, localSettingsFile } from "../src/local-settings.ts";
+import { addLocalAllowRule, localSettingsFile, localSettingsFiles } from "../src/local-settings.ts";
 
 let root: string;
 beforeEach(() => {
@@ -52,6 +52,32 @@ describe("localSettingsFile", () => {
     const dir = repo();
     mkdirSync(join(dir, "sub"));
     expect(await localSettingsFile(join(dir, "sub"), env({ uid: (process.getuid?.() ?? 0) + 1 }))).toBe(join(dir, "sub", ".claude", "settings.local.json"));
+  });
+});
+
+describe("localSettingsFiles", () => {
+  const f = (dir: string) => join(dir, ".claude", "settings.local.json");
+  it("is the root file alone for a cwd at the repository root", async () => {
+    const dir = repo();
+    expect(await localSettingsFiles(dir, env())).toEqual([f(dir)]);
+  });
+  it("adds the cwd's own file under the root file for a subdirectory", async () => {
+    const dir = repo();
+    mkdirSync(join(dir, "sub"));
+    expect(await localSettingsFiles(join(dir, "sub"), env())).toEqual([f(dir), f(join(dir, "sub"))]);
+  });
+  it("is the main checkout's file, then the worktree's own, for a worktree", async () => {
+    const dir = repo();
+    const wt = join(root, "wt");
+    git(dir, "worktree", "add", "-q", wt, "-b", "feature");
+    expect(await localSettingsFiles(wt, env())).toEqual([f(dir), f(wt)]);
+  });
+  it("is the own file alone outside a repository and on Windows", async () => {
+    const plain = join(root, "plain");
+    mkdirSync(plain);
+    expect(await localSettingsFiles(plain, env())).toEqual([f(plain)]);
+    const dir = repo();
+    expect(await localSettingsFiles(dir, env({ platform: "win32" }))).toEqual([f(dir)]);
   });
 });
 

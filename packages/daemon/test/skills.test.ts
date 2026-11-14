@@ -1,4 +1,5 @@
 // "Slash commands" dialog requests (docs/spec.md "Config dialogs"): live or config query, the skill state write and its confirmation.
+import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, statSync, symlinkSync, readdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,7 @@ import { createDaemon } from "../src/server.ts";
 import { fakeQuery } from "./fake-query.ts";
 import { canSymlink, needsLinks } from "./symlink-support.ts";
 
+const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", ...args], { cwd, stdio: "pipe" });
 const webRoot = mkdtempSync(join(tmpdir(), "web-"));
 const project = realpathSync(mkdtempSync(join(tmpdir(), "skills-")));
 const quiet = realpathSync(mkdtempSync(join(tmpdir(), "skills-quiet-")));
@@ -230,16 +232,69 @@ describe("skills.setState", () => {
     c.ws.close();
   });
 
-  it("a project nested in a git repo gets its own file, not the root's", async () => {
+  /** A real git repository under the allowed `project` root (a fresh one per test). */
+  const repoIn = (name: string) => {
+    const dir = join(project, name);
+    mkdirSync(dir, { recursive: true });
+    git(dir, "init", "-q");
+    git(dir, "commit", "-q", "--allow-empty", "-m", "init");
+    return dir;
+  };
+  const local = (dir: string) => join(dir, ".claude", "settings.local.json");
+  const overrides = (dir: string) => JSON.parse(readFileSync(local(dir), "utf8")).skillOverrides;
+
+  it.skipIf(process.platform === "win32")("a project nested in a git repo writes the repository root's file, the one the CLI reads", async () => {
     reset();
-    const sub = join(project, "sub");
-    mkdirSync(join(project, ".git"), { recursive: true });
+    const root = repoIn("nested-repo");
+    const sub = join(root, "sub");
     mkdirSync(sub, { recursive: true });
     const c = await client();
     behavior.showAfterReads = Infinity;
     await c.request({ type: "skills.setState", cwd: sub, name: "probe", state: "off" });
-    expect(JSON.parse(readFileSync(join(sub, ".claude", "settings.local.json"), "utf8"))).toEqual({ skillOverrides: { probe: "off" } });
-    expect(existsSync(join(project, ".claude", "settings.local.json"))).toBe(false);
+    expect(overrides(root)).toEqual({ probe: "off" });
+    expect(existsSync(local(sub))).toBe(false);
+    c.ws.close();
+  });
+
+  it.skipIf(process.platform === "win32")("a session in a linked worktree writes the main checkout's file, not the worktree's", async () => {
+    reset();
+    const main = repoIn("wt-main");
+    const wt = join(project, "wt-linked");
+    git(main, "worktree", "add", "-q", wt, "-b", "feature");
+    const c = await client();
+    behavior.showAfterReads = Infinity;
+    await c.request({ type: "skills.setState", cwd: wt, name: "probe", state: "off" });
+    expect(overrides(main)).toEqual({ probe: "off" });
+    expect(existsSync(local(wt))).toBe(false);
+    c.ws.close();
+  });
+
+  it.skipIf(process.platform === "win32")("state On removes the entry from the main checkout's file and from the worktree's own legacy file", async () => {
+    reset();
+    const main = repoIn("on-main");
+    const wt = join(project, "on-linked");
+    git(main, "worktree", "add", "-q", wt, "-b", "feature-on");
+    mkdirSync(join(main, ".claude"));
+    writeFileSync(local(main), JSON.stringify({ skillOverrides: { probe: "name-only", other: "off" } }));
+    mkdirSync(join(wt, ".claude"));
+    writeFileSync(local(wt), JSON.stringify({ skillOverrides: { probe: "off" }, keep: 1 }));
+    const c = await client();
+    behavior.showAfterReads = Infinity;
+    await c.request({ type: "skills.setState", cwd: wt, name: "probe", state: "on" });
+    expect(overrides(main)).toEqual({ other: "off" });
+    expect(JSON.parse(readFileSync(local(wt), "utf8"))).toEqual({ skillOverrides: {}, keep: 1 });
+    c.ws.close();
+  });
+
+  it.skipIf(process.platform === "win32")("a state other than On leaves the worktree's own file alone, and On creates no file there", async () => {
+    reset();
+    const main = repoIn("keep-main");
+    const wt = join(project, "keep-linked");
+    git(main, "worktree", "add", "-q", wt, "-b", "feature-keep");
+    const c = await client();
+    behavior.showAfterReads = Infinity;
+    await c.request({ type: "skills.setState", cwd: wt, name: "probe", state: "on" });
+    expect(existsSync(local(wt))).toBe(false);
     c.ws.close();
   });
 

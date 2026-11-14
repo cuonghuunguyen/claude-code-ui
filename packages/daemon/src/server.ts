@@ -1,7 +1,7 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
 import { planDirs } from "./plan-dirs.ts";
 import { DeniedRetryError } from "./denied-retry.ts";
-import { localSettingsFile } from "./local-settings.ts";
+import { localSettingsFile, localSettingsFiles } from "./local-settings.ts";
 import { closeSync, createReadStream, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
 import { homedir, hostname as osHostname, tmpdir } from "node:os";
@@ -417,6 +417,14 @@ export function createDaemon(opts: {
   // Account-wide, so not a session event: every connection gets each change.
   const plan = createPlanTracker({ onChange: (usage) => broadcast({ type: "plan_usage", usage }), read: () => queuedQuery(plan.refresh, opts.query), oauthToken: opts.oauthToken ?? (() => usesOauthToken(claudeEnv())), account: () => accountName() });
   /** Options of every session: settings changes are saved under its ID. */
+  // Local settings files per cwd. `Session.snapshot()` is synchronous, so `planDirs` reads this cache; async paths refresh or warm it.
+  const localFilesCache = new Map<string, string[]>();
+  const localFiles = async (cwd: string) => {
+    const files = await localSettingsFiles(cwd);
+    localFilesCache.set(cwd, files);
+    return files;
+  };
+  const cachedLocalFiles = (cwd: string) => localFilesCache.get(cwd) ?? [join(cwd, ".claude", "settings.local.json")];
   const sessionOpts = (initial: Partial<SessionSettings>) => ({
     ...initial,
     plan,
@@ -449,7 +457,7 @@ export function createDaemon(opts: {
     // The stale-turn check reads only the transcript's tail, not the chain and its subagent runs (GH-239).
     transcriptEnd: (id: string, cwd: string) => transcriptEnd(transcriptFile(projectsDir, transcriptCwd(id, cwd), id)),
     cliTurnRunning: (id: string) => cliTurnRunning(claudeDir, id),
-    planDirs: (cwd: string) => planDirs(claudeDir, cwd),
+    planDirs: (cwd: string) => planDirs(claudeDir, cwd, cachedLocalFiles(cwd)),
     // Only the fields this change set: a daemon on another port may have changed the others of the same session (GH-91).
     onSettings: (s: SessionSettings, id: string, fields: (keyof SessionSettings)[]) => saveSettings(() => settings.set(id, s, fields)),
     // /clear: the new session is listed; tabs that show the old one follow its session_cleared part.
@@ -1558,8 +1566,8 @@ export function createDaemon(opts: {
   }
 
   /** `permissions.defaultMode` of the Claude settings for `cwd`, else Settings `sessions.defaultMode`, when this daemon offers it for `model` (bypass needs the daemon flag, auto a model with support). */
-  const defaultModeFor = (cwd: string, model = "default") => {
-    const mode = readDefaultMode(claudeDir, cwd) ?? appSettings.get().sessions.defaultMode;
+  const defaultModeFor = async (cwd: string, model = "default") => {
+    const mode = readDefaultMode(claudeDir, cwd, await localFiles(cwd)) ?? appSettings.get().sessions.defaultMode;
     return permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto(model) }).find((m) => m === mode);
   };
 
@@ -2354,12 +2362,14 @@ export function createDaemon(opts: {
             return reply({ session: s.info() });
           }
           await modelList().catch(() => {});
+          // Before the removal check below: no await between that check and the new Session.
+          const permissionMode = await defaultModeFor(cwd, msg.model);
           // A removal may have started during the await: no live session in a deleted directory.
           if (isRemoving(cwd) || !existsSync(cwd)) return fail("worktree_removing", "This worktree is being removed");
           // The draft token of the new-session tab's uploads: the session gets their id, and with it their folder (one claim per token).
           const claimed = typeof msg.draft === "string" ? uploads.claim(msg.draft) : undefined;
           if (msg.draft !== undefined && !claimed) console.log("session.create: draft uploads not claimed");
-          const s = track(new Session(cwd, sessionOpts({ model: msg.model, permissionMode: defaultModeFor(cwd, msg.model) }), claimed ? { id: claimed } : undefined));
+          const s = track(new Session(cwd, sessionOpts({ model: msg.model, permissionMode }), claimed ? { id: claimed } : undefined));
           addProject(cwd);
           rememberEngine("claude");
           return reply({ session: s.info() });
@@ -2430,7 +2440,7 @@ export function createDaemon(opts: {
           const cwd = typeof msg.cwd === "string" && allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           await modelList().catch(() => {});
-          return reply({ mode: defaultModeFor(cwd) ?? "default" });
+          return reply({ mode: (await defaultModeFor(cwd)) ?? "default" });
         }
         case "session.commands": {
           const cwd = typeof msg.cwd === "string" && allowed(msg.cwd);
@@ -2457,6 +2467,9 @@ export function createDaemon(opts: {
             const s = await find(msg.sessionId, msg.background === true);
             const title = s && (await titleOf(s));
             if (!s || ws.readyState !== ws.OPEN) return;
+            // The snapshot below is synchronous and reads the plan folders: warm the local settings files first.
+            if (!localFilesCache.has(s.cwd)) await localFiles(s.cwd);
+            if (ws.readyState !== ws.OPEN) return;
             // Only an explicit open (link, notification) adds the project; a reconnect resubscribe must not bring back a removed one.
             if (msg.addProject === true) addProject(s.cwd);
             unsubscribes.get(s.id)?.();

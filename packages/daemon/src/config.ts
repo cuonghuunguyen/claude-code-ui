@@ -1,13 +1,15 @@
 // Config dialogs (docs/spec.md "Config dialogs", same as the VS Code extension): live operations as control requests on the
 // session's query or a config query held open per project cwd; config writes through the SDK-bundled Claude Code CLI.
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { createRequire } from "node:module";
 import { query as sdkQuery, type McpServerStatus, type Query } from "@anthropic-ai/claude-agent-sdk";
 import type { ClientMessage, ConfigKind, ConfigScope, McpAddConfig, McpServerInfo, SkillHandles, SkillRow, SkillsResult, SkillsSetStateResult } from "@claude-ui/protocol";
 import { redact } from "./plugins.ts";
 import { claudeEnv } from "./claude-env.ts";
 import { openQuery, THROWAWAY_TIMEOUT_MS } from "./session.ts";
-import { SettingsFileError, updateSettingsFile } from "./local-settings.ts";
+import { localSettingsFiles, SettingsFileError, updateSettingsFile } from "./local-settings.ts";
 
 /** One-shot CLI call in `cwd` (`stdin`: written to it, for `edit-skill-overrides`); resolves with its exit code and output (never rejects on a non-zero exit). */
 /** `timeoutMs`: default 30 s; `env`: replaces the active account's env (GH-627 token test); commands that fetch from git pass more. */
@@ -80,22 +82,34 @@ export const runCli: CliRunner = (args, cwd, stdin, timeoutMs = CLI_TIMEOUT_MS, 
   });
 
 /**
- * Sets `skillOverrides[name]` in the project's own `.claude/settings.local.json` (state On removes the entry, as the CLI does).
- * `claude edit-skill-overrides` writes the git root's file for a project nested in a repo, and has no option for the project's.
- * Other keys stay; temp file + rename, so a crash leaves the old file.
+ * Sets `skillOverrides[name]` in the local settings file Claude Code reads (the one `claude edit-skill-overrides` writes: repo root,
+ * main checkout for a worktree). State On removes the entry, as the CLI does; also from `<cwd>/.claude/settings.local.json` when that
+ * differs and holds it, as the CLI merges it under the root file. Other keys stay; temp file + rename, so a crash leaves the old file.
  */
-function writeSkillOverride(cwd: string, name: string, state: string) {
+async function writeSkillOverride(cwd: string, name: string, state: string) {
+  const [file, own] = await localSettingsFiles(cwd);
+  const set = (settings: Record<string, unknown>, remove: boolean) => {
+    const prev = settings.skillOverrides;
+    const overrides: Record<string, unknown> = prev && typeof prev === "object" && !Array.isArray(prev) ? { ...prev } : {};
+    if (remove) delete overrides[name];
+    else overrides[name] = state;
+    settings.skillOverrides = overrides;
+  };
   try {
-    updateSettingsFile(cwd, (settings) => {
-      const prev = settings.skillOverrides;
-      const overrides: Record<string, unknown> = prev && typeof prev === "object" && !Array.isArray(prev) ? { ...prev } : {};
-      if (state === "on") delete overrides[name];
-      else overrides[name] = state;
-      settings.skillOverrides = overrides;
-    });
+    updateSettingsFile(dirname(dirname(file!)), (settings) => set(settings, state === "on"));
+    if (state === "on" && own && hasOverride(own, name)) updateSettingsFile(dirname(dirname(own)), (settings) => set(settings, true));
   } catch (e) {
     if (e instanceof SettingsFileError) throw new ConfigError("cli_failed", e.message);
     throw e;
+  }
+}
+
+function hasOverride(file: string, name: string): boolean {
+  try {
+    const overrides = JSON.parse(readFileSync(file, "utf8"))?.skillOverrides;
+    return !!overrides && typeof overrides === "object" && name in overrides;
+  } catch {
+    return false;
   }
 }
 
@@ -290,7 +304,7 @@ export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; h
     // Only a row of this cwd's dialog: the CLI writes any name it gets. Its handles come from that row, not the client.
     const row = (await list()).find((s) => s.name === msg.name);
     if (!row) throw new ConfigError("bad_request", `"${msg.name.slice(0, 100)}" is not a skill of this project`);
-    writeSkillOverride(cwd, row.name, msg.state);
+    await writeSkillOverride(cwd, row.name, msg.state);
     // The running query re-reads its skills; the change is saved either way, so a failed reload only delays the confirmation.
     await call(() => q.reloadSkills()).catch(() => {});
     let rows: SkillRow[] = [];
