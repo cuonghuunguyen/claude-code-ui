@@ -130,12 +130,12 @@ import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscript
 import { isUnread, loadSeen, loadShownActivity, pruneShownActivity, saveSeen, saveShownActivity, seenNow, tabTitle, tabUnread, type Seen } from "./unread.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
-import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withArtifacts, withEdits, withoutResultText, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
+import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withArtifacts, withEdits, withoutResultText, lastTextOf, stepCountOf, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { FILE_LINK_PROPS, FileLinkContext, resolveBareName } from "./file-links.tsx";
 import { BackgroundShellContext, PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type OpenViewer, type ViewerState } from "./viewer.ts";
 import { ViewerDialog } from "./viewer-dialog.tsx";
 import { BackgroundButton, ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
-import { StopRunContext } from "./run-card.tsx";
+import { ForkCard, StopRunContext } from "./run-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
 import { useSendMode } from "./send-mode.ts";
 import { loadSignalOnly, saveSignalOnly, signalItems, useSignalOnly, type SignalItem } from "./signal.ts";
@@ -6759,16 +6759,24 @@ function PartView({ part, view }: { part: Part; view: SessionView }) {
         const res = resultOf(view, part);
         const out = res && inlineTaskResult(res.output);
         const shown = out?.text ? withoutResultText(items, out.text, out.truncated) : items;
-        const stepCount = items.reduce((n, i) => n + (i.kind === "context" ? i.calls.length : i.part.type === "tool_call" ? 1 : 0), 0);
+        const stepCount = stepCountOf(items);
         return <ToolCard call={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.toolUseId)} run={{ steps: <Timeline view={view} items={shown} />, stepCount, hasParts: items.length > 0 }} />;
       }
       return <ToolCard call={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.toolUseId)} plan={planOfPart(view, part)} />;
-    case "subagent":
+    case "subagent": {
+      if (part.agentType === "fork") {
+        // GH-718: a Fork run's steps are the child parts of its call; its result is its last text step, shown once in the card.
+        const items = timeline(view, part.id);
+        const text = part.status === "running" || part.status === "pending" ? "" : lastTextOf(items);
+        const shown = text ? withoutResultText(items, text) : items;
+        return <ForkCard part={part} text={text} awaiting={awaitingPermission(view).has(part.id)} run={{ steps: <Timeline view={view} items={shown} />, stepCount: stepCountOf(shown), hasParts: items.length > 0 }} onOpen={openRun && (() => openRun(part.id))} />;
+      }
       return (
         <SubagentGroup part={part} result={resultOf(view, part)} awaiting={awaitingPermission(view).has(part.id)} onOpen={openRun && (() => openRun(part.id))}>
           <Timeline view={view} parentId={part.id} />
         </SubagentGroup>
       );
+    }
     case "question":
       return <QuestionMarker part={part} />;
     case "turn_result":

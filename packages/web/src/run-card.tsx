@@ -2,7 +2,7 @@
 // Header: status, label, summary, `model · turns · tokens`, Stop while running. Body: a collapsed "N steps" disclosure (the run's child parts), the result, the changed files.
 import type { ToolStatus } from "@claude-ui/protocol";
 import type { ToolUIPart } from "ai";
-import { SquareIcon } from "lucide-react";
+import { SquareArrowOutUpRightIcon, SquareIcon } from "lucide-react";
 import { createContext, use, useState, type ReactNode } from "react";
 import { ToolChevron, ToolContent, ToolHeader, Tool } from "@/components/ai-elements/tool";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -14,6 +14,7 @@ import type { Part } from "@claude-ui/protocol";
 import type { ToolCall } from "./store.ts";
 import { t as tr, useT } from "./i18n.ts";
 import { useExpanded } from "./tool-card.tsx";
+import { duration } from "./agents.tsx";
 
 const STATE: Record<ToolStatus, ToolUIPart["state"]> = {
   pending: "input-streaming",
@@ -34,6 +35,8 @@ export type RunCardProps = {
   status: ToolStatus;
   model?: string;
   usage?: InlineTokens;
+  /** Run time, last in the meta (`3m 05s`). */
+  elapsed?: string;
   turns?: { used: number; max?: number };
   filesChanged?: string[];
   /** Shown in the body below the steps (the result text, notes). */
@@ -47,24 +50,27 @@ export type RunCardProps = {
   onCancel?: () => void | Promise<unknown>;
   /** A step waits for a permission answer: card and steps are held open. */
   awaiting?: boolean;
+  /** Opens the run's subagent view (Open button right of the header, as on a subagent group). */
+  onOpen?: () => void;
 };
 
 const FOCUS = "outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info";
 
 /** `model · 3/10 turns · 2.0k tokens`, what is known. */
-export function runMeta({ model, turns, usage }: Pick<RunCardProps, "model" | "turns" | "usage">): string {
+export function runMeta({ model, turns, usage, elapsed }: Pick<RunCardProps, "model" | "turns" | "usage" | "elapsed">): string {
   return [
     model,
     turns && (turns.max ? tr("session.run.turnsOf", { used: turns.used, max: turns.max }) : tr("session.run.turns", { count: turns.used })),
     usage && tr("session.run.tokens", { count: tokens(inlineTokens(usage)) }),
+    elapsed,
   ]
     .filter(Boolean)
     .join(" · ");
 }
 
-export function RunCard({ id, label, summary, status, model, usage, turns, filesChanged = [], result, steps, stepCount, stepsKept = true, onCancel, awaiting }: RunCardProps) {
+export function RunCard({ id, label, summary, status, model, usage, elapsed, turns, filesChanged = [], result, steps, stepCount, stepsKept = true, onCancel, awaiting, onOpen }: RunCardProps) {
   const t = useT();
-  const meta = runMeta({ model, turns, usage });
+  const meta = runMeta({ model, turns, usage, elapsed });
   const active = status === "running" || status === "pending";
   const [stop, setStop] = useState<{ pending: boolean; error?: string }>();
   const stepsOpen = useExpanded(`${id}:steps`, awaiting);
@@ -99,6 +105,18 @@ export function RunCard({ id, label, summary, status, model, usage, turns, files
             onClick={doStop}
           >
             <SquareIcon aria-hidden className="size-3.5" />
+          </button>
+        )}
+        {onOpen && (
+          <button
+            type="button"
+            data-testid="run-open"
+            aria-label={t("session.toolCard.openSubagentLabel", { description: summary })}
+            title={t("session.toolCard.openSubagent")}
+            className={cn("flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground pointer-coarse:size-11", FOCUS)}
+            onClick={onOpen}
+          >
+            <SquareArrowOutUpRightIcon aria-hidden className="size-4" />
           </button>
         )}
       </div>
@@ -199,6 +217,41 @@ export function InlineTaskCard({ call, result, awaiting, run }: { call: ToolCall
             </p>
           )}
         </>
+      }
+    />
+  );
+}
+
+type Subagent = Extract<Part, { type: "subagent" }>;
+
+/**
+ * A Fork run (a `subagent` part with `agentType: "fork"`, docs/spec.md "Fork runs (GH-718)") as a run card: the task, the status, the steps
+ * collapsed behind a count and the final result. `text`: the run's result text (the last text step, already left out of `run.steps`);
+ * shown once the run has ended.
+ */
+export function ForkCard({ part, awaiting, run, text, onOpen }: { part: Subagent; awaiting?: boolean; run: RunSteps; text?: string; onOpen?: () => void }) {
+  const t = useT();
+  const stop = use(StopRunContext);
+  const active = part.status === "running" || part.status === "pending";
+  return (
+    <RunCard
+      id={part.id}
+      label={t("session.run.fork")}
+      summary={part.description}
+      status={part.status}
+      stepCount={run.stepCount}
+      steps={run.steps}
+      stepsKept={run.hasParts || active}
+      awaiting={awaiting}
+      onCancel={stop && (() => stop(part.id))}
+      onOpen={onOpen}
+      elapsed={part.endedAt !== undefined ? duration(part.endedAt - part.startedAt) : undefined}
+      result={
+        !active && text ? (
+          <div data-testid="run-result" className="min-w-0 text-sm [overflow-wrap:anywhere]">
+            <MessageResponse>{text}</MessageResponse>
+          </div>
+        ) : undefined
       }
     />
   );

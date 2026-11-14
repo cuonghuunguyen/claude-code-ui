@@ -835,6 +835,12 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
     ],
   },
   {
+    id: "fork",
+    rows: [
+      { key: "enabled", kind: "switch" },
+    ],
+  },
+  {
     id: "usageLimit",
     rows: [
       { key: "autoContinue", kind: "switch" },
@@ -1054,6 +1060,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const chat = daemonGroup("chat");
   const terminalAccess = daemonGroup("terminalAccess");
   const inlineTask = daemonGroup("inlineTask");
+  const fork = daemonGroup("fork");
   const sessions = daemonGroup("sessions");
   const git = daemonGroup("git");
   const launcher = daemonGroup("launcher");
@@ -1096,6 +1103,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     ...(chat ? [{ id: "chat", title: sectionTitle(chat.id), category: "Sessions" as const, body: daemonSection(chat) }] : []),
     ...(terminalAccess ? [{ id: "terminalAccess", title: sectionTitle(terminalAccess.id), category: "Sessions" as const, body: daemonSection(terminalAccess) }] : []),
     ...(inlineTask ? [{ id: "inlineTask", title: sectionTitle(inlineTask.id), category: "Sessions" as const, body: daemonSection(inlineTask) }] : []),
+    ...(fork ? [{ id: "fork", title: sectionTitle(fork.id), category: "Sessions" as const, body: daemonSection(fork) }] : []),
     ...(usageLimit
       ? [
           {

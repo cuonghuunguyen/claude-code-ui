@@ -155,6 +155,24 @@ it("Focus prompt (Ctrl+L) and Rewind from the palette on a wide screen keep the 
   expect(sideTab(), "after Rewind").toMatch(/changes/i);
 });
 
+it("a fork run shows as a Fork run card with its steps collapsed and its last text as the result once; a plain subagent stays a subagent group (GH-718)", async () => {
+  const sub = (id: string, agentType?: string) => ({ type: "subagent" as const, id, toolUseId: id, description: `task ${id}`, status: "done" as const, startedAt: 1, endedAt: 2_000, ...(agentType && { agentType }) });
+  const child = (id: string, parentId: string, part: object) => ({ id, parentId, ...part });
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: sub("f1", "fork") }));
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 2, part: child("f1:t", "f1", { type: "tool_call", toolUseId: "f1:t", tool: "Grep", input: { pattern: "x" }, status: "done" }) as never }));
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 3, part: child("f1:a", "f1", { type: "assistant_text", text: "Found 2 matches", streaming: false }) as never }));
+  await act(async () => emit({ type: "event", sessionId: ID, seq: 4, part: sub("s1") }));
+  const card = el.querySelector<HTMLElement>('[data-testid="run-card"]')!;
+  expect(card.textContent).toContain("Fork");
+  expect(card.textContent).toContain("task f1");
+  await act(async () => card.querySelector("button")!.click());
+  expect(card.querySelector('[data-testid="run-steps-toggle"]')?.textContent).toContain("1 step");
+  expect(card.querySelector('[data-testid="run-result"]')?.textContent).toContain("Found 2 matches");
+  expect(card.textContent!.split("Found 2 matches")).toHaveLength(2);
+  expect(el.querySelectorAll('[data-testid="subagent"]')).toHaveLength(1);
+  expect(el.querySelector('[data-testid="subagent"]')!.textContent).toContain("task s1");
+});
+
 it.each([
   ["quick open", () => press({ key: "p", code: "KeyP", ctrlKey: true }), '[aria-modal="true"]'],
   ["the Open project dialog", async () => {

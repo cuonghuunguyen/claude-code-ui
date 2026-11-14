@@ -170,6 +170,7 @@ export default {
   "session.toolCard.reads": { other: "{count} lần đọc" },
   "session.toolCard.searches": { other: "{count} lần tìm" },
   "session.run.inlineTask": "Tác vụ nội tuyến",
+  "session.run.fork": "Fork",
   "session.run.steps": { other: "{count} bước" },
   "session.run.turns": { other: "{count} lượt" },
   "session.run.turnsOf": "{used}/{max} lượt",

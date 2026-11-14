@@ -168,6 +168,7 @@ export default {
   "session.toolCard.reads": { one: "{count} read", other: "{count} reads" },
   "session.toolCard.searches": { one: "{count} search", other: "{count} searches" },
   "session.run.inlineTask": "Inline task",
+  "session.run.fork": "Fork",
   "session.run.steps": { one: "{count} step", other: "{count} steps" },
   "session.run.turns": { one: "{count} turn", other: "{count} turns" },
   "session.run.turnsOf": "{used}/{max} turns",
