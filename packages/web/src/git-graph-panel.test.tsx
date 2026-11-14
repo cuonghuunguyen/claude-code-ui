@@ -65,6 +65,7 @@ afterEach(() => {
   noStamp = false;
   branchCount = 2;
   tagRemotes = {};
+  tagSigning = undefined;
   forgetRemoteOps();
   forgetRepoChoices();
   localStorage.removeItem("claude-ui.repoChoice");
@@ -95,6 +96,8 @@ const tagRemoteReply = async (m: Req & { name?: string; remote?: string }) => {
   if (tagRemotes[m.remote!] === "fail") throw Object.assign(new Error("fatal: could not read\nsecond line"), { code: "git_failed" });
   return { remoteTag: { remote: m.remote!, ...(tagRemotes[m.remote!] && { hash: tagRemotes[m.remote!] }) } };
 };
+/** New Tag signing config of the fake (`git.tagSigning`); absent: the daemon has no answer. */
+let tagSigning: { gpgSign: boolean; format: string; key?: string } | undefined;
 let writeReply: () => Promise<unknown> = async () => ({ remote: { output: "", refs: "s2" } });
 function fake(all: GitCommit[], files: GitCommitDetail["files"] = [], page = 200, nogit = false) {
   const sent: Req[] = [];
@@ -109,6 +112,8 @@ function fake(all: GitCommit[], files: GitCommitDetail["files"] = [], page = 200
     if (m.type === "git.branch") return { branch: branchInfo(m.ref!) };
     if (m.type === "git.push" || m.type === "git.pull" || m.type === "git.merge" || m.type === "git.rebase" || m.type === "git.revert" || m.type === "git.undoCommit" || m.type === "git.cherryPick" || m.type === "git.checkout" || m.type === "git.branchCreate" || m.type === "git.reset") return writeReply();
     if (m.type === "git.tagCreate" || m.type === "git.tagDelete") return writeReply();
+    if (m.type === "git.tagSigning") return { signing: tagSigning ?? null };
+    if (m.type === "git.tagCancel") return {};
     if (m.type === "git.tag") return tagReply(m);
     if (m.type === "git.tagRemote") return tagRemoteReply(m);
     if (m.type === "git.commitMenu") return { commitMenu: commitMenu(m.hash!, (m as { hard?: boolean }).hard) };
@@ -1601,4 +1606,102 @@ it("Remove Tag with no remote checked sends no remotes and reports a local delet
   await flush();
   expect(c.sent.filter((m) => m.type === "git.tagDelete")).toEqual([{ type: "git.tagDelete", cwd: "/p", name: "v1", hash: hash(2), argv: ["tag", "-d", "v1"] }]);
   expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Deleted tag v1");
+});
+
+// ---- GH-666: New Tag signing (tag.gpgSign) ----
+const openNewTag = async (c: ReturnType<typeof fake>, name = "v2") => {
+  await mount(c);
+  await menuAt(rowOf(hash(1)));
+  await act(async () => byId("tag-new").click());
+  await flush();
+  if (name) await fillField(byId("git-new-tag-name"), name);
+};
+const tagCreates = (c: ReturnType<typeof fake>) => c.sent.filter((m) => m.type === "git.tagCreate");
+
+it("New Tag reads the signing config when it opens and shows it; no signing configured: no toggle default, plain command", async () => {
+  const c = fake(tagged());
+  tagSigning = { gpgSign: false, format: "openpgp", key: "ABCD1234" };
+  await openNewTag(c, "");
+  expect(c.sent.filter((m) => m.type === "git.tagSigning")).toEqual([{ type: "git.tagSigning", cwd: "/p" }]);
+  expect((byId("git-new-tag-sign") as HTMLInputElement).checked).toBe(false);
+  expect(byId("git-new-tag-signing").textContent).toContain("openpgp");
+  expect(byId("git-new-tag-signing").textContent).toContain("ABCD1234");
+  await fillField(byId("git-new-tag-name"), "v2");
+  expect(byId("git-command").textContent).toBe("git tag v2 " + hash(1));
+  await act(async () => byId("git-new-tag-cancel").click());
+  expect(c.sent.some((m) => m.type === "git.tagCancel")).toBe(false);
+});
+
+it("New Tag with tag.gpgSign on: the toggle starts on, the command is a signed one, and switching it off adds --no-sign", async () => {
+  const c = fake(tagged());
+  tagSigning = { gpgSign: true, format: "ssh" };
+  await openNewTag(c);
+  expect((byId("git-new-tag-sign") as HTMLInputElement).checked).toBe(true);
+  expect(byId("git-command").textContent).toBe(`git tag -s -m v2 v2 ${hash(1)}`);
+  await fillField(byId("git-new-tag-message"), "first");
+  expect(byId("git-command").textContent).toBe(`git tag -s -m first v2 ${hash(1)}`);
+  await act(async () => byId("git-new-tag-sign").click());
+  expect(byId("git-command").textContent).toBe(`git tag -a --no-sign -m first v2 ${hash(1)}`);
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await act(async () => byId("git-new-tag-confirm").click());
+  await flush();
+  expect(tagCreates(c)).toEqual([{ type: "git.tagCreate", cwd: "/p", hash: hash(1), name: "v2", message: "first", sign: false, argv: ["tag", "-a", "--no-sign", "-m", "first", "v2", hash(1)] }]);
+  expect(byId("git-new-tag-dialog")).toBeNull();
+});
+
+it("a signed create keeps the dialog open with a waiting line and closes with the result line on success", async () => {
+  const c = fake(tagged());
+  tagSigning = { gpgSign: false, format: "openpgp" };
+  await openNewTag(c);
+  await act(async () => byId("git-new-tag-sign").click());
+  expect(byId("git-command").textContent).toBe(`git tag -s -m v2 v2 ${hash(1)}`);
+  let done!: () => void;
+  writeReply = () => new Promise((r) => (done = () => r({ written: { output: "", refs: "s2" } })));
+  await act(async () => byId("git-new-tag-confirm").click());
+  await flush();
+  expect(tagCreates(c)).toEqual([{ type: "git.tagCreate", cwd: "/p", hash: hash(1), name: "v2", sign: true, argv: ["tag", "-s", "-m", "v2", "v2", hash(1)] }]);
+  expect(byId("git-new-tag-dialog")).not.toBeNull();
+  expect(byId("git-new-tag-waiting").textContent).toContain("passphrase");
+  expect(byId("git-new-tag-confirm").hasAttribute("disabled")).toBe(true);
+  await act(async () => done());
+  await flush();
+  expect(byId("git-new-tag-dialog")).toBeNull();
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Created tag v2");
+});
+
+it("Cancel while signing sends git.tagCancel and closes the dialog", async () => {
+  const c = fake(tagged());
+  tagSigning = { gpgSign: true, format: "openpgp" };
+  await openNewTag(c);
+  let fail!: () => void;
+  writeReply = () => new Promise((_, rej) => (fail = () => rej(Object.assign(new Error("Cancelled"), { code: "cancelled" }))));
+  await act(async () => byId("git-new-tag-confirm").click());
+  await flush();
+  await act(async () => byId("git-new-tag-cancel").click());
+  expect(c.sent.filter((m) => m.type === "git.tagCancel")).toEqual([{ type: "git.tagCancel", cwd: "/p" }]);
+  expect(byId("git-new-tag-dialog")).toBeNull();
+  await act(async () => fail());
+  await flush();
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")).toBeNull();
+});
+
+it("a signing failure stays in the dialog (the user can retry unsigned) instead of a result line", async () => {
+  const c = fake(tagged());
+  tagSigning = { gpgSign: true, format: "openpgp" };
+  await openNewTag(c);
+  writeReply = async () => {
+    throw Object.assign(new Error("signing did not finish: gpg passphrase prompt?"), { code: "git_failed" });
+  };
+  await act(async () => byId("git-new-tag-confirm").click());
+  await flush();
+  expect(byId("git-new-tag-dialog")).not.toBeNull();
+  expect(byId("git-new-tag-error").textContent).toBe("signing did not finish: gpg passphrase prompt?");
+  expect(byId("git-new-tag-waiting")).toBeNull();
+  expect(byId("git-new-tag-confirm").hasAttribute("disabled")).toBe(false);
+  await act(async () => byId("git-new-tag-sign").click());
+  expect(byId("git-new-tag-error")).toBeNull();
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await act(async () => byId("git-new-tag-confirm").click());
+  await flush();
+  expect(byId("git-new-tag-dialog")).toBeNull();
 });

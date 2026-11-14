@@ -5,7 +5,7 @@ import { chmodSync, closeSync, existsSync, fstatSync, lstatSync, renameSync, rmS
 import { lstat, open, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tagCreateArgv } from "@claude-ui/protocol";
-import type { GitCommitMenu, GitTagInfo, GitCommitted, GitOperation, GitOperationKind, GitRollbackFile, GitRollbackPreview, GitStash, HistoryReason } from "@claude-ui/protocol";
+import type { GitCommitMenu, GitTagInfo, GitTagSigning, GitCommitted, GitOperation, GitOperationKind, GitRollbackFile, GitRollbackPreview, GitStash, HistoryReason } from "@claude-ui/protocol";
 import { gitOperation, gitRefs, hostOf, isHash, pinScope, repoPath, topIn, WorktreeError } from "./git.ts";
 import { branchInfo, branchRef, checkTagName, exclusive, gitBranch, HARDEN, localTagHash, MAX_ERROR, remoteConfigOf, tidy, writeEnv, type RemoteOptions } from "./git-remote.ts";
 import { openChecked, OPEN_READ, readAll, sameFile } from "./fd-check.ts";
@@ -13,7 +13,7 @@ import { runGit } from "./git-runner.ts";
 import { MAX_BYTES } from "./local-history.ts";
 
 /** Test seam: the timeout of a write (hooks may run tests). */
-export const writeConfig = { timeout: 300_000 };
+export const writeConfig = { timeout: 300_000, /** A signed tag create: a signer waiting for a passphrase never ends by itself. */ signTimeout: 60_000 };
 /** Test seam: what `gitCommitDiff` hands to the prompt (characters; bytes git may print before the patch is dropped). */
 export const diffConfig = { maxChars: 60_000, maxBuffer: 4 << 20 };
 const MAX_PATHS = 10_000;
@@ -23,15 +23,17 @@ const MAX_OUTPUT = 8000;
 type Failure = Error & { stderr?: string; stdout?: Buffer; killed?: boolean; code?: number | string };
 type Run = { out: string; code: number };
 /** One git call of a write. `soft`: exit code 1 is an answer, not a failure. Failure text: stdout and stderr (hooks print on either). */
-async function run(top: string, args: string[], env: NodeJS.ProcessEnv, o: { input?: string; soft?: boolean; raw?: boolean; maxBuffer?: number } = {}): Promise<Run> {
+async function run(top: string, args: string[], env: NodeJS.ProcessEnv, o: { input?: string; soft?: boolean; raw?: boolean; maxBuffer?: number; timeout?: number; signal?: AbortSignal; onTimeout?: string } = {}): Promise<Run> {
+  const timeout = o.timeout ?? writeConfig.timeout;
   try {
-    const r = await runGit({ cwd: top, args: [...HARDEN, ...args], env, input: o.input, timeout: writeConfig.timeout, killTree: true, maxBuffer: o.maxBuffer });
+    const r = await runGit({ cwd: top, args: [...HARDEN, ...args], env, input: o.input, timeout, killTree: true, maxBuffer: o.maxBuffer, signal: o.signal });
     return { out: o.raw ? r.stdout.toString("utf8") : tidy(`${r.stdout.toString("utf8")}\n${r.stderr}`, MAX_OUTPUT), code: 0 };
   } catch (e) {
     const err = e as Failure;
     // `maxBuffer` set: output over it is an answer (code -1), not a failure. `raw`: stdout as git printed it.
     if (o.maxBuffer && err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return { out: "", code: -1 };
-    if (err.killed) throw new WorktreeError("git_failed", `git ${args.find((a) => !a.startsWith("-"))} timed out after ${Math.round(writeConfig.timeout / 1000)} s`);
+    if (o.signal?.aborted) throw new WorktreeError("cancelled", "Cancelled");
+    if (err.killed) throw new WorktreeError("git_failed", o.onTimeout ?? `git ${args.find((a) => !a.startsWith("-"))} timed out after ${Math.round(timeout / 1000)} s`);
     if (o.soft && err.code === 1) return { out: "", code: 1 };
     const text = tidy(`${err.stdout?.toString("utf8") ?? ""}\n${err.stderr ?? ""}`, MAX_ERROR) || tidy(err.message, MAX_ERROR);
     throw new WorktreeError("git_failed", text);
@@ -690,10 +692,33 @@ export async function gitBranchCreate(cwd: string, o: { name: unknown; at?: unkn
 const MAX_TAG_MESSAGE = 10_000;
 const MAX_REMOTES = 20;
 
-/** `git tag <name> <hash>` (annotated with `-a -m` when `message` has text). `hash`: a full commit hash. Allowed during an unfinished operation: no index or work tree change. */
-export async function gitTagCreate(cwd: string, o: { hash: unknown; name: unknown; message?: unknown; argv: unknown } & RemoteOptions): Promise<Written | null> {
-  const { hash, name, message } = o;
+/** Reads one boolean or string git setting; "" when unset or unreadable. */
+async function setting(top: string, key: string, env: NodeJS.ProcessEnv, type?: "bool"): Promise<string> {
+  return (await run(top, ["config", ...(type ? ["--type=bool"] : []), "--get", key], env, { soft: true }).catch(() => ({ out: "" }))).out.split("\n")[0]!.trim();
+}
+
+/** The signing config `git tag` reads (no signer is run). Null outside a work tree. */
+export async function gitTagSigning(cwd: string, o: RemoteOptions): Promise<GitTagSigning | null> {
+  return pinScope(async () => {
+    const top = await topIn(cwd, o.allowed);
+    if (!top) return null;
+    const env = await writeEnv(top);
+    const format = await setting(top, "gpg.format", env);
+    const key = await setting(top, "user.signingKey", env);
+    return { gpgSign: (await setting(top, "tag.gpgSign", env, "bool")) === "true", format: format === "ssh" || format === "x509" ? format : "openpgp", ...(key && { key: key.slice(0, 300) }) };
+  });
+}
+
+/**
+ * `git tag <name> <hash>` (annotated with `-a -m` when `message` has text; `sign` as in `tagCreateArgv`). `hash`: a full commit hash.
+ * Allowed during an unfinished operation: no index or work tree change.
+ * A create that signs (`-s`, or `tag.gpgSign` with `sign` absent) ends at `writeConfig.signTimeout` or on `signal` instead of the write timeout,
+ * and a signer failure reads "signing did not finish: <gpg|ssh key> passphrase prompt?".
+ */
+export async function gitTagCreate(cwd: string, o: { hash: unknown; name: unknown; message?: unknown; sign?: unknown; argv: unknown; signal?: AbortSignal } & RemoteOptions): Promise<Written | null> {
+  const { hash, name, message, sign } = o;
   if (message !== undefined && (typeof message !== "string" || message.length > MAX_TAG_MESSAGE || message.includes("\0"))) throw bad("message must be text of at most 10000 characters");
+  if (sign !== undefined && typeof sign !== "boolean") throw bad("sign must be a boolean");
   return pinScope(async () => {
   const top = await topIn(cwd, o.allowed);
   if (!top) return null;
@@ -703,9 +728,17 @@ export async function gitTagCreate(cwd: string, o: { hash: unknown; name: unknow
     await checkTagName(top, name, env);
     const tag = name as string;
     if ((await localTagHash(top, tag, env)) !== "") throw bad(`Tag ${tag} already exists`);
-    const argv = tagCreateArgv(tag, hash, message as string | undefined);
+    const argv = tagCreateArgv(tag, hash, message as string | undefined, sign);
     if (!Array.isArray(o.argv) || o.argv.length !== argv.length || o.argv.some((a, i) => a !== argv[i])) throw new WorktreeError("stale", "The command changed since the dialog opened");
-    return { output: (await run(top, argv, env)).out, refs: await gitRefs(top, o.allowed) };
+    const signs = sign === true || (sign === undefined && (await setting(top, "tag.gpgSign", env, "bool")) === "true");
+    if (!signs) return { output: (await run(top, argv, env)).out, refs: await gitRefs(top, o.allowed) };
+    const head = `signing did not finish: ${(await setting(top, "gpg.format", env)) === "ssh" ? "ssh key" : "gpg"} passphrase prompt?`;
+    try {
+      return { output: (await run(top, argv, env, { timeout: writeConfig.signTimeout, signal: o.signal, onTimeout: head })).out, refs: await gitRefs(top, o.allowed) };
+    } catch (e) {
+      if (e instanceof WorktreeError && e.code === "git_failed" && e.message !== head && /gpg|sign|pinentry|passphrase|ssh-keygen/i.test(e.message)) throw new WorktreeError("git_failed", `${head}\n${e.message}`);
+      throw e;
+    }
   });
   });
 }

@@ -366,7 +366,11 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Branch menu New branch: `git branch <name> <at|HEAD>`, or with `checkout` `git switch -c <name> [<at>]`. `at`: a full commit hash (absent = HEAD). Tracked local changes that would be overwritten: error code `local_changes`; `smart` stashes them, switches and applies them again (a conflict is a success whose reply carries `operation`). Refused while a merge, rebase or conflict is unfinished. Reply GitWriteResult. */
   | { type: "git.branchCreate"; cwd: string; name: string; at?: string; checkout?: boolean; smart?: boolean; exact?: true }
   /** Graph New Tag: `git tag <name> <hash>`, or `git tag -a -m <message> <name> <hash>` when `message` has text. `hash`: a full commit hash. `argv` must equal `tagCreateArgv(name, hash, message)` (else `stale`). Existing or invalid name: `bad_request`. Allowed during an unfinished operation. Reply GitWriteResult. */
-  | { type: "git.tagCreate"; cwd: string; hash: string; name: string; message?: string; argv: string[]; exact?: true }
+  | { type: "git.tagCreate"; cwd: string; hash: string; name: string; message?: string; sign?: boolean; argv: string[]; exact?: true }
+  /** Graph New Tag dialog data: the effective signing config (`tag.gpgSign`, `gpg.format`, `user.signingKey`), no signer is run. Reply GitTagSigningResult. */
+  | { type: "git.tagSigning"; cwd: string; exact?: true }
+  /** Stops this connection's running signed `git.tagCreate` (it replies `cancelled`, nothing is created). Reply {}. */
+  | { type: "git.tagCancel"; cwd: string; exact?: true }
   /** Graph Remove Tag dialog data: the local tag and the configured remotes (no network). Unknown tag: `bad_request`. Reply GitTagResult. */
   | { type: "git.tag"; cwd: string; name: string; exact?: true }
   /** Graph Remove Tag dialog: whether `remote` has the tag (`git ls-remote`, network, credentials never asked). Reply GitTagRemoteResult. */
@@ -900,6 +904,9 @@ export type GitWriteResult = { written: { output: string; refs: string | null; o
 /** A tag as `git.tag` read it: `hash` the ref value (tag object or commit), `commit` the peeled commit, `remotes` the configured remote names (at most 20). */
 export type GitTagInfo = { name: string; hash: string; commit: string; annotated: boolean; remotes: string[] };
 export type GitTagResult = { tag: GitTagInfo | null };
+/** What `git tag` would sign with: `gpgSign` is `tag.gpgSign`, `format` `gpg.format` (unknown values read as openpgp), `key` `user.signingKey` when set. */
+export type GitTagSigning = { gpgSign: boolean; format: "openpgp" | "ssh" | "x509"; key?: string };
+export type GitTagSigningResult = { signing: GitTagSigning | null };
 /** `remoteTag.hash` absent: the remote has no such tag. `null` outside a work tree. */
 export type GitTagRemoteResult = { remoteTag: { remote: string; hash?: string } | null };
 /** One stash entry: `message` is the reflog subject ("On main: wip"), `time` seconds like \`GitCommit.time\`. */

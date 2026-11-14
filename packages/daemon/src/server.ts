@@ -33,7 +33,7 @@ import { createSecrets, type Secrets } from "./secrets.ts";
 import { createWorktree, listBranches, pullRequestBranches, gitBlame, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitOperationOf, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, cachedStatuses, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush, gitTagDelete, gitTagRemote } from "./git-remote.ts";
 import { createWarmCommitMessage, generateCommitMessage, instructionFor, promptFor } from "./commit-message.ts";
-import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff, gitCommitFiles, gitCommitMenu, gitContinue, gitMergeRebase, gitRollback, gitRollbackHunk, gitRollbackPreview, gitStash, gitStashList, gitStashPush, gitTag, gitTagCreate } from "./git-write.ts";
+import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff, gitCommitFiles, gitCommitMenu, gitContinue, gitMergeRebase, gitRollback, gitRollbackHunk, gitRollbackPreview, gitStash, gitStashList, gitStashPush, gitTag, gitTagCreate, gitTagSigning } from "./git-write.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
@@ -2150,6 +2150,8 @@ export function createDaemon(opts: {
     let writingReplace = false;
     /** The running `git.commitMessage` of this connection: stopped by `git.commitMessageCancel`, a newer one, and the close. */
     let generating: AbortController | undefined;
+    /** The signed `git.tagCreate` of this connection, aborted by `git.tagCancel` and when the connection closes. */
+    let tagging: AbortController | undefined;
     /** Clean up scans (`worktree.status` with `scan`) of this connection: aborted by `worktree.cancel` and when it closes. */
     const scans = new Map<string, AbortController>();
     const unwatchAll = () => {
@@ -2171,6 +2173,7 @@ export function createDaemon(opts: {
       grepping?.abort();
       replacing?.abort();
       generating?.abort();
+      tagging?.abort();
       scans.forEach((a) => a.abort());
       scans.clear();
       focused.delete(ws);
@@ -3324,11 +3327,29 @@ export function createDaemon(opts: {
           // Output and URLs are never logged.
           try {
             const o = { allowed: (p: string) => inRoots(real(p) ?? p) };
-            const written = await (msg.type === "git.tagCreate" ? gitTagCreate(cwd, { hash: msg.hash, name: msg.name, message: msg.message, argv: msg.argv, ...o }) : gitTagDelete(cwd, { name: msg.name, hash: msg.hash, argv: msg.argv, remotes: msg.remotes, ...o }));
-            markRepoStale(cwd);
-            return reply({ written });
+            const ctl = msg.type === "git.tagCreate" ? (tagging = new AbortController()) : undefined;
+            try {
+              const written = await (msg.type === "git.tagCreate" ? gitTagCreate(cwd, { hash: msg.hash, name: msg.name, message: msg.message, sign: msg.sign, argv: msg.argv, signal: ctl!.signal, ...o }) : gitTagDelete(cwd, { name: msg.name, hash: msg.hash, argv: msg.argv, remotes: msg.remotes, ...o }));
+              markRepoStale(cwd);
+              return reply({ written });
+            } finally {
+              if (ctl && tagging === ctl) tagging = undefined;
+            }
           } catch (e) {
             if (e instanceof WorktreeError ? e.code !== "bad_request" : true) markRepoStale(cwd);
+            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+          }
+        }
+        case "git.tagCancel":
+          tagging?.abort();
+          return reply({});
+        case "git.tagSigning": {
+          const cwd = allowed(msg.cwd);
+          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+          try {
+            return reply({ signing: await gitTagSigning(cwd, { allowed: (p: string) => inRoots(real(p) ?? p) }) });
+          } catch (e) {
             return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
           }
         }

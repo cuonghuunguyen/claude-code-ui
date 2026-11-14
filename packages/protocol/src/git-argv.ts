@@ -4,8 +4,16 @@
 /** Every remote operation: no fsmonitor program and no `ext::` transport. */
 export const HARDEN = ["-c", "core.fsmonitor=false", "-c", "protocol.ext.allow=never"];
 
-/** New Tag: annotated (`-a -m`) when `message` has text, else lightweight. `hash`: a full commit hash. */
-export const tagCreateArgv = (name: string, hash: string, message?: string): string[] => (message?.trim() ? ["tag", "-a", "-m", message, name, hash] : ["tag", name, hash]);
+/**
+ * New Tag: lightweight, annotated (`-a -m`) when `message` has text, signed (`-s`; a signed tag needs a message, the name when blank) with `sign` true,
+ * and `--no-sign` with `sign` false (overrides `tag.gpgSign`). `sign` undefined: git's own config decides. `hash`: a full commit hash.
+ */
+export const tagCreateArgv = (name: string, hash: string, message?: string, sign?: boolean): string[] => {
+  const text = message?.trim() ? message : undefined;
+  if (sign === true) return ["tag", "-s", "-m", text ?? name, name, hash];
+  if (sign === false) return text ? ["tag", "-a", "--no-sign", "-m", text, name, hash] : ["tag", "--no-sign", name, hash];
+  return text ? ["tag", "-a", "-m", text, name, hash] : ["tag", name, hash];
+};
 
 /** Remove Tag, local part. */
 export const tagDeleteArgv = (name: string): string[] => ["tag", "-d", name];

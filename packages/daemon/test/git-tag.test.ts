@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync } from "node:fs";
+import { chmodSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { tagCreateArgv, tagDeleteArgv, tagDeleteRemoteArgv } from "@claude-ui/protocol";
 import { setGitRunner, threadRunner } from "../src/git-runner.ts";
 import { gitTagDelete, gitTagRemote } from "../src/git-remote.ts";
-import { gitTag, gitTagCreate } from "../src/git-write.ts";
+import { gitTag, gitTagCreate, gitTagSigning, writeConfig } from "../src/git-write.ts";
 
 vi.setConfig({ testTimeout: process.platform === "win32" ? 120_000 : 60_000 });
 const run = (cwd: string, ...args: string[]) => {
@@ -25,7 +25,11 @@ vi.stubEnv("GIT_COMMITTER_NAME", "t");
 vi.stubEnv("GIT_COMMITTER_EMAIL", "t@t");
 vi.stubEnv("GIT_AUTHOR_NAME", "t");
 vi.stubEnv("GIT_AUTHOR_EMAIL", "t@t");
-afterEach(() => setGitRunner(undefined));
+const signTimeout = writeConfig.signTimeout;
+afterEach(() => {
+  setGitRunner(undefined);
+  writeConfig.signTimeout = signTimeout;
+});
 
 /** A repo `a` with two commits, a bare origin inside the roots, and `outside.git` beside the roots. */
 function repo() {
@@ -200,5 +204,103 @@ describe("gitTagDelete", () => {
     await new Promise((x) => setTimeout(x, 100));
     await expect(create(r, "v2")).rejects.toMatchObject({ code: "busy" });
     await first;
+  });
+});
+
+// ---- Signing: a signer that waits for a passphrase never leaves a create hanging until the write timeout ----
+
+/** Makes git call a fake `gpg.program` (a shell script) in repo `r`: it hangs (a passphrase prompt nobody answers) or fails. */
+function signer(r: R, body: string) {
+  const prog = join(r.root, "fake-gpg.sh");
+  writeFileSync(prog, `#!/bin/sh\n${body}\n`);
+  chmodSync(prog, 0o755);
+  run(r.a, "config", "gpg.program", prog);
+  run(r.a, "config", "user.signingKey", "ABCD1234");
+}
+const HANG = "exec sleep 600";
+const sign = (r: R, name: string, message: string | undefined, sign: boolean | undefined, over: Record<string, unknown> = {}) =>
+  gitTagCreate(r.a, { hash: r.c2, name, message, sign, argv: tagCreateArgv(name, r.c2, message, sign), ...r.o, ...over });
+
+describe.skipIf(process.platform === "win32")("gitTagCreate signing", () => {
+  it("a signed create whose signer hangs ends at the signing timeout with the signing error, and creates nothing", async () => {
+    const r = repo();
+    signer(r, HANG);
+    writeConfig.signTimeout = 400;
+    const t0 = Date.now();
+    await expect(sign(r, "v1", "m", true)).rejects.toMatchObject({ code: "git_failed", message: "signing did not finish: gpg passphrase prompt?" });
+    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(run(r.a, "tag", "-l")).toBe("");
+  });
+  it("tag.gpgSign=true without an explicit sign (a stale dialog) is signed too: same short timeout", async () => {
+    const r = repo();
+    signer(r, HANG);
+    run(r.a, "config", "tag.gpgSign", "true");
+    writeConfig.signTimeout = 400;
+    await expect(sign(r, "v1", "m", undefined)).rejects.toMatchObject({ message: "signing did not finish: gpg passphrase prompt?" });
+  });
+  it("the ssh format names the ssh key in the error", async () => {
+    const r = repo();
+    signer(r, HANG);
+    run(r.a, "config", "gpg.format", "ssh");
+    run(r.a, "config", "gpg.ssh.program", join(r.root, "fake-gpg.sh"));
+    writeConfig.signTimeout = 400;
+    await expect(sign(r, "v1", "m", true)).rejects.toMatchObject({ message: "signing did not finish: ssh key passphrase prompt?" });
+  });
+  it("a signer that fails (no pinentry) gets the same error with git's output", async () => {
+    const r = repo();
+    signer(r, 'echo "gpg: signing failed: No pinentry" >&2\nexit 2');
+    await expect(sign(r, "v1", "m", true)).rejects.toMatchObject({ code: "git_failed", message: expect.stringMatching(/^signing did not finish: gpg passphrase prompt\?\n[\s\S]*No pinentry/) });
+    expect(run(r.a, "tag", "-l")).toBe("");
+  });
+  it("an abort signal cancels a signed create: code cancelled, nothing created", async () => {
+    const r = repo();
+    signer(r, HANG);
+    const ctl = new AbortController();
+    const p = sign(r, "v1", "m", true, { signal: ctl.signal });
+    const seen = expect(p).rejects.toMatchObject({ code: "cancelled" });
+    await new Promise((x) => setTimeout(x, 300));
+    ctl.abort();
+    await seen;
+    expect(run(r.a, "tag", "-l")).toBe("");
+    // The lock is free again.
+    await create(r, "v2");
+  });
+  it("sign=false overrides tag.gpgSign: the signer is not called and the tag is lightweight", async () => {
+    const r = repo();
+    signer(r, HANG);
+    run(r.a, "config", "tag.gpgSign", "true");
+    await sign(r, "v1", undefined, false);
+    expect(run(r.a, "cat-file", "-t", "refs/tags/v1")).toBe("commit");
+  });
+  it("answers stale when sign differs from the argv", async () => {
+    const r = repo();
+    await expect(sign(r, "v1", "m", true, { argv: tagCreateArgv("v1", r.c2, "m") })).rejects.toMatchObject({ code: "stale" });
+    await expect(sign(r, "v1", "m", undefined, { sign: "yes" })).rejects.toMatchObject({ code: "bad_request" });
+  });
+  it("Remove Tag never calls the signer", async () => {
+    const r = repo();
+    run(r.a, "tag", "v1", r.c1);
+    signer(r, HANG);
+    run(r.a, "config", "tag.gpgSign", "true");
+    const hash = run(r.a, "rev-parse", "refs/tags/v1");
+    await gitTagDelete(r.a, { name: "v1", hash, argv: tagDeleteArgv("v1"), ...r.o });
+    expect(run(r.a, "tag", "-l")).toBe("");
+  });
+});
+
+describe("gitTagSigning", () => {
+  it("reads tag.gpgSign, gpg.format and user.signingKey; defaults: off, openpgp, no key", async () => {
+    const r = repo();
+    expect(await gitTagSigning(r.a, r.o)).toEqual({ gpgSign: false, format: "openpgp" });
+    run(r.a, "config", "tag.gpgSign", "true");
+    run(r.a, "config", "gpg.format", "ssh");
+    run(r.a, "config", "user.signingKey", "~/.ssh/id_ed25519.pub");
+    expect(await gitTagSigning(r.a, r.o)).toEqual({ gpgSign: true, format: "ssh", key: "~/.ssh/id_ed25519.pub" });
+  });
+  it("an unknown gpg.format reads as openpgp; gpg.sign alone does not sign tags", async () => {
+    const r = repo();
+    run(r.a, "config", "gpg.format", "weird");
+    run(r.a, "config", "commit.gpgSign", "true");
+    expect(await gitTagSigning(r.a, r.o)).toEqual({ gpgSign: false, format: "openpgp" });
   });
 });

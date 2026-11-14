@@ -188,7 +188,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
   const gen = useRef(0);
   // A remote operation (Fetch, Push, Pull) of this repository: one at a time; its result line shows under the filter row until the next one or Dismiss. Kept per repository path, not in this panel.
   const { running: op, settled } = useRemoteOp(cwd);
-  const runRemote = (msg: RemoteRequest | StashRequest, done: string | ((r: OpReply) => string), running: string, onFail?: (e: RequestError) => boolean) => void (!notGit && runRemoteOp(client, msg, done, running, undefined, onFail));
+  const runRemote = (msg: RemoteRequest | StashRequest, done: string | ((r: OpReply) => string), running: string, onFail?: (e: RequestError) => boolean, onDone?: () => void) => void (!notGit && runRemoteOp(client, msg, done, running, onDone && (() => onDone()), onFail));
   // Success or failure, the list reloads.
   const lastSettled = useRef(settled);
   useEffect(() => {

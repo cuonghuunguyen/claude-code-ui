@@ -17,7 +17,7 @@ export type Kind = "push" | "force" | "pull" | "merge" | "rebase";
 type Done = string | ((r: OpReply) => string);
 /** A checkout or create the daemon refused with `local_changes`: Smart checkout resends it with `smart`. */
 type Smart = { msg: Extract<RemoteRequest, { smart?: boolean }>; done: Done; running: string; target: string; message: string };
-type OnRun = (msg: RemoteRequest, done: Done, running: string, onFail?: (e: RequestError) => boolean) => void;
+type OnRun = (msg: RemoteRequest, done: Done, running: string, onFail?: (e: RequestError) => boolean, onDone?: () => void) => void;
 
 /** "<text> of <repo>" while the repository is named (the Graph shows the repository selector), else the text. */
 export const ofRepo = (text: string, repoName?: string) => (repoName ? t("sidebar.git.ofRepo", { text, repo: repoName }) : text);
@@ -83,7 +83,7 @@ export function useBranchHost({ client, cwd, exact = false, repoName, busy, onRu
           {smart?.message}
         </pre>
       </ConfirmDialog>
-      {newTag && <NewTagDialog cwd={cwd} exact={exact} repoName={repoName} hash={newTag.hash} onRun={onRun} onClose={() => setNewTag(undefined)} />}
+      {newTag && <NewTagDialog client={client} cwd={cwd} exact={exact} repoName={repoName} hash={newTag.hash} onRun={onRun} onClose={() => setNewTag(undefined)} />}
       {removeTag && <RemoveTagDialog client={client} cwd={cwd} exact={exact} repoName={repoName} name={removeTag.name} onRun={onRun} onClose={() => setRemoveTag(undefined)} />}
       <BranchDialog dialog={dialog} cwd={cwd} exact={exact} repoName={repoName} onRun={onRun} onClose={() => setDialog(undefined)} />
       <ResetDialog client={client} cwd={cwd} exact={exact} repoName={repoName} target={reset} onRun={onRun} onClose={() => setReset(undefined)} />
