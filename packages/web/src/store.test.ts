@@ -426,11 +426,12 @@ describe("withoutResultText", () => {
     const items = [part(text("a", "looking", false)), part(call), part(text("b", "The answer\n", false))];
     expect(withoutResultText(items, "The answer").map((i) => (i.kind === "part" ? i.part.id : i.id))).toEqual(["a", "c"]);
   });
-  it("keeps a last text that differs from the result; matches the tail of a truncated result", () => {
+  it("keeps a last text that differs from the result; keeps the step of a truncated result (only its tail is the result)", () => {
     const items = [part(text("b", "tail of it", false))];
     expect(withoutResultText(items, "other")).toBe(items);
     expect(withoutResultText(items, "other")).toHaveLength(1);
-    expect(withoutResultText([part(text("b", "head tail", false))], "tail", true)).toHaveLength(0);
+    expect(withoutResultText([part(text("b", "head tail", false))], "tail", true)).toHaveLength(1);
+    expect(withoutResultText([part(text("b", "tail", false))], "tail", true)).toHaveLength(1);
     expect(withoutResultText(items, "")).toBe(items);
   });
 });

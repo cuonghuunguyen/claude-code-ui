@@ -234,16 +234,6 @@ describe("runInlineClaude permissions", () => {
   });
 });
 
-describe("runInlineClaude bare deny", () => {
-  it("a deny with interrupt reaches the CLI as a plain deny: the model sees it and the run goes on", async () => {
-    const ask = vi.fn<InlineClaudeDeps["canUseTool"]>(async () => ({ behavior: "deny", message: "rejected", interrupt: true }) as PermissionResult);
-    const x = setup({ messages: [result()], ask });
-    await runInlineClaude(x.deps, { ...SPEC, tools: ["Bash"] }, { signal: new AbortController().signal, toolUseId: "toolu_main" });
-    const res = await x.optionsSeen[0]!.canUseTool!("Bash", { command: "ls" }, { signal: new AbortController().signal, toolUseID: "t9" } as never);
-    expect(res).toEqual({ behavior: "deny", message: "rejected" });
-  });
-});
-
 describe("runInlineClaude result", () => {
   it("turns never exceed maxTurns (the SDK counts the turn that hit the limit)", async () => {
     const r = await run({ messages: [assistant("m1", [text("partial")]), result({ subtype: "error_max_turns", is_error: true, num_turns: 2 })] }, { maxTurns: 1 }).done;
@@ -453,6 +443,42 @@ describe("ClaudeSession inline runs", () => {
     expect(r.text).toBe("allow");
     expect(seen.permissionMode).toBe("default");
     expect(seen.settings).toEqual({ permissions: { allow: ["Read(*)"] }, disableAllHooks: true });
+    await s.close();
+  });
+  /** An inline query whose Bash step asks; a deny with `interrupt` ends the query like the CLI does (it stops, no result). */
+  const asking = (o: Options) =>
+    Object.assign(
+      (async function* () {
+        yield assistant("m1", [toolUse("t1", "Bash", { command: "ls" })]);
+        const r = (await o.canUseTool!("Bash", { command: "ls" }, { signal: new AbortController().signal, toolUseID: "t1", suggestions: [] } as never))!;
+        if (r.behavior === "deny" && r.interrupt) throw new Error("interrupted by deny");
+        yield toolResult("t1", "denied", true);
+        yield assistant("m2", [text("went on")]);
+        yield result();
+      })(),
+      { close: () => {} },
+    );
+  async function pendingStep() {
+    const s = await parentSession(asking);
+    const events: import("@claude-ui/protocol").Event[] = [];
+    s.subscribe(0, (e) => events.push(e));
+    const p = s.run.inlineTask!({ ...SPEC, tools: ["Bash"] }, hooks("toolu_main"));
+    await vi.waitFor(() => expect(events.some((e) => e.part.type === "permission_request")).toBe(true));
+    const req = events.find((e) => e.part.type === "permission_request")!.part as { requestId: string };
+    return { s, p, req };
+  }
+  it("a user Deny (bare No) on a bridged step lets the run finish: done", async () => {
+    const { s, p, req } = await pendingStep();
+    s.respond(req.requestId, { decision: "deny" } as never);
+    const r = await p;
+    expect(r.status).toBe("done");
+    expect(r.text).toBe("went on");
+    await s.close();
+  });
+  it("Stop (interruptPending) during a pending bridged step ends the run: stopped", async () => {
+    const { s, p } = await pendingStep();
+    (s.run as unknown as { session: { interruptPending(): void } }).session.interruptPending();
+    expect((await p).status).toBe("stopped");
     await s.close();
   });
   it("allow_always on a bridged step request appends the session grant to the parent: the next inline query allows the rule", async () => {

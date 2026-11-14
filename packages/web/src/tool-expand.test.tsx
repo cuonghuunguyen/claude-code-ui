@@ -304,3 +304,22 @@ it("a restored inline task without child parts says its steps are not kept", asy
   await act(async () => runCards()[0]!.querySelector("button")!.click());
   expect(el.querySelector('[data-testid="run-steps-note"]')?.textContent).toBe("Steps are not kept after the daemon restarts.");
 });
+
+it("an inline task shows its result text once: the last text step equal to it is dropped, an earlier one stays", async () => {
+  const txt = (id: string, text: string): Part => ({ type: "assistant_text", id, text, streaming: false, parentId: "i5" }) as Part;
+  const output = JSON.stringify({ status: "done", text: "FINAL ANSWER" });
+  const parts = [
+    call("i5", INLINE, { prompt: "q" }),
+    txt("t-a", "STEP NOTE"),
+    child("c5", "i5", "Grep", { pattern: "x" }),
+    txt("t-b", "FINAL ANSWER"),
+    { type: "tool_result", id: "i5:result", toolUseId: "i5", output, isError: false } as Part,
+  ];
+  await render(view(parts));
+  await act(async () => runCards()[0]!.querySelector("button")!.click());
+  const toggleSteps = el.querySelector<HTMLElement>('[data-testid="run-steps-toggle"]');
+  if (toggleSteps) await act(async () => toggleSteps.click());
+  const count = (s: string) => (el.textContent!.match(new RegExp(s, "g")) ?? []).length;
+  expect(count("FINAL ANSWER")).toBe(1);
+  expect(count("STEP NOTE")).toBe(1);
+});

@@ -222,7 +222,7 @@ export function timeline(s: SessionView, parentId?: string): TimelineItem[] {
   return items;
 }
 
-/** A run card shows its result text once: the run's last assistant text step is dropped when it is that text (a truncated result keeps only the tail). */
+/** A run card shows its result text once: the run's last assistant text step is dropped when it is exactly that text. A truncated result (tail only) keeps the step: its head would be lost. */
 export function withoutResultText(items: TimelineItem[], result: string, truncated = false): TimelineItem[] {
   const want = result.trim();
   if (!want) return items;
@@ -231,7 +231,7 @@ export function withoutResultText(items: TimelineItem[], result: string, truncat
   const it = items[i];
   if (!it || it.kind !== "part" || it.part.type !== "assistant_text") return items;
   const got = it.part.text.trim();
-  return got === want || (truncated && got.endsWith(want)) ? items.filter((_, n) => n !== i) : items;
+  return got === want && !truncated ? items.filter((_, n) => n !== i) : items;
 }
 
 /** The assistant text of the turn up to and including item `index` (back to its prompt), blocks joined by a blank line; tool calls and reasoning are not text parts. */

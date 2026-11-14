@@ -26,7 +26,7 @@ type ParentState = {
   disallowedTools?: string[];
 };
 /** What ClaudeSession's own permission flow needs to run for a child step: the adapter that knows the step's call, and an emit that tags parts. */
-export type InlineBridge = { adapter: ReturnType<typeof createAdapter>; emit: (part: Part) => void };
+export type InlineBridge = { adapter: ReturnType<typeof createAdapter>; emit: (part: Part) => void; /** Ends the run as stopped (the main session's Stop reached a pending step). */ stop: () => void };
 export type InlineClaudeDeps = {
   /** The SDK `query` (test seam). */
   query: (p: { prompt: string; options: Options }) => Query;
@@ -210,15 +210,7 @@ export async function runInlineClaude(deps: InlineClaudeDeps, spec: InlineSpec, 
       abort,
       env: withoutApiKeys(deps.env()),
       permissions,
-      // A bare "No" replies with `interrupt` (it stops a main turn). Here it would end the whole query as an error: the step is denied, the model sees it and goes on.
-      canUseTool: async (tool, input, o) => {
-        const r = await deps.canUseTool(tool, input, o, { adapter, emit });
-        if (r.behavior === "deny" && r.interrupt) {
-          const { interrupt: _drop, ...plain } = r;
-          return plain;
-        }
-        return r;
-      },
+      canUseTool: (tool, input, o) => deps.canUseTool(tool, input, o, { adapter, emit, stop: () => stop({ status: "stopped" }) }),
     });
     q = deps.query({ prompt: spec.text, options });
     for await (const m of q) {

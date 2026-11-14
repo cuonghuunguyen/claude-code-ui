@@ -432,8 +432,11 @@ export class ClaudeSession implements EngineSession {
       case "deny":
         denyCard();
         // Like Claude Code: "No" with feedback lets Claude continue with it; a bare "No" stops the turn.
-        return resolve(r.message ? { behavior: "deny", message: `${REJECTED} To tell you how to proceed, the user said:\n${r.message}` } : { behavior: "deny", message: REJECTED, interrupt: true });
+        // A step of an inline run: no interrupt (it would end the whole run as an error); the model sees the denial and goes on.
+        return resolve(r.message ? { behavior: "deny", message: `${REJECTED} To tell you how to proceed, the user said:\n${r.message}` } : bridge ? { behavior: "deny", message: REJECTED } : { behavior: "deny", message: REJECTED, interrupt: true });
       case "interrupt":
+        // Stop: an inline run ends as stopped.
+        bridge?.stop();
         if (part.type === "question") return resolve({ behavior: "deny", message: REJECTED });
         denyCard();
         return resolve({ behavior: "deny", message: REJECTED, interrupt: true });

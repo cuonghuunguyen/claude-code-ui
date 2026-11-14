@@ -36,7 +36,7 @@ export function inlineResults(projectName: string, home = homedir()): InlineResu
   const root = join(home, ".claude", "projects");
   if (!existsSync(root)) return [];
   const out: InlineResult[] = [];
-  for (const dir of readdirSync(root).filter((d) => d.endsWith(`-${projectName}`) || d.endsWith(projectName))) {
+  for (const dir of readdirSync(root).filter((d) => d.endsWith(`-${projectName}`))) {
     for (const f of readdirSync(join(root, dir)).filter((x) => x.endsWith(".jsonl"))) {
       const ids = new Set<string>();
       const lines = readFileSync(join(root, dir, f), "utf8").split("\n").filter(Boolean);
