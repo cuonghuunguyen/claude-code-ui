@@ -65,3 +65,8 @@ Then("the shown session has a reply from Claude", async ({ page }) => {
 Then("the shown session's turn has finished", async ({ page }) => {
   await expect(page.locator('[data-testid="send"][data-state="idle"]:visible')).toBeVisible({ timeout: TURN_MS });
 });
+
+// The reply of the counting prompt is whole once its last word shows (a cut-off text would end in a number).
+Then("the shown reply has its last word", async ({ page }) => {
+  await expect(page.locator('[data-testid="assistant-text"]:visible').last()).toContainText(/done/i, { timeout: 15_000 });
+});

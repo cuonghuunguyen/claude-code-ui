@@ -14,6 +14,7 @@ Feature: Reconnect after the page was offline
     Then the app is connected
     And I see a reply from Claude
     And the turn has finished
+    And the shown reply has its last word
     And the page has no horizontal scroll
     And I capture "<name>"
 
@@ -42,4 +43,5 @@ Feature: Reconnect after the page was offline
     When I switch to session tab 1
     Then the shown session has a reply from Claude
     And the shown session's turn has finished
+    And the shown reply has its last word
     And I capture "reconnect-background-tab"
