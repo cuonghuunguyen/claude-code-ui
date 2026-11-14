@@ -50,14 +50,6 @@ When("I switch to session tab {int}", async ({ page }, n: number) => {
 });
 
 // Two sessions are mounted: the shared steps expect one, so these look at the shown one only.
-When("I send {string} in the new session tab", async ({ page }, text: string) => {
-  const tab = page.getByTestId("new-session-tab");
-  await tab.getByRole("combobox", { name: /^First prompt$/ }).fill(text);
-  await tab.getByTestId("send").click();
-  // Sent: the tab became the session. A cut before that would fail the send instead of changing a session while offline.
-  await expect(tab).toHaveCount(0, { timeout: 30_000 });
-});
-
 Then("the shown session has a reply from Claude", async ({ page }) => {
   await expect(page.locator('[data-testid="assistant-text"]:visible').first()).toHaveText(/\S/, { timeout: TURN_MS });
 });

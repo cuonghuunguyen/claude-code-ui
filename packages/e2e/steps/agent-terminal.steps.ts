@@ -94,10 +94,14 @@ When("I start a new Haiku session in the new session tab", async ({ page, projec
 });
 
 When("I send {string} in the new session tab", async ({ page }, text: string) => {
-  const tab = page.getByTestId("new-session-tab").last();
-  await tab.getByRole("combobox", { name: "First prompt" }).fill(text);
+  const tabs = page.getByTestId("new-session-tab");
+  const before = await tabs.count();
+  const tab = tabs.last();
+  await tab.getByRole("combobox", { name: /^First prompt$/ }).fill(text);
   await expect(tab.getByTestId("send")).toBeEnabled();
   await tab.getByTestId("send").click();
+  // Sent: the tab became the session. A cut before that would fail the send instead of changing a session while offline.
+  await expect(tabs).toHaveCount(before - 1, { timeout: 30_000 });
 });
 
 Then("the new session has finished its turn", async ({ page }) => {
