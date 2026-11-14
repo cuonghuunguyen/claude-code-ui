@@ -74,7 +74,7 @@ import { backspaceToken, cleanTitle, collapsePasted, dedupePasteTokens, deleteTo
 import { OverflowTabs } from "./overflow-tabs.tsx";
 import { ArtifactConnectedContext, ArtifactOpenedContext, ArtifactPreviewContext, ArtifactTabContext, ArtifactUrlContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
 import { ArtifactTab } from "./artifact-tab.tsx";
-import { ArtifactsPane, forgetArtifactSelection, selectArtifact } from "./artifacts-pane.tsx";
+import { forgetArtifactSelection, selectArtifact } from "./artifact-selection.ts";
 import { sessionArtifacts } from "./artifacts.ts";
 import { artifactTitle } from "./tools.ts";
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
@@ -86,16 +86,11 @@ import { checkError, nextUpdate, undismissUpdate, UpdateToast, type UpdateInfo }
 import { StaleToast } from "./stale-toast.tsx";
 import { NotificationStack, useNotifications, type CardItem } from "./notifications.tsx";
 import { cardText, describeCard, IN_APP_EVENT, loadInApp, type Card } from "./notify.ts";
-import { McpDialog } from "./mcp-dialog.tsx";
-import { SkillsDialog } from "./skills-dialog.tsx";
-import { ShellsDialog } from "./shells-dialog.tsx";
-import { saveGroup as saveSettingsGroup, SettingsDialog } from "./settings-dialog.tsx";
-import { PluginsDialog } from "./plugins-dialog.tsx";
-import { AddonsDialog } from "./addons-dialog.tsx";
 import { VisualizeContext, VisualizeReadContext } from "./visualize-block.tsx";
 import { addonCommandOf, commandRows, AddonApiContext, AddonCommandContext, AddonStatusContext, AddonsContext, EMPTY_ADDONS, enabledAddons, logAllowed, useAddonLog, paneIdsOf, paneTitlesOf, addonViewOf, type AddonApi, type AddonsListResult, type AddonsState } from "./addons.ts";
 import { AddonBands, AddonFrame, type AddonHandle } from "./addon-frame.tsx";
 import { addonThemes } from "./themes.ts";
+import { saveGroup as saveSettingsGroup } from "./settings-group.ts";
 import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, insertCommand, insertMention, mentionPath, splitUploads } from "./mentions.ts";
@@ -108,8 +103,6 @@ import { agentLinks, NO_LINKS, sameLinks, workerState, type AgentLinks } from ".
 import { confirmNames, daysLabel } from "./sidebar-menus.ts";
 import { displayTitle, resumeSearchText, byRow, inProject, keepsBranch, patchSession, projectCwd, projectOf, removableWorktree, removeWorktreeText, repoOf, timeAgo, worktreeName } from "./sessions.ts";
 import { BLOCK_TEXT, ignoredText, summaryText, type CleanupScope } from "./cleanup.ts";
-import { CleanupDialog } from "./cleanup-dialog.tsx";
-import { CreateWorktreeDialog } from "./create-worktree-dialog.tsx";
 import { appendQuote, isBlockInsert } from "./quote.ts";
 import { MarkdownToolbar, formatShortcut } from "./markdown-toolbar.tsx";
 import { UserMarkdown } from "./user-markdown.tsx";
@@ -117,7 +110,6 @@ import { clearSaved } from "./editor-persist.ts";
 import { clearDrafts, draftKeys, loadDraft, loadDraftImages, NEW_TAB_DRAFT, saveDraft, saveDraftImages } from "./drafts.ts";
 import { autoCloseDue, autoCloseTargets, cleanupMenu as buildCleanupMenu, cleanupTargets, loadAutoClose, saveAutoClose, type AutoClose, type CleanupContext, type CleanupRule, type TabFacts } from "./tab-cleanup.ts";
 import { loadUsed, pruneUsed, saveUsed, seedUsed, stampUsed } from "./tab-used.ts";
-import { PairingForm } from "./pairing-form.tsx";
 import { announceDraft, flushDrafts, onDraftWritten, useDraft } from "./use-draft.ts";
 import { ClaudeLoginContext, RawPart } from "./raw-part.tsx";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
@@ -133,7 +125,6 @@ import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withArtifacts, withEdits, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { FILE_LINK_PROPS, FileLinkContext, resolveBareName } from "./file-links.tsx";
 import { AllowDeniedContext, AlwaysAllowDeniedContext, BackgroundShellContext, LocalSettingsFileContext, PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type OpenViewer, type ViewerState } from "./viewer.ts";
-import { ViewerDialog } from "./viewer-dialog.tsx";
 import { BackgroundButton, ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { VirtualTimeline } from "./virtual-timeline.tsx";
 import { useSendMode } from "./send-mode.ts";
@@ -151,15 +142,13 @@ import { announcement, faviconHref, setAppleTitle, setAppleTouchIcon, setFavicon
 import { useStableProps } from "@/lib/utils";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
 import { baseName, inDir, joinPath, relPath } from "./paths.ts";
-import { EditorSync, FilesPanel, FileTab } from "./files-panel.tsx";
-import { FileDialog } from "./file-dialog.tsx";
+import { EditorSync } from "./editor-sync.ts";
 import { createEditorStore, useEditorStore } from "./editor-store.ts";
 import { entryMention, fileMention, isDirty } from "./files.ts";
 import { isEntriesDrag, readEntriesDrag } from "./tree-drag.ts";
 import { defaultRepo, useRepos } from "./repos.ts";
 import { repoProjectKey, setRepoChoice, type RepoList } from "./repo-choice.ts";
 import { focusCommit } from "./graph-focus.ts";
-import { ChangesPanel } from "./changes-panel.tsx";
 import { sessionDiffChoice } from "./diff-mode.ts";
 import { sessionChanges } from "./changes.ts";
 import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
@@ -192,6 +181,7 @@ import { FOCUS_TAB, NEW_TAB, avatarColors, insertPaneTab, keysFinal as tabKeysFi
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { type Area, type DockArea, type DockSide, PANE_IDS, canMain, type PaneId, activePane, areaOf, flipSide, isAddonPane, loadLayout, loadPaneTabs, movePane, paneLabel, paneTabText, rememberPane, resetLayout, saveLayout, saveTerminalDock, setAddonPaneTitles, useLayout, useMinWidth, withPane, withPanes } from "./layout.ts";
+import { OnFirstOpen, PaneFallback } from "./lazy-dialog.tsx";
 import { PlanPane } from "./plan-pane.tsx";
 import { PER_CWD, artifactRef, identityOf, isItem, isPaneRef, kindOf, ownerOf, paneTabFor, paneTabTitle, parseRef, partIdOf, pathOf, refOf } from "./pane-ref.ts";
 import { type DockedCommand, type DockedSession, DOCKED_DRAG_TYPE, DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PANE_DRAG_TYPE, PaneSlot, usePaneHosts } from "./dock-area.tsx";
@@ -220,6 +210,22 @@ type PanelTarget = { key: string; cwd: string; sessionId?: string };
 const hashTab = () => tabFromHash(location.hash);
 const card = "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border bg-card shadow-raised";
 // xterm (~300 KB) loads with the first opened terminal panel, not with the app.
+// Dialogs and panels load on first use: the entry chunk stays small (GH-775).
+const McpDialog = lazy(() => import("./mcp-dialog.tsx").then((x) => ({ default: x.McpDialog })));
+const SkillsDialog = lazy(() => import("./skills-dialog.tsx").then((x) => ({ default: x.SkillsDialog })));
+const ShellsDialog = lazy(() => import("./shells-dialog.tsx").then((x) => ({ default: x.ShellsDialog })));
+const SettingsDialog = lazy(() => import("./settings-dialog.tsx").then((x) => ({ default: x.SettingsDialog })));
+const PluginsDialog = lazy(() => import("./plugins-dialog.tsx").then((x) => ({ default: x.PluginsDialog })));
+const AddonsDialog = lazy(() => import("./addons-dialog.tsx").then((x) => ({ default: x.AddonsDialog })));
+const CleanupDialog = lazy(() => import("./cleanup-dialog.tsx").then((x) => ({ default: x.CleanupDialog })));
+const CreateWorktreeDialog = lazy(() => import("./create-worktree-dialog.tsx").then((x) => ({ default: x.CreateWorktreeDialog })));
+const PairingForm = lazy(() => import("./pairing-form.tsx").then((x) => ({ default: x.PairingForm })));
+const ViewerDialog = lazy(() => import("./viewer-dialog.tsx").then((x) => ({ default: x.ViewerDialog })));
+const FileDialog = lazy(() => import("./file-dialog.tsx").then((x) => ({ default: x.FileDialog })));
+const ArtifactsPane = lazy(() => import("./artifacts-pane.tsx").then((x) => ({ default: x.ArtifactsPane })));
+const FilesPanel = lazy(() => import("./files-panel.tsx").then((x) => ({ default: x.FilesPanel })));
+const FileTab = lazy(() => import("./files-panel.tsx").then((x) => ({ default: x.FileTab })));
+const ChangesPanel = lazy(() => import("./changes-panel.tsx").then((x) => ({ default: x.ChangesPanel })));
 const GraphTab = lazy(() => import("./graph-tab.tsx").then((m) => ({ default: m.GraphTab })));
 const GraphPane = lazy(() => import("./git-graph-panel.tsx").then((m) => ({ default: m.GraphPane })));
 const TerminalPanel = lazy(() => import("./terminal-panel.tsx").then((m) => ({ default: m.TerminalPanel })));
@@ -3045,7 +3051,7 @@ export function App() {
       return (
         <Activity key={ref} mode={here ? "visible" : "hidden"}>
           <div {...box("flex flex-col")} data-pane-tab-body={ref} tabIndex={-1}>
-            <ArtifactsPane view={views[owner]} owner={owner} failed={failedTabs.has(owner)} label={tabLabel(ref)} load={artifactLoad(owner)} connected={status === "connected"} onOpenTab={(partId) => openArtifactTab(owner, partId)} requestOlder={() => requestArtifacts(owner)} hidden={!here} />
+            <Suspense fallback={<PaneFallback />}><ArtifactsPane view={views[owner]} owner={owner} failed={failedTabs.has(owner)} label={tabLabel(ref)} load={artifactLoad(owner)} connected={status === "connected"} onOpenTab={(partId) => openArtifactTab(owner, partId)} requestOlder={() => requestArtifacts(owner)} hidden={!here} /></Suspense>
           </div>
         </Activity>
       );
@@ -3070,7 +3076,7 @@ export function App() {
       return (
         <div key={ref} {...box("flex flex-col")} data-pane-tab-body={ref} tabIndex={-1}>
           {cwd ? (
-            <FileTab
+            <Suspense fallback={<PaneFallback />}><FileTab
               store={editors}
               path={pathOf(ref)!}
               cwd={cwd}
@@ -3081,7 +3087,7 @@ export function App() {
               onLink={(p, line) => (setOpenFile({ path: p, line }), showFiles(ownerOf(ref)))}
               onMoveToFiles={() => moveToFiles(ref)}
               onFocusTab={() => focusTabOf(ref)}
-            />
+            /></Suspense>
           ) : (
             <p className="m-auto text-muted-foreground text-sm">{tr("app.main.loadingFile")}</p>
           )}
@@ -3114,7 +3120,7 @@ export function App() {
         {!cwd ? (
           loading
         ) : kind === "files" ? (
-          <FilesPanel
+          <Suspense fallback={<PaneFallback />}><FilesPanel
             client={client.current!}
             status={status}
             cwd={cwd}
@@ -3145,7 +3151,7 @@ export function App() {
             onShowGraph={() => reveal("graph")}
             onOpenCommit={openCommit}
             visible={here && (lg || pane === "session")}
-          />
+          /></Suspense>
         ) : (
           <Suspense fallback={loading}>
             <GraphTab client={client.current!} cwd={cwd} hidden={!here || (!lg && pane !== "session")} connected={status === "connected" && synced} openFiles={openFiles} seq={reposSeq} repoKey={repoProjectKey(cwd, worktrees, listLoaded)} />
@@ -3924,7 +3930,7 @@ export function App() {
         </div>
       </header>
       <DeleteDialog title={deleting && (list.find((s) => s.id === deleting)?.title ?? tr("app.palette.untitled"))} onConfirm={() => deleteSession(deleting!)} onCancel={() => setDeleting(undefined)} />
-      <CleanupDialog
+      <OnFirstOpen open={!!cleanup}><CleanupDialog
         scope={cleanup}
         list={list}
         worktrees={worktrees}
@@ -3936,7 +3942,7 @@ export function App() {
           void refreshList();
           if (!cleanupOpen.current) setToast(r.skipped[0] ? tr("app.main.cleanupSkipped", { summary: summaryText(r), label: r.skipped[0].label, reason: r.skipped[0].reason }) : summaryText(r));
         }}
-      />
+      /></OnFirstOpen>
       <LabelDialog
         open={labeling !== undefined}
         title={tr("label.projectTitle", { name: labeling ? projectName(labeling) : "" })}
@@ -3990,13 +3996,13 @@ export function App() {
         }}
         testId="remove-project"
       />
-      <CreateWorktreeDialog
+      <OnFirstOpen open={!!creatingWt}><CreateWorktreeDialog
         project={creatingWt}
         request={(m) => client.current!.request(m)}
         onClose={() => setCreatingWt(undefined)}
         onCreated={(project, r) => void openInWorktree(project, r.path)}
         onJiraSettings={() => (setCreatingWt(undefined), openSettingsGroup("jira"))}
-      />
+      /></OnFirstOpen>
       <ConfirmDialog
         open={removingWorker !== undefined}
         title={tr("app.main.removeWorkerTitle", { name: lastRemovingWorker.current?.name ?? "" })}
@@ -4155,7 +4161,7 @@ export function App() {
           {status === "unauthorized" ? (
             // Also over an open session: nothing works until the browser is paired again (e.g. the token was rotated).
             <div className={`${card} flex-1`}>
-              <PairingForm />
+              <Suspense fallback={<PaneFallback />}><PairingForm /></Suspense>
             </div>
           ) : (
             <>
@@ -4345,7 +4351,7 @@ export function App() {
                   {createPortal(
                     areaOf(layout, "files") !== "main" && (
                     <div className={shows("files") ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-                      <FilesPanel
+                      <Suspense fallback={<PaneFallback />}><FilesPanel
                         client={client.current!}
                         status={status}
                         cwd={panelTarget.cwd}
@@ -4376,7 +4382,7 @@ export function App() {
                         onOpenCommit={openCommit}
                         visible={inSight("files")}
                         sync={false}
-                      />
+                      /></Suspense>
                     </div>
                     ),
                     hosts.files,
@@ -4384,7 +4390,7 @@ export function App() {
                   {createPortal(
                     panelTarget.sessionId ? (
                       views[panelTarget.sessionId] && (
-                        <ChangesPanel
+                        <Suspense fallback={<PaneFallback />}><ChangesPanel
                           key={panelTarget.sessionId}
                           hidden={!shows("changes")}
                           onCopy={copyText}
@@ -4403,11 +4409,11 @@ export function App() {
                           onResolve={(prompt) => (addonImpl.current.insert(panelTarget.sessionId!, prompt), setPane("session"))}
                           onSend={(m) => (setInsert(m), setPane("session"))}
                           project={projectOf(panelTarget.cwd, worktrees)}
-                        />
+                        /></Suspense>
                       )
                     ) : (
                       // The new-session tab: no session yet, so nothing was edited; git modes work for the draft's project.
-                      <ChangesPanel
+                      <Suspense fallback={<PaneFallback />}><ChangesPanel
                         onCopy={copyText}
                         key={NEW_TAB}
                         hidden={!shows("changes")}
@@ -4426,7 +4432,7 @@ export function App() {
                         onResolve={(prompt) => (newSession(panelTarget.cwd), setInsert(prompt))}
                         project={projectOf(panelTarget.cwd, worktrees)}
                         emptyText={tr("app.changes.empty")}
-                      />
+                      /></Suspense>
                     ),
                     hosts.changes,
                   )}
@@ -4449,7 +4455,7 @@ export function App() {
                   {createPortal(
                     areaOf(layout, "artifacts") !== "main" && panelTarget.sessionId && (
                       <div className={shows("artifacts") ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-                        <ArtifactsPane view={panelView} owner={panelTarget.sessionId} label={paneLabel("artifacts")} load={artifactLoad(panelTarget.sessionId)} connected={status === "connected"} onOpenTab={(partId) => openArtifactTab(panelTarget.sessionId!, partId)} requestOlder={() => requestArtifacts(panelTarget.sessionId!)} hidden={!shows("artifacts")} />
+                        <Suspense fallback={<PaneFallback />}><ArtifactsPane view={panelView} owner={panelTarget.sessionId} label={paneLabel("artifacts")} load={artifactLoad(panelTarget.sessionId)} connected={status === "connected"} onOpenTab={(partId) => openArtifactTab(panelTarget.sessionId!, partId)} requestOlder={() => requestArtifacts(panelTarget.sessionId!)} hidden={!shows("artifacts")} /></Suspense>
                       </div>
                     ),
                     hosts.artifacts,
@@ -4630,7 +4636,7 @@ export function App() {
         finalFocus={newPrompt}
       />
       {mcp && (
-        <McpDialog
+        <OnFirstOpen open={mcp.open}><McpDialog
           open={mcp.open}
           cwd={mcp.cwd}
           sessionId={mcp.sessionId}
@@ -4638,10 +4644,10 @@ export function App() {
           changed={configChanged[mcp.cwd]}
           request={(m) => client.current!.request(m)}
           onClose={() => setMcp({ ...mcp, open: false })}
-        />
+        /></OnFirstOpen>
       )}
       {skillsDialog && (
-        <SkillsDialog
+        <OnFirstOpen open={skillsDialog.open}><SkillsDialog
           open={skillsDialog.open}
           cwd={skillsDialog.cwd}
           sessionId={skillsDialog.sessionId}
@@ -4650,16 +4656,16 @@ export function App() {
           request={(m) => client.current!.request(m)}
           onRun={runCommand}
           onClose={() => setSkillsDialog({ ...skillsDialog, open: false })}
-        />
+        /></OnFirstOpen>
       )}
       {shellsDialog && (
-        <ShellsDialog
+        <OnFirstOpen open={shellsDialog.open}><ShellsDialog
           open={shellsDialog.open}
           view={shellsDialog.sessionId ? views[shellsDialog.sessionId] : undefined}
           output={(toolUseId) => client.current!.request<ShellOutputResult>({ type: "session.shellOutput", sessionId: shellsDialog.sessionId!, toolUseId })}
           kill={(toolUseId) => client.current!.request({ type: "session.stopShell", sessionId: shellsDialog.sessionId!, toolUseId })}
           onClose={() => setShellsDialog({ ...shellsDialog, open: false })}
-        />
+        /></OnFirstOpen>
       )}
       {commandSession &&
         enabledAddons(addons.addons)
@@ -4669,9 +4675,9 @@ export function App() {
             const key = `${a.name}:${commandSession}`;
             return entry && <AddonFrame key={key} handle={(h) => (h ? commandFrames.current.set(key, h) : commandFrames.current.delete(key), undefined)} addon={a} entry={entry} role="command" view="" sessionId={commandSession} hidden />;
           })}
-      <AddonsDialog open={addonsOpen} changed={addonsRev} log={addonLog} onClearLog={(name) => changeAddonLog({ drop: name })} request={(m) => client.current!.request(m)} onClose={() => setAddonsOpen(false)} />
+      <OnFirstOpen open={addonsOpen}><AddonsDialog open={addonsOpen} changed={addonsRev} log={addonLog} onClearLog={(name) => changeAddonLog({ drop: name })} request={(m) => client.current!.request(m)} onClose={() => setAddonsOpen(false)} /></OnFirstOpen>
       {plugins && (
-        <PluginsDialog
+        <OnFirstOpen open={plugins.open}><PluginsDialog
           open={plugins.open}
           cwd={plugins.cwd}
           sessionId={plugins.sessionId}
@@ -4680,11 +4686,11 @@ export function App() {
           request={(m) => client.current!.request(m)}
           onRestarted={(ids) => setReloadFailed((f) => new Set([...f].filter((x) => !ids.includes(x))))}
           onClose={() => setPlugins({ ...plugins, open: false })}
-        />
+        /></OnFirstOpen>
       )}
-      <SettingsDialog onLogin={() => (setSettingsOpen(false), openLogin())} project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} onOpenCodeProviders={dropOpenCodeModels} />
+      <OnFirstOpen open={settingsOpen}><SettingsDialog onLogin={() => (setSettingsOpen(false), openLogin())} project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} onOpenCodeProviders={dropOpenCodeModels} /></OnFirstOpen>
       {(viewer || shown) && client.current && (
-        <ViewerDialog
+        <OnFirstOpen open={!!viewer}><ViewerDialog
           target={viewer && !isFileTarget(viewer.target) ? viewer.target : undefined}
           opener={viewer?.opener}
           client={client.current}
@@ -4697,10 +4703,10 @@ export function App() {
           onClose={() => setViewer(undefined)}
           onOpenInEditor={(p, line) => (setViewer(undefined), setOpenFile({ path: p, line, focus: true }), reveal("files"))}
           onOpenInTab={(p) => (setViewer(undefined), openFileTab(p, viewer?.sessionId))}
-        />
+        /></OnFirstOpen>
       )}
       {(fileDialog?.owner || panelTarget) && client.current && (
-        <FileDialog
+        <OnFirstOpen open={!!fileDialog}><FileDialog
           open={!!fileDialog}
           opener={fileDialog?.opener}
           client={client.current}
@@ -4721,7 +4727,7 @@ export function App() {
           onOpenInFiles={fileDialog?.owner ? undefined : () => (setFileDialog(undefined), reveal("files"))}
           onOpenTab={(p) => openFileTab(p, fileDialog?.owner?.id)}
           onItem={focusFileTab}
-        />
+        /></OnFirstOpen>
       )}
       <ShortcutsDialog open={shortcutsOpen} edit={shortcutsEdit} onClose={() => (setShortcutsOpen(false), setShortcutsEdit(undefined))} />
       {/* Always mounted so a screen reader announces the hint when it fills in. */}

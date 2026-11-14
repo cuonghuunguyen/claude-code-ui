@@ -1,5 +1,5 @@
 import type pierreLight from "@pierre/theme/pierre-light";
-import { registerCustomTheme, type ThemeRegistration } from "@pierre/diffs";
+import type { registerCustomTheme, ThemeRegistration } from "@pierre/diffs";
 import { SURFACE, themeById, THEMES, tokensOf, type Mode, type ThemeId } from "./themes.ts";
 
 /**
@@ -122,11 +122,11 @@ export function paletteTheme(id: ThemeId, mode: Mode, src: Source): ThemeRegistr
 }
 
 let registered = false;
-/** Register Default and every theme's diff themes with @pierre/diffs (main thread: the app has no diffs worker pool). Safe to call more than once. */
-export function registerDiffThemes() {
+/** Register Default and every theme's diff themes with @pierre/diffs (main thread: the app has no diffs worker pool); `register` is its `registerCustomTheme`, passed in so this module never pulls the library into the entry chunk (diffs.ts calls it after the library loads). Safe to call more than once. */
+export function registerDiffThemes(register: typeof registerCustomTheme) {
   if (registered) return;
   registered = true;
-  for (const mode of ["light", "dark"] as const) registerCustomTheme(DIFF_THEMES[mode], () => loadSource(mode).then((src) => adjustTheme(mode, src)));
+  for (const mode of ["light", "dark"] as const) register(DIFF_THEMES[mode], () => loadSource(mode).then((src) => adjustTheme(mode, src)));
   for (const t of THEMES)
-    for (const mode of ["light", "dark"] as const) if (t[mode]) registerCustomTheme(diffThemeName(t.id, mode), () => loadSource(mode).then((src) => paletteTheme(t.id, mode, src)));
+    for (const mode of ["light", "dark"] as const) if (t[mode]) register(diffThemeName(t.id, mode), () => loadSource(mode).then((src) => paletteTheme(t.id, mode, src)));
 }

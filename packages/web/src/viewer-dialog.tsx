@@ -1,7 +1,7 @@
 // Popup viewer: a modal dialog showing a file, a diff, a plan or the Changes view opened from the timeline or the palette
 // (docs/spec.md "Session view UX"). Esc or Close closes it; focus is trapped and returns to the control that opened it.
-import { useEffect, useMemo, useRef, useState } from "react";
-import { MultiFileDiff } from "@pierre/diffs/react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { MultiFileDiff } from "./diffs.tsx";
 import { Dialog } from "@base-ui/react/dialog";
 import type { EditorView } from "@codemirror/view";
 import type { FsMediaResult, FsReadResult } from "@claude-ui/protocol";
@@ -193,7 +193,9 @@ function CompareBody({ path, old, new: next }: { path: string; old: CompareSide;
         {same ? <p className="p-2 text-muted-foreground">{t("files.timeline.noDifference")}</p> : (
           <>
             {!drawn && <p className="p-2 text-muted-foreground">{t("files.changes.loadingDiff")}</p>}
-            <MultiFileDiff oldFile={files.old} newFile={files.new} options={options} />
+            <Suspense fallback={null}>
+              <MultiFileDiff oldFile={files.old} newFile={files.new} options={options} />
+            </Suspense>
           </>
         )}
       </div>

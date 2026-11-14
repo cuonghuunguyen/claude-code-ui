@@ -76,6 +76,15 @@
     }
 }
 
+/* Shimmer text (components/ai-elements/shimmer.tsx): the highlight sweeps right to left; under reduced motion the component renders plain muted text instead. */
+@keyframes shimmer-sweep {
+    from {
+        background-position: 100% center;
+    }
+    to {
+        background-position: 0% center;
+    }
+}
 /* Shake to locate (GH-517): accent ring on the active tab, group chip and sidebar row; inset, the strip and list clip outside outlines. */
 @keyframes locate-pulse {
     50% {

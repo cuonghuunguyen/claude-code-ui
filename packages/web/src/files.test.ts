@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { inDir } from "./paths.ts";
-import { goneTab, restoredTab, mediaKind, pin, placeTab, readFailure, type Tab, diskChanged, docText, isDirty, lineBreaks, opened, reload, replaceDoc, saveBase, saved, selectionMention, selectionQuote, fileMention, entryMention, moveTabs, dropTabs, movedPath } from "./files.ts";
+import { docText, lineBreaks, replaceDoc, selectionMention, selectionQuote } from "./editor-doc.ts";
+import { goneTab, restoredTab, mediaKind, pin, placeTab, readFailure, type Tab, diskChanged, isDirty, opened, reload, saveBase, saved, fileMention, entryMention, moveTabs, dropTabs, movedPath } from "./files.ts";
 
 const tab = opened("/p/a.ts", { content: "one", mtime: 1 });
 

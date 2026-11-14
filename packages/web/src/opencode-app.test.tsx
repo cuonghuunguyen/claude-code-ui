@@ -136,8 +136,8 @@ it("the OpenCode model picker links to Settings › OpenCode; a Claude session's
   const connect = document.querySelector<HTMLElement>('[data-testid="models-connect"]')!;
   expect(connect.textContent).toContain("Connect a provider");
   await act(async () => connect.click());
-  await settle();
-  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  // Settings is a lazy chunk (GH-775).
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull(), { timeout: 10_000 });
   expect(document.querySelector('[data-testid="session-model"]')!.getAttribute("aria-expanded")).toBe("false");
   act(() => root.unmount());
   el.remove();

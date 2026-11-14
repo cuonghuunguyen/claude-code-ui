@@ -1,6 +1,6 @@
 // Tool knowledge for tool cards (docs/spec.md "Session view UX").
 import type { TodoItem } from "@claude-ui/protocol";
-import { parseDiffFromFile } from "@pierre/diffs";
+import { lineStats } from "./diff-stats.ts";
 import type { ToolCall } from "./store.ts";
 import { isWinPath, relPath } from "./paths.ts";
 import { t } from "./i18n.ts";
@@ -68,8 +68,7 @@ export function editFiles(tool: string, input: unknown): { oldFile: FileContents
 export function diffStats(tool: string, input: unknown): { added: number; removed: number } | undefined {
   const files = editFiles(tool, input);
   if (!files) return undefined;
-  const { hunks } = parseDiffFromFile(files.oldFile, files.newFile);
-  return { added: hunks.reduce((n, h) => n + h.additionLines, 0), removed: hunks.reduce((n, h) => n + h.deletionLines, 0) };
+  return lineStats(files.newFile.name, files.oldFile.contents, files.newFile.contents);
 }
 
 /** The Artifact tools (publish, read and comment on claude.ai artifacts, artifact database); each has a card body of its own. */

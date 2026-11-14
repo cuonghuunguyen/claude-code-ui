@@ -175,7 +175,8 @@ describe("restart", () => {
     await mount();
     expect(tour()).toBeNull();
     await act(async () => document.querySelector<HTMLElement>('[data-testid="open-settings"]')!.click());
-    await act(async () => {});
+    // Settings is a lazy chunk (GH-775).
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="settings-dialog"]')).not.toBeNull(), { timeout: 10_000 });
     expect(document.querySelector('[data-testid="settings-dialog"]')).not.toBeNull();
     await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-group-about"]')!.click());
     await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-guide-restart"]')!.click());
@@ -203,6 +204,7 @@ describe("restart", () => {
     Object.defineProperty(btn, "getClientRects", { value: () => [{}] });
     btn.getBoundingClientRect = () => ({ left: 0, top: 0, width: 50, height: 20, right: 50, bottom: 20, x: 0, y: 0, toJSON() {} });
     await act(async () => btn.click());
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="settings-group-about"]')).not.toBeNull(), { timeout: 10_000 });
     await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-group-about"]')!.click());
     await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-guide-restart"]')!.click());
     await act(async () => {});

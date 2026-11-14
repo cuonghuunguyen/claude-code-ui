@@ -3,12 +3,11 @@ import { isPromptImage, type Part, type ToolStatus } from "@claude-ui/protocol";
 import { useMediaSrc } from "./media.ts";
 import { MediaPlaceholder } from "./media-notice.tsx";
 import type { FileDiffOptions } from "@pierre/diffs";
-import { MultiFileDiff } from "@pierre/diffs/react";
+import { DiffSkeleton, MultiFileDiff } from "./diffs.tsx";
 import { useColorTheme, useDark } from "./theme.ts";
 import { DIFF_THEMES, diffThemes } from "./code-palette.ts";
-import "./code-theme.ts"; // registers the diff themes before any diff renders
 import type { ToolUIPart } from "ai";
-import { createContext, use, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, Suspense, use, useEffect, useMemo, useState, type ReactNode } from "react";
 import { SendToBackIcon, Maximize2Icon, PanelsTopLeftIcon, SquareArrowOutUpRightIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
@@ -645,6 +644,8 @@ function EditDiff({ call, result }: { call: ToolCall; result?: ToolResult }) {
   );
 }
 
+const lineCount = (s: string) => (s ? s.split("\n").length - (s.endsWith("\n") ? 1 : 0) : 0);
+
 /** The Edit/Write diff of a tool input; `fallback` while the input is incomplete. Also used by the permission panel. */
 export function InputDiff({
   tool,
@@ -677,7 +678,9 @@ export function InputDiff({
   if (!files) return fallback;
   return (
     <div className="overflow-hidden rounded-md border text-xs" data-testid="edit-diff">
-      <MultiFileDiff oldFile={files.oldFile} newFile={files.newFile} options={options} />
+      <Suspense fallback={<DiffSkeleton rows={lineCount(files.oldFile.contents) + lineCount(files.newFile.contents)} header={fileHeader} />}>
+        <MultiFileDiff oldFile={files.oldFile} newFile={files.newFile} options={options} />
+      </Suspense>
     </div>
   );
 }

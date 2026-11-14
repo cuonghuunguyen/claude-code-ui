@@ -1,9 +1,9 @@
 // Changes tab (docs/spec.md "Layout"): files changed in the session, or in the working tree against HEAD or a branch, each with its diff, like OpenCode's review panel.
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode, type RefObject } from "react";
+import { Fragment, Suspense, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode, type RefObject } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
 import type { FsMediaResult, FsReadResult, GitDiff, GitDiffResult, GitLogResult, GitOperation, GitOperationResult, GitRepo, GitStatusResult } from "@claude-ui/protocol";
-import { parseDiffFromFile, type DiffLineAnnotation, type SelectedLineRange } from "@pierre/diffs";
-import { FileDiff as PierreFileDiff } from "@pierre/diffs/react";
+import type { DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
+import { PierreFileDiff, usePierre } from "./diffs.tsx";
 import { ArchiveIcon, ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, FileDiffIcon, ListIcon, ListTreeIcon, Maximize2Icon, MessageSquarePlusIcon, RotateCcwIcon, RotateCwIcon, Rows2Icon, SearchIcon, SquareArrowOutUpRightIcon, TextQuoteIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -1108,7 +1108,8 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
   );
   const same = files !== undefined && row.before === row.after;
   // The library's own parse of the two sides: hunk Rollback (GH-558, one button after the last change of each hunk) and the line selection read it.
-  const parsed = useMemo(() => (files && !same ? parseDiffFromFile(files.old, files.new) : undefined), [files, same]);
+  const pierre = usePierre();
+  const parsed = useMemo(() => (pierre && files && !same ? pierre.parseDiffFromFile(files.old, files.new) : undefined), [pierre, files, same]);
   // The annotation carries no data (the options type is not generic): the hunk is found again by its line.
   const anchors = useMemo(() => {
     if (!onHunk) return undefined;
@@ -1236,6 +1237,7 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
           <p className="p-2 text-muted-foreground">{git ? (row.kind === "R" ? t("files.changes.renamedOnly") : t("files.changes.noContent")) : t("files.changes.noAgainstBefore")}</p>
         ) : files ? (
           parsed && (
+            <Suspense fallback={null}>
             <PierreFileDiff
               fileDiff={parsed}
               options={options}
@@ -1259,6 +1261,7 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
                 );
               }}
             />
+            </Suspense>
           )
         ) : (
           !row.error &&

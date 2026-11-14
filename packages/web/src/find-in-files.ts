@@ -1,5 +1,4 @@
 // Find in files (Ctrl+Shift+F): the pure parts of the panel: search history, flat match list, highlight segments, prefill from a selection.
-import { EditorView } from "@codemirror/view";
 import { MAX_SEARCH_CHARS, type FsGrepResult, type FsReplaceResult, type GrepFile, type ReplaceSkip } from "@claude-ui/protocol";
 
 export const FIND_HISTORY_KEY = "claude-ui.findHistory";
@@ -45,12 +44,17 @@ export function lineSegments(text: string, ranges: [number, number][] | undefine
   return out;
 }
 
+/** The editor view of a `.cm-editor` element. Set by files-panel.tsx when it loads: CodeMirror is a lazy chunk, and there is no editor before it. */
+type EditorOf = (el: HTMLElement) => { state: { selection: { main: { from: number; to: number } }; sliceDoc(from: number, to: number): string } } | null | undefined;
+let editorOf: EditorOf | undefined;
+export const setEditorOf = (f: EditorOf) => void (editorOf = f);
+
 /** The single-line selected text of the focused file editor or text field; undefined for none, a blank one, a line break or over MAX_SEARCH_CHARS. */
 export function selectionQuery(el: Element | null = document.activeElement): string | undefined {
   let text: string | undefined;
   const cm = el?.closest(".cm-editor");
   if (cm instanceof HTMLElement) {
-    const view = EditorView.findFromDOM(cm);
+    const view = editorOf?.(cm);
     const { from, to } = view?.state.selection.main ?? { from: 0, to: 0 };
     text = view?.state.sliceDoc(from, to);
   } else if ((el instanceof HTMLInputElement && el.type !== "password") || el instanceof HTMLTextAreaElement) {

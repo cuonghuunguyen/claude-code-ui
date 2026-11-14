@@ -97,8 +97,8 @@ it("a tab shown again without a re-render sends to its own session and opens dia
   expect(sent).toContainEqual(expect.objectContaining({ type: "session.prompt", sessionId: B, text: "hello" }));
   await type("/mcp");
   await enter();
-  await act(async () => {});
-  expect(sent).toContainEqual(expect.objectContaining({ type: "mcp.list", cwd: "/p/b" }));
+  // The MCP dialog is a lazy chunk (GH-775): it asks for its list once loaded.
+  await vi.waitFor(() => expect(sent).toContainEqual(expect.objectContaining({ type: "mcp.list", cwd: "/p/b" })), { timeout: 10_000 });
 });
 
 it("the phone tab switcher is a popup that picks the tab", async () => {

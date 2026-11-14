@@ -13,10 +13,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { cjk } from "@streamdown/cjk";
-import { code } from "@streamdown/code";
-import { math } from "@streamdown/math";
-import { mermaid } from "@streamdown/mermaid";
 import type { UIMessage } from "ai";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import type { ComponentProps, HTMLAttributes, ReactElement } from "react";
@@ -35,6 +31,7 @@ import { useAddonFenceRenderers } from "../../addon-render.tsx";
 import { VisualizeContext, VisualizeFence } from "../../visualize-block.tsx";
 import { useDark } from "../../theme.ts";
 import { useT } from "../../i18n.ts";
+import { useMarkdownPlugins } from "../../markdown-plugins.ts";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -330,8 +327,6 @@ export const MessageBranchPage = ({
 
 export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
-const streamdownPlugins = { cjk, code, math, mermaid };
-
 export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => {
     // Fences an addon draws (GH-516): its renderer is checked before mermaid and the code plugin. The constant stays while there are none.
@@ -342,6 +337,8 @@ export const MessageResponse = memo(
     // Mermaid draws with its own palette: without the dark theme its lines vanish on a dark background.
     const dark = useDark();
     const mermaid = useMemo(() => ({ config: { theme: dark ? ("dark" as const) : ("default" as const) } }), [dark]);
+    // katex, mermaid and shiki load only for a text that has math, a mermaid fence or a code fence (markdown-plugins.ts).
+    const streamdownPlugins = useMarkdownPlugins(typeof props.children === "string" ? props.children : "");
     return (
       <Streamdown
         className={cn(
@@ -356,7 +353,9 @@ export const MessageResponse = memo(
   },
   (prevProps, nextProps) =>
     prevProps.children === nextProps.children &&
-    nextProps.isAnimating === prevProps.isAnimating
+    nextProps.isAnimating === prevProps.isAnimating &&
+    // UserMarkdown passes its own plugins, which change once the code plugin has loaded.
+    nextProps.plugins === prevProps.plugins
 );
 
 MessageResponse.displayName = "MessageResponse";

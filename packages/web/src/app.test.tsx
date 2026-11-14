@@ -3,7 +3,7 @@
 import { EditorView } from "@codemirror/view";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearDrafts, loadDraftImages } from "./drafts.ts";
 import type { SessionListItem } from "@claude-ui/protocol";
 import { saveDiffMode } from "./diff-mode.ts";
@@ -92,6 +92,12 @@ const { App } = await import("./App.tsx");
 
 let el: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
+// The dialogs and panels are lazy chunks (GH-775): load them once up front, so a test that opens one is not racing the first transform of its modules.
+beforeAll(() =>
+  Promise.all(["./file-dialog.tsx", "./files-panel.tsx", "./changes-panel.tsx", "./settings-dialog.tsx", "./viewer-dialog.tsx", "./artifacts-pane.tsx", "./mcp-dialog.tsx", "./skills-dialog.tsx", "./plugins-dialog.tsx", "./addons-dialog.tsx", "./shells-dialog.tsx", "./cleanup-dialog.tsx", "./create-worktree-dialog.tsx", "./pairing-form.tsx"].map((m) => import(/* @vite-ignore */ m))),
+  60_000,
+);
+
 beforeEach(async () => {
   clearDrafts();
   width = 1440;
@@ -1803,6 +1809,8 @@ describe("worktrees", () => {
     try {
       await press({ key: "k", code: "KeyK", ctrlKey: true });
       await act(async () => paletteRow("Clean up worktrees and workers…")!.click());
+      // The dialog is a lazy chunk (GH-775).
+      await vi.waitFor(() => expect(document.querySelector('[data-testid="cleanup-dialog"]')).not.toBeNull(), { timeout: 10_000 });
       await act(async () => {});
       const d = document.querySelector('[data-testid="cleanup-dialog"]')!;
       expect(d.textContent).toContain("All projects");
@@ -1825,7 +1833,8 @@ describe("worktrees", () => {
     const from = sent.length;
     try {
       await act(async () => el.querySelector<HTMLElement>('[data-testid="project-new-worktree"]')!.click());
-      await act(async () => {});
+      // The dialog is a lazy chunk (GH-775): it draws when the chunk has loaded.
+      await vi.waitFor(() => expect(document.querySelector('[data-testid="create-worktree"]')).not.toBeNull(), { timeout: 10_000 });
       expect(document.querySelector('[data-testid="create-worktree"]')).not.toBeNull();
       expect(sent.slice(from).filter((m) => m.type === "worktree.create")).toEqual([]);
       await field("create-worktree-name", "Fix Login Ü");
@@ -2464,6 +2473,8 @@ describe("idle close: holds and background follows", () => {
 
 it("a daemon that rejects this browser shows the pairing form in place of the session", async () => {
   await act(async () => setStatus("unauthorized"));
+  // The pairing form is a lazy chunk (GH-775).
+  await vi.waitFor(() => expect(el.querySelector('[data-testid="pairing-needed"]')).not.toBeNull(), { timeout: 10_000 });
   expect(el.querySelector('[data-testid="pairing-needed"]')!.textContent).toContain("it is not paired");
   expect(el.querySelector('[data-testid="pairing-input"]')).not.toBeNull();
   await act(async () => setStatus("connected"));
@@ -5421,6 +5432,8 @@ describe("GH-397 Terminal in the main area", () => {
       await settle();
       await press({ key: "k", code: "KeyK", ctrlKey: true });
       await act(async () => paletteRow("Open settings")!.click());
+      // Settings is a lazy chunk (GH-775).
+      await vi.waitFor(() => expect(document.querySelector('[data-testid="settings-group-layout"]')).not.toBeNull(), { timeout: 10_000 });
       await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-group-layout"]')!.click());
       await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-terminal-position"]')!.click());
       await act(async () => document.querySelector<HTMLElement>('[data-testid="settings-terminal-position-bottom"]')!.click());

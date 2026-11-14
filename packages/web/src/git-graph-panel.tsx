@@ -1,8 +1,8 @@
 // Graph tab (docs/spec.md "Layout"): the commit history of the selected repository: lanes, filters, Fetch, details, per-file diff.
-import { cloneElement, memo, useCallback, type ReactElement, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { cloneElement, memo, Suspense, useCallback, type ReactElement, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { GitCommit, GitRepo, GitCommitDetail, GitCommitResult, GitDiff, GitDiffResult, GitFileChange, GitLogResult, GitRefsResult, FsReadResult } from "@claude-ui/protocol";
 import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
-import { MultiFileDiff } from "@pierre/diffs/react";
+import { MultiFileDiff } from "./diffs.tsx";
 import { ArchiveIcon, ArrowLeftIcon, CloudDownloadIcon, GitCommitHorizontalIcon, LoaderCircleIcon, RotateCwIcon, SearchIcon, TagIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -529,7 +529,9 @@ function FileView({ file: f, load, loadKey, back, dark, narrow, onBack }: { file
         {!err && (!sides || (sides.before !== sides.after && !drawn)) && <p className="p-2 text-muted-foreground">{tr("files.changes.loadingDiff")}</p>}
         {sides && sides.before === sides.after && <p className="p-2 text-muted-foreground">{f.status === "R" ? tr("files.changes.renamedOnly") : tr("files.changes.noContent")}</p>}
         {sides && sides.before !== sides.after && (
-          <MultiFileDiff oldFile={files!.old} newFile={files!.new} options={options} />
+          <Suspense fallback={null}>
+            <MultiFileDiff oldFile={files!.old} newFile={files!.new} options={options} />
+          </Suspense>
         )}
       </div>
     </div>
