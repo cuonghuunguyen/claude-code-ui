@@ -849,7 +849,7 @@ describe("OpenCode rewind", { timeout: TEST_MS }, () => {
     const snapshotParts: Part[] = [...sub.snapshot.heads.map((e: { part: Part }) => e.part), ...sub.snapshot.page.parts];
     /** What the page has: the snapshot, then the events. */
     const seen = () => [...snapshotParts, ...parts()];
-    /** The read after the stream connected (the second message read, after the restore's) has been answered and applied. */
+    /** The read after the stream connected (the second message read, after the restore's) has started, plus 150 ms for its answer and apply: the client sees no signal of the apply (re-emitted parts may be in the snapshot or in events). */
     const streamRead = async () => {
       await until(() => d.requests("GET", "/session/ses_rw/message").length >= 2);
       await new Promise((x) => setTimeout(x, 150));
