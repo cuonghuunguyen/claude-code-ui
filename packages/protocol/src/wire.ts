@@ -365,6 +365,14 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.abort"; cwd: string; kind: GitOperationKind; exact?: true }
   /** Branch menu New branch: `git branch <name> <at|HEAD>`, or with `checkout` `git switch -c <name> [<at>]`. `at`: a full commit hash (absent = HEAD). Tracked local changes that would be overwritten: error code `local_changes`; `smart` stashes them, switches and applies them again (a conflict is a success whose reply carries `operation`). Refused while a merge, rebase or conflict is unfinished. Reply GitWriteResult. */
   | { type: "git.branchCreate"; cwd: string; name: string; at?: string; checkout?: boolean; smart?: boolean; exact?: true }
+  /** Graph New Tag: `git tag <name> <hash>`, or `git tag -a -m <message> <name> <hash>` when `message` has text. `hash`: a full commit hash. `argv` must equal `tagCreateArgv(name, hash, message)` (else `stale`). Existing or invalid name: `bad_request`. Allowed during an unfinished operation. Reply GitWriteResult. */
+  | { type: "git.tagCreate"; cwd: string; hash: string; name: string; message?: string; argv: string[]; exact?: true }
+  /** Graph Remove Tag dialog data: the local tag and the configured remotes (no network). Unknown tag: `bad_request`. Reply GitTagResult. */
+  | { type: "git.tag"; cwd: string; name: string; exact?: true }
+  /** Graph Remove Tag dialog: whether `remote` has the tag (`git ls-remote`, network, credentials never asked). Reply GitTagRemoteResult. */
+  | { type: "git.tagRemote"; cwd: string; name: string; remote: string; exact?: true }
+  /** Graph Remove Tag: deletes `name` on each of `remotes` (lease on the shown `hash`), then locally. `hash` and every `argv` are what `git.tag`/`git.tagRemote` and the dialog showed (a change is `stale`). A remote failure stops before the local delete. Reply GitWriteResult. */
+  | { type: "git.tagDelete"; cwd: string; name: string; hash: string; argv: string[]; remotes?: { remote: string; hash: string; argv: string[] }[]; exact?: true }
   /** Branch menu Checkout: `git switch --no-guess <branch>` for `refs/heads/x`, `git switch --track <ref>` for `refs/remotes/r/b` (a new local branch). Errors, `smart` and the reply as `git.branchCreate`. */
   | { type: "git.checkout"; cwd: string; ref: string; smart?: boolean; exact?: true }
   /** Graph commit menu data (GH-562): what Undo Commit, Revert Commit, Cherry-Pick and Reset Current Branch to Here can do for `hash`, with the exact git argv of each. `hard`: also the files a hard reset would lose (`lose`, `loseCount`, `dirty`). Reply GitCommitMenuResult. */
@@ -889,6 +897,11 @@ export type GitOperation = { kind: GitOperationKind; conflicted: string[] };
 export type GitOperationResult = { operation: GitOperation | null };
 /** A merge, rebase, continue or abort: git's output and the refs stamp; `operation` is set when it stopped on conflicts. `written` null outside a work tree. */
 export type GitWriteResult = { written: { output: string; refs: string | null; operation?: GitOperation } | null };
+/** A tag as `git.tag` read it: `hash` the ref value (tag object or commit), `commit` the peeled commit, `remotes` the configured remote names (at most 20). */
+export type GitTagInfo = { name: string; hash: string; commit: string; annotated: boolean; remotes: string[] };
+export type GitTagResult = { tag: GitTagInfo | null };
+/** `remoteTag.hash` absent: the remote has no such tag. `null` outside a work tree. */
+export type GitTagRemoteResult = { remoteTag: { remote: string; hash?: string } | null };
 /** One stash entry: `message` is the reflog subject ("On main: wip"), `time` seconds like \`GitCommit.time\`. */
 export type GitStash = { index: number; hash: string; message: string; time: number };
 /** `stashes` null outside a git work tree. */

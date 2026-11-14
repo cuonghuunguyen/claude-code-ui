@@ -64,6 +64,7 @@ afterEach(() => {
   stampValue = "s1";
   noStamp = false;
   branchCount = 2;
+  tagRemotes = {};
   forgetRemoteOps();
   forgetRepoChoices();
   localStorage.removeItem("claude-ui.repoChoice");
@@ -87,6 +88,13 @@ const commitMenu = (h: string, hard?: boolean): GitCommitMenu => ({
   reset: { soft: ["reset", "--soft", h], mixed: ["reset", "--mixed", h], hard: ["reset", "--hard", "--no-recurse-submodules", h] },
   ...(hard && { lose: ["a.txt", "b.txt"], loseCount: 3, dirty: "fp1" }),
 });
+/** Remove Tag dialog data of the fake: the local tag, and per remote the hash it answers (absent: not on that remote; "fail": ls-remote fails). */
+let tagRemotes: Record<string, string | undefined> = {};
+const tagReply = (m: Req & { name?: string }) => ({ tag: { name: m.name!, hash: hash(2), commit: hash(2), annotated: false, remotes: Object.keys(tagRemotes) } });
+const tagRemoteReply = async (m: Req & { name?: string; remote?: string }) => {
+  if (tagRemotes[m.remote!] === "fail") throw Object.assign(new Error("fatal: could not read\nsecond line"), { code: "git_failed" });
+  return { remoteTag: { remote: m.remote!, ...(tagRemotes[m.remote!] && { hash: tagRemotes[m.remote!] }) } };
+};
 let writeReply: () => Promise<unknown> = async () => ({ remote: { output: "", refs: "s2" } });
 function fake(all: GitCommit[], files: GitCommitDetail["files"] = [], page = 200, nogit = false) {
   const sent: Req[] = [];
@@ -100,6 +108,9 @@ function fake(all: GitCommit[], files: GitCommitDetail["files"] = [], page = 200
     if (m.type === "git.fetch") return fetchReply();
     if (m.type === "git.branch") return { branch: branchInfo(m.ref!) };
     if (m.type === "git.push" || m.type === "git.pull" || m.type === "git.merge" || m.type === "git.rebase" || m.type === "git.revert" || m.type === "git.undoCommit" || m.type === "git.cherryPick" || m.type === "git.checkout" || m.type === "git.branchCreate" || m.type === "git.reset") return writeReply();
+    if (m.type === "git.tagCreate" || m.type === "git.tagDelete") return writeReply();
+    if (m.type === "git.tag") return tagReply(m);
+    if (m.type === "git.tagRemote") return tagRemoteReply(m);
     if (m.type === "git.commitMenu") return { commitMenu: commitMenu(m.hash!, (m as { hard?: boolean }).hard) };
     if (m.type === "git.refs") return { refs: noStamp ? null : stampValue };
     if (m.type === "git.status") return { status: { branch: statusBranch, added: 0, removed: 0 } };
@@ -382,7 +393,7 @@ it("a detached HEAD chip offers no Push or Pull, only Fetch", async () => {
   await mount(c);
   await menuAt([...el.querySelectorAll("[data-testid=commit-ref]")].find((x) => x.textContent === "HEAD")!);
   expect(c.sent.filter((m) => m.type === "git.branch")).toEqual([]);
-  expect(itemTexts()).toEqual(["New Branch…"]);
+  expect(itemTexts()).toEqual(["New Branch…", "New Tag…"]);
 });
 
 it("the HEAD label comes from the first page's head: it follows a checkout on Refresh and needs no HEAD commit in the page; the panel sends no git.status", async () => {
@@ -1032,7 +1043,7 @@ it("a click on empty list space then Shift+F10 opens the selected row's commit m
   await act(async () => void list().dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true, cancelable: true })));
   await menuAt(list());
   expect(c.sent.filter((m) => m.type === "git.commitMenu").map((m) => m.hash)).toEqual([hash(3)]);
-  expect(itemTexts()).toEqual(["New Branch…"]);
+  expect(itemTexts()).toEqual(["New Branch…", "New Tag…"]);
 });
 
 it("the command block wraps at spaces (a long -c prefix is not cut mid-word)", async () => {
@@ -1293,7 +1304,7 @@ it("the commit menu has commit actions only, in order: Copy Revision Number, Che
   await mount(c);
   await menuAt(rowEls()[0]!);
   await flush();
-  expect(items().map((i) => i.textContent)).toEqual(["Copy Revision Number", "Cherry-Pick", "Reset Current Branch to Here…", "Revert Commit", "Undo Commit", "New Branch…"]);
+  expect(items().map((i) => i.textContent)).toEqual(["Copy Revision Number", "Cherry-Pick", "Reset Current Branch to Here…", "Revert Commit", "Undo Commit", "New Branch…", "New Tag…"]);
   expect(byId("commit-reset").className).toContain("text-destructive");
   expect(document.querySelector("[data-testid=branch-fetch]")).toBeNull();
 });
@@ -1480,4 +1491,114 @@ it("GH-722: a New branch ask opens the New branch dialog; a Stash ask opens the 
   expect(el.querySelector("[data-testid=stash-section]")).not.toBeNull();
   expect(byId("git-stash-push-dialog")).not.toBeNull();
   await act(async () => byId("git-stash-push-cancel").click());
+});
+
+// ---- GH-666: New Tag and Remove Tag ----
+const tagged = (): GitCommit[] => {
+  const h = history(3);
+  h[1] = { ...h[1]!, refs: ["refs/tags/v1"] };
+  return h;
+};
+const fillField = (e: HTMLElement, v: string) =>
+  act(async () => {
+    const proto = e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(e, v);
+    e.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
+it("a tag chip menu starts with Remove Tag…, then the commit group with New Tag… and Remove Tag <name>…", async () => {
+  const c = fake(tagged());
+  await mount(c);
+  await menuAt(chip("refs/tags/v1"));
+  const ids = items().map((i) => i.dataset.testid);
+  expect(ids[0]).toBe("tag-remove");
+  expect(byId("tag-remove").textContent).toBe("Remove Tag…");
+  expect(ids).toContain("tag-new");
+  expect(byId("tag-remove-v1").textContent).toBe("Remove Tag v1…");
+  expect(ids.indexOf("tag-new")).toBeGreaterThan(ids.indexOf("branch-new"));
+  expect(c.sent.some((m) => m.type === "git.branch")).toBe(false);
+});
+
+it("a row menu has New Tag… and one Remove Tag <name>… per tag of the commit", async () => {
+  const c = fake(tagged());
+  await mount(c);
+  await menuAt(rowOf(hash(2)));
+  expect(byId("tag-new").textContent).toBe("New Tag…");
+  expect(byId("tag-remove")).toBeNull();
+  expect(byId("tag-remove-v1").textContent).toBe("Remove Tag v1…");
+  await closeMenu();
+  await menuAt(rowOf(hash(1)));
+  expect(byId("tag-new")).not.toBeNull();
+  expect(byId("tag-remove-v1")).toBeNull();
+});
+
+it("New Tag: the command follows the message (lightweight to annotated) and Create sends that argv", async () => {
+  const c = fake(tagged());
+  await mount(c);
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await menuAt(rowOf(hash(1)));
+  await act(async () => byId("tag-new").click());
+  expect(byId("git-new-tag-confirm").hasAttribute("disabled")).toBe(true);
+  expect(byId("git-command").textContent).toBe("git tag <name> " + hash(1));
+  await fillField(byId("git-new-tag-name"), "v2");
+  expect(byId("git-new-tag-confirm").hasAttribute("disabled")).toBe(false);
+  expect(byId("git-command").textContent).toBe("git tag v2 " + hash(1));
+  await fillField(byId("git-new-tag-message"), "first release");
+  expect(byId("git-command").textContent).toBe(`git tag -a -m "first release" v2 ${hash(1)}`);
+  await act(async () => byId("git-new-tag-confirm").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.tagCreate")).toEqual([{ type: "git.tagCreate", cwd: "/p", hash: hash(1), name: "v2", message: "first release", argv: ["tag", "-a", "-m", "first release", "v2", hash(1)] }]);
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Created tag v2 at 0000000");
+});
+
+it("New Tag without a message sends a lightweight tag with no message field", async () => {
+  const c = fake(tagged());
+  await mount(c);
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await menuAt(rowOf(hash(1)));
+  await act(async () => byId("tag-new").click());
+  await fillField(byId("git-new-tag-name"), "  v3  ");
+  await act(async () => byId("git-new-tag-confirm").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.tagCreate")).toEqual([{ type: "git.tagCreate", cwd: "/p", hash: hash(1), name: "v3", argv: ["tag", "v3", hash(1)] }]);
+});
+
+it("Remove Tag: a checkbox only for a remote that has the tag, the command follows it, the request carries remotes", async () => {
+  const c = fake(tagged());
+  await mount(c);
+  tagRemotes = { origin: hash(2), backup: undefined, broken: "fail" };
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await menuAt(chip("refs/tags/v1"));
+  await act(async () => byId("tag-remove").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.tag")).toEqual([{ type: "git.tag", cwd: "/p", name: "v1" }]);
+  expect(c.sent.filter((m) => m.type === "git.tagRemote").map((m) => (m as { remote?: string }).remote).sort()).toEqual(["backup", "broken", "origin"]);
+  expect(byId("git-remove-tag-remote-origin")).not.toBeNull();
+  expect((byId("git-remove-tag-remote-origin") as HTMLInputElement).checked).toBe(false);
+  expect(byId("git-remove-tag-remote-backup")).toBeNull();
+  expect(byId("git-remove-tag-remote-broken")).toBeNull();
+  expect(byId("git-remove-tag-dialog").textContent).toContain("Could not check broken: fatal: could not read");
+  expect(byId("git-remove-tag-dialog").textContent).not.toContain("second line");
+  expect(byId("git-command").textContent).toBe("git tag -d v1");
+  await act(async () => byId("git-remove-tag-remote-origin").click());
+  const push = ["-c", "core.fsmonitor=false", "-c", "protocol.ext.allow=never", "push", "--no-recurse-submodules", `--force-with-lease=refs/tags/v1:${hash(2)}`, "origin", "--delete", "refs/tags/v1"];
+  expect(byId("git-command").textContent).toBe(`git ${push.join(" ")}\ngit tag -d v1`);
+  await act(async () => byId("git-remove-tag-confirm").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.tagDelete")).toEqual([{ type: "git.tagDelete", cwd: "/p", name: "v1", hash: hash(2), argv: ["tag", "-d", "v1"], remotes: [{ remote: "origin", hash: hash(2), argv: push }] }]);
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Deleted tag v1 locally and on origin");
+});
+
+it("Remove Tag with no remote checked sends no remotes and reports a local delete", async () => {
+  const c = fake(tagged());
+  await mount(c);
+  tagRemotes = { origin: hash(2) };
+  writeReply = async () => ({ written: { output: "", refs: "s2" } });
+  await menuAt(rowOf(hash(2)));
+  await act(async () => byId("tag-remove-v1").click());
+  await flush();
+  await act(async () => byId("git-remove-tag-confirm").click());
+  await flush();
+  expect(c.sent.filter((m) => m.type === "git.tagDelete")).toEqual([{ type: "git.tagDelete", cwd: "/p", name: "v1", hash: hash(2), argv: ["tag", "-d", "v1"] }]);
+  expect(el.querySelector("[data-testid=graph-remote-result] [role=status]")!.textContent).toContain("Deleted tag v1");
 });

@@ -4,9 +4,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, existsSync, fstatSync, lstatSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { lstat, open, rm } from "node:fs/promises";
 import { join } from "node:path";
-import type { GitCommitMenu, GitCommitted, GitOperation, GitOperationKind, GitRollbackFile, GitRollbackPreview, GitStash, HistoryReason } from "@claude-ui/protocol";
+import { tagCreateArgv } from "@claude-ui/protocol";
+import type { GitCommitMenu, GitTagInfo, GitCommitted, GitOperation, GitOperationKind, GitRollbackFile, GitRollbackPreview, GitStash, HistoryReason } from "@claude-ui/protocol";
 import { gitOperation, gitRefs, hostOf, isHash, pinScope, repoPath, topIn, WorktreeError } from "./git.ts";
-import { branchInfo, branchRef, exclusive, gitBranch, HARDEN, MAX_ERROR, tidy, writeEnv, type RemoteOptions } from "./git-remote.ts";
+import { branchInfo, branchRef, checkTagName, exclusive, gitBranch, HARDEN, localTagHash, MAX_ERROR, remoteConfigOf, tidy, writeEnv, type RemoteOptions } from "./git-remote.ts";
 import { openChecked, OPEN_READ, readAll, sameFile } from "./fd-check.ts";
 import { runGit } from "./git-runner.ts";
 import { MAX_BYTES } from "./local-history.ts";
@@ -682,6 +683,43 @@ export async function gitBranchCreate(cwd: string, o: { name: unknown; at?: unkn
     if (!o.checkout) return { output: (await run(top, ["branch", name, ...(at ? [at] : ["HEAD"])], env)).out, refs: await gitRefs(top, o.allowed) };
     return switchTo(top, ["-c", name, ...(at ? [at] : [])], smart, env, o.allowed, o.snapshot);
   });
+}
+
+// ---- Tags: New Tag, and the local data of Remove Tag (docs/spec.md "Layout", Graph tab; wire `git.tagCreate`, `git.tag`) ----
+
+const MAX_TAG_MESSAGE = 10_000;
+const MAX_REMOTES = 20;
+
+/** `git tag <name> <hash>` (annotated with `-a -m` when `message` has text). `hash`: a full commit hash. Allowed during an unfinished operation: no index or work tree change. */
+export async function gitTagCreate(cwd: string, o: { hash: unknown; name: unknown; message?: unknown; argv: unknown } & RemoteOptions): Promise<Written | null> {
+  const { hash, name, message } = o;
+  if (message !== undefined && (typeof message !== "string" || message.length > MAX_TAG_MESSAGE || message.includes("\0"))) throw bad("message must be text of at most 10000 characters");
+  const top = await topIn(cwd, o.allowed);
+  if (!top) return null;
+  const env = await writeEnvNoEditor(top);
+  return exclusive(top, async () => {
+    if (!isHash(hash) || (await ask(top, ["cat-file", "-e", `${hash}^{commit}`], env).catch(() => ({ code: 1 }))).code !== 0) throw bad("Unknown commit");
+    await checkTagName(top, name, env);
+    const tag = name as string;
+    if ((await localTagHash(top, tag, env)) !== "") throw bad(`Tag ${tag} already exists`);
+    const argv = tagCreateArgv(tag, hash, message as string | undefined);
+    if (!Array.isArray(o.argv) || o.argv.length !== argv.length || o.argv.some((a, i) => a !== argv[i])) throw new WorktreeError("stale", "The command changed since the dialog opened");
+    return { output: (await run(top, argv, env)).out, refs: await gitRefs(top, o.allowed) };
+  });
+}
+
+/** The local tag and the configured remotes (no network), for the Remove Tag dialog. Null outside a work tree. */
+export async function gitTag(cwd: string, o: { name: unknown } & RemoteOptions): Promise<GitTagInfo | null> {
+  const top = await topIn(cwd, o.allowed);
+  if (!top) return null;
+  const env = await writeEnv(top);
+  const name = await checkTagName(top, o.name, env);
+  const hash = await localTagHash(top, name, env);
+  if (!hash) throw bad("Unknown tag");
+  const commit = (await ask(top, ["rev-parse", "-q", "--verify", `refs/tags/${name}^{commit}`], env)).out;
+  const annotated = (await ask(top, ["cat-file", "-t", `refs/tags/${name}`], env)).out === "tag";
+  const { names } = await remoteConfigOf(top);
+  return { name, hash, commit, annotated, remotes: [...names].slice(0, MAX_REMOTES) };
 }
 
 /** Checks out a local branch (`refs/heads/x`), or a remote branch (`refs/remotes/r/b`) as a new local branch that tracks it. */
