@@ -1,4 +1,4 @@
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { Activity, lazy, memo, Suspense, use, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, LoaderCircleIcon, MenuIcon, MonitorIcon, MoonIcon, PanelLeftIcon, PanelRightIcon, RotateCcwIcon, SearchIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, SunIcon, TriangleAlertIcon, UsersIcon, XIcon } from "lucide-react";
 import type {
@@ -70,7 +70,7 @@ import { Button } from "@/components/ui/button";
 import { QueueChips } from "./queue-chips.tsx";
 import { followed } from "./follow.ts";
 import { storedToken } from "./pairing.ts";
-import { createSaveScheduler, createViewCache, tokenHash, type CacheMeta, type CachedView } from "./view-cache.ts";
+import { createSaveScheduler, createViewCache, tokenHash, type CacheMeta, type CachedView, type Hydrated } from "./view-cache.ts";
 import { connect, type ConnectionStatus, type DaemonHello, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
 import { PastedBlock, pastedBlockId, PasteChips } from "./pasted-text.tsx";
@@ -960,13 +960,17 @@ export function App() {
     return subscribe(id, false, false, !isShown(id));
   }
 
-  /** Page load: reads the cache (at most 300 ms, shown tabs first) and draws the cached list and the open tabs' views; whatever it cannot read, the page starts as without a cache. */
-  async function hydrateCache() {
+  /** Page load: reads the cache (at most 300 ms, shown tabs first); undefined when it holds nothing usable (the page starts as without a cache). */
+  async function hydrateCache(): Promise<Hydrated | undefined> {
     const sp = splitRef.current;
     const owners = [activeRef.current, ...(sp?.ids ?? []), ...tabsRef.current, hashId()].filter((t): t is string => !!t && t !== NEW_TAB && t !== FOCUS_TAB).map(ownerOf);
     const h = await cache!.hydrate({ tokenHash: tokenHash(storedToken() ?? ""), tabIds: [...new Set(owners)] });
     cachedMeta.current = h.meta;
-    if (!h.meta) return;
+    return h.meta ? h : undefined;
+  }
+
+  /** Draws the cached list and the open tabs' views. */
+  function applyHydrated(h: Hydrated) {
     if (h.list) {
       try {
         const reply = JSON.parse(h.list.json) as ListResult;
@@ -1684,14 +1688,18 @@ export function App() {
     }
   }, [views]);
 
-  // The page reads the view cache first (at most 300 ms), then connects; the cached state is applied before the socket can open.
+  // The page reads the view cache first (at most 300 ms), then connects; the cached state is committed before any socket event.
   useEffect(() => {
     let off = false;
     let stop: (() => void) | undefined;
-    const go = () => {
-      if (!off) stop = connectApp();
+    const go = (h?: Hydrated) => {
+      if (off) return;
+      stop = connectApp();
+      // Committed in this same task, right after connect() (the client exists for what the cached render mounts): no socket event can run before it, so the cached view
+      // is in the DOM before "connected"; a plain setState would let a fast socket open batch "connected" into the first cached render.
+      if (h) flushSync(() => applyHydrated(h));
     };
-    if (cache) hydrateCache().then(go, go);
+    if (cache) hydrateCache().then(go, () => go());
     else go();
     return () => {
       off = true;

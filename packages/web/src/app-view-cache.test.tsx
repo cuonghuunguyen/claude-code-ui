@@ -31,12 +31,15 @@ type Hello = { daemonId: string; logEpoch: string } | undefined;
 type Opts = { onEvents: (es: unknown[]) => void; onOpen?: (h: Hello) => void; onStatus?: (s: string) => void };
 let opts!: Opts;
 let hold = false;
+/** Whether the cached answer was in the DOM at the first microtask after connect() (before any socket event could run). */
+let shownAtConnect = false;
 vi.mock("@xterm/xterm", () => ({ Terminal: class { options = {}; cols = 80; rows = 24; loadAddon() {} open() {} focus() {} write() {} reset() {} onData() {} onResize() {} onSelectionChange() {} onScroll() {} attachCustomKeyEventHandler() {} dispose() {} } }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
   connect: (o: Opts) => {
     opts = o;
+    queueMicrotask(() => (shownAtConnect = document.body.textContent?.includes("cached answer") ?? false));
     if (!hold) queueMicrotask(() => (o.onStatus?.("connected"), o.onOpen?.(undefined)));
     return { request: async (m: { type: string }) => (sent.push(m), typeof replies[m.type] === "function" ? (replies[m.type] as (m: unknown) => unknown)(m) : (replies[m.type] ?? {})), search: async () => ({}), onFsChanged: () => () => {}, onTerminal: () => () => {}, close() {} };
   },
@@ -94,6 +97,13 @@ describe("view cache in the app (GH-771)", () => {
     expect(el.textContent).toContain("cached prompt");
     expect(el.querySelector('[data-testid="tab-strip"] [data-testid="tab"]')?.textContent).toContain("Demo");
     expect(sent).toEqual([]);
+  });
+
+  it("the cached view is in the DOM before any socket event can run (a fast open must not batch into the first cached render)", async () => {
+    await seed();
+    shownAtConnect = false;
+    await mount();
+    expect(shownAtConnect).toBe(true);
   });
 
   it("same epoch: the first list asks since the cached version and the subscribe resumes with sinceSeq, no known", async () => {
