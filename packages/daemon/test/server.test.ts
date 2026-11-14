@@ -5585,6 +5585,135 @@ describe("keep-alive ping on a side's virtual connection (GH-263)", () => {
   });
 });
 
+describe("keep-alive counts progress (GH-760)", () => {
+  const nap = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const pingDaemon = () => createDaemon({ webRoot, roots: [webRoot], query: fakeQuery as never, token, pingMs: 30, history: { ...history, getSessionInfo: async () => undefined } as never });
+  /** A socket that never pongs; `buffered` is read at every tick. */
+  const mute = (buffered: () => number = () => 0) => {
+    const terminate = vi.fn(() => void ws.emit("close"));
+    const ws = Object.assign(new EventEmitter(), { OPEN: 1, readyState: 1, bufferedAmount: 0, send: vi.fn(), close: vi.fn(), ping: vi.fn(), terminate });
+    // Object.assign would copy the getter's value once.
+    Object.defineProperty(ws, "bufferedAmount", { get: buffered });
+    return { ws, terminate };
+  };
+  const warnings = () => vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  it("drops a socket with no pong, no message and no buffer progress; the line has the counters", async () => {
+    const warn = warnings();
+    const d = pingDaemon();
+    const { ws, terminate } = mute(() => 5 * 2 ** 20);
+    try {
+      d.accept(ws);
+      await vi.waitFor(() => expect(terminate).toHaveBeenCalledTimes(1));
+      const line = warn.mock.calls.map((c) => String(c[0])).find((l) => l.includes("no pong"))!;
+      expect(line).toMatch(/dropped \(0 left\); open \d+s, sent \d+ msgs [\d.]+MB, buffered 5\.0MB \(prev tick [\d.]+MB\), recv 0 msgs, last recv never, ua "-"/);
+    } finally {
+      warn.mockRestore();
+      d.close();
+    }
+  });
+
+  it("keeps a socket without pong that sends a message every tick", async () => {
+    const warn = warnings();
+    const d = pingDaemon();
+    const { ws, terminate } = mute(() => 1000);
+    try {
+      d.accept(ws);
+      for (let i = 0; i < 8; i++) {
+        ws.emit("message", JSON.stringify({ type: "ping", reqId: `r${i}` }));
+        await nap(25);
+      }
+      expect(terminate).not.toHaveBeenCalled();
+      expect(warn.mock.calls.map((c) => String(c[0])).some((l) => /kept: \d+ msgs received/.test(l))).toBe(true);
+    } finally {
+      warn.mockRestore();
+      d.close();
+    }
+  });
+
+  it("keeps a socket without pong whose send buffer drains; logs the drain", async () => {
+    const warn = warnings();
+    const d = pingDaemon();
+    let n = 4 * 2 ** 20;
+    const { ws, terminate } = mute(() => (n = Math.max(n - 2 ** 18, 2 ** 18)));
+    try {
+      d.accept(ws);
+      await nap(200);
+      expect(terminate).not.toHaveBeenCalled();
+      expect(warn.mock.calls.map((c) => String(c[0])).some((l) => /no pong in 0\.03s, kept: draining [\d.]+MB -> [\d.]+MB/.test(l))).toBe(true);
+    } finally {
+      warn.mockRestore();
+      d.close();
+    }
+  });
+
+  it("drops a draining socket after 8 ticks without a pong", async () => {
+    const warn = warnings();
+    const d = pingDaemon();
+    let n = 2 ** 30;
+    const { ws, terminate } = mute(() => (n -= 1000));
+    try {
+      d.accept(ws);
+      await vi.waitFor(() => expect(terminate).toHaveBeenCalledTimes(1), { timeout: 2000 });
+      expect(warn.mock.calls.map((c) => String(c[0])).some((l) => l.includes("no pong for 8 ticks"))).toBe(true);
+    } finally {
+      warn.mockRestore();
+      d.close();
+    }
+  });
+
+  it("a pong resets the count of ticks without one", async () => {
+    const d = pingDaemon();
+    let n = 2 ** 30;
+    const { ws, terminate } = mute(() => (n -= 1000));
+    try {
+      d.accept(ws);
+      for (let i = 0; i < 20; i++) {
+        await nap(20);
+        ws.emit("pong");
+      }
+      expect(terminate).not.toHaveBeenCalled();
+    } finally {
+      d.close();
+    }
+  });
+
+  it("the close line has the counters and the user agent", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const d = createDaemon({ webRoot, roots: [webRoot], query: fakeQuery as never, token, history: { ...history, getSessionInfo: async () => undefined } as never });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const p = (d.address() as AddressInfo).port;
+      const ws = new WebSocket(`ws://127.0.0.1:${p}/ws`, protocols(), { origin: `http://127.0.0.1:${p}`, headers: { "user-agent": "Mozilla/5.0 (iPhone) test" } });
+      await new Promise((r) => ws.once("open", r));
+      ws.send(JSON.stringify({ type: "ping", reqId: "1" }));
+      await new Promise((r) => ws.once("message", r));
+      ws.close();
+      await vi.waitFor(() => expect(log.mock.calls.map((c) => String(c[0])).some((l) => /ws: closed code \d+ after \d+s \(0 left\); sent \d+ msgs [\d.]+MB, recv 1 msgs, ua "Mozilla\/5\.0 \(iPhone\) test"/.test(l))).toBe(true));
+    } finally {
+      log.mockRestore();
+      d.close();
+    }
+  });
+
+  it("logs a page note up to 600 characters", async () => {
+    const warn = warnings();
+    const d = createDaemon({ webRoot, roots: [webRoot], query: fakeQuery as never, token, history: { ...history, getSessionInfo: async () => undefined } as never });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      await c.request({ type: "ping", note: "x".repeat(700) });
+      const line = warn.mock.calls.map((x) => String(x[0])).find((l) => l.includes("page reconnected after"))!;
+      expect(line.endsWith("x".repeat(600))).toBe(true);
+      expect(line.endsWith("x".repeat(601))).toBe(false);
+      c.ws.close();
+    } finally {
+      warn.mockRestore();
+      d.close();
+    }
+  });
+});
+
 describe("uploads after the session id changes under a running CLI", () => {
   const setup = async (extra: Record<string, unknown> = {}) => {
     const P = join(mkdtempSync(join(tmpdir(), "up-")), "uploads");

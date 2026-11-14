@@ -65,6 +65,7 @@ vi.mock("@xterm/xterm", () => ({
 }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 let emit: (e: unknown) => void = () => {};
+let emitBatch: (es: unknown[]) => void = () => {};
 let sessionsChanged: (m: unknown) => void = () => {};
 let reconnect: () => void = () => {};
 let setStatus: (s: string) => void = () => {};
@@ -74,8 +75,9 @@ let planUsage: (u: unknown) => void = () => {};
 const sent: { type: string }[] = [];
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
-  connect: (opts: { onEvent: (e: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void; onSessionsChanged?: (m: unknown) => void; onSettingsChanged?: (m: unknown) => void; onSlept?: (m: unknown) => void }) => {
-    emit = opts.onEvent;
+  connect: (opts: { onEvents: (es: unknown[]) => void; onOpen?: () => void; onStatus?: (s: string) => void; onSessionsChanged?: (m: unknown) => void; onSettingsChanged?: (m: unknown) => void; onSlept?: (m: unknown) => void }) => {
+    emit = (e) => opts.onEvents([e]);
+    emitBatch = opts.onEvents;
     slept = opts.onSlept ?? (() => {});
     planUsage = (opts as { onPlanUsage?: (u: unknown) => void }).onPlanUsage ?? (() => {});
     settingsChanged = opts.onSettingsChanged ?? (() => {});
@@ -2366,6 +2368,40 @@ describe("idle close: holds and background follows", () => {
       expect(done()).toBe(21);
     } finally {
       restoreSubscribe();
+      sent.length = 0;
+      restore();
+    }
+  });
+
+  it("reconnect (GH-760): background resubscribes and repos wait until the list replied and the shown session resubscribed", async () => {
+    const many = Array.from({ length: 6 }, (_, i) => ({ ...other, id: `${String(i).padStart(8, "0")}-2222-3333-4444-555555555555`, cwd: "/p/other", state: "running" as const }));
+    sent.length = 0;
+    const restore = await remount({ "session.list": { sessions: [session, ...many], projects: ["/p/demo", "/p/other"] } });
+    try {
+      expect(new Set(subscribes().map((m) => m.sessionId)).size).toBe(7);
+      sent.length = 0;
+      let listReply!: () => void;
+      let shownReply!: () => void;
+      const listDone = new Promise<void>((r) => (listReply = r));
+      const shownDone = new Promise<void>((r) => (shownReply = r));
+      const listed = { sessions: [session, ...many], projects: ["/p/demo", "/p/other"] };
+      replies["session.list"] = async () => (await listDone, listed);
+      replies["session.subscribe"] = async (m: { sessionId: string }) => (m.sessionId === ID && (await shownDone), { logEpoch: "e1", session });
+      await act(async () => reconnect());
+      await act(async () => {});
+      // Nothing but the shown session, while neither reply is in.
+      expect(subscribes().map((m) => (m as { sessionId?: string }).sessionId)).toEqual([ID]);
+      await act(async () => listReply());
+      await act(async () => {});
+      expect(subscribes()).toHaveLength(1);
+      expect(sent.filter((m) => m.type === "git.repos")).toEqual([]);
+      await act(async () => shownReply());
+      await act(async () => {});
+      await act(async () => {});
+      expect(new Set(subscribes().map((m) => (m as { sessionId?: string }).sessionId)).size).toBe(7);
+    } finally {
+      restoreSubscribe();
+      replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
       sent.length = 0;
       restore();
     }
@@ -6755,4 +6791,28 @@ it("a session whose engine has no plan usage shows no plan account and no shell 
   } finally {
     restore();
   }
+});
+
+describe("events applied as one batch (GH-760)", () => {
+  const events = [
+    { type: "event", sessionId: ID, seq: 1, part: { type: "user_text", id: "u1", text: "hello", images: [] } },
+    { type: "event", sessionId: ID, seq: 2, part: { type: "session_state", id: "session_state", state: "running" } },
+    { type: "event", sessionId: ID, seq: 3, part: { type: "user_text", id: "u2", text: "second", images: [] } },
+    { type: "event", sessionId: ID, seq: 4, part: { type: "user_text", id: "u2", text: "second one", images: [] } },
+    { type: "event", sessionId: ID, seq: 5, part: { type: "session_state", id: "session_state", state: "idle" } },
+  ];
+  const shown = () => ({
+    users: [...el.querySelectorAll('[data-testid="user-message"]')].map((n) => n.textContent),
+    assistant: [...el.querySelectorAll('[data-testid="assistant-text"]')].map((n) => n.textContent),
+  });
+
+  it("one batch of events renders the same transcript as the same events one by one", async () => {
+    for (const e of events) await act(async () => emit(e));
+    const oneByOne = shown();
+    expect(oneByOne.users.map((u) => u?.slice(0, 5))).toEqual(["hello", "secon"]);
+    expect(oneByOne.users[1]).toContain("second one");
+    await rerender();
+    await act(async () => emitBatch(events));
+    expect(shown()).toEqual(oneByOne);
+  });
 });

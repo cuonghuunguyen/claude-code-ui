@@ -70,3 +70,13 @@ playwright-cli -s=tw-XXXXXX step-over                           # or: resume
 - HTML report: `npx playwright show-report` (from `packages/e2e`, folder `playwright-report/`).
 - Traces of failed scenarios (and failure screenshots): `npx playwright show-trace test-results/<scenario>/trace.zip`.
 - Daemon log: `<run>/daemon-w0.log`. After a clean pass the run folder is emptied (the evidence stays when it lives inside it); after a failure, or a retry that saved the run, it is kept whole.
+
+## Reconnect burst harness (GH-760)
+
+Not part of `npm test` or the Cucumber suite: a phone reconnecting over a slow link to a daemon with hundreds of sessions. Needs `npm run build` first (the daemon serves `packages/web/dist`) and `npx playwright install chromium`.
+
+```sh
+npx tsx packages/e2e/perf/reconnect-burst.ts [--sessions 300 --live 40 --tabs 8 --cpu 6 --kbps 1000 --reconnects 10 --port 4321 --label run --report-dir <dir> --ping-ms 15000]
+```
+
+It starts its own daemon (temp `XDG_CONFIG_HOME` and `CLAUDE_CONFIG_DIR`, API key variables unset, a fake query that streams long turns) on `--port + 1` behind a throttling TCP proxy on `--port`, opens a 390x844 Chromium page with CPU throttling, cuts the socket `--reconnects` times and prints per reconnect the time to settle, MB received and the daemon's drop/kept lines. Writes `<report-dir>/perf-<label>.json`. Exit code 1 when a "no pong ... dropped" line appears. Not typechecked by `npm run typecheck` of this package (it imports daemon sources).

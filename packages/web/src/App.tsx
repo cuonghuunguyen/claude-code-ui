@@ -225,6 +225,8 @@ const GraphPane = lazy(() => import("./git-graph-panel.tsx").then((m) => ({ defa
 const TerminalPanel = lazy(() => import("./terminal-panel.tsx").then((m) => ({ default: m.TerminalPanel })));
 /** Background views resubscribed at once after a reconnect. */
 const RESUBSCRIBE_CONCURRENCY = 4;
+/** The most a reconnect waits for the list and the shown sessions before the background views and the repos go on. */
+const RESYNC_SETTLE_MS = 15_000;
 const TERMINAL_KEY = "claude-ui.terminalOpen";
 const PANEL_HIDDEN_KEY = "claude-ui.sidePanelHidden";
 const FILE_TREE_HIDDEN_KEY = "claude-ui.fileTreeHidden";
@@ -370,6 +372,8 @@ export function App() {
   const refusedShown = useRef(new Set<string>());
   const newPrompt = useRef<HTMLTextAreaElement>(null);
   const [views, setViews] = useState<Record<string, SessionView>>({});
+  /** The resync of this connection settled (list and shown sessions replied): what is not needed at once (repos, background views) waits for it. */
+  const [synced, setSynced] = useState(false);
   // GH-133: prompts sent but not yet echoed by the daemon, by tab key (NEW_TAB while the first prompt creates the session).
   const [optimistic, setOptimistic] = useState<Record<string, Pending[]>>({});
   useEffect(() => setOptimistic((o) => pruneEchoed(o, views)), [views]);
@@ -1488,36 +1492,47 @@ export function App() {
 
   useEffect(() => {
     const c = connect({
-      onEvent: (e: Event) => {
-        setViews((v) => ({ ...v, [e.sessionId]: applyEvent(v[e.sessionId] ?? emptySession(), e) }));
-        // New titles and last activity come from the transcript; refresh when a session changes state. A replayed
-        // change is in the list already (one session.list per subscribe would rescan every transcript, FIX-LEAK).
-        const live = e.seq > (replayedTo.current[e.sessionId] ?? 0);
-        if (live) liveAt.current.set(e.sessionId, Date.now());
-        notifyRef.current?.(e, live);
-        if (e.part.type === "session_state") {
-          // Push rule: a session that needed the user while the page was hidden, also as seen in the replay of a reconnect that follows.
-          const prev = viewsRef.current[e.sessionId]?.state;
-          if (prev && isAttention(prev, e.part) && (document.visibilityState === "hidden" || (awaitReplay.current && !live))) {
-            hiddenNeed.current = true;
-            if (!live && awaitReplay.current) (clearTimeout(pushTimer.current), (pushTimer.current = setTimeout(() => document.visibilityState === "visible" && recNow.current.push(), 800)));
+      // One task applies every event received since the last one: one render for the batch, the side logic per event in arrival order.
+      onEvents: (es: Event[]) => {
+        setViews((v) => {
+          const next = { ...v };
+          for (const e of es) next[e.sessionId] = applyEvent(next[e.sessionId] ?? emptySession(), e);
+          return next;
+        });
+        // viewsRef is the view as of the last render: the state each session had before the event is tracked through the batch.
+        const states = new Map<string, SessionView["state"] | undefined>();
+        for (const e of es) {
+          const before = states.has(e.sessionId) ? states.get(e.sessionId) : viewsRef.current[e.sessionId]?.state;
+          states.set(e.sessionId, e.part.type === "session_state" ? e.part.state : before ?? emptySession().state);
+          // New titles and last activity come from the transcript; refresh when a session changes state. A replayed
+          // change is in the list already (one session.list per subscribe would rescan every transcript, FIX-LEAK).
+          const live = e.seq > (replayedTo.current[e.sessionId] ?? 0);
+          if (live) liveAt.current.set(e.sessionId, Date.now());
+          notifyRef.current?.(e, live);
+          if (e.part.type === "session_state") {
+            // Push rule: a session that needed the user while the page was hidden, also as seen in the replay of a reconnect that follows.
+            const prev = before;
+            if (prev && isAttention(prev, e.part) && (document.visibilityState === "hidden" || (awaitReplay.current && !live))) {
+              hiddenNeed.current = true;
+              if (!live && awaitReplay.current) (clearTimeout(pushTimer.current), (pushTimer.current = setTimeout(() => document.visibilityState === "visible" && recNow.current.push(), 800)));
+            }
+            // The turn's context_usage comes after this idle event: the rule waits for it.
+            // A new turn drops a context_usage that never came (a failed read).
+            if (live && e.part.state === "running") turnEnded.current.delete(e.sessionId);
+            if (live && sentHere.current.has(e.sessionId) && e.part.state !== "running" && e.part.state !== "needs_input") (sentHere.current.delete(e.sessionId), turnEnded.current.add(e.sessionId));
           }
-          // The turn's context_usage comes after this idle event: the rule waits for it.
-          // A new turn drops a context_usage that never came (a failed read).
-          if (live && e.part.state === "running") turnEnded.current.delete(e.sessionId);
-          if (live && sentHere.current.has(e.sessionId) && e.part.state !== "running" && e.part.state !== "needs_input") (sentHere.current.delete(e.sessionId), turnEnded.current.add(e.sessionId));
-        }
-        if (live && e.part.type === "context_usage" && turnEnded.current.delete(e.sessionId)) {
-          offer("contextBreakdown", { visible: document.visibilityState === "visible" && recNow.current.visibleIds.includes(e.sessionId), percent: e.part.usage.percentage }, () =>
-            document.querySelector<HTMLElement>(`[data-testid="session-area"] [data-session-id="${CSS.escape(e.sessionId)}"] [data-testid="context-meter"]`)?.click());
-        }
-        // /clear: a tab of the session follows the session the CLI goes on in; a replay (reopening the old session) does not.
-        if (e.part.type === "session_cleared" && live) follow(e.sessionId, e.part.sessionId);
-        if (e.part.type === "session_state" && live) void refreshList();
-        // The title of a session without transcript is "New session" until its transcript exists, some time into the first turn.
-        else if (live && listRef.current.some((s) => s.id === e.sessionId && !s.transcript) && Date.now() - titleRefreshed.current > 2000) {
-          titleRefreshed.current = Date.now();
-          void refreshList();
+          if (live && e.part.type === "context_usage" && turnEnded.current.delete(e.sessionId)) {
+            offer("contextBreakdown", { visible: document.visibilityState === "visible" && recNow.current.visibleIds.includes(e.sessionId), percent: e.part.usage.percentage }, () =>
+              document.querySelector<HTMLElement>(`[data-testid="session-area"] [data-session-id="${CSS.escape(e.sessionId)}"] [data-testid="context-meter"]`)?.click());
+          }
+          // /clear: a tab of the session follows the session the CLI goes on in; a replay (reopening the old session) does not.
+          if (e.part.type === "session_cleared" && live) follow(e.sessionId, e.part.sessionId);
+          if (e.part.type === "session_state" && live) void refreshList();
+          // The title of a session without transcript is "New session" until its transcript exists, some time into the first turn.
+          else if (live && listRef.current.some((s) => s.id === e.sessionId && !s.transcript) && Date.now() - titleRefreshed.current > 2000) {
+            titleRefreshed.current = Date.now();
+            void refreshList();
+          }
         }
       },
       onSessionsChanged: (m) => {
@@ -1568,11 +1583,13 @@ export function App() {
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
         c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLastEngine(r.settings.sessions?.engine ?? "claude"), setSessionsMode(r.settings.sessions?.defaultMode), setLabels(r.settings.labels), setBack(r.settings.back, true), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setVisualizeOn(r.settings.chat?.visualize === true), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
-        void refreshList();
+        // The resync of a reconnect: the list and the shown sessions first; the background views and the repos follow once they settled (GH-760).
+        setSynced(false);
+        const resync: Promise<unknown>[] = [refreshList()];
         const h = hashId();
         // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
         held.current.clear();
-        if (h && !viewsRef.current[h]) void subscribe(h);
+        if (h && !viewsRef.current[h]) resync.push(subscribe(h));
         // Shown sessions at once; background views through a small queue, so a restarted daemon is not asked to restore hundreds of transcripts in the same moment.
         // A background view of a session that is no longer live (idle, not live) is dropped, unless it is unread: the list does not follow it either.
         const live = (id: string) => {
@@ -1581,7 +1598,7 @@ export function App() {
         };
         const background: string[] = [];
         for (const id of Object.keys(viewsRef.current)) {
-          if (isShown(id)) void subscribe(id);
+          if (isShown(id)) resync.push(subscribe(id));
           else if (live(id)) background.push(id);
           else drop(id, false);
         }
@@ -1589,7 +1606,15 @@ export function App() {
         const worker = async () => {
           for (let id = background.shift(); id !== undefined && gen === connGen.current; id = background.shift()) if (viewsRef.current[id]) await subscribe(id, false, false, true);
         };
-        for (let i = 0; i < RESUBSCRIBE_CONCURRENCY; i++) void worker();
+        // Bounded wait: a request that never settles must not keep the background views and the repos from loading.
+        let timer: ReturnType<typeof setTimeout>;
+        const cap = new Promise<void>((r) => (timer = setTimeout(r, RESYNC_SETTLE_MS)));
+        void Promise.race([Promise.allSettled(resync), cap]).then(() => {
+          clearTimeout(timer);
+          if (gen !== connGen.current) return;
+          setSynced(true);
+          for (let i = 0; i < RESUBSCRIBE_CONCURRENCY; i++) void worker();
+        });
         void pushSubscription().then((sub) => {
           setPushOn(!!sub);
           if (sub) sendSubscription(c, sub).catch(() => {});
@@ -2406,7 +2431,7 @@ export function App() {
   const pane: Pane = (!lg && histPane === "terminal" && !termAvail) || (histPane === "plan" && !planListed) || (histPane === "artifacts" && !artifactsListed) || (histPane !== "session" && canMain(histPane) && areaOf(layout, histPane) === "main") ? "session" : histPane;
   // A project or worktree listed by session.list is a git work tree: the tab shows at once, without a git.status (a working-tree diff).
   const knownGit = !!panelCwd && !!worktrees[projectOf(panelCwd, worktrees)];
-  const { repos, truncated: reposTruncated } = useRepos(client.current, panelCwd, { connected: status === "connected", openFiles, seq: reposSeq, fresh: reposFresh });
+  const { repos, truncated: reposTruncated } = useRepos(client.current, panelCwd, { connected: status === "connected" && synced, openFiles, seq: reposSeq, fresh: reposFresh });
   const repo = repos ? defaultRepo(repos) : undefined;
   // Changes and the Graph resolve the remembered choice themselves.
   // Panes: the pane owner session's cwd replaces panelCwd here (the choice is kept per owner project).
@@ -3121,7 +3146,7 @@ export function App() {
           />
         ) : (
           <Suspense fallback={loading}>
-            <GraphTab client={client.current!} cwd={cwd} hidden={!here || (!lg && pane !== "session")} connected={status === "connected"} openFiles={openFiles} seq={reposSeq} repoKey={repoProjectKey(cwd, worktrees, listLoaded)} />
+            <GraphTab client={client.current!} cwd={cwd} hidden={!here || (!lg && pane !== "session")} connected={status === "connected" && synced} openFiles={openFiles} seq={reposSeq} repoKey={repoProjectKey(cwd, worktrees, listLoaded)} />
           </Suspense>
         )}
       </div>

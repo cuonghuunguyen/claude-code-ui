@@ -2,6 +2,7 @@
 // onOpen runs after every (re)connect, so the caller resubscribes there with its last seq and logEpoch.
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type Event, type PlanUsage, type ServerMessage, type SessionsSearchResult } from "@claude-ui/protocol";
 import { storedToken } from "./pairing.ts";
+import { stallLog } from "./stall-log.ts";
 import { browserWakeEvents, type WakeEvents } from "./wake.ts";
 
 export type Request = ClientMessage extends infer M ? (M extends ClientMessage ? Omit<M, "reqId"> : never) : never;
@@ -22,6 +23,8 @@ const OFFLINE_AFTER = 5;
 /** A socket open after the page was hidden at least this long is probed with a ping on wake: the OS may have dropped the connection without telling the page. */
 const PROBE_AFTER_MS = 10_000;
 const PROBE_TIMEOUT_MS = 1_000;
+/** One drain task applies received messages for at most this long, then yields so the page can paint, take input and read its socket. */
+const DRAIN_BUDGET_MS = 8;
 
 export const backoffMs = (attempt: number) => Math.min(10_000, 500 * 2 ** attempt);
 
@@ -29,7 +32,9 @@ export function connect(opts: {
   url?: string;
   /** Pairing token; defaults to the one this browser stored (pairing.ts). */
   token?: string;
-  onEvent: (e: Event) => void;
+  onEvent?: (e: Event) => void;
+  /** Consecutive events applied in one task: one call per drain, in arrival order (a non-event message in between ends the batch). Preferred over `onEvent` when both are given. */
+  onEvents?: (events: Event[]) => void;
   /** Another tab (or this one) renamed, archived or deleted a session. */
   onSessionsChanged?: (m: Extract<ServerMessage, { type: "sessions.changed" }>) => void;
   /** Account plan usage, on connect and on each change; null = no plan limits. */
@@ -53,6 +58,9 @@ export function connect(opts: {
   /** Test seams of the wake probe (docs/spec.md "Reconnect"). */
   probeAfterMs?: number;
   probeTimeoutMs?: number;
+  /** Test seams of the batched apply: the clock of the 8 ms drain budget, and the stall log the counters go to. */
+  now?: () => number;
+  stall?: Pick<typeof stallLog, "message" | "lag30">;
 }) {
   const url = opts.url ?? `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
   const fsListeners = new Set<(m: FsChanged) => void>();
@@ -70,8 +78,14 @@ export function connect(opts: {
   let failures = 0;
   /** Why the last socket went down: logged in the console now, sent to the daemon log once the next socket opens. */
   let lastDrop: string | undefined;
+  const stall = opts.stall ?? stallLog;
+  const clock = opts.now ?? (() => performance.now());
+  /** Received since this socket opened: the page's side of a drop, sent with the reconnect note. */
+  let since = { msgs: 0, bytes: 0, parseMs: 0 };
+  const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
   const noteDrop = (why: string) => {
-    lastDrop = `${new Date().toISOString()} ${why}`;
+    const lag = stall.lag30();
+    lastDrop = `${new Date().toISOString()} ${why}; page: lag max ${seconds(lag.max)} total ${seconds(lag.total)} (30s), msgs ${since.msgs} (${(since.bytes / 2 ** 20).toFixed(1)}MB) parse ${Math.round(since.parseMs)}ms since open`;
     console.warn("claude-ui: socket down:", lastDrop);
   };
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -97,6 +111,89 @@ export function connect(opts: {
     pending.clear();
   }
 
+  /** Messages received and not yet applied. Each socket message is its own task, so applying them there renders the page once per event of a replay. */
+  let queue: string[] = [];
+  let head = 0;
+  let drainScheduled = false;
+  // A MessageChannel task: setTimeout is clamped to 4 ms and later, requestAnimationFrame stops while the page is hidden.
+  const channel = typeof MessageChannel === "undefined" ? undefined : new MessageChannel();
+  const postDrain = () => (channel ? channel.port2.postMessage(0) : void setTimeout(drain, 0));
+  if (channel) {
+    channel.port1.onmessage = () => drain();
+    (channel.port1 as unknown as { unref?: () => void }).unref?.();
+  }
+  function scheduleDrain() {
+    if (drainScheduled) return;
+    drainScheduled = true;
+    postDrain();
+  }
+  const guard = (what: string, f: () => void) => {
+    try {
+      f();
+    } catch (err) {
+      console.error(`claude-ui: ${what} failed:`, err);
+    }
+  };
+
+  /** Applies one message that is not an event. True when it settled a request (its continuation must run before later messages). */
+  function dispatch(m: Exclude<ServerMessage, Event>): boolean {
+    if (m.type === "fs.changed") return fsListeners.forEach((l) => l(m)), false;
+    if (m.type === "terminal.output" || m.type === "terminal.exit") return terminalListeners.forEach((l) => l(m)), false;
+    if (m.type === "sessions.changed") return opts.onSessionsChanged?.(m), false;
+    if (m.type === "plan_usage") return opts.onPlanUsage?.(m.usage), false;
+    if (m.type === "config.changed") return opts.onConfigChanged?.(m), false;
+    if (m.type === "settings_changed") return opts.onSettingsChanged?.(m), false;
+    if (m.type === "opencode.providersChanged") return opts.onOpenCodeProviders?.(), false;
+    if (m.type === "update_available" || m.type === "update_state") return opts.onUpdate?.(m), false;
+    if (m.type === "daemon_stale") return opts.onStale?.(m.note), false;
+    if (m.type === "daemon_slept") return opts.onSlept?.(m), false;
+    if (m.type === "sessions.search.result") return streams.get(m.reqId)?.(m), false;
+    const p = m.reqId ? pending.get(m.reqId) : undefined;
+    // A reply that arrives after its socket went down: markDown already rejected the request.
+    if (!p) return sockDown || console.error("daemon error", m), false;
+    pending.delete(m.reqId!);
+    m.type === "reply" ? p.resolve(m.result) : p.reject(Object.assign(new Error(m.message), { code: m.code, size: m.size }));
+    return true;
+  }
+
+  /** One task: parse and apply in arrival order until the queue is empty, the budget is spent or a request settled; then the next task goes on. */
+  function drain() {
+    drainScheduled = false;
+    const start = clock();
+    let events: Event[] = [];
+    const flush = () => {
+      if (!events.length) return;
+      const batch = events;
+      events = [];
+      guard("event handler", () => (opts.onEvents ? opts.onEvents(batch) : batch.forEach((e) => opts.onEvent?.(e))));
+    };
+    while (head < queue.length) {
+      const data = queue[head++];
+      const t0 = clock();
+      let parsed: ServerMessage;
+      try {
+        parsed = JSON.parse(data);
+      } catch (err) {
+        console.error("claude-ui: bad message from the daemon:", err);
+        continue;
+      }
+      const m = parsed;
+      const t1 = clock();
+      since.msgs++;
+      since.bytes += data.length;
+      since.parseMs += t1 - t0;
+      stall.message(data.length, t1 - t0);
+      let settled = false;
+      if (m.type === "event") events.push(m);
+      else (flush(), guard("message handler", () => (settled = dispatch(m))));
+      if (settled || clock() - start >= DRAIN_BUDGET_MS) break;
+    }
+    flush();
+    if (head < queue.length) return scheduleDrain();
+    queue = [];
+    head = 0;
+  }
+
   function dial() {
     if (closed || unauthorized) return;
     // One socket at a time: a timer, a wake and a close handler may all ask.
@@ -114,6 +211,7 @@ export function connect(opts: {
       isOpen = true;
       failures = 0;
       openedAt = Date.now();
+      since = { msgs: 0, bytes: 0, parseMs: 0 };
       markOpen();
       if (lastDrop) {
         const note = typeof document === "undefined" ? lastDrop : `${lastDrop}; ${navigator.onLine ? "online" : "offline"}, ${document.visibilityState}`;
@@ -125,23 +223,8 @@ export function connect(opts: {
     });
     sock.addEventListener("message", (ev) => {
       if (!current()) return;
-      const m: ServerMessage = JSON.parse(ev.data);
-      if (m.type === "event") return opts.onEvent(m);
-      if (m.type === "fs.changed") return fsListeners.forEach((l) => l(m));
-      if (m.type === "terminal.output" || m.type === "terminal.exit") return terminalListeners.forEach((l) => l(m));
-      if (m.type === "sessions.changed") return opts.onSessionsChanged?.(m);
-      if (m.type === "plan_usage") return opts.onPlanUsage?.(m.usage);
-      if (m.type === "config.changed") return opts.onConfigChanged?.(m);
-      if (m.type === "settings_changed") return opts.onSettingsChanged?.(m);
-      if (m.type === "opencode.providersChanged") return opts.onOpenCodeProviders?.();
-      if (m.type === "update_available" || m.type === "update_state") return opts.onUpdate?.(m);
-      if (m.type === "daemon_stale") return opts.onStale?.(m.note);
-      if (m.type === "daemon_slept") return opts.onSlept?.(m);
-      if (m.type === "sessions.search.result") return streams.get(m.reqId)?.(m);
-      const p = m.reqId ? pending.get(m.reqId) : undefined;
-      if (!p) return console.error("daemon error", m);
-      pending.delete(m.reqId!);
-      m.type === "reply" ? p.resolve(m.result) : p.reject(Object.assign(new Error(m.message), { code: m.code, size: m.size }));
+      queue.push(ev.data);
+      scheduleDrain();
     });
     // Node's WebSocket fires only error on a rejected upgrade, a browser error then close: handle the first, once.
     let down = false;
@@ -239,6 +322,7 @@ export function connect(opts: {
       closed = true;
       clearTimeout(timer);
       stopWakeEvents();
+      channel?.port1.close();
       ws?.close();
     },
   };

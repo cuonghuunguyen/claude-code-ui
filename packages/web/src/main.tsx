@@ -7,12 +7,15 @@ import { applyColorTheme, applyTheme, loadColorTheme, loadPref } from "./theme.t
 import { reloadOnStalePage } from "./preload-reload.ts";
 import { adoptToken } from "./pairing.ts";
 import { startBrowserLogs } from "./browser-logs.ts";
+import { stallLog } from "./stall-log.ts";
 
 // First thing, before the theme or the app write any claude-ui.* key: the guided tour starts only in a browser that has none (docs/spec.md "First-use guide").
 takeFirstUseSnapshot();
 
 // Keep console errors, window errors and rejections of this browser for the bug report export (docs/spec.md "Browser logs"). Before the service worker registration so its failure is kept.
 startBrowserLogs();
+// After the console capture: its busy-page lines (docs/spec.md "Browser logs") reach the export and, with a reconnect, the daemon log.
+stallLog.start();
 
 // Before the first render, so a dark theme does not flash light. App's effect owns the "system" listener; stop this one.
 applyColorTheme(loadColorTheme());
