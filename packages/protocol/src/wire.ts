@@ -1033,6 +1033,8 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
   terminalAccess: { enabled: boolean };
   /** Inline tasks (GH-734): the claude-ui MCP server's `inline_task` tool runs a mid-size task on a small model with minimized context. `model`: Claude model (alias or id); `openCodeModel`: `provider/model`, "" = OpenCode's small model, else the session's model; `maxTurns` is the default of one run. Enabled is read at each query start. */
   inlineTask: { enabled: boolean; model: string; openCodeModel: string; maxTurns: number };
+  /** Fork subagents (GH-718), Claude sessions only: the agent may start a subagent as a fork (it inherits the conversation, only its result returns). On sets the CLI's fork gate and the fork guidance (the claude-ui MCP server's `fork` group); off turns both off. Read at each query start. */
+  fork: { enabled: boolean };
   /** Claude account (GH-615): `""` = Default (the Daemon's environment), `"cli"` = the CLI login (no CLAUDE_CODE_OAUTH_TOKEN), else the id of a token account. Hub-local. */
   claude: { account: string };
   /** Local history (GH-565): `exclude` globs (matched on the absolute path with / separators) are never stored. */

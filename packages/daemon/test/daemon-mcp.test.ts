@@ -37,6 +37,23 @@ describe("createDaemonMcp", () => {
     expect(servers[DAEMON_SERVER]!.type).toBe("sdk");
     expect(mcp.mcpServerFor("s")).toBeDefined();
   });
+  it("a group with engines [claude] and no tools is in the Claude server only; the OpenCode route skips it (GH-718)", async () => {
+    const only = group({ id: "fork", instructions: "Fork rules.", tools: [], engines: ["claude"] });
+    const instructions = async (server: { connect: (t: never) => Promise<void> }) => {
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      await server.connect(a as never);
+      const c = new Client({ name: "t", version: "1" });
+      await c.connect(b);
+      return c.getInstructions() ?? "";
+    };
+    const alone = make([only]);
+    expect(await instructions(alone.mcpServers("s")![DAEMON_SERVER]!.instance as never)).toBe("Fork rules.");
+    expect(alone.mcpServerFor("s")).toBeUndefined();
+    const mixed = make([group(), only]);
+    expect(await instructions(mixed.mcpServers("s")![DAEMON_SERVER]!.instance as never)).toContain("Fork rules.");
+    expect(await instructions(mixed.mcpServerFor("s") as never)).toBe("Demo tools.");
+    expect(make([{ ...only, enabled: () => false }]).mcpServers("s")).toBeUndefined();
+  });
   it("serves nothing while no group is enabled (read at each call)", () => {
     let on = false;
     const mcp = make([group({ enabled: () => on })]);

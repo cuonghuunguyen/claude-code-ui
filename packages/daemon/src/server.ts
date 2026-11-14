@@ -64,6 +64,7 @@ import { createUpdater, type Updater } from "./update.ts";
 import { createOrchestration, SERVER as ORCHESTRATION_SERVER } from "./orchestration.ts";
 import { createDaemonMcp, DAEMON_SERVER, ToolError } from "./daemon-mcp.ts";
 import { createAgentTerminals, terminalPort } from "./agent-terminals.ts";
+import { createForkGroup } from "./fork-guidance.ts";
 import { createInlineTask } from "./inline-task.ts";
 import type { AddressInfo } from "node:net";
 import { serveAppIcon } from "./app-icon.ts";
@@ -421,6 +422,7 @@ export function createDaemon(opts: {
     plan,
     promptSuggestions: () => appSettings.get().focus.nextForYou,
     chrome: () => appSettings.get().chrome.enabled,
+    fork: () => appSettings.get().fork.enabled,
     visualizePlugin: () => (appSettings.get().chat.visualize ? visualizePluginDir() : undefined),
     // The plan fallback only while the plan says rejected: another 429 (per-model, credits) during a warning is no usage limit.
     onLimitStop: (id: string, resetsAt: number | undefined) => {
@@ -1281,6 +1283,7 @@ export function createDaemon(opts: {
           return s.run.inlineTask({ ...spec, ...(model && { model }) }, { signal, toolUseId, input, openCodeModel: appSettings.get().inlineTask.openCodeModel });
         },
       }),
+      createForkGroup(() => appSettings.get().fork.enabled),
     ],
   });
   const orchestration = createOrchestration({

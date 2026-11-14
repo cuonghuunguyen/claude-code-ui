@@ -27,6 +27,8 @@ export type DaemonToolGroup = {
   tools: (Omit<DaemonTool, "run"> & { run: (ctx: DaemonToolCtx, args: any) => Promise<unknown> })[];
   /** OpenCode's MCP client timeout for this group's calls. */
   timeoutMs: number;
+  /** The engines whose server carries this group (default both). A group may have no tools: its `instructions` alone reach the agent. */
+  engines?: ("claude" | "opencode")[];
 };
 type Source = { name: string; source: string };
 type Rule = { permission: string; pattern: string; action: "allow" | "ask" | "deny" };
@@ -61,8 +63,8 @@ export function createDaemonMcp(deps: { groups: DaemonToolGroup[]; session: (id:
       ),
     );
   }
-  const build = (id: string) => {
-    const groups = active();
+  const build = (id: string, engine: "claude" | "opencode") => {
+    const groups = active().filter((g) => !g.engines || g.engines.includes(engine));
     if (!groups.length) return undefined;
     return createSdkMcpServer({ name: DAEMON_SERVER, version: "1.0.0", instructions: groups.map((g) => g.instructions).join("\n\n"), tools: tools(id, groups) });
   };
@@ -70,11 +72,11 @@ export function createDaemonMcp(deps: { groups: DaemonToolGroup[]; session: (id:
   return {
     /** The server for a new query of session `id`; undefined while no group is enabled. */
     mcpServers(id: string): Record<string, McpSdkServerConfigWithInstance> | undefined {
-      const server = build(id);
+      const server = build(id, "claude");
       return server && { [DAEMON_SERVER]: server };
     },
     /** A new server instance for session `id`'s OpenCode route (one per MCP client session). */
-    mcpServerFor: (id: string) => build(id)?.instance,
+    mcpServerFor: (id: string) => build(id, "opencode")?.instance,
     /** "allow" for a tool that needs no permission; keyed on the server's source: a configured server of the same name never gets it. */
     toolPolicy(toolName: string, mcpServer?: Source): "allow" | undefined {
       if (!own(mcpServer) || !toolName.startsWith(prefix)) return undefined;

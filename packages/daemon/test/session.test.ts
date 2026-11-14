@@ -526,6 +526,21 @@ describe("Session", () => {
     });
   });
 
+  describe("Fork subagents (GH-718)", () => {
+    it("sets CLAUDE_CODE_FORK_SUBAGENT to 1 when the setting is on and to 0 when it is off or absent (it wins over an inherited value); reads the setting at each query start", () => {
+      vi.stubEnv("CLAUDE_CODE_FORK_SUBAGENT", "1");
+      started({ query: fakeQuery as never, fork: () => false });
+      expect(calls.at(-1)!.env).toMatchObject({ CLAUDE_CODE_FORK_SUBAGENT: "0" });
+      started({ query: fakeQuery as never });
+      expect(calls.at(-1)!.env).toMatchObject({ CLAUDE_CODE_FORK_SUBAGENT: "0" });
+      vi.unstubAllEnvs();
+      vi.stubEnv("CLAUDE_CODE_FORK_SUBAGENT", "0");
+      started({ query: fakeQuery as never, fork: () => true });
+      expect(calls.at(-1)!.env).toMatchObject({ CLAUDE_CODE_FORK_SUBAGENT: "1" });
+      vi.unstubAllEnvs();
+    });
+  });
+
   describe("Claude in Chrome (GH-514)", () => {
     it("runs the CLI with --chrome when the setting is on; no --chrome when the setting is off or absent; a worker never gets --chrome; a worker query carries no PreToolUse hook; reads the setting at each query start", () => {
       {

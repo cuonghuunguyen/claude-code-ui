@@ -64,6 +64,8 @@ export type SessionOpts = Partial<Omit<SessionSettings, "agent">> & {
   promptSuggestions?: () => boolean;
   /** Claude in Chrome setting (GH-514); read at every query start. Workers never get it. */
   chrome?: () => boolean;
+  /** Fork subagents setting (GH-718); read at every query start. Absent = off. */
+  fork?: () => boolean;
   /** The visualize plugin folder to load into the CLI (GH-690), or undefined while the setting is off; read at every query start. */
   visualizePlugin?: () => string | undefined;
   /** Account plan usage: told of each rate_limit_event, refreshed after each turn. */

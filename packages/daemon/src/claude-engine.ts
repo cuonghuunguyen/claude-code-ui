@@ -507,6 +507,8 @@ export class ClaudeSession implements EngineSession {
           CLAUDE_CODE_ENABLE_TASKS: "0",
           CLAUDE_CODE_ARTIFACT: "1",
           ...claudeEnv(),
+          // The CLI's fork gate (CLI 2.1.285, undocumented): unset it is on only for an interactive CLI. Explicit "0" so an inherited value cannot turn it on.
+          CLAUDE_CODE_FORK_SUBAGENT: this.opts.fork?.() ? "1" : "0",
           ...(this.bashPinned ? { CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: "1" } : {}),
         },
         canUseTool: (tool, input, o) => owner.run.canUseTool(tool, input, o),
