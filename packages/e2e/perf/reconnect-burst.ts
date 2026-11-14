@@ -7,6 +7,7 @@
 // `--stream`: the fake turns emit text deltas (streamed parts). `--quiet N`: after the live reconnects, wait until the turns ended and the page caught up, then N more reconnects (nothing changed).
 // `--reload N`: after the quiet rows, N `page.reload()` rows (the socket is closed by the navigation, no proxy cut): WebSocket bytes down and up by class, HTTP bytes (CDP, info only),
 //   cachedMs (navigation start until the shown tab's timeline is in the DOM while the connection status is not "connected"; -1 = never, e.g. code without a view cache), shownMs, settledMs.
+//   Before each reload row the harness waits until the page link is idle (cap 300 s) plus 7 s, so the page drained its backlog and the view cache saves landed.
 // Exit code 1 when the daemon logs a "no pong ... dropped" line; 2 when the page's last seq of a followed live session differs from the harness client's after the last reconnect (missed events).
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -306,6 +307,49 @@ const settled = async (since: number) => {
   }
   return -1;
 };
+/** Waits until the page link carried less than 2 KB down in the last 3 s (cap 300 s); returns the wait in ms. */
+const linkIdle = async () => {
+  const t0 = Date.now();
+  let last = proxy.stats.down;
+  let still = 0;
+  while (Date.now() - t0 < 300_000 && still < 6) {
+    await sleep(500);
+    still = proxy.stats.down - last < 2048 && proxy.stats.queuedDown < 4096 ? still + 1 : 0;
+    if (!still) last = proxy.stats.down;
+  }
+  return Date.now() - t0;
+};
+/** Longer than the view cache's save debounce (2 s quiet, at most every 5 s per session) so no save is in flight when the page goes. */
+const SAVE_SETTLE_MS = 7000;
+/** What the page's view cache holds: views, characters, whether the shown session's cached lastSeq matches the daemon's. */
+const cacheSummary = () =>
+  page
+    .evaluate(
+      ([shown, target]) =>
+        new Promise<string>((resolve) => {
+          const r = indexedDB.open("claude-ui-cache");
+          r.onerror = () => resolve("cache: open failed");
+          r.onsuccess = () => {
+            const db = r.result;
+            if (!db.objectStoreNames.contains("viewMeta")) return (db.close(), resolve("cache: empty database"));
+            const tx = db.transaction(["viewMeta", "viewData", "list"], "readonly");
+            const metas = tx.objectStore("viewMeta").getAll();
+            const data = tx.objectStore("viewData").get(shown as string);
+            const list = tx.objectStore("list").get("list");
+            tx.oncomplete = () => {
+              const ms = metas.result as { chars: number }[];
+              let seq = -1;
+              try {
+                seq = JSON.parse((data.result as { json: string } | undefined)?.json ?? "null")?.view?.lastSeq ?? -1;
+              } catch {}
+              db.close();
+              resolve(`cache: ${ms.length} views ${(ms.reduce((a, m) => a + m.chars, 0) / 1e6).toFixed(1)} M chars, list ${list.result ? `v${(list.result as { version: unknown }).version}` : "none"}, shown lastSeq ${seq} of ${target}`);
+            };
+          };
+        }),
+      [shownId, shownId ? (daemonSeq.get(shownId) ?? 0) : 0] as const,
+    )
+    .catch((e: Error) => `cache: ${e.message}`);
 type Row = { n: number; phase: "live" | "quiet" | "reload"; settledMs: number; shownMs: number; bytesDown: number; genKBps: number; classes: Record<string, { n: number; b: number }>; drops: number; kept: number; bytesUp?: number; wsDown?: number; httpBytes?: number; httpRequests?: number; cachedMs?: number; classesUp?: Record<string, { n: number; b: number }> };
 const rows: Row[] = [];
 const shownId = liveIds[Math.min(opt.tabs, liveIds.length) - 1];
@@ -340,6 +384,7 @@ async function reconnect(n: number, phase: Row["phase"]) {
   const secs = (Date.now() - t0) / 1000;
   const fresh = daemonLog.slice(lines0);
   const cachedMs = reload ? await page.evaluate(() => (window as unknown as { __cachedMs?: number }).__cachedMs ?? -1).catch(() => -1) : undefined;
+  if (reload) console.log(`  first paint: ${JSON.stringify(await page.evaluate(() => (window as unknown as { __diag?: object }).__diag).catch(() => undefined))}`);
   const sum = (c: Record<string, { b: number }>) => Object.values(c).reduce((a, v) => a + v.b, 0);
   const row: Row = { n, phase, settledMs, shownMs, bytesDown: proxy.stats.down - down0, genKBps: (gen.bytes - g0) / secs / 1024, classes: structuredClone(cls), drops: fresh.filter((l) => /no pong .*dropped/.test(l)).length, kept: fresh.filter((l) => /no pong .*kept/.test(l)).length };
   if (reload) Object.assign(row, { bytesUp: sum(clsUp), wsDown: sum(cls), httpBytes: http.bytes - http0.bytes, httpRequests: http.n - http0.n, cachedMs, classesUp: structuredClone(clsUp) });
@@ -379,17 +424,27 @@ if (opt.reload > 0) {
     console.log(`harness: turns ${idle >= 10 ? "ended" : "still running"}, ${opt.reload} reloads`);
   } else console.log(`harness: ${opt.reload} reloads`);
   // First time the shown tab's timeline is in the DOM while the status is not "connected" (performance.now() is relative to the navigation start).
-  await context.addInitScript(() => {
-    const w = window as unknown as { __cachedMs?: number };
-    const tick = () => {
-      if (w.__cachedMs !== undefined) return;
+  // A string, not a function: tsx (esbuild keepNames) wraps named arrows in `__name(...)`, which does not exist in the page, so a serialized function throws.
+  // A MutationObserver (microtask after each DOM change), not a rAF loop: the socket can open between a commit and the next frame; the question is what the DOM held.
+  await context.addInitScript(`(() => {
+    const d = (window.__diag = {});
+    const mo = new MutationObserver(() => {
       const st = document.querySelector('[data-testid="connection-status"]')?.getAttribute("data-status");
-      if (st !== "connected" && document.querySelector('[data-testid="user-message"]:not([data-pending]), [data-testid="assistant-text"]')) w.__cachedMs = Math.round(performance.now());
-      else requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  });
-  for (let n = 1; n <= opt.reload; n++) await reconnect(opt.reconnects + opt.quiet + n, "reload");
+      const tl = !!document.querySelector('[data-testid="user-message"]:not([data-pending]), [data-testid="assistant-text"]');
+      if (st === "connected") d.connectedMs ??= Math.round(performance.now());
+      if (tl && d.timelineMs === undefined) (d.timelineMs = Math.round(performance.now())), (d.statusAtTimeline = st ?? "none");
+      if (window.__cachedMs === undefined && st !== "connected" && tl) window.__cachedMs = Math.round(performance.now());
+      if (d.timelineMs !== undefined && d.connectedMs !== undefined) mo.disconnect();
+    });
+    mo.observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-status"] });
+  })();`);
+  for (let n = 1; n <= opt.reload; n++) {
+    // A "nothing changed" reload needs a settled page and cache: the page drained its backlog, and the debounced cache saves (2 s quiet, 5 s gap) landed.
+    const idle = await linkIdle();
+    await sleep(SAVE_SETTLE_MS);
+    console.log(`harness: page idle after ${(idle / 1000).toFixed(1)}s (+${SAVE_SETTLE_MS / 1000}s for the cache saves); ${await cacheSummary()}`);
+    await reconnect(opt.reconnects + opt.quiet + n, "reload");
+  }
 }
 
 // Missed events: after the last reconnect the page's last seq of every followed live session equals the harness client's (turns must have ended).
