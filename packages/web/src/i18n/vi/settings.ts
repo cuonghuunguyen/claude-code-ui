@@ -278,6 +278,8 @@ export default {
   "settings.row.git.openRepositoryInParentFolders.hint": "Điều khiển việc có mở kho mã nằm trong thư mục cha của không gian làm việc hoặc tệp đang mở hay không. Mặc định always (VS Code: prompt); prompt hoạt động như always ở đây cho đến khi có hộp thoại hỏi.",
   "settings.row.git.commitMessageInstruction.label": "Chỉ dẫn viết nội dung commit",
   "settings.row.git.commitMessageInstruction.hint": "Điều Claude được yêu cầu khi viết nội dung commit cho các tệp đã chọn. Để trống: dùng chỉ dẫn có sẵn (chữ xám).",
+  "settings.row.git.commitMessageWarm.label": "Giữ sẵn trình tạo nội dung commit",
+  "settings.row.git.commitMessageWarm.hint": "Daemon giữ sẵn một tiến trình Claude Haiku để nút Tạo nội dung commit chạy nhanh hơn. Tốn một tiến trình nhàn rỗi khi bật. Tắt: mỗi lần bấm một tiến trình.",
   "settings.git.projectInstruction.label": "Chỉ dẫn viết nội dung commit cho {project}",
   "settings.git.projectInstruction.hint": "Chỉ áp dụng cho dự án này; ưu tiên hơn chỉ dẫn ở trên. Để trống: dùng chỉ dẫn ở trên.",
 
@@ -395,6 +397,18 @@ export default {
   "about.updates": "Cập nhật",
   "about.check": "Kiểm tra cập nhật",
   "about.autoCheck": "Được kiểm tra khi claude-ui khởi động và mỗi ngày một lần.",
+  "browserLogs.title": "Nhật ký trình duyệt",
+  "browserLogs.keep": "Lưu nhật ký trình duyệt",
+  "browserLogs.keepHint": "Lỗi, cảnh báo và thông báo của trình duyệt này, lưu trên thiết bị này 7 ngày (tối đa 5000 mục). Mã ghép nối được xóa. Không gửi đi đâu cả.",
+  "browserLogs.count": "{count} mục từ {oldest}",
+  "browserLogs.empty": "Chưa có mục nào.",
+  "browserLogs.off": "Tắt: không lưu gì.",
+  "browserLogs.unavailable": "Không dùng được nhật ký trình duyệt: trình duyệt này chặn lưu trữ.",
+  "browserLogs.export": "Xuất nhật ký trình duyệt",
+  "browserLogs.clear": "Xóa nhật ký trình duyệt",
+  "browserLogs.clearConfirm": "Xóa toàn bộ nhật ký trình duyệt của trình duyệt này?",
+  "browserLogs.clearYes": "Xóa",
+  "browserLogs.cancel": "Hủy",
 
   // pairing-form.tsx
   "pairing.invalid": "Đây không phải liên kết hoặc token ghép nối.",

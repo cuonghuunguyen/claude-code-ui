@@ -38,6 +38,10 @@ Then("the branch popup search box is hidden", async ({ page }) => {
   await expect(popup(page).getByTestId("branch-popup-search")).toBeHidden();
 });
 
+Then("the branch popup search box has focus", async ({ page }) => {
+  await expect(popup(page).getByTestId("branch-popup-search")).toBeFocused();
+});
+
 Then("the branch popup actions are closed", async ({ page }) => {
   await expect(sub(page)).toHaveCount(0);
 });

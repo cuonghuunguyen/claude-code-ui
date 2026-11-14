@@ -68,3 +68,10 @@ Then("the Generate button is inside the viewport and 44 px high", async ({ page 
   expect(b!.x + b!.width).toBeLessThanOrEqual(page.viewportSize()!.width + 0.5);
   expect(b!.height).toBeGreaterThanOrEqual(44);
 });
+
+When("I switch {string} {word} in Settings Git", async ({ page }, _label: string, state: string) => {
+  const sw = page.getByTestId("settings-git-commitMessageWarm");
+  const want = state === "on" ? "true" : "false";
+  if ((await sw.getAttribute("aria-checked")) !== want) await sw.click();
+  await expect(sw).toHaveAttribute("aria-checked", want);
+});

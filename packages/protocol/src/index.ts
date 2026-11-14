@@ -1,6 +1,7 @@
 export * from "./parts.ts";
+export * from "./always-rule.ts";
 export * from "./wire.ts";
-export { createAdapter, bashRecords, escapeBash } from "./adapter.ts";
+export { CLASSIFIER_DENIAL_PREFIX, createAdapter, bashRecords, escapeBash } from "./adapter.ts";
 export { imageBlock, isPromptImage, MEDIA_INLINE_MAX, omitMedia, omittedImage, parseOmitted, type ImageBlock, type OmittedSource } from "./images.ts";
 export * from "./wsl-path.ts";
 export * from "./histogram.ts";
@@ -12,3 +13,4 @@ export * from "./repo-tree.ts";
 export * from "./node-min.ts";
 export * from "./ssh-command.ts";
 export * from "./editor-command.ts";
+export * from "./git-argv.ts";

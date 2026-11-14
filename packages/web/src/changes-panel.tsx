@@ -1278,7 +1278,7 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
           source={() => box.current}
           onDismiss={dismissMenu}
           actions={[
-            { id: "add", label: t("files.selection.add"), icon: <MessageSquarePlusIcon />, title: t("files.panel.sendSelectionTitle"), onSelect: send },
+            { id: "add", label: t("common.selection.addToChat"), icon: <MessageSquarePlusIcon />, title: t("files.panel.sendSelectionTitle"), onSelect: send },
             { id: "quote", label: t("session.quote.button"), icon: <TextQuoteIcon />, onSelect: quote },
           ]}
         />
