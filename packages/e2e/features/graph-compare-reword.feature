@@ -17,8 +17,8 @@ Feature: Graph compare and Edit Commit Message (GH-667)
     When I open the compare file "README.md"
     Then the compare diff is shown
     And I capture "compare-file-diff"
-    When I go back in the compare view
-    And I go back in the compare view
+    When I go back from the compare file
+    And I go back from the compare list
     And I open the commit menu on the row "local work"
     And I pick "Compare Before with Local" in the compare menu
     Then the compare list shows the file "work.txt"

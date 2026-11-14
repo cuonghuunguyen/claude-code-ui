@@ -34,9 +34,12 @@ Then("the compare diff is shown", async ({ page }) => {
   await expect(page.getByTestId("commit-file-diff")).toBeVisible({ timeout: 30_000 });
 });
 
-// The first back leaves the file diff, the second leaves the compare view.
-When("I go back in the compare view", async ({ page }) => {
-  await page.getByTestId("commit-back").first().click();
+When("I go back from the compare file", async ({ page }) => {
+  await page.getByTestId("commit-back").click();
+});
+
+When("I go back from the compare list", async ({ page }) => {
+  await page.getByTestId("compare-back").click();
 });
 
 Then("the reword message is {string}", async ({ page }, text: string) => {

@@ -84,6 +84,16 @@ describe("commitMenu reword", () => {
     run(r.dir, "commit", "-q", "-m", "c4");
     expect((await menu(r, head(r.dir))).reword).toBe("amend");
   });
+  it("the pushed reason names the branch's upstream first", async () => {
+    const r = repo();
+    const bare = join(r.root, "o.git");
+    run(r.root, "init", "-q", "--bare", bare);
+    run(r.dir, "remote", "add", "origin", bare);
+    run(r.dir, "push", "-q", "origin", "main", "main:aaa-other");
+    run(r.dir, "fetch", "-q", "origin");
+    run(r.dir, "branch", "-q", "--set-upstream-to=origin/main");
+    expect((await menu(r, head(r.dir, "HEAD~1"))).why?.reword).toBe("Already pushed to origin/main");
+  });
   it("a merge commit after it is refused", async () => {
     const r = repo();
     const first = head(r.dir, "HEAD~2");

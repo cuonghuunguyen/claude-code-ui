@@ -271,11 +271,12 @@ function hasAmendBang(top: string, env: NodeJS.ProcessEnv): Promise<boolean> {
 }
 
 /** Edit Commit Message: the mode that works for `hash`, or the reason it does not (checks in the order of docs/spec.md `git.commitMenu`). */
-async function rewordCheck(top: string, hash: string, head: string, parents: number, current: string, env: NodeJS.ProcessEnv, ancestor: (a: string, b: string) => Promise<boolean>): Promise<"amend" | "rebase" | string> {
+async function rewordCheck(top: string, hash: string, head: string, parents: number, current: string, env: NodeJS.ProcessEnv, ancestor: (a: string, b: string) => Promise<boolean>, upstream = ""): Promise<"amend" | "rebase" | string> {
   if (parents > 1) return "Merge commit: edit its message in a terminal";
   if (!(await ancestor(hash, "HEAD"))) return `Not on ${current}`;
   const remotes = (await run(top, ["for-each-ref", "--contains", hash, "--count=50", "--format=%(refname)", "refs/remotes"], env)).out.split("\n").filter(Boolean);
-  const pushed = remotes.find((r) => !r.endsWith("/HEAD")) ?? remotes[0];
+  // The branch's own upstream first: it is the remote ref the user expects to read.
+  const pushed = remotes.find((r) => r === upstream) ?? remotes.find((r) => !r.endsWith("/HEAD")) ?? remotes[0];
   if (pushed) return `Already pushed to ${shortRef(pushed)}`;
   if (hash === head) return "amend";
   if ((await run(top, ["rev-list", "--merges", "--count", `${hash}..HEAD`], env)).out !== "0") return "A merge commit follows it: edit its message in a terminal";
@@ -324,7 +325,7 @@ async function commitInfo(top: string, hash: string, env: NodeJS.ProcessEnv, har
   else info.cherryPick = [...HARDEN, "cherry-pick", hash];
   // --no-recurse-submodules: a user's `submodule.recurse=true` would reset submodule work the preview does not list.
   info.reset = { soft: [...HARDEN, "reset", "--soft", hash], mixed: [...HARDEN, "reset", "--mixed", hash], hard: [...HARDEN, "reset", "--hard", "--no-recurse-submodules", hash] };
-  const reason = await rewordCheck(top, hash, head, parents, current, env, ancestor);
+  const reason = await rewordCheck(top, hash, head, parents, current, env, ancestor, upstream);
   if (reason === "amend" || reason === "rebase") info.reword = reason;
   else why.reword = reason;
   if (hard) {
