@@ -39,7 +39,6 @@ import { ListResizer, loadListWidth, saveListWidth } from "./changes-panel.tsx";
 import { usePanelAsk } from "./panel-ask.ts";
 import { fileSize, isDirty, isMarkdown, loadMdView, mediaKind, pin, entryMention, saveMdView, type MdView } from "./files.ts";
 import { setEditorOf } from "./find-in-files.ts";
-
 import { docText, lineBreaks, replaceDoc, selectionMention, selectionQuote } from "./editor-doc.ts";
 import { createEditorStore, useEditorStore, useEditorSync, type EditorStore } from "./editor-store.ts";
 import { EditorSync } from "./editor-sync.ts";

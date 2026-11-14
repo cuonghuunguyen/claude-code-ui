@@ -4012,7 +4012,7 @@ export function App() {
         }}
         testId="remove-project"
       />
-      <OnFirstOpen open={!!creatingWt}><CreateWorktreeDialog
+      <OnFirstOpen open={!!creatingWt} fallback={<DialogFallback size="worktree" />}><CreateWorktreeDialog
         project={creatingWt}
         request={(m) => client.current!.request(m)}
         onClose={() => setCreatingWt(undefined)}
