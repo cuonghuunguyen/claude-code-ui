@@ -57,6 +57,8 @@ import { ALL_CAPABILITIES, capabilitiesOf, ENGINES, LOCAL_SIDE, isAttention, isP
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SessionSkeleton, SkeletonComposer, SkeletonHeader } from "./session-skeleton.tsx";
+import { showsSkeleton } from "./session-loading.ts";
 import { usePhone } from "./lib/use-narrow.ts";
 import { useHideOnScroll } from "./lib/hide-on-scroll.ts";
 import { cancelFlight, launchFlight, useLanding } from "./flight.ts";
@@ -2177,9 +2179,13 @@ export function App() {
   const viewOf = (id: string) => views[id] ?? heirViews[id] ?? (optimistic[id]?.length ? EMPTY_VIEW : undefined);
   const view = currentId ? viewOf(currentId) : undefined;
   const shown = active && view ? active : undefined;
-  /** Something fills the main area: a session, or a pane tab (even while its owner loads). */
-  const mainShown = !!shown || !!paneRef;
-  /** Both splits render (a loading session shows alone until its view is there). */
+  /** GH-774: a session tab whose view is on its way shows the skeleton in its place. */
+  const loadingTab = (id: string) => isSession(id) && showsSkeleton({ view: !!viewOf(id), listed: !!sessionOf(id), failed: failedTabs.has(id), listLoaded });
+  const loadingMain = !paneRef && !!currentId && loadingTab(currentId);
+  /** The shown session, or the one loading in the main area (its list item is known): the panels and the phone pane tabs hang off it. */
+  const hosted = shown ?? (loadingMain ? active : undefined);
+  /** Something fills the main area: a session (or its skeleton), or a pane tab (even while its owner loads). */
+  const mainShown = !!shown || !!paneRef || loadingMain;
   // Drag a tab onto the session area (GH-356): an edge splits there, the middle of a split shows the tab in it.
   const splitDrop = useSplitDrop({
     enabled: () => lg && splitContent(activeRef.current),
@@ -2212,8 +2218,18 @@ export function App() {
     const total = (row ? area.w : area.h) - 8;
     return ratioFor(split.ratio * total, total, row ? SPLIT_MIN_W : SPLIT_MIN_H);
   })();
-  const splitShown = splitOn && split.ids.every((id) => (isPaneRef(id) ? !!sessionOf(ownerOf(id)) : !!viewOf(id) && !!sessionOf(id)));
+  /** Both splits render (a loading session shows its skeleton in its split, GH-774). */
+  const splitShown = splitOn && split.ids.every((id) => (isPaneRef(id) ? !!sessionOf(ownerOf(id)) : !!sessionOf(id) && (!!viewOf(id) || loadingTab(id))));
   const inSplit = (id: string) => splitShown && split!.ids.includes(id);
+  // GH-774: a split partner with no view (restored by a reload, idle, not followed) is asked for, so its skeleton does not stay.
+  useEffect(() => {
+    if (status !== "connected" || !listLoaded || !splitOn) return;
+    for (const id of split.ids) {
+      if (id === activeId || !isSession(id) || viewsRef.current[id] || failedTabsRef.current.has(id) || !sessionOf(id) || requested.current.has(id)) continue;
+      requested.current.add(id);
+      void subscribe(id);
+    }
+  }, [status, listLoaded, splitOn, split?.ids.join("\n"), activeId]);
   /** On screen: in the shown split, else the active tab. */
   const onScreen = (id: string) => (splitShown ? split!.ids.includes(id) : id === activeId);
   const splitProps = (id: string) => ({
@@ -2329,7 +2345,7 @@ export function App() {
   // GH-430: the side and bottom panel hang off a panel target: the shown session, or on wide screens the new-session tab's project
   // (cwd, DOM position and keys stay the same when its first prompt creates the session, so nothing remounts).
   const draftHost = lg && draftShown && !!draftProject;
-  const target: PanelTarget | undefined = shown ? { key: shown.id, cwd: shown.cwd, sessionId: shown.id } : draftHost ? { key: NEW_TAB, cwd: draftProject! } : undefined;
+  const target: PanelTarget | undefined = hosted ? { key: hosted.id, cwd: hosted.cwd, sessionId: hosted.id } : draftHost ? { key: NEW_TAB, cwd: draftProject! } : undefined;
   // The panels stay mounted while no tab shows (Focus), so their open files survive.
   const lastTarget = useRef<PanelTarget>(undefined);
   if (target) lastTarget.current = target;
@@ -4159,10 +4175,12 @@ export function App() {
             </div>
           ) : (
             <>
-              {shown && (
+              {hosted ? (
                 <div className="flex min-w-0 items-center gap-1 lg:hidden">
                   <PaneTabs panes={["session", "changes", "files", ...(isGit ? (["graph"] as const) : []), "terminal", ...(panelPlan ? (["plan"] as const) : []), ...(panelHasArtifacts ? (["artifacts"] as const) : []), ...addonPanes]} value={paneRef && pane === "session" ? (paneRef.kind === "file" || paneRef.kind === "artifact" ? "session" : paneRef.kind) : pane === "graph" && !isGit ? "files" : pane} onChange={switchPane} changes={changeCount} />
                 </div>
+              ) : (
+                loadingMain && <div className="h-7 shrink-0 lg:hidden" aria-hidden />
               )}
               {layout.side === "left" && lg && (
                 <>
@@ -4187,11 +4205,12 @@ export function App() {
                   const pend = optimistic[id];
                   // Just created: shown before its subscribe reply, so the card is never blank.
                   const v = viewOf(id);
-                  if (!s || !v) return null;
+                  if (!v && !(onScreen(id) && loadingTab(id))) return null;
+                  if (v && !s) return null;
                   return (
                     <Activity key={tabKeys[id] ?? id} mode={onScreen(id) ? "visible" : "hidden"}>
                       <div data-session-id={id} {...(inSplit(id) ? splitProps(id) : { className: "flex min-h-0 min-w-0 flex-1 flex-col" })}>
-                      {renderTab(id, s, v, pend, { active: splitShown ? id === activeId : true })}
+                      {v && s ? renderTab(id, s, v, pend, { active: splitShown ? id === activeId : true }) : <SessionSkeleton session={s} place={s && worktreeName(s.cwd, worktrees)} />}
                       </div>
                     </Activity>
                   );
@@ -4263,7 +4282,7 @@ export function App() {
                         onPrompt: (text, images) => (isClearCommand(text) ? notHere() : sendPrompt(a.id, text, images)),
                       })
                     ) : (
-                      <p className="m-auto text-muted-foreground text-sm">{tr("app.main.loading")}</p>
+                      failedTabs.has(a.id) ? <p className="m-auto text-muted-foreground text-sm">{tr("app.main.loading")}</p> : <SessionSkeleton session={s} />
                     )}
                   </AsidePopup>
                 );
@@ -5001,18 +5020,7 @@ function StartingSession({ cwd, place, pending }: { cwd: string; place?: string;
   const phone = usePhone();
   return (
     <div className={`${card} flex-1`} data-testid="starting-session" aria-busy="true">
-      {!phone && (
-        <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4" data-testid="session-header">
-          <ProjectAvatar cwd={cwd} />
-          <span className="min-w-0 truncate font-medium" title={cwd}>
-            {place ?? projectName(cwd)}
-          </span>
-          <SideBadge cwd={cwd} />
-          <span className="min-w-0 truncate text-muted-foreground" title={cwd}>
-            {cwd}
-          </span>
-        </header>
-      )}
+      {!phone && <SkeletonHeader cwd={cwd} place={place} />}
       <VirtualTimeline
         items={[] as TimelineItem[]}
         itemKey={timelineKey}
@@ -5026,9 +5034,7 @@ function StartingSession({ cwd, place, pending }: { cwd: string; place?: string;
           </>
         }
       />
-      <div className="relative mx-auto flex w-full max-w-3xl flex-col gap-2 p-4 max-sm:px-2 max-sm:py-2">
-        <Skeleton className="h-[104px] w-full rounded-lg" data-testid="prompt-skeleton" />
-      </div>
+      <SkeletonComposer />
     </div>
   );
 }

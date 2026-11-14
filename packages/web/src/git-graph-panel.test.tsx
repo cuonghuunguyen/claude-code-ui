@@ -1393,19 +1393,29 @@ it("the › button of a row opens the same actions; Push there opens its dialog"
 it("mouse hover on a branch row opens its actions without taking focus from the search box; hover on All branches closes them", async () => {
   await mount(fake(withRefs()));
   await openPopup();
-  const hover = async (el: Element, pointerType = "mouse") => {
-    const e = new MouseEvent("pointerover", { bubbles: true });
+  let moveX = 100;
+  // GH-777: only a pointer move to new coordinates opens the actions; pointerenter and a synthetic move (same coordinates) come from layout under a still pointer.
+  const hover = async (el: Element, pointerType = "mouse", type = "pointermove", x = ++moveX) => {
+    const e = new MouseEvent(type, { bubbles: true });
     Object.defineProperty(e, "pointerType", { value: pointerType });
+    Object.defineProperty(e, "clientX", { value: x });
+    Object.defineProperty(e, "clientY", { value: 5 });
     await act(async () => void el.dispatchEvent(e));
     await flush();
   };
   const row = document.querySelector("[data-testid=branch-popup-row][data-ref='refs/heads/main']")!;
   await hover(row, "touch");
   expect(document.querySelector("[data-testid=branch-popup-sub]")).toBeNull();
+  const all = [...document.querySelectorAll("[data-testid=branch-popup-row]")].find((r) => r.textContent?.includes("All branches"))!;
+  await hover(all);
+  await hover(row, "mouse", "pointerover", moveX);
+  await hover(row, "mouse", "pointermove", moveX);
+  await hover(row, "mouse", "pointermove", moveX);
+  expect(document.querySelector("[data-testid=branch-popup-sub]")).toBeNull();
   await hover(row);
   expect(byId("branch-popup-sub")).not.toBeNull();
   expect(document.activeElement).toBe(search());
-  await hover(document.querySelector("[data-testid=branch-popup-row]")!);
+  await hover(all);
   expect(document.querySelector("[data-testid=branch-popup-sub]")).toBeNull();
 });
 
