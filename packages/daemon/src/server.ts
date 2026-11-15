@@ -29,6 +29,9 @@ import { openChecked, OPEN_READ, OPEN_WRITE, readAll, readdirChecked, real, same
 import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
 import { performance } from "node:perf_hooks";
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
+import { connectAreas } from "./areas.ts";
+import type { DaemonContext } from "./daemon-context.ts";
+import type { Connection } from "./dispatch.ts";
 import { createJira, JiraError, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
 import { GitRequestError, NOT_TOP, gitFailure, gitRequest, read as gitRead, write as gitWrite, type GitOutcome, type GitRequestContext } from "./git-request.ts";
@@ -1928,6 +1931,30 @@ export function createDaemon(opts: {
   }, MEM_LOG_MS).unref();
   http.on("close", () => (clearInterval(pinger), clearInterval(lagWatch), clearInterval(memLog)));
 
+  /** What the areas (area-*.ts) reach of this daemon. Built once, after every closure it names exists. */
+  const ctx: DaemonContext = {
+    appSettings,
+    secrets,
+    jira,
+    settingsReply,
+    broadcastSettings,
+    testAccount,
+    applyAccountToken: () => setClaudeToken(accountToken()),
+    claudeLoginChanged,
+    warmCommit,
+    catalogues,
+    autoContinue,
+    sessions,
+    perfMon,
+    syncRunning,
+    addons,
+    updater,
+    focused,
+    covered,
+    engineRequests,
+    opts,
+  };
+
   wss.on("connection", (ws: Conn, req?: IncomingMessage) => {
     const sameBrowser = sameMachine(req);
     // A WSL daemon's attached Hub is the Windows Hub of this machine, which checked its own browser (ADR 0011).
@@ -2015,6 +2042,7 @@ export function createDaemon(opts: {
       rewording?.abort();
       scans.forEach((a) => a.abort());
       scans.clear();
+      areas.close();
       focused.delete(ws);
       covered.delete(ws);
     });
@@ -2105,7 +2133,7 @@ export function createDaemon(opts: {
       media.set(nonce, { src: { kind: "bytes", read, mime, name }, ws, used: Date.now() });
       return { type: "reply", reqId: msg.reqId, result: { url: `/media/${nonce}/${encodeURIComponent(name)}?v=${msg.hash ?? r.mtime}`, mime, size: r.size, mtime: r.mtime } };
     };
-    const local = async (msg: ClientMessage, out: (m: ServerMessage) => void) => {
+    const legacy = async (msg: ClientMessage, out: (m: ServerMessage) => void) => {
       const reply = (result: unknown) => out({ type: "reply", reqId: msg.reqId, result });
       const fail = (code: string, message: string, size?: number) => out({ type: "error", reqId: msg.reqId, code, message, size });
       const answer = (o: GitOutcome) => ("error" in o ? fail(o.error.code, o.error.message, o.error.size) : reply(o.result));
@@ -2141,9 +2169,6 @@ export function createDaemon(opts: {
       };
       const find = async (id: string, background = false) => (await findSession(id, background)) ?? void fail("unknown_session", `no session ${id}`);
 
-      // A request only one Engine answers (its provider login, its server restart).
-      const own = engineRequests.get(msg.type);
-      if (own) return own(msg, reply, fail);
       switch (msg.type) {
         case "session.create": {
           if (typeof msg.cwd === "string" && refused(msg.cwd)) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
@@ -2589,100 +2614,6 @@ export function createDaemon(opts: {
           }
           broadcast({ type: "sessions.changed" });
           return reply({});
-        case "perf.report":
-          return reply({ daemon: perfMon.report() });
-        case "perf.clear":
-          perfMon.clear();
-          return reply({});
-        case "settings.get":
-          return reply(settingsReply());
-        case "jira.token": {
-          if (msg.token !== null && typeof msg.token !== "string") return fail("bad_settings", "token must be a string or null");
-          try {
-            secrets.setJiraToken(msg.token === null ? null : msg.token.trim(), jiraOrigin(appSettings.get().jira.url));
-          } catch (err) {
-            return fail("bad_settings", (err as Error).message);
-          }
-          broadcastSettings();
-          return reply(settingsReply());
-        }
-        case "claude.account.add": {
-          if (typeof msg.name !== "string" || typeof msg.token !== "string") return fail("bad_settings", "name and token must be strings");
-          try {
-            secrets.addClaudeAccount(msg.name.trim(), msg.token.trim());
-          } catch (err) {
-            return fail("bad_settings", (err as Error).message);
-          }
-          broadcastSettings();
-          return reply(settingsReply());
-        }
-        case "claude.account.remove": {
-          if (typeof msg.id !== "string") return fail("bad_settings", "id must be a string");
-          try {
-            const active = appSettings.get().claude.account === msg.id;
-            secrets.removeClaudeAccount(msg.id);
-            if (active) appSettings.set({ claude: { account: "" } });
-            setClaudeToken(accountToken());
-            if (active) claudeLoginChanged();
-          } catch (err) {
-            return fail("bad_settings", (err as Error).message);
-          }
-          broadcastSettings();
-          return reply(settingsReply());
-        }
-        case "claude.account.test": {
-          const token = typeof msg.id === "string" ? secrets.claudeToken(msg.id) : undefined;
-          if (!token) return fail("bad_settings", "Claude account: unknown account");
-          const env = { ...claudeEnv(process.env, token), CLAUDE_CODE_MAX_RETRIES: "0" };
-          if (!usesOauthToken(env)) return fail("bad_settings", "a cloud provider (Bedrock, Vertex, Foundry) is on in the daemon environment: token accounts are not used");
-          try {
-            const o = await testAccount(msg.id, token, env);
-            return o.ok ? reply({}) : fail(o.code, o.message);
-          } catch (e) {
-            if (e instanceof ConfigError) return fail("claude_test_failed", e.message.replaceAll(token, "***"));
-            throw e;
-          }
-        }
-        case "jira.test":
-        case "jira.search": {
-          if (msg.type === "jira.search" && msg.text !== undefined && (typeof msg.text !== "string" || msg.text.length > 500)) return fail("bad_request", "text must be a string of at most 500 characters");
-          try {
-            return reply(msg.type === "jira.test" ? await jira.test() : { tickets: await jira.search(msg.text) });
-          } catch (e) {
-            if (e instanceof JiraError) return fail(e.code, e.message);
-            throw e;
-          }
-        }
-        case "settings.set": {
-          // The command runs on the daemon machine's desktop: a remote browser must not plant it for the local user's next click.
-          if (msg.patch?.editor !== undefined && !sameHost) return fail("not_local", "Only a browser on the daemon machine can change the editor command");
-          try {
-            const picked = msg.patch?.claude?.account;
-            if (picked !== undefined && picked !== "" && picked !== "cli" && !secrets.claudeAccounts().some((a) => a.id === picked)) return fail("bad_settings", "Claude account: unknown account");
-            const before = appSettings.get().claude.account;
-            const settingsBefore = appSettings.get();
-            const settings = appSettings.set(msg.patch);
-            if (msg.patch?.git?.commitMessageWarm !== undefined) (settings.git.commitMessageWarm ? warmCommit.prewarm() : warmCommit.stop());
-            for (const c of catalogues.all) c.settingsChanged?.(settingsBefore, settings);
-            if (settings.claude.account !== before) (setClaudeToken(accountToken()), claudeLoginChanged());
-            const origin = jiraOrigin(settings.jira.url);
-            const urlPatched = msg.patch?.jira?.url !== undefined;
-            // GH-487: a token saved without URL takes the first URL set here (never a hand edit), in one write; a token of another origin is dropped (cleanup, it is never sent anyway).
-            if (urlPatched && origin) secrets.bindJiraToken(origin);
-            const bound = secrets.jiraTokenOrigin();
-            if (bound !== undefined && bound !== origin) secrets.setJiraToken(null);
-            if (urlPatched && !origin) secrets.endJiraTokenReset();
-            if (!settings.usageLimit.autoContinue) autoContinue.clear();
-            if (!settings.focus.nextForYou) for (const s of sessions.values()) s.clearSuggestion();
-            perfMon.setEnabled(settings.performance.monitor);
-            if (!settings.power.keepAwake) opts.keepAwake?.reset();
-            syncRunning();
-            broadcastSettings(settings);
-            return reply(settingsReply(settings));
-          } catch (err) {
-            return fail("bad_settings", (err as Error).message);
-          }
-        }
         case "back.set":
         case "back.done":
         case "back.brief": {
@@ -3173,20 +3104,6 @@ export function createDaemon(opts: {
             return answer({ error: gitFailure(e) });
           }
         }
-        case "push.key":
-          return opts.push ? reply({ publicKey: opts.push.publicKey }) : fail("push_unavailable", "push is not configured");
-        case "push.subscribe":
-          if (!opts.push) return fail("push_unavailable", "push is not configured");
-          return opts.push.subscribe(msg.subscription) ? reply({}) : fail("bad_subscription", "subscription needs an https endpoint and keys");
-        case "push.focus":
-          if (msg.sessionId !== undefined && typeof msg.sessionId !== "string") return fail("bad_request", "sessionId must be a string");
-          if (msg.covered !== undefined && !(Array.isArray(msg.covered) && msg.covered.length <= 2000 && msg.covered.every((x) => typeof x === "string" && x.length <= 200)))
-            return fail("bad_request", "covered must be an array of at most 2000 session ids");
-          if (msg.sessionId === undefined) focused.delete(ws);
-          else focused.set(ws, msg.sessionId);
-          if (msg.covered === undefined) covered.delete(ws);
-          else covered.set(ws, new Set(msg.covered));
-          return reply({});
         case "fs.read": {
           // GH-807: a visualize file of a session's upload folder is readable without a root covering that folder.
           const file = allowed(msg.path) ?? visualizeReadable(msg.path, uploads.parent);
@@ -3469,45 +3386,14 @@ export function createDaemon(opts: {
             return fail(e instanceof ConfigError ? e.code : msg.type.startsWith("skills.") ? "skills_failed" : "mcp_failed", (e as Error).message);
           }
         }
-        case "addons.list":
-        case "addons.install":
-        case "addons.checkUpdate":
-        case "addons.update":
-        case "addons.approve":
-        case "addons.setEnabled":
-        case "addons.uninstall":
-        case "addons.pickRenderer": {
-          if (!addons) return fail("addons_unavailable", "addons live on the Hub");
-          try {
-            return reply(await addons.handle(msg as AddonsRequest));
-          } catch (e) {
-            return fail(e instanceof ConfigError ? e.code : "addons_failed", (e as Error).message);
-          }
-        }
-        case "update.check":
-        case "update.install":
-        case "update.restart": {
-          if (!updater) return fail("update_unavailable", "updates are off (source checkout, --no-update-check or not started by claude-ui)");
-          try {
-            if (msg.type === "update.check") return reply(await updater.checkNow());
-            return reply(msg.type === "update.install" ? { installed: await updater.install() } : { waitingFor: updater.restart(msg.now === true) });
-          } catch (e) {
-            return fail((e as { code?: string }).code ?? "update_failed", (e as Error).message);
-          }
-        }
-        case "launcher.shortcut": {
-          if (!opts.shortcut) return fail("shortcut_unavailable", "this daemon cannot make a launcher shortcut");
-          if (typeof msg.on !== "boolean") return fail("bad_request", "on must be true or false");
-          try {
-            return reply({ installed: await opts.shortcut.set(msg.on) });
-          } catch (e) {
-            return fail("shortcut_failed", (e as Error).message);
-          }
-        }
         default:
           return fail("unknown_type", `unknown message type ${(msg as { type?: string }).type}`);
       }
     };
+    const conn: Connection = { ws, send: (m) => send(ws, m), sameHost, sameBrowser, nonceFor };
+    const areas = connectAreas(ctx, conn, (msg, out) => legacy(msg, out));
+    /** Handles a message in this daemon; its reply or error goes to `out`, events and streams to this connection. */
+    const local = areas.dispatch;
     const router =
       opts.sides &&
       createRouter({
@@ -3594,6 +3480,9 @@ export function createDaemon(opts: {
   });
 }
 
+
+/** The options of `createDaemon` (the areas name the ones they read). */
+export type DaemonOptions = Parameters<typeof createDaemon>[0];
 
 const isSize = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 1 && (n as number) <= 1000;
 
