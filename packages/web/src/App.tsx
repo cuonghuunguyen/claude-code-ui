@@ -144,7 +144,7 @@ import { AsidePopup } from "./aside-popup.tsx";
 import { isClearCommand } from "./clear.ts";
 import { asideItem, cascade, clampRect, DEFAULT_SIZE, raise, setMinimized, type AsideState } from "./aside.ts";
 import { nextWaiting, waitingCount, waitingRequests, waitingStatus } from "./focus.ts";
-import { setApp, useAppIcon, useAppName } from "./app-icon.ts";
+import { useAppIcon, useAppName } from "./app-icon.ts";
 import { announcement, faviconHref, setAppleTitle, setAppleTouchIcon, setFavicon } from "./attention.ts";
 import { useStableProps } from "@/lib/utils";
 import { showTodoDock, TodoDock } from "./todo-dock.tsx";
@@ -177,10 +177,11 @@ import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { LabelDialog } from "./label-dialog.tsx";
-import { projectLabel, saveLabel, setLabels, useLabels } from "./labels.ts";
+import { applySettingsChanged, fromSettingsGet, publishSettings, type SettingsView } from "./settings-projection.ts";
+import { projectLabel, saveLabel, useLabels } from "./labels.ts";
 import { ENGINE_ICON, ENGINE_NAME, EngineTag } from "./engine-tag.tsx";
 import { BackButton, BackPanel, BackReminderCards, BriefRow } from "./back-panel.tsx";
-import { briefTag, foldBriefTurns, markFields, markOf, setBack, staleTurns, useBack } from "./back-marks.ts";
+import { briefTag, foldBriefTurns, markFields, markOf, staleTurns, useBack } from "./back-marks.ts";
 import { SideBadge, SideLabel, SideState, sideLookup } from "./sides.tsx";
 import { applyListReply } from "./list-delta.ts";
 import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeTargets, otherGroupTargets, projectName, runFromHash, staleTabs, tabFromHash } from "./tabs.ts";
@@ -194,7 +195,7 @@ import { PER_CWD, artifactRef, identityOf, isItem, isPaneRef, kindOf, ownerOf, p
 import { type DockedCommand, type DockedSession, DOCKED_DRAG_TYPE, DockHeader, DropStrip, useAreaDrop, type DropAt, droppedPane, isPaneDrag, PANE_DRAG_TYPE, PaneSlot, usePaneHosts } from "./dock-area.tsx";
 import { type Drag, type DropCtx, type MainDrop, dockDrop, mainDrop } from "./pane-drop.ts";
 import type { TabCommand } from "./tab-menu.ts";
-import { OpenExternalContext, canOpenSide, customEditor, externalHow, isExternalId, onDaemonMachine, type EditorInfo, type OpenExternal } from "./open-external-menu.ts";
+import { OpenExternalContext, canOpenSide, externalHow, isExternalId, onDaemonMachine, type OpenExternal } from "./open-external-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
 import { SPLIT_MIN_H, SPLIT_MIN_W, type DropZone, type Split, type SplitDir, type SplitRefusal, dropRefusal, isSession, REFUSAL_TEXT, splitContent, nextSplit, ratioFor } from "./split.ts";
 import { AvatarColors, IconButton, ProjectAvatar, QUIET_PRESSED, TAB_DRAG_TYPE, TabsBar, draggedTab, useGroupedTabs } from "./tabs-bar.tsx";
@@ -331,14 +332,15 @@ export function App() {
   const [pick, setDraft] = useState<DraftPick>(NEW_DRAFT);
   const [defaultMode, setDefaultMode] = useState<PermissionMode>("default");
   // GH-722: the daemon setting New sessions > Default permission mode (the Turn on of its recommendation sets it).
-  const [sessionsMode, setSessionsMode] = useState<PermissionMode>();
   // Modes a new session may start in (session.list): bypassPermissions only when the daemon enables it.
   const [newModes, setNewModes] = useState<PermissionMode[]>(NEW_SESSION_MODES);
   // Every Engine with its flags and start modes (session.list); none on an older daemon: claude only. `lastEngine`: Settings sessions.engine, the draft's engine until one is picked.
   const [engines, setEngines] = useState<NonNullable<ListResult["engines"]>>([]);
   /** The engines of each side (its daemon may allow other modes): a folder of a side reads its entry, else `engines`. */
   const [sideEngines, setSideEngines] = useState<NonNullable<ListResult["sideEngines"]>>({});
-  const [lastEngine, setLastEngine] = useState<Engine>(DEFAULT_ENGINE);
+  const [settingsView, setSettingsView] = useState<SettingsView>();
+  const lastEngine = settingsView?.lastEngine ?? DEFAULT_ENGINE;
+  const sessionsMode = settingsView?.sessionsMode;
   const [openingProject, setOpeningProject] = useState(false);
   // MCP servers dialog, on the project (and session) shown when it opened; `server`: opened on that server's detail (palette row).
   // Kept after closing, so the dialog stays mounted for its close and focus return.
@@ -541,23 +543,24 @@ export function App() {
   // In-app notifications (GH-158): `notifyRef` takes every event; the choice is per browser and Settings tells this page by event.
   const notifyRef = useRef<(e: Event, live: boolean) => void>(undefined);
   const [inApp, setInApp] = useState(loadInApp);
-  // Settings › Orchestration › Notifications from workers (GH-387): read on connect and from settings_changed.
-  const [workerNotices, setWorkerNotices] = useState(true);
+  // Settings read on connect and from settings_changed (settings-projection.ts).
+  /** GH-387: Settings › Orchestration › Notifications from workers. */
+  const workerNotices = settingsView?.workerNotices ?? true;
   // Settings › Git: no "modified content" probes of submodules in Changes.
-  const [ignoreSubmodules, setIgnoreSubmodules] = useState(false);
+  const ignoreSubmodules = settingsView?.ignoreSubmodules ?? false;
   /** GH-523: Keep computer awake; undefined until settings.get answers or on an older daemon. */
+  const computerAwake = settingsView?.computerAwake;
   /** GH-514: Claude in Chrome setting; undefined on a daemon without it. */
-  const [chromeOn, setChromeOn] = useState<boolean>();
+  const chromeOn = settingsView?.chromeOn;
   /** GH-690: Settings › Chat › Inline visualizations; a daemon without the setting counts as off. */
-  const [visualizeOn, setVisualizeOn] = useState(false);
+  const visualizeOn = settingsView?.visualizeOn ?? false;
   const visualizeRead = useCallback((path: string) => (client.current?.request<FsReadResult>({ type: "fs.read", path }) ?? Promise.reject(new Error("not connected"))).then((r) => r.content), []);
   /** Claude account (GH-615): the setting, the saved token accounts (no tokens) and whether Default is a token of the daemon's environment. */
-  const [claudeAccount, setClaudeAccount] = useState("");
-  const [claudeAccounts, setClaudeAccounts] = useState<{ id: string; name: string }[]>([]);
-  const [claudeEnvToken, setClaudeEnvToken] = useState(false);
+  const claudeAccount = settingsView?.claudeAccount ?? "";
+  const claudeAccounts = settingsView?.claudeAccounts ?? [];
+  const claudeEnvToken = settingsView?.claudeEnvToken ?? false;
   /** GH-612: the hub's editors from settings.get. */
-  const [appEditors, setAppEditors] = useState<EditorInfo[] | undefined>();
-  const [computerAwake, setComputerAwake] = useState<{ on: boolean; supported: boolean }>();
+  const appEditors = settingsView?.appEditors;
   useEffect(() => {
     const sync = (e: globalThis.Event) => setInApp((e as CustomEvent<boolean>).detail ?? loadInApp());
     window.addEventListener(IN_APP_EVENT, sync);
@@ -1450,7 +1453,7 @@ export function App() {
         setPlan(u);
       },
       onProvidersChanged: catalogue.providersChanged,
-      onSettingsChanged: (m) => (setLastEngine(m.settings.sessions?.engine ?? DEFAULT_ENGINE), setSessionsMode(m.settings.sessions?.defaultMode), setAppEditors((es) => es && [...es.filter((x) => x.id !== "custom"), ...customEditor(m.settings.editor)]), setLabels(m.settings.labels), setBack(m.settings.back), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled), setVisualizeOn(m.settings.chat?.visualize === true), setClaudeAccount(m.settings.claude?.account ?? ""), setClaudeAccounts(m.claudeAccounts ?? [])),
+      onSettingsChanged: (m) => (publishSettings(m.settings, "changed"), setSettingsView((v) => applySettingsChanged(v, m)), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1)),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       // Not on the page's first connection: the offer comes from a reconnect or the next time the page shows.
@@ -1475,7 +1478,7 @@ export function App() {
           (r) => catalogue.setDaemonList(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
-        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLastEngine(r.settings.sessions?.engine ?? DEFAULT_ENGINE), setSessionsMode(r.settings.sessions?.defaultMode), setLabels(r.settings.labels), setBack(r.settings.back, true), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setVisualizeOn(r.settings.chat?.visualize === true), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (publishSettings(r.settings, "get"), setSettingsView(fromSettingsGet(r)))).catch(() => {});
         // View cache (GH-771): meta of another daemon stored: nothing of the cache applies, the page starts as without a cache. Without a hello (older daemon) nothing is known: keep.
         // An unknown stored meta (the load read timed out or failed) is read now; none stored (a first load) or unreadable: nothing to clear, only the meta is written.
         // Only the resync (list, subscribes, follows) waits for that check.
@@ -2436,7 +2439,7 @@ export function App() {
   const [rec, setRec] = useState<{ key: number; message: string; action?: { label: string; onClick: () => void } }>();
   const recKey = useRef(0);
   const recNow = useRef({} as { compact: boolean; grouping: TabGrouping; autoClose: AutoClose; worktrees: Record<string, Worktree[]>; guideRun: boolean; drag: boolean; visibleIds: string[]; pushOn: boolean; togglePush: () => void; desktopOn: boolean; keepAwake: () => void; push: () => boolean; accounts: number });
-  recNow.current = { ...recNow.current, accounts: (claudeEnvToken ? 1 : 0) + 1 + claudeAccounts.length, compact, grouping, autoClose, worktrees, guideRun: !!guideRun, drag: !!drag, visibleIds: splitOn ? split.ids : [activeId ?? ""], pushOn, togglePush: () => void togglePush(), keepAwake: offerKeepAwake, push: offerPush };
+  recNow.current = { ...recNow.current, desktopOn: onDaemonMachine() && !!settingsView?.desktop && !settingsView.desktopForcedOff, accounts: (claudeEnvToken ? 1 : 0) + 1 + claudeAccounts.length, compact, grouping, autoClose, worktrees, guideRun: !!guideRun, drag: !!drag, visibleIds: splitOn ? split.ids : [activeId ?? ""], pushOn, togglePush: () => void togglePush(), keepAwake: offerKeepAwake, push: offerPush };
   const pushTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(pushTimer.current), []);
   /** Performs what the follow module's event rules decided for a batch. */
@@ -2463,7 +2466,6 @@ export function App() {
   function offerKeepAwake() {
     offer("keepAwake", { slept: slept.current, supported: !!computerAwake?.supported, on: !!computerAwake?.on }, () => void setComputer(true));
   }
-  const desktopForcedOff = useRef(false);
   useEffect(() => {
     setRecommendationHost({
       blocked: () => recNow.current.guideRun || recNow.current.drag || draggedTab() !== undefined || promptBusy(),
