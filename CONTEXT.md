@@ -66,6 +66,14 @@ A session tab shown in the side or bottom panel instead of the tabs bar (wide sc
 **Idle close**:
 The daemon ends the CLI process of an idle session no tab holds after a set time; the Session and its history stay and the next prompt resumes it.
 
+**Hold**:
+A subscribe of a Session that a tab, the URL hash or an Aside shows. The Daemon keeps the CLI of a held Session (see Idle close). The page records a Hold when it gives the command, not when the reply arrives.
+_Avoid_: lock, pin (pin = a pinned tab)
+
+**Background follow**:
+A subscribe without Hold (`background`): the page keeps the view and the unread marker of a Session no tab shows, and the Session may be idle-closed. Closing a tab of a live Session leaves a Background follow.
+_Avoid_: passive subscribe
+
 **Project**:
 A working directory the user added in claude-ui: opened with "Open project" (also by picking a recent project), the cwd of a session created in the web app, or a project reached by a link or notification click to one of its sessions (not by a reconnect or a page load). Cwds that only have terminal CLI transcripts are recent projects, not projects, until added. New sessions start in a project. Removing one hides it from the list; files and transcripts stay.
 _Avoid_: workspace, folder (folder = any directory in the folder browser)

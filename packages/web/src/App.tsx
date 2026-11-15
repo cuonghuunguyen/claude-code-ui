@@ -126,7 +126,8 @@ import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscript
 import { isUnread, loadSeen, loadShownActivity, pruneShownActivity, saveSeen, saveShownActivity, seenNow, tabTitle, tabUnread, type Seen } from "./unread.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
-import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withArtifacts, withEdits, withoutResultText, lastTextOf, stepCountOf, withPage, withSubscribe, knownOf, MISSING_REFS, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
+import { awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withoutResultText, lastTextOf, stepCountOf, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
+import { createSessionFollow, type Effect, type FollowHost } from "./session-follow.ts";
 import { FILE_LINK_PROPS, FileLinkContext, resolveBareName } from "./file-links.tsx";
 import { AllowDeniedContext, AlwaysAllowDeniedContext, BackgroundShellContext, LocalSettingsFileContext, PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type OpenViewer, type ViewerState } from "./viewer.ts";
 import { BackgroundButton, ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
@@ -141,7 +142,7 @@ import { AsideAsk } from "./aside-ask.tsx";
 import { AsidePopup } from "./aside-popup.tsx";
 import { isClearCommand } from "./clear.ts";
 import { asideItem, cascade, clampRect, DEFAULT_SIZE, raise, setMinimized, type AsideState } from "./aside.ts";
-import { FINISHED_MAX_AGE_MS, nextWaiting, waitingCount, waitingRequests, waitingStatus } from "./focus.ts";
+import { nextWaiting, waitingCount, waitingRequests, waitingStatus } from "./focus.ts";
 import { setApp, useAppIcon, useAppName } from "./app-icon.ts";
 import { announcement, faviconHref, setAppleTitle, setAppleTouchIcon, setFavicon } from "./attention.ts";
 import { useStableProps } from "@/lib/utils";
@@ -235,10 +236,6 @@ const ChangesPanel = lazy(() => import("./changes-panel.tsx").then((x) => ({ def
 const GraphTab = lazy(() => import("./graph-tab.tsx").then((m) => ({ default: m.GraphTab })));
 const GraphPane = lazy(() => import("./git-graph-panel.tsx").then((m) => ({ default: m.GraphPane })));
 const TerminalPanel = lazy(() => import("./terminal-panel.tsx").then((m) => ({ default: m.TerminalPanel })));
-/** Background views resubscribed at once after a reconnect. */
-const RESUBSCRIBE_CONCURRENCY = 4;
-/** The most a reconnect waits for the list and the shown sessions before the background views and the repos go on. */
-const RESYNC_SETTLE_MS = 15_000;
 const TERMINAL_KEY = "claude-ui.terminalOpen";
 const PANEL_HIDDEN_KEY = "claude-ui.sidePanelHidden";
 const FILE_TREE_HIDDEN_KEY = "claude-ui.fileTreeHidden";
@@ -272,8 +269,6 @@ const saveFlag = (key: string, on: boolean) => {
 };
 const TERMINAL_HEIGHT_KEY = "claude-ui.terminalHeight";
 const SIDEBAR_WIDTH_KEY = "claude-ui.sidebarWidth";
-/** Least time between two automatic retries of a failed older-page cursor (n9: a burst of scroll events sends one request). */
-const PAGE_RETRY_MS = 3000;
 const loadNumber = (key: string, fallback: number) => {
   try {
     return Number(localStorage.getItem(key)) || fallback;
@@ -387,19 +382,15 @@ export function App() {
   const newPrompt = useRef<HTMLTextAreaElement>(null);
   const [views, setViews] = useState<Record<string, SessionView>>({});
   // View cache (GH-771, docs/spec.md "Client state"): the views and the session list of the last page life, in IndexedDB, shown before the socket opens. Not a source of truth.
-  // Absent where the browser has no IndexedDB. `cachedMeta`: the daemon the cache was written for; `fromCache`: sessions whose view came from it and has not been resubscribed yet
-  // (not a SessionView field); `cacheGate`: the last clear, so a read or save never goes ahead of it; `savedSeq`: lastSeq of the view each session was last marked for saving.
+  // Absent where the browser has no IndexedDB. `cachedMeta`: the daemon the cache was written for; `cacheGate`: the last clear, so a read or save never goes ahead of it; `savedSeq`: lastSeq of the view each session was last marked for saving.
   const [cache] = useState(() => (idbFactory() ? createViewCache() : undefined));
   const cachedMeta = useRef<CacheMeta>(undefined);
-  const fromCache = useRef(new Set<string>());
   const cacheGate = useRef<Promise<unknown>>(Promise.resolve());
   const savedSeq = useRef(new Map<string, number>());
   /** Something newer than the cache was applied (a daemon hello, a real list, a subscribe reply): a cache read that finishes late is dropped. */
   const newerThanCache = useRef(false);
-  /** The `daemon_hello` of the current connection (undefined: none yet, or an older daemon). */
-  const helloRef = useRef<DaemonHello>(undefined);
   const saver = useRef<ReturnType<typeof createSaveScheduler>>(undefined);
-  /** The resync of this connection settled (list and shown sessions replied): what is not needed at once (repos, background views) waits for it. */
+  /** The resync of this connection settled (list and shown sessions replied): what is not needed at once (repos, background views) waits for it. Mirrors `follows.synced()`. */
   const [synced, setSynced] = useState(false);
   // GH-133: prompts sent but not yet echoed by the daemon, by tab key (NEW_TAB while the first prompt creates the session).
   const [optimistic, setOptimistic] = useState<Record<string, Pending[]>>({});
@@ -423,8 +414,6 @@ export function App() {
   const [focusSel, setFocusSel] = useState<string>();
   // When this browser first saw a request that came without the daemon's `at`.
   const firstSeen = useRef(new Map<string, number>());
-  /** Last live event per session (ms): the Focus page's quiet time. */
-  const liveAt = useRef(new Map<string, number>());
   // Signal only (GH-159, one setting for the browser since GH-205), set in Settings.
   const signalOnly = useSignalOnly();
   // Keep screen awake (GH-361): "running" = a listed, unarchived session that works or waits for the user.
@@ -790,8 +779,6 @@ export function App() {
   const setComputer = (on: boolean) => client.current!.request({ type: "settings.set", patch: { power: { keepAwake: on } } }).catch((e) => setError((e as Error).message));
   /** GH-523: Keep screen awake also sets Keep computer awake, when the daemon can; never the reverse. */
   const toggleScreen = () => (awake.toggle(), computerAwake?.supported && void setComputer(!awake.setting.on));
-  const viewsRef = useRef(views);
-  viewsRef.current = views;
   const statusRef = useRef(status);
   statusRef.current = status;
   const tabsRef = useRef(tabs);
@@ -806,25 +793,41 @@ export function App() {
   listRef.current = list;
   /** Prompts sent while a session's /clear runs: they go to the session the tab follows to (or back to this one when the /clear ends without), keyed by the session they were typed in. */
   const clearQueue = useRef<Record<string, { key: string; text: string; images: string[] }[]>>({});
-  const requested = useRef(new Set<string>());
-  /** Sessions subscribed holding on this connection: a tab shows them, the daemon keeps their CLI (docs/spec.md "Idle close"). */
-  const held = useRef(new Set<string>());
   /** Open Aside popups, for the closure-held reconnect resubscribe (an Aside nobody holds is deleted by the daemon's idle cleanup). */
   const asidesRef = useRef(asides);
   asidesRef.current = asides;
-  const isShown = (id: string) => tabsRef.current.includes(id) || hashId() === id || asidesRef.current.some((a) => a.id === id);
-  const titleRefreshed = useRef(0);
-  /** Seq of each session's last subscribe reply: events up to it are a replay of known changes, not new ones. */
-  const replayedTo = useRef<Record<string, number>>({});
-  /** Sessions whose older page is requested right now (a second request for the same cursor would be wasted), and the same for the indicator. */
-  const loadingOlder = useRef(new Set<string>());
   const [olderLoading, setOlderLoading] = useState<Record<string, boolean>>({});
-  const resnapshotting = useRef(new Set<string>());
-  const editsAsked = useRef(new Set<string>());
-  const artifactsAsked = useRef(new Set<string>());
-  /** Per session, the epoch and cursor whose page request failed, and when: retried only by a scroll event, at most every PAGE_RETRY_MS. */
-  const failedPage = useRef(new Map<string, { key: string; at: number }>());
-  const runRequested = useRef(new Set<string>());
+  /** The latest closures of what the follow module reports to (it is created once, with the first render's host). */
+  const hostFns = useRef({} as Pick<FollowHost, "refreshList" | "readCached" | "replied" | "dropped" | "gone" | "failed" | "error">);
+  /** Which sessions this page follows and how (hold, background, resync, paging); `views` mirrors its views. App performs the effects of its events. */
+  const [follows] = useState(() =>
+    createSessionFollow({
+      client: () => client.current,
+      listed: (id) => listRef.current.find((s) => s.id === id),
+      isLocal: (id) => (sideOfRef.current.sideOf(listRef.current.find((x) => x.id === id)?.cwd ?? infosRef.current[id]?.cwd ?? "") ?? LOCAL_SIDE) === LOCAL_SIDE,
+      shownAs: (id) => (hashId() === id ? "hash" : asidesRef.current.some((a) => a.id === id) ? "aside" : tabsRef.current.includes(id) ? "tab" : undefined),
+      hashId: () => hashId(),
+      unread: (id) => unreadRef.current.has(id),
+      pageVisible: () => document.visibilityState === "visible",
+      onScreen: (id) => recNow.current.visibleIds.includes(id),
+      refreshList: () => hostFns.current.refreshList(),
+      readCached: cache ? (id) => hostFns.current.readCached!(id) : undefined,
+      replied: (id, r) => hostFns.current.replied(id, r),
+      dropped: (id) => hostFns.current.dropped(id),
+      gone: (id) => hostFns.current.gone(id),
+      failed: (ids, message) => hostFns.current.failed(ids, message),
+      error: (message) => hostFns.current.error(message),
+    }),
+  );
+  useEffect(
+    () =>
+      follows.onChange(() => {
+        setViews(follows.views());
+        setOlderLoading(follows.olderLoadingMap());
+        setSynced(follows.synced());
+      }),
+    [],
+  );
   /** Session whose prompt box gets the focus once shown (follow()). */
   const refocus = useRef<string>(undefined);
   // Tabs restored from storage, checked against the first session list: a stale one would show "Untitled".
@@ -837,7 +840,7 @@ export function App() {
    * The list of the view cache is applied (GH-771): it only draws. Audit of every `listLoaded` use, which stays "a real server reply arrived":
    * - `keysFinal` (tab regrouping, never closes): `listShown`; a cached list names the sessions of the tabs, so the strip is grouped before the socket opens.
    * - `showsSkeleton`, `repoProjectKey`, the auto-close effect, the split-partner subscribe effect, `cleanupCtx` (the cleanup rules close unlisted tabs): real `listLoaded`.
-   * - Closing a tab by the list (`closeTabs` of a removed project, `staleTabs` forget, guide decision, `retryFailedFollows`, follows) lives in `loadList` only; `listFresh` stays false.
+   * - Closing a tab by the list (`closeTabs` of a removed project, `staleTabs` forget, guide decision, `follows.listReplied`) lives in `loadList` only; `follows.listFresh()` stays false.
    */
   const [listCached, setListCached] = useState(false);
   const listShown = listLoaded || listCached;
@@ -845,11 +848,6 @@ export function App() {
   const [failedTabs, setFailedTabs] = useState<ReadonlySet<string>>(new Set());
   const failedTabsRef = useRef(failedTabs);
   failedTabsRef.current = failedTabs;
-  /** Sessions whose subscribe is in flight while they have a view (a reconnect resubscribe): the view may be of an earlier daemon run (GH-378). */
-  const resubscribing = useRef(new Set<string>());
-  /** Connections opened so far, and whether a session.list reply requested on the current one arrived (GH-378): before it the list (state, lastActivity) may be of before a daemon restart. */
-  const connGen = useRef(0);
-  const listFresh = useRef(false);
 
   /** The `version` and the session rows of the last applied list: the next request sends the version and gets only the changed rows (GH-767). Not cleared on a reconnect: the daemon holds versions. */
   const listVersion = useRef<string | undefined>(undefined);
@@ -866,8 +864,8 @@ export function App() {
   const listFull = useRef<ListResult | undefined>(undefined);
 
   /**
-   * Sets everything a list reply (or the cached list, `gen` undefined) shows. A real reply (`gen`) also closes the tabs of a removed project, decides the guide, retries failed follows
-   * and marks the list fresh; the cached list does none of that (it may be of before a project was removed).
+   * Sets everything a list reply (or the cached list, `gen` undefined) shows. A real reply (`gen`) also closes the tabs of a removed project and decides the guide;
+   * the cached list does none of that (and does not reach `follows.listReplied`) (it may be of before a project was removed).
    */
   function applyList(reply: ListResult, sessions: ListResult["sessions"], gen?: number) {
     const { projects, recentProjects = [], permissionModes, engines: listedEngines, sideEngines: listedSideEngines, sides, docker, ssh, cwdSides = {}, worktrees = {} } = reply;
@@ -880,7 +878,6 @@ export function App() {
       closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd)) && !(first && s.id === hashId())).map((s) => s.id)));
     }
     setList(sessions.map((s) => ({ ...s, title: cleanTitle(s.title) })));
-    if (gen !== undefined && gen === connGen.current) listFresh.current = true;
     setProjects(projects);
     if (gen !== undefined && !guideDecided.current) {
       // The first list of this page decides: a fresh browser on a daemon with no projects gets the tour, anything else is only offered it.
@@ -893,12 +890,6 @@ export function App() {
     }
     setRecentProjects(recentProjects);
     setSides(sides);
-    if (gen !== undefined) {
-      // A side that became ready: its sessions that failed to follow are asked again.
-      const ready = new Set((sides ?? []).filter((x) => x.state === "ready").map((x) => x.id));
-      if ([...ready].some((id) => !readySides.current.has(id))) retryFailedFollows();
-      readySides.current = ready;
-    }
     setDocker(docker);
     setSsh(ssh);
     setCwdSides(cwdSides);
@@ -912,7 +903,7 @@ export function App() {
 
   /** `whole`: ask without `since` (a delta that could not be applied). */
   async function loadList(whole = false): Promise<void> {
-    const gen = connGen.current;
+    const gen = follows.connection();
     try {
       const since = whole ? undefined : listVersion.current;
       const reply = await client.current!.request<ListResult>({ type: "session.list", since: since ?? "" });
@@ -935,34 +926,25 @@ export function App() {
         for (const id of new Set(staleTabs(restored.current.filter((id) => id !== hashId()), new Set(sessions.map((s) => s.id))).map(ownerOf))) forget(id);
         restored.current = undefined;
       }
-      // Live sessions are followed so their unread markers update without opening them (background: no hold on the CLI).
-      // ponytail: replays every live session's log into this tab; follow state only if that gets heavy.
-      // A restored or cached session (`live: false`, idle) has no CLI running: nothing new arrives, so it is not followed.
-      for (const s of sessions)
-        if (followed(s) && (s.state !== "error" || isShown(s.id) || Date.now() - s.lastActivity <= FINISHED_MAX_AGE_MS) && !viewsRef.current[s.id] && !requested.current.has(s.id)) requested.current.add(s.id), void followCached(s.id);
+      // A side that became ready asks its failed follows again; live sessions are followed so their unread markers update (background: no hold on the CLI).
+      follows.listReplied(gen, sessions, (reply.sides ?? []).filter((x) => x.state === "ready").map((x) => x.id));
     } catch (e) {
       if ((e as Error).message !== "disconnected") setError((e as Error).message);
     }
   }
 
-  /** Puts a cached record into the views, infos and titles (the view stays marked in `fromCache` until its first subscribe); only where the session has no view yet. */
+  /** Puts a cached record into the views, infos and titles (the view stays marked as cached until its first subscribe); only where the session has no view yet. */
   function applyCachedView(id: string, cv: CachedView) {
-    if (viewsRef.current[id]) return;
-    fromCache.current.add(id);
+    if (!follows.seed(id, cv.view)) return;
     savedSeq.current.set(id, cv.view.lastSeq);
-    viewsRef.current = { ...viewsRef.current, [id]: cv.view };
-    setViews((v) => (v[id] ? v : { ...v, [id]: cv.view }));
     setInfos((i) => (i[id] ? i : { ...i, [id]: cv.info }));
     if (cv.title) setTitles((t) => (t[id] ? t : { ...t, [id]: cv.title }));
   }
 
-  /** A follow of a session that has no view: its cached view (a background one is not read at page load) is put in first, so the subscribe resumes from it. */
-  async function followCached(id: string) {
-    if (cache) {
-      const cv = await cacheGate.current.then(() => cache.readView(id));
-      if (cv) applyCachedView(id, cv);
-    }
-    return subscribe(id, false, false, !isShown(id));
+  /** A follow of a session that has no view reads its cached view first (a background one is not read at page load), so the subscribe resumes from it. */
+  async function readCachedView(id: string) {
+    const cv = await cacheGate.current.then(() => cache!.readView(id));
+    if (cv) applyCachedView(id, cv);
   }
 
   /** Page load: reads the cache (at most 300 ms, shown tabs first); undefined when it holds nothing usable (the page starts as without a cache). */
@@ -971,7 +953,7 @@ export function App() {
     const owners = [activeRef.current, ...(sp?.ids ?? []), ...tabsRef.current, hashId()].filter((t): t is string => !!t && t !== NEW_TAB && t !== FOCUS_TAB).map(ownerOf);
     // A read over the cap is "unknown" (cachedMeta stays undefined, the hello reads the stored meta itself); its late result is drawn only while nothing newer is.
     const onLate = (late: Hydrated) => {
-      if (newerThanCache.current || helloRef.current) return;
+      if (newerThanCache.current || follows.hello()) return;
       cachedMeta.current ??= late.meta;
       flushSync(() => applyHydrated(late));
     };
@@ -1004,150 +986,31 @@ export function App() {
     for (const [id, cv] of h.views) applyCachedView(id, cv);
   }
 
-  const failedBatch = useRef<string[]>([]);
-  const failedMessage = useRef("");
-  /** Sessions whose follow failed with side_not_ready: kept in `requested` so a list change does not ask again. */
-  const failedFollow = useRef(new Set<string>());
-  const readySides = useRef(new Set<string>());
-  function retryFailedFollows() {
-    for (const id of failedFollow.current) requested.current.delete(id);
-    failedFollow.current.clear();
+  /** A subscribe reply: what App keeps of it besides the view. */
+  function followReplied(id: string, r: SubscribeResult) {
+    newerThanCache.current = true;
+    setInfos((i) => ({ ...i, [id]: r.session }));
+    setFailedTabs((f) => (f.has(id) ? new Set([...f].filter((x) => x !== id)) : f));
+    setHeirOf((h) => (h[id] ? without(h, id) : h));
+    if (r.title) setTitles((t) => ({ ...t, [id]: cleanTitle(r.title) }));
   }
-
-  // Replays events after the view's last seq, or everything when the daemon restarted (new logEpoch).
-  // A session that is not live in the daemon is rebuilt from its transcript and resumes with the same ID on the next prompt.
-  /** `addProject`: an explicit open (link, notification, click); a reconnect resubscribe must not re-add a project the user removed. */
-  /** `fresh`: a new snapshot (last page) whatever the view holds: a cursor or rewind the view cannot follow. `background`: follow only (no hold). */
-  /** `startAt`: the part to start the snapshot at when the view has none (an Aside: its own question). */
-  async function subscribe(sessionId: string, addProject = false, fresh = false, background = false, startAt?: string) {
-    const view = viewsRef.current[sessionId];
-    if (view) resubscribing.current.add(sessionId);
-    // After a daemon restart the snapshot starts at the oldest turn this view holds (transcript uuids are stable), so the scroll position survives.
-    const from = fresh ? undefined : view?.order.find((id) => {
-      const p = view.parts.get(id);
-      return p?.type === "user_text" && !p.parentId;
-    }) ?? startAt;
-    // GH-771: the daemon sends hashes back as refs instead of the parts the view holds when it answers with a snapshot anyway: another epoch (a daemon restart, here or while
-    // the page was closed), a trimmed cached view (parts, no epoch), or a side session from the cache (the hub's hello has no side epochs). Same epoch: only `sinceSeq`, no hashes.
-    const hello = helloRef.current;
-    const local = (sideOfRef.current.sideOf(listRef.current.find((x) => x.id === sessionId)?.cwd ?? infosRef.current[sessionId]?.cwd ?? "") ?? LOCAL_SIDE) === LOCAL_SIDE;
-    const hasParts = !!view && (view.order.length > 0 || view.aux.length > 0);
-    const wantKnown = !fresh && hasParts && ((local && !!hello && view.logEpoch !== hello.logEpoch) || !view.logEpoch || (!local && fromCache.current.has(sessionId)));
-    const known = wantKnown ? knownOf(view) : [];
-    try {
-      const r = await client.current!.request<SubscribeResult>({
-        type: "session.subscribe",
-        sessionId,
-        sinceSeq: fresh ? 0 : view?.lastSeq ?? 0,
-        logEpoch: view?.logEpoch,
-        paged: true,
-        ...(from && { from }),
-        ...(known.length && { known }),
-        ...(addProject && { addProject }),
-        ...(background && { background }),
-      });
-      // A ref the view no longer holds (it was reset meanwhile): the same subscribe again as a plain snapshot.
-      let merged: SessionView | undefined;
-      if (r.snapshot?.refs) {
-        const m = withSubscribe(viewsRef.current[sessionId] ?? emptySession(), r);
-        if (m === MISSING_REFS) return await subscribe(sessionId, addProject, true, background, startAt);
-        merged = m;
-      }
-      if (background) held.current.delete(sessionId);
-      else held.current.add(sessionId);
-      // Runs before the replayed events: the reply precedes them on the socket and this continuation is a microtask.
-      replayedTo.current[sessionId] = r.seq;
-      // A snapshot replaces the view: its older edits and failed cursor are asked again.
-      if (r.snapshot) {
-        for (const k of editsAsked.current) if (k.startsWith(`${sessionId}:`)) editsAsked.current.delete(k);
-        for (const k of artifactsAsked.current) if (k.startsWith(`${sessionId}:`)) artifactsAsked.current.delete(k);
-        failedPage.current.delete(sessionId);
-        for (const k of runRequested.current) if (k.startsWith(`${sessionId}:`)) runRequested.current.delete(k);
-      }
-      fromCache.current.delete(sessionId);
-      newerThanCache.current = true;
-      setViews((v) => ({ ...v, [sessionId]: merged ?? (withSubscribe(v[sessionId] ?? emptySession(), r) as SessionView) }));
-      setInfos((i) => ({ ...i, [sessionId]: r.session }));
-      setFailedTabs((f) => (f.has(sessionId) ? new Set([...f].filter((x) => x !== sessionId)) : f));
-      setHeirOf((h) => (h[sessionId] ? without(h, sessionId) : h));
-      if (r.title) setTitles((t) => ({ ...t, [sessionId]: cleanTitle(r.title) }));
-    } catch (e) {
-      // Gone from the daemon, e.g. never prompted before a daemon restart (no transcript): drop it from this tab.
-      if ((e as RequestError).code === "unknown_session") return forget(sessionId);
-      if ((e as Error).message !== "disconnected") {
-        // One toast and one state update for a burst of failures (a stopped side fails every one of its sessions at once).
-        failedBatch.current.push(sessionId);
-        failedMessage.current = (e as Error).message;
-        if (failedBatch.current.length === 1)
-          setTimeout(() => {
-            const ids = failedBatch.current.splice(0);
-            setError(failedMessage.current);
-            setFailedTabs((f) => (ids.every((x) => f.has(x)) ? f : new Set([...f, ...ids])));
-          });
-        // A stopped side (side_not_ready) fails the same way again: asked again only after a reconnect or when a side becomes ready, not by every list change.
-        // Another failure may be transient: asked again by the next follow instead of waiting on "Loading plan…" for good.
-        if (!viewsRef.current[sessionId]) {
-          if ((e as RequestError).code === "side_not_ready") failedFollow.current.add(sessionId);
-          else requested.current.delete(sessionId);
-        }
-      } else if (!viewsRef.current[sessionId]) requested.current.delete(sessionId); // a dropped request: the next follow asks again; a view is resubscribed on reconnect
-    } finally {
-      resubscribing.current.delete(sessionId);
-    }
+  /** One toast and one state update for a burst of failed subscribes (a stopped side fails every one of its sessions at once). */
+  function followFailed(ids: string[], message: string) {
+    setError(message);
+    setFailedTabs((f) => (ids.every((x) => f.has(x)) ? f : new Set([...f, ...ids])));
   }
-
-  /** Loads the page of whole turns before the view's cursor (`until`: back to the turn holding that part or message). Prepended without moving the view. */
-  async function loadOlder(sessionId: string, opts?: { until?: string; user?: boolean }) {
-    const view = viewsRef.current[sessionId];
-    if (!view?.older || !view.logEpoch || loadingOlder.current.has(sessionId)) return;
-    const { before } = view.older;
-    const epoch = view.logEpoch;
-    const cursorKey = `${epoch}:${before}`;
-    // A scroll event retries a failed cursor, at most every PAGE_RETRY_MS (measurements and the pinned follow fire scroll events too); layout passes do not.
-    const failed = failedPage.current.get(sessionId);
-    if (failed?.key === cursorKey && (!opts?.user || Date.now() - failed.at < PAGE_RETRY_MS)) return;
-    loadingOlder.current.add(sessionId);
-    setOlderLoading((l) => ({ ...l, [sessionId]: true }));
-    try {
-      const r = await client.current!.request<PageResult>({ type: "session.page", sessionId, logEpoch: epoch, before, ...(opts?.until && { until: opts.until }) });
-      failedPage.current.delete(sessionId);
-      setViews((v) => (v[sessionId]?.logEpoch === epoch ? { ...v, [sessionId]: withPage(v[sessionId]!, before, r.page) } : v));
-    } catch (e) {
-      const code = (e as RequestError).code;
-      // The cursor is gone (rewound away): a fresh snapshot replaces the view.
-      if (code === "unknown_cursor") await subscribe(sessionId, false, true, !held.current.has(sessionId));
-      // The daemon restarted: the resubscribe (with `from`, so the position stays) takes the new epoch.
-      else if (code === "stale_epoch") await subscribe(sessionId, false, false, !held.current.has(sessionId));
-      else if ((e as Error).message !== "disconnected") {
-        // One toast per cursor: a retry that fails again stays quiet.
-        const again = failedPage.current.get(sessionId)?.key === cursorKey;
-        failedPage.current.set(sessionId, { key: cursorKey, at: Date.now() });
-        if (!again) setError((e as Error).message);
-      }
-    } finally {
-      loadingOlder.current.delete(sessionId);
-      setOlderLoading((l) => ({ ...l, [sessionId]: false }));
-    }
+  /** The session has no view any more. */
+  function followDropped(id: string) {
+    setInfos((i) => without(i, id));
+    setFailedTabs((f) => (f.has(id) ? new Set([...f].filter((x) => x !== id)) : f));
   }
+  hostFns.current = { refreshList, readCached: cache ? readCachedView : undefined, replied: followReplied, dropped: followDropped, gone: (id) => forget(id), failed: followFailed, error: (m) => setError(m) };
 
   // A subagent view opened by URL or Back/Forward whose run is only known from aux: load back to its turn once.
   useEffect(() => {
-    const v = activeId ? views[activeId] : undefined;
-    if (!run || !activeId || !v || v.parts.has(run) || !partOf(v, run) || olderLoading[activeId]) return;
-    const key = `${activeId}:${run}`;
-    if (runRequested.current.has(key)) return;
-    runRequested.current.add(key);
-    void loadOlder(activeId, { until: run });
+    if (!run || !activeId || olderLoading[activeId]) return;
+    follows.revealRun(activeId, run);
   }, [run, activeId, views, olderLoading]);
-
-  // A view that cannot follow a rewind into its unloaded region takes a fresh snapshot.
-  useEffect(() => {
-    for (const [id, v] of Object.entries(views))
-      if (v.stale && !resnapshotting.current.has(id)) {
-        resnapshotting.current.add(id);
-        void subscribe(id, false, true, !held.current.has(id)).finally(() => resnapshotting.current.delete(id));
-      }
-  }, [views]);
 
   /** The tab of session `from` shows session `to` instead, in its place; the active one opens it, its prompt box keeps the focus. */
   function follow(from: string, to: string) {
@@ -1203,9 +1066,8 @@ export function App() {
     // Offline, a request would wait for the reconnect with no feedback; the prompt box keeps the text instead.
     if (statusRef.current !== "connected") return Promise.reject(new Error(`the daemon is ${statusRef.current}`));
     const key = pendingKey();
-    sentHere.current.add(id);
-    turnEnded.current.delete(id);
-    setOptimistic((o) => ({ ...o, [id]: addPending(o[id], viewsRef.current[id], { key, text, images }) }));
+    follows.sent(id);
+    setOptimistic((o) => ({ ...o, [id]: addPending(o[id], follows.views()[id], { key, text, images }) }));
     return client.current!.request<PromptResult | undefined>({ type: "session.prompt", sessionId: id, text, images }).then(
       (r) => {
         // The Engine ran the text as its own command (OpenCode /undo): nothing echoes it, the bubble goes.
@@ -1225,25 +1087,14 @@ export function App() {
     return client.current!.request<T>(msg);
   }
 
-  /** Drops the view of a session this tab no longer follows; `unsubscribe`: also stops the daemon's events. */
-  function drop(sessionId: string, unsubscribe = true) {
-    held.current.delete(sessionId);
-    requested.current.delete(sessionId);
-    setViews((v) => without(v, sessionId));
-    setInfos((i) => without(i, sessionId));
-    setFailedTabs((f) => (f.has(sessionId) ? new Set([...f].filter((x) => x !== sessionId)) : f));
-    if (unsubscribe) client.current?.request({ type: "session.unsubscribe", sessionId }).catch(() => {});
-  }
-
   /** `deleted`: removed on purpose (this or another tab), so no "no longer exists" error. */
   function forget(sessionId: string, deleted = false) {
     // Gone from the daemon: nothing of it stays in the view cache.
-    fromCache.current.delete(sessionId);
     savedSeq.current.delete(sessionId);
     if (cache) void cacheGate.current.then(() => cache.remove(sessionId));
     // An Aside deleted elsewhere (another tab closed it): its popup goes.
     setAsides((a) => (a.some((x) => x.id === sessionId) ? a.filter((x) => x.id !== sessionId) : a));
-    drop(sessionId, false);
+    follows.drop(sessionId, { unsubscribe: false });
     setOptimistic((o) => without(o, sessionId));
     setList((l) => l.filter((s) => s.id !== sessionId));
     // Its pane tabs go with it (its file tabs go back to Files through the effect on `tabs`).
@@ -1272,12 +1123,12 @@ export function App() {
     setTitles((t) => ({ ...t, [id]: cleanTitle(r.title) }));
     setAsides((a) => [...a, { id, ownerId, title: r.title, from: r.from, minimized: false, readOnly: true }]);
     setAsideFocused(id);
-    void subscribe(id, false, false, false, r.from);
+    void follows.show(id, { startAt: r.from });
   }
   function closeAside(id: string) {
     setAsides((a) => a.filter((x) => x.id !== id));
     setAsideFocused((f) => (f === id ? undefined : f));
-    drop(id, true);
+    follows.drop(id);
     client.current?.request({ type: "aside.close", sessionId: id }).catch((e) => setError((e as Error).message));
   }
   /** Keep as session: the popup becomes a tab; the view and subscription stay, `loadOlder` brings the copied history on scroll up. */
@@ -1299,13 +1150,6 @@ export function App() {
     setAsides((l) => raise(setMinimized(l, id, false), id));
     setAsideFocused(id);
     open(a.ownerId);
-  }
-
-  /** Subscribes the owner of a pane tab when no view exists: in the background (no CLI hold) unless a session tab of it is open. Once per owner while requested. */
-  function followOwner(o: string) {
-    if (viewsRef.current[o] || requested.current.has(o)) return;
-    requested.current.add(o);
-    void subscribe(o, false, false, !isShown(o));
   }
 
   /** Opens or focuses a tab; `undefined` shows no tab. Only a session tab goes into the URL hash. */
@@ -1337,11 +1181,11 @@ export function App() {
     if (fresh) requestAnimationFrame(tabOpened);
     if (!keepHash) history.replaceState(null, "", tabHash(id));
     // A pane tab shows from its owner's view: follow the owner (no hold unless a session tab holds it).
-    if (isPaneRef(id)) return followOwner(ownerOf(id));
+    if (isPaneRef(id)) return follows.ensure(ownerOf(id));
     // A page-load link subscribed without adding its project: the first explicit open of that session adds it, view or not.
     // A session the list only follows in the background is held now (a tab shows it).
-    const add = !viewsRef.current[id] || !listRef.current.some((s) => s.id === id);
-    if (id !== NEW_TAB && (add || !held.current.has(id))) void subscribe(id, add);
+    const add = !follows.views()[id] || !listRef.current.some((s) => s.id === id);
+    if (id !== NEW_TAB) void follows.show(id, { addProject: add });
   }
 
   /** Makes `t` the active tab of split `s` (already updated for it): the subagent view of each tab goes with it, the hash follows. Not `open()`: the tab is open already. */
@@ -1389,8 +1233,8 @@ export function App() {
   /** Opens the subagent view of `id` in the active session tab, or its session view; a history entry each, so browser Back returns. */
   async function openRun(sessionId: string, id?: string) {
     // A run that is only known from the agent map (its turn is not loaded): load back to its turn first, so its children are there.
-    const v = viewsRef.current[sessionId];
-    if (id && v && !v.parts.has(id) && partOf(v, id)) await loadOlder(sessionId, { until: id });
+    const v = follows.views()[sessionId];
+    if (id && v && !v.parts.has(id) && partOf(v, id)) await follows.loadOlder(sessionId, { until: id });
     if (lg && dockedRef.current[sessionId]) return setDockRun((r) => ({ ...r, [sessionId]: id }));
     history.pushState(null, "", runHash(sessionId, id));
     setRun(id);
@@ -1448,7 +1292,7 @@ export function App() {
           // Back in place; it becomes the shown tab only if it was the one shown when swiped away.
           if (wasActive) open(id);
           // A tab that was not shown is held again like any open tab (the close left it followed in the background, or dropped).
-          else if (!isPaneRef(id)) void subscribe(id); // no `held` check: the close's background subscribe may still be in flight and would win
+          else if (!isPaneRef(id)) void follows.show(id);
         },
       },
     });
@@ -1464,11 +1308,11 @@ export function App() {
     const live = !!state && state !== "closed" && state !== "error";
     if (isPaneRef(id)) {
       // A live owner stays followed by the list; a tab of the owner (or another pane tab) keeps its view.
-      if (!live && !left.some((t) => ownerOf(t) === o)) drop(o);
+      if (!live && !left.some((t) => ownerOf(t) === o)) follows.drop(o);
       return;
     }
     // A pane tab of this session stays: its view keeps following in the background.
-    live || left.some((t) => isPaneRef(t) && ownerOf(t) === id) ? void subscribe(id, false, false, true) : drop(id);
+    live || left.some((t) => isPaneRef(t) && ownerOf(t) === id) ? void follows.background(id) : follows.drop(id);
   }
 
   /** The tab that took over after a close; none: the hash goes. */
@@ -1552,7 +1396,7 @@ export function App() {
           }
           setClosedTabs(stack);
           setTabs(tabs);
-          for (const id of restored) if (id !== NEW_TAB && !isPaneRef(id) && id !== shown) void subscribe(id);
+          for (const id of restored) if (id !== NEW_TAB && !isPaneRef(id) && id !== shown) void follows.show(id);
           // Undo counts as use: the restored tabs must not be auto-closed again at once.
           setUsed((u) => stampUsed(u, restored, Date.now()));
           // The tab that was shown comes back shown; the others are held again like any open tab.
@@ -1579,10 +1423,10 @@ export function App() {
         const owner = listRef.current.find((s) => s.id === ownerOf(id));
         // A file tab with unsaved edits is a draft: no rule closes it (GH-399).
         const fileTab = kindOf(id) === "file" ? editors.get().tabs[pathOf(id)!] : undefined;
-        return { id, unread: false, draft: !!fileTab && isDirty(fileTab), listed: !!owner, archived: !!owner?.archived, worker: false, transcript: false, busy: false, loading: !listFresh.current, lastUsed: usedAt(id) };
+        return { id, unread: false, draft: !!fileTab && isDirty(fileTab), listed: !!owner, archived: !!owner?.archived, worker: false, transcript: false, busy: false, loading: !follows.listFresh(), lastUsed: usedAt(id) };
       }
       const item = listRef.current.find((s) => s.id === id);
-      const v = viewsRef.current[id];
+      const v = follows.views()[id];
       // A view not replayed yet reads idle: the list state (running, needs input) still protects the tab.
       const busyList = item?.state === "running" || item?.state === "needs_input";
       // Not loaded in this daemon run: no queue, continue, request or attention seq exists; unread comes from the list's lastActivity.
@@ -1591,9 +1435,9 @@ export function App() {
       // A failed subscribe: no view, or one that may be of an earlier daemon run.
       const failed = failedTabsRef.current.has(id);
       // Disconnected or resubscribing: the view may be of an earlier daemon run, the new one is on its way.
-      const stale = !!v && (statusRef.current !== "connected" || resubscribing.current.has(id));
+      const stale = !!v && (statusRef.current !== "connected" || follows.resyncing(id));
       const read = item && (v || closed) ? tabUnread(v, seenRef.current[id], item.lastActivity, shownAt(id)) : undefined;
-      return { id, state: busyList ? item.state : (shownState(v) ?? item?.state), loading: !listFresh.current || (!!item && !failed && (stale || (!v && !closed))), unknown: failed || (!!item && (!!v || closed) && read === undefined), unread: unreadRef.current.has(id) || read === true, draft: drafts.has(id), listed: !!item, archived: !!item?.archived, worker: !!item?.coordinatorId, transcript: !!item?.transcript, busy: !!v?.queue?.items.length || v?.continueAt !== undefined, lastUsed: usedAt(id) };
+      return { id, state: busyList ? item.state : (shownState(v) ?? item?.state), loading: !follows.listFresh() || (!!item && !failed && (stale || (!v && !closed))), unknown: failed || (!!item && (!!v || closed) && read === undefined), unread: unreadRef.current.has(id) || read === true, draft: drafts.has(id), listed: !!item, archived: !!item?.archived, worker: !!item?.coordinatorId, transcript: !!item?.transcript, busy: !!v?.queue?.items.length || v?.continueAt !== undefined, lastUsed: usedAt(id) };
     });
   }
   const cleanupCtx = (): CleanupContext => ({ activeId: activeRef.current, shown: splitOnRef.current && splitRef.current ? new Set(splitRef.current.ids) : undefined, pinned: pinnedRef.current, listLoaded: listLoadedRef.current, now: Date.now() });
@@ -1670,7 +1514,7 @@ export function App() {
     const s = createSaveScheduler({
       saveViews: (ids) => {
         const entries = ids.flatMap((id) => {
-          const view = viewsRef.current[id];
+          const view = follows.views()[id];
           const item = listRef.current.find((x) => x.id === id);
           const info = infosRef.current[id] ?? item;
           return view && info ? [{ id, view, info, title: titlesRef.current[id] ?? item?.title ?? "" }] : [];
@@ -1726,49 +1570,8 @@ export function App() {
   /** The connection and everything hanging off it; returns the teardown. */
   function connectApp(): () => void {
     const c = connect({
-      // One task applies every event received since the last one: one render for the batch, the side logic per event in arrival order.
-      onEvents: (es: Event[]) => {
-        setViews((v) => {
-          const next = { ...v };
-          for (const e of es) next[e.sessionId] = applyEvent(next[e.sessionId] ?? emptySession(), e);
-          return next;
-        });
-        // viewsRef is the view as of the last render: the state each session had before the event is tracked through the batch.
-        const states = new Map<string, SessionView["state"] | undefined>();
-        for (const e of es) {
-          const before = states.has(e.sessionId) ? states.get(e.sessionId) : viewsRef.current[e.sessionId]?.state;
-          states.set(e.sessionId, e.part.type === "session_state" ? e.part.state : before ?? emptySession().state);
-          // New titles and last activity come from the transcript; refresh when a session changes state. A replayed
-          // change is in the list already (one session.list per subscribe would rescan every transcript, FIX-LEAK).
-          const live = e.seq > (replayedTo.current[e.sessionId] ?? 0);
-          if (live) liveAt.current.set(e.sessionId, Date.now());
-          notifyRef.current?.(e, live);
-          if (e.part.type === "session_state") {
-            // Push rule: a session that needed the user while the page was hidden, also as seen in the replay of a reconnect that follows.
-            const prev = before;
-            if (prev && isAttention(prev, e.part) && (document.visibilityState === "hidden" || (awaitReplay.current && !live))) {
-              hiddenNeed.current = true;
-              if (!live && awaitReplay.current) (clearTimeout(pushTimer.current), (pushTimer.current = setTimeout(() => document.visibilityState === "visible" && recNow.current.push(), 800)));
-            }
-            // The turn's context_usage comes after this idle event: the rule waits for it.
-            // A new turn drops a context_usage that never came (a failed read).
-            if (live && e.part.state === "running") turnEnded.current.delete(e.sessionId);
-            if (live && sentHere.current.has(e.sessionId) && e.part.state !== "running" && e.part.state !== "needs_input") (sentHere.current.delete(e.sessionId), turnEnded.current.add(e.sessionId));
-          }
-          if (live && e.part.type === "context_usage" && turnEnded.current.delete(e.sessionId)) {
-            offer("contextBreakdown", { visible: document.visibilityState === "visible" && recNow.current.visibleIds.includes(e.sessionId), percent: e.part.usage.percentage }, () =>
-              document.querySelector<HTMLElement>(`[data-testid="session-area"] [data-session-id="${CSS.escape(e.sessionId)}"] [data-testid="context-meter"]`)?.click());
-          }
-          // /clear: a tab of the session follows the session the CLI goes on in; a replay (reopening the old session) does not.
-          if (e.part.type === "session_cleared" && live) follow(e.sessionId, e.part.sessionId);
-          if (e.part.type === "session_state" && live) void refreshList();
-          // The title of a session without transcript is "New session" until its transcript exists, some time into the first turn.
-          else if (live && listRef.current.some((s) => s.id === e.sessionId && !s.transcript) && Date.now() - titleRefreshed.current > 2000) {
-            titleRefreshed.current = Date.now();
-            void refreshList();
-          }
-        }
-      },
+      // One task applies every event received since the last one: one render for the batch, the side rules per event in arrival order.
+      onEvents: (es: Event[]) => perform(follows.apply(es)),
       onSessionsChanged: (m) => {
         setReposSeq((n) => n + 1);
         if (m.deleted) forget(m.deleted, true);
@@ -1791,7 +1594,7 @@ export function App() {
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       // Not on the page's first connection: the offer comes from a reconnect or the next time the page shows.
-      onSlept: () => ((slept.current = true), connGen.current > 1 && recNow.current.keepAwake()),
+      onSlept: () => ((slept.current = true), follows.connection() > 1 && recNow.current.keepAwake()),
       onConfigChanged: (m) => {
         if (m.kind === "addons") return setAddonsRev((n) => n + 1);
         // The Claude login or account changed: the daemon dropped its model list.
@@ -1800,45 +1603,34 @@ export function App() {
         setReloadFailed((f) => nextReloadFailed(f, m.reloadFailed));
       },
       onOpen: (hello) => {
-        // Clean up tabs (GH-378): every session tab is "loading" until this connection's first list reply.
-        connGen.current++;
-        listFresh.current = false;
-        helloRef.current = hello;
-        // Per-connection resets and the cache-independent requests run now, before the daemon's burst after the hello is handled.
-        if (connGen.current > 1 && wasHidden.current) (awaitReplay.current = true, (wasHidden.current = false), clearTimeout(windowTimer.current), (windowTimer.current = setTimeout(() => (awaitReplay.current = false), 3000)));
+        // Clean up tabs (GH-378): every session tab is "loading" until this connection's first list reply. Per-connection resets and the cache-independent
+        // requests run now, before the daemon's burst after the hello is handled.
+        const gen = follows.opened(hello);
         // The daemon sends its update state right after the connect; a restarted one has none.
         setUpdate(undefined);
         setStale(undefined);
-        // A transient page failure (a side restarting) is retried after a reconnect.
-        failedPage.current.clear();
         modelsRequested.current.clear();
-        retryFailedFollows();
         // Models first: the subscribe replays come before later replies, and the toolbar needs the model names and effort levels.
         c.request<ModelsResult>({ type: "models.list" }).then(
           (r) => setModels(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
         c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLastEngine(r.settings.sessions?.engine ?? "claude"), setSessionsMode(r.settings.sessions?.defaultMode), setLabels(r.settings.labels), setBack(r.settings.back, true), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setVisualizeOn(r.settings.chat?.visualize === true), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
-        setSynced(false); // the resync below may wait for the daemon check: repos must not load meanwhile
         // View cache (GH-771): meta of another daemon stored: nothing of the cache applies, the page starts as without a cache. Without a hello (older daemon) nothing is known: keep.
         // An unknown stored meta (the load read timed out or failed) is read now; none stored (a first load) or unreadable: nothing to clear, only the meta is written.
         // Only the resync (list, subscribes, follows) waits for that check.
         if (hello && cache) {
           newerThanCache.current = true;
-          const gen = connGen.current;
           const meta = { daemonId: hello.daemonId, tokenHash: tokenHash(storedToken() ?? "") };
           const known = cachedMeta.current;
           const stored = known ? Promise.resolve(known) : readMetaCapped();
           void stored.then((m) => {
-            if (gen !== connGen.current) return;
+            if (gen !== follows.connection()) return;
             cachedMeta.current = { schema: 1, ...meta };
             if (m && m.daemonId !== hello.daemonId) {
               cacheGate.current = cache.clear().then(() => cache.writeMeta(meta));
-              fromCache.current.clear();
               savedSeq.current.clear();
-              requested.current.clear(); // a follow that drew a view of the other daemon must be asked again
-              viewsRef.current = {};
-              setViews({});
+              follows.reset();
               setInfos({});
               setTitles({});
               // The cached list's version names a list of another daemon: ask for the whole one.
@@ -1851,39 +1643,7 @@ export function App() {
         resume();
         function resume() {
         // The resync of a reconnect: the list and the shown sessions first; the background views and the repos follow once they settled (GH-760).
-        setSynced(false);
-        const resync: Promise<unknown>[] = [refreshList()];
-        const h = hashId();
-        // The hash session of a page load is only shown, not opened by the user: a removed project stays removed.
-        held.current.clear();
-        if (h && !viewsRef.current[h]) resync.push(subscribe(h));
-        // Shown sessions at once; background views through a small queue, so a restarted daemon is not asked to restore hundreds of transcripts in the same moment.
-        // A background view of a session that is no longer live (idle, not live) is dropped, unless it is unread: the list does not follow it either.
-        const live = (id: string) => {
-          const s = listRef.current.find((x) => x.id === id);
-          return !s || followed(s) || unreadRef.current.has(id);
-        };
-        const background: string[] = [];
-        // The visible tab goes first, then asides (an open popup), then the other open tabs: on a slow link the daemon sends their backlogs in this order (GH-767).
-        const rank = (id: string) => (id === h ? 0 : asidesRef.current.some((x) => x.id === id) ? 1 : 2);
-        for (const id of Object.keys(viewsRef.current).sort((x, y) => rank(x) - rank(y))) {
-          if (isShown(id)) resync.push(subscribe(id));
-          else if (live(id)) background.push(id);
-          else drop(id, false);
-        }
-        const gen = connGen.current;
-        const worker = async () => {
-          for (let id = background.shift(); id !== undefined && gen === connGen.current; id = background.shift()) if (viewsRef.current[id]) await subscribe(id, false, false, true);
-        };
-        // Bounded wait: a request that never settles must not keep the background views and the repos from loading.
-        let timer: ReturnType<typeof setTimeout>;
-        const cap = new Promise<void>((r) => (timer = setTimeout(r, RESYNC_SETTLE_MS)));
-        void Promise.race([Promise.allSettled(resync), cap]).then(() => {
-          clearTimeout(timer);
-          if (gen !== connGen.current) return;
-          setSynced(true);
-          for (let i = 0; i < RESUBSCRIBE_CONCURRENCY; i++) void worker();
-        });
+        void follows.resync();
         void pushSubscription().then((sub) => {
           setPushOn(!!sub);
           if (sub) sendSubscription(c, sub).catch(() => {});
@@ -2090,7 +1850,7 @@ export function App() {
     try {
       // The new-session tab (and its draft) stays until the first prompt is taken.
       const session = await startSession(client.current!.request, unprompted, cwd, { ...opts, draft: draftUpload.current }, first, (s) => {
-        sentHere.current.add(s.id);
+        follows.sent(s.id);
         setInfos((i) => ({ ...i, [s.id]: s }));
         setOptimistic((o) => (o[NEW_TAB] ? { ...o, [NEW_TAB]: o[NEW_TAB].map((p) => ({ ...p, sessionId: s.id })) } : o));
         // Listed (and so subscribed) before the prompt goes out: its echo can be in the view before the tab switches.
@@ -2250,7 +2010,7 @@ export function App() {
   async function configure(msg: Extract<Request, { type: "session.setModel" | "session.setPermissionMode" | "session.setEffort" | "session.setAgent" }>) {
     setError(undefined);
     try {
-      const before = viewsRef.current[msg.sessionId]?.permissionMode ?? infos[msg.sessionId]?.permissionMode;
+      const before = follows.views()[msg.sessionId]?.permissionMode ?? infos[msg.sessionId]?.permissionMode;
       const { session } = await client.current!.request<SetModelResult>(msg);
       setInfos((i) => ({ ...i, [session.id]: session }));
       // The daemon drops auto to ask when the new model has no auto support.
@@ -2382,11 +2142,11 @@ export function App() {
   // Regrouped only once every tab's key is final: on partial keys the unknown tabs gather in one group and the damaged order is stored (GH-196).
   const keysFinal = tabKeysFinal(tabs, listShown, (id) => !!sessionOf(id), failedTabs);
   useGroupedTabs(tabs, setTabs, groupOfTab, keysFinal, pinnedSet);
-  // Every owner of an open pane tab is followed (reload, a closed owner, Undo, Reopen); `requested` keeps it to one subscribe.
+  // Every owner of an open pane tab is followed (reload, a closed owner, Undo, Reopen); `follows.ensure` keeps it to one subscribe.
   const ownersKey = [...new Set(tabs.filter(isPaneRef).map(ownerOf))].sort().join();
   useEffect(() => {
     if (status !== "connected" || !ownersKey) return;
-    for (const o of ownersKey.split(",")) followOwner(o);
+    for (const o of ownersKey.split(",")) follows.ensure(o);
   }, [ownersKey, status === "connected"]);
   const cwdOfOwner = (o: string) => sessionOf(o)?.cwd;
   // A pane tab whose kind has no main-area home (another browser tab moved it, or an older stored value) closes silently,
@@ -2493,9 +2253,8 @@ export function App() {
   useEffect(() => {
     if (status !== "connected" || !listLoaded || !splitOn) return;
     for (const id of split.ids) {
-      if (id === activeId || !isSession(id) || viewsRef.current[id] || failedTabsRef.current.has(id) || !sessionOf(id) || requested.current.has(id)) continue;
-      requested.current.add(id);
-      void subscribe(id);
+      if (id === activeId || !isSession(id) || follows.views()[id] || failedTabsRef.current.has(id) || !sessionOf(id)) continue;
+      follows.ensure(id, { hold: true });
     }
   }, [status, listLoaded, splitOn, split?.ids.join("\n"), activeId]);
   /** On screen: in the shown split, else the active tab. */
@@ -2535,7 +2294,7 @@ export function App() {
                         onOpenRun={(r) => openRun(s.id, r)}
                         links={linksOf(id)}
                         onOpenSession={(sid) => open(sid)}
-                        onLoadOlder={(opts) => loadOlder(s.id, opts)}
+                        onLoadOlder={(opts) => follows.loadOlder(s.id, opts)}
                         loadingOlder={!!olderLoading[s.id]}
                         onStopRun={(subagentId) => client.current!.request({ type: "session.stopSubagent", sessionId: s.id, subagentId })}
                         onBackgroundShell={(toolUseId) => client.current!.request({ type: "session.backgroundShell", sessionId: s.id, toolUseId })}
@@ -2561,7 +2320,7 @@ export function App() {
                           if (!v.externalTurn && clearing(v, pend)) {
                             if (status !== "connected") return Promise.reject(new Error(`the daemon is ${status}`));
                             const key = pendingKey();
-                            setOptimistic((o) => ({ ...o, [s.id]: addPending(o[s.id], viewsRef.current[s.id], { key, text, images }) }));
+                            setOptimistic((o) => ({ ...o, [s.id]: addPending(o[s.id], follows.views()[s.id], { key, text, images }) }));
                             (clearQueue.current[s.id] ??= []).push({ key, text, images });
                             return Promise.resolve();
                           }
@@ -2587,7 +2346,7 @@ export function App() {
                         }
                         onMedia={(partId, index) => client.current!.request<MediaResult>({ type: "session.media", sessionId: s.id, partId, index }).then((r) => r.dataUrl)}
                         onArtifactPreview={(partId) => client.current!.request<ArtifactPreviewResult>({ type: "artifact.preview", sessionId: s.id, partId })}
-                        onArtifactTab={(partId) => (openArtifactTab(s.id, partId), offer("artifactsPane", { artifacts: sessionArtifacts(viewsRef.current[s.id] ?? v).length, paneSeen: recSeen("artifactsPane") > 0 }, () => showArtifacts(s.id)))}
+                        onArtifactTab={(partId) => (openArtifactTab(s.id, partId), offer("artifactsPane", { artifacts: sessionArtifacts(follows.views()[s.id] ?? v).length, paneSeen: recSeen("artifactsPane") > 0 }, () => showArtifacts(s.id)))}
                         onRespond={respond}
                         onSearch={search(s.cwd)}
                         onDialog={openDialog}
@@ -2629,33 +2388,11 @@ export function App() {
   const panelView = panelTarget?.sessionId ? views[panelTarget.sessionId] : undefined;
   // The changes panel needs the Edit/Write calls of the unloaded region: asked once per session (the cursor moves, aux keeps them).
   useEffect(() => {
-    const v = panelView;
-    if (status !== "connected" || !panelTarget?.sessionId || !v || !v.older || v.auxEdits || !v.logEpoch) return;
-    const { before } = v.older;
-    const epoch = v.logEpoch;
-    const id = panelTarget.sessionId;
-    const key = `${id}:${epoch}:${before}`;
-    if (editsAsked.current.has(key)) return;
-    editsAsked.current.add(key);
-    client.current?.request<EditsResult>({ type: "session.edits", sessionId: id, logEpoch: epoch, before }).then(
-      (r) => setViews((vs) => (vs[id]?.logEpoch === epoch ? { ...vs, [id]: withEdits(vs[id]!, before, r.parts) } : vs)),
-      () => editsAsked.current.delete(key),
-    );
+    if (status !== "connected" || !panelTarget?.sessionId) return;
+    follows.loadEdits(panelTarget.sessionId);
   }, [panelTarget?.sessionId, panelView?.older?.before, panelView?.auxEdits, panelView?.logEpoch, status]); // status: a request cut by a connection drop is asked again once it is back
   // The Artifacts pane needs the Artifact publishes of the unloaded region (GH-176): asked once per boundary, by the effect for the shown session and by the pane for its own.
-  const requestArtifacts = useCallback((id: string) => {
-    const v = viewsRef.current[id];
-    if (!v?.older || v.auxArtifacts || !v.logEpoch) return;
-    const { before } = v.older;
-    const epoch = v.logEpoch;
-    const key = `${id}:${epoch}:${before}`;
-    if (artifactsAsked.current.has(key)) return;
-    artifactsAsked.current.add(key);
-    client.current?.request<ArtifactsResult>({ type: "session.artifacts", sessionId: id, logEpoch: epoch, before }).then(
-      (r) => setViews((vs) => (vs[id]?.logEpoch === epoch ? { ...vs, [id]: withArtifacts(vs[id]!, before, r.parts) } : vs)),
-      () => artifactsAsked.current.delete(key),
-    );
-  }, []);
+  const requestArtifacts = useCallback((id: string) => follows.loadArtifacts(id), []);
   useEffect(() => {
     if (status === "connected" && panelTarget?.sessionId) requestArtifacts(panelTarget.sessionId);
   }, [panelTarget?.sessionId, panelView?.older?.before, panelView?.auxArtifacts, panelView?.logEpoch, requestArtifacts, status]);
@@ -2851,18 +2588,24 @@ export function App() {
   const recKey = useRef(0);
   const recNow = useRef({} as { compact: boolean; grouping: TabGrouping; autoClose: AutoClose; worktrees: Record<string, Worktree[]>; guideRun: boolean; drag: boolean; visibleIds: string[]; pushOn: boolean; togglePush: () => void; desktopOn: boolean; keepAwake: () => void; push: () => boolean; accounts: number });
   recNow.current = { ...recNow.current, accounts: (claudeEnvToken ? 1 : 0) + 1 + claudeAccounts.length, compact, grouping, autoClose, worktrees, guideRun: !!guideRun, drag: !!drag, visibleIds: splitOn ? split.ids : [activeId ?? ""], pushOn, togglePush: () => void togglePush(), keepAwake: offerKeepAwake, push: offerPush };
-  const sentHere = useRef(new Set<string>());
-  /** Sessions whose turn ended and whose context_usage is still to come. */
-  const turnEnded = useRef(new Set<string>());
-  // Push rule across a reconnect: the page was hidden since the socket closed; the replay's attention events count for a while after the open.
-  const wasHidden = useRef(false);
-  const awaitReplay = useRef(false);
   const pushTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const windowTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => (clearTimeout(pushTimer.current), clearTimeout(windowTimer.current)), []);
+  useEffect(() => () => clearTimeout(pushTimer.current), []);
+  /** Performs what the follow module's event rules decided for a batch. */
+  function perform(effects: Effect[]) {
+    for (const f of effects) {
+      if (f.type === "notify") notifyRef.current?.(f.event, f.live);
+      else if (f.type === "offerPush") (clearTimeout(pushTimer.current), (pushTimer.current = setTimeout(() => document.visibilityState === "visible" && recNow.current.push(), f.afterMs)));
+      else if (f.type === "offerContextBreakdown") offer("contextBreakdown", { visible: f.visible, percent: f.percent }, () => openContextMeter(f.sessionId));
+      else if (f.type === "clearMoved") follow(f.from, f.to);
+      else void refreshList();
+    }
+  }
+  /** The recommendation's button: the context meter of the session's area opens. */
+  function openContextMeter(sessionId: string) {
+    document.querySelector<HTMLElement>(`[data-testid="session-area"] [data-session-id="${CSS.escape(sessionId)}"] [data-testid="context-meter"]`)?.click();
+  }
   function offerPush() {
-    const needed = hiddenNeed.current;
-    hiddenNeed.current = false;
+    const needed = follows.takeHiddenNeed();
     const n = recNow.current;
     return needed && offer("push", { needed, pushOn: n.pushOn, supported: pushSupported(), secure: window.isSecureContext, permission: "Notification" in window ? Notification.permission : "denied", local: true, desktopOn: n.desktopOn }, n.togglePush);
   }
@@ -2872,7 +2615,6 @@ export function App() {
     offer("keepAwake", { slept: slept.current, supported: !!computerAwake?.supported, on: !!computerAwake?.on }, () => void setComputer(true));
   }
   const desktopForcedOff = useRef(false);
-  const hiddenNeed = useRef(false);
   useEffect(() => {
     setRecommendationHost({
       blocked: () => recNow.current.guideRun || recNow.current.drag || draggedTab() !== undefined || promptBusy(),
@@ -2890,7 +2632,7 @@ export function App() {
   };
   useEffect(() => {
     const onVis = () => {
-      if (document.visibilityState === "hidden") return void (wasHidden.current = true);
+      if (document.visibilityState === "hidden") return void follows.pageHidden();
       recNow.current.push() || recNow.current.keepAwake();
     };
     document.addEventListener("visibilitychange", onVis);
@@ -4606,7 +4348,7 @@ export function App() {
                   onAnswer={answer}
                   onOpenSession={(id) => (asides.some((a) => a.id === id) ? showAside(id) : open(id))}
                   unread={unread}
-                  activity={(id) => Math.max(liveAt.current.get(id) ?? 0, list.find((s) => s.id === id)?.lastActivity ?? 0)}
+                  activity={(id) => Math.max(follows.lastLive(id), list.find((s) => s.id === id)?.lastActivity ?? 0)}
                   onCancelContinue={(id) => client.current!.request({ type: "session.cancelContinue", sessionId: id }).catch((e) => setError((e as Error).message))}
                   marks={backMarks}
                   onOpenBack={(sessionId, partId) => openBackMark(sessionId, partId)}
