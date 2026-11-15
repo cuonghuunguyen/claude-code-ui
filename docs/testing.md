@@ -51,8 +51,6 @@ Order of pruning only, not keep or delete: high churn, past bug density and comp
 
 ## Critical user journeys (E2E scope)
 
-Draft; the owner confirms changes to this list.
-
 1. Start a session, send a prompt, see the reply, stop a turn.
 2. Permission request: allow, always allow, deny.
 3. Session restore after daemon restart and client reconnect.
