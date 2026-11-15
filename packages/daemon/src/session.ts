@@ -4,6 +4,7 @@ import { artifactFileOf, type ArtifactFile } from "./artifact-preview.ts";
 import {
   MAX_FROM_PARTS,
   omitMedia,
+  partHash,
   type Effort,
   type Event,
   type Part,
@@ -11,6 +12,8 @@ import {
   type PermissionDecision,
   type PosPart,
   type Snapshot,
+  type SnapshotWire,
+  type RefPart,
   type TimelinePage,
   type RewindMode,
   type RewindPreview,
@@ -105,6 +108,14 @@ export type SessionOpts = Partial<Omit<SessionSettings, "agent">> & {
   permissionCard?: (id: string, tool: string, input: Record<string, unknown>, mcpServer?: { name: string; source: string }) => PermissionCard | Promise<PermissionCard | undefined> | undefined;
 };
 
+/** `partHash` memo: the index replaces an entry's part object on every update, so the object is a valid key (GH-771). */
+const hashes = new WeakMap<Part, string>();
+const hashOf = (p: Part): string => {
+  let h = hashes.get(p);
+  if (h === undefined) hashes.set(p, (h = partHash(p)));
+  return h;
+};
+
 export class Session {
   readonly id: string;
   readonly createdAt = Date.now();
@@ -195,11 +206,20 @@ export class Session {
     return this.lastSeq;
   }
 
-  /** The paged subscribe snapshot at the current seq (synchronous: subscribe with this seq right after, no event falls between). */
-  snapshot(from?: string): { seq: number; snapshot: Snapshot } {
+  /**
+   * The paged subscribe snapshot at the current seq (synchronous: subscribe with this seq right after, no event falls between).
+   * `known` (part id -> `partHash` the client holds): a loaded or aux part with the same hash goes as `{ref}`; heads stay whole (GH-771).
+   */
+  snapshot(from?: string): { seq: number; snapshot: Snapshot };
+  snapshot(from: string | undefined, known: ReadonlyMap<string, string>): { seq: number; snapshot: SnapshotWire };
+  snapshot(from?: string, known?: ReadonlyMap<string, string>): { seq: number; snapshot: Snapshot | SnapshotWire } {
     const page = (from !== undefined && this.index.pageFrom(from, MAX_FROM_PARTS)) || this.index.lastPage();
     const aux = page.older ? this.index.aux(page.older.pos, this.planDirs()) : [];
-    return { seq: this.seq(), snapshot: { heads: this.index.heads(), attentionSeq: this.index.attentionSeq, page: { ...page, parts: page.parts.map(omitMedia) }, aux } };
+    const heads = this.index.heads();
+    const attentionSeq = this.index.attentionSeq;
+    if (!known) return { seq: this.seq(), snapshot: { heads, attentionSeq, page: { ...page, parts: page.parts.map(omitMedia) }, aux } };
+    const wire = (p: Part): Part | RefPart => (known.get(p.id) === hashOf(p) ? { ref: p.id } : omitMedia(p));
+    return { seq: this.seq(), snapshot: { heads, attentionSeq, refs: true, page: { ...page, parts: page.parts.map(wire) }, aux: aux.map((a) => ({ pos: a.pos, part: wire(a.part) })) } };
   }
 
   /** The page before the part `before`; undefined = unknown cursor. */

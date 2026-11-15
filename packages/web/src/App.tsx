@@ -1,4 +1,4 @@
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { Activity, lazy, memo, Suspense, use, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, LoaderCircleIcon, MenuIcon, MonitorIcon, MoonIcon, PanelLeftIcon, PanelRightIcon, RotateCcwIcon, SearchIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, SunIcon, TriangleAlertIcon, UsersIcon, XIcon } from "lucide-react";
 import type {
@@ -69,7 +69,9 @@ import { Message, MessageAction, MessageActions, MessageContent, MessageResponse
 import { Button } from "@/components/ui/button";
 import { QueueChips } from "./queue-chips.tsx";
 import { followed } from "./follow.ts";
-import { connect, type ConnectionStatus, type Request, type RequestError } from "./client.ts";
+import { storedToken } from "./pairing.ts";
+import { createSaveScheduler, createViewCache, idbFactory, tokenHash, type CacheMeta, type CachedView, type Hydrated } from "./view-cache.ts";
+import { connect, type ConnectionStatus, type DaemonHello, type Request, type RequestError } from "./client.ts";
 import { ImageStrip, readDataUrl, readImages } from "./images.tsx";
 import { PastedBlock, pastedBlockId, PasteChips } from "./pasted-text.tsx";
 import { backspaceToken, cleanTitle, collapsePasted, dedupePasteTokens, deleteToken, expandPastes, healDeletion, isLargePaste, nextPasteId, normalizePaste, type Pastes, pasteRefs, pasteTagId, pasteToken, prunePastes, splitPasted, stripPasted, summarizePasted } from "./pasted-text.ts";
@@ -124,7 +126,7 @@ import { disablePush, enablePush, pushSubscription, pushSupported, sendSubscript
 import { isUnread, loadSeen, loadShownActivity, pruneShownActivity, saveSeen, saveShownActivity, seenNow, tabTitle, tabUnread, type Seen } from "./unread.ts";
 import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
-import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withArtifacts, withEdits, withoutResultText, lastTextOf, stepCountOf, withPage, withSubscribe, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
+import { applyEvent, awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withArtifacts, withEdits, withoutResultText, lastTextOf, stepCountOf, withPage, withSubscribe, knownOf, MISSING_REFS, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { FILE_LINK_PROPS, FileLinkContext, resolveBareName } from "./file-links.tsx";
 import { AllowDeniedContext, AlwaysAllowDeniedContext, BackgroundShellContext, LocalSettingsFileContext, PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type OpenViewer, type ViewerState } from "./viewer.ts";
 import { BackgroundButton, ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
@@ -321,6 +323,8 @@ export function App() {
   const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({});
   const labels = useLabels();
   const sideOf = useMemo(() => sideLookup(sides, cwdSides, labels.sides), [sides, cwdSides, labels.sides]);
+  const sideOfRef = useRef(sideOf);
+  sideOfRef.current = sideOf;
   // GH-458: the status line of a project whose side is not ready; Retry / Update start it again (the state comes back as sessions.changed).
   const sideState = useMemo(
     () => ({ of: (cwd: string) => sides?.find((x) => x.id === sideOf.sideOf(cwd)), act: (side: string, setup?: "needed" | "updateRemote") => void client.current?.request(setup === "updateRemote" ? { type: "side.updateRemote", side } : { type: "side.start", side, ...(setup && { setup }) }).catch(() => {}) }),
@@ -382,6 +386,19 @@ export function App() {
   const refusedShown = useRef(new Set<string>());
   const newPrompt = useRef<HTMLTextAreaElement>(null);
   const [views, setViews] = useState<Record<string, SessionView>>({});
+  // View cache (GH-771, docs/spec.md "Client state"): the views and the session list of the last page life, in IndexedDB, shown before the socket opens. Not a source of truth.
+  // Absent where the browser has no IndexedDB. `cachedMeta`: the daemon the cache was written for; `fromCache`: sessions whose view came from it and has not been resubscribed yet
+  // (not a SessionView field); `cacheGate`: the last clear, so a read or save never goes ahead of it; `savedSeq`: lastSeq of the view each session was last marked for saving.
+  const [cache] = useState(() => (idbFactory() ? createViewCache() : undefined));
+  const cachedMeta = useRef<CacheMeta>(undefined);
+  const fromCache = useRef(new Set<string>());
+  const cacheGate = useRef<Promise<unknown>>(Promise.resolve());
+  const savedSeq = useRef(new Map<string, number>());
+  /** Something newer than the cache was applied (a daemon hello, a real list, a subscribe reply): a cache read that finishes late is dropped. */
+  const newerThanCache = useRef(false);
+  /** The `daemon_hello` of the current connection (undefined: none yet, or an older daemon). */
+  const helloRef = useRef<DaemonHello>(undefined);
+  const saver = useRef<ReturnType<typeof createSaveScheduler>>(undefined);
   /** The resync of this connection settled (list and shown sessions replied): what is not needed at once (repos, background views) waits for it. */
   const [synced, setSynced] = useState(false);
   // GH-133: prompts sent but not yet echoed by the daemon, by tab key (NEW_TAB while the first prompt creates the session).
@@ -465,6 +482,9 @@ export function App() {
   useEffect(() => {
     if (status !== "unauthorized") return;
     listVersion.current = listRows.current = undefined;
+    // The cache goes with the token (a wrong or revoked token must not leave a session's text on this device).
+    saver.current?.dispose();
+    void cache?.destroy();
     clearDrafts();
     editors.forget();
     clearSaved();
@@ -524,6 +544,8 @@ export function App() {
   const models = modelsOf("claude");
   // Replies to subscribe / create / setModel: the freshest SessionInfo, incl. model.
   const [infos, setInfos] = useState<Record<string, SessionInfo>>({});
+  const infosRef = useRef(infos);
+  infosRef.current = infos;
   /** Open Aside popups (docs/spec.md "Aside"), the top one last; `asideFocused`: the one Esc applies to. */
   const [asides, setAsides] = useState<AsideState[]>([]);
   const [asideFocused, setAsideFocused] = useState<string>();
@@ -533,6 +555,8 @@ export function App() {
   const [heirOf, setHeirOf] = useState<Record<string, string>>({});
   /** Titles from subscribe replies: a tab of a session not (yet) in the list, e.g. the page-load hash session. */
   const [titles, setTitles] = useState<Record<string, string>>({});
+  const titlesRef = useRef(titles);
+  titlesRef.current = titles;
   const [seen, setSeen] = useState<Record<string, Seen>>(loadSeen);
   const seenRef = useRef(seen);
   seenRef.current = seen;
@@ -809,6 +833,14 @@ export function App() {
   const [listLoaded, setListLoaded] = useState(false);
   const listLoadedRef = useRef(listLoaded);
   listLoadedRef.current = listLoaded;
+  /**
+   * The list of the view cache is applied (GH-771): it only draws. Audit of every `listLoaded` use, which stays "a real server reply arrived":
+   * - `keysFinal` (tab regrouping, never closes): `listShown`; a cached list names the sessions of the tabs, so the strip is grouped before the socket opens.
+   * - `showsSkeleton`, `repoProjectKey`, the auto-close effect, the split-partner subscribe effect, `cleanupCtx` (the cleanup rules close unlisted tabs): real `listLoaded`.
+   * - Closing a tab by the list (`closeTabs` of a removed project, `staleTabs` forget, guide decision, `retryFailedFollows`, follows) lives in `loadList` only; `listFresh` stays false.
+   */
+  const [listCached, setListCached] = useState(false);
+  const listShown = listLoaded || listCached;
   /** Tabs whose subscribe failed for a reason other than unknown_session: their session never arrives, so they must not keep the group keys from becoming final (GH-201). */
   const [failedTabs, setFailedTabs] = useState<ReadonlySet<string>>(new Set());
   const failedTabsRef = useRef(failedTabs);
@@ -830,6 +862,54 @@ export function App() {
     return (listQueued.current ??= listFlight.current.then(() => ((listQueued.current = undefined), refreshList())));
   }
 
+  /** The last whole list (rows merged), what the view cache keeps. */
+  const listFull = useRef<ListResult | undefined>(undefined);
+
+  /**
+   * Sets everything a list reply (or the cached list, `gen` undefined) shows. A real reply (`gen`) also closes the tabs of a removed project, decides the guide, retries failed follows
+   * and marks the list fresh; the cached list does none of that (it may be of before a project was removed).
+   */
+  function applyList(reply: ListResult, sessions: ListResult["sessions"], gen?: number) {
+    const { projects, recentProjects = [], permissionModes, engines: listedEngines, sideEngines: listedSideEngines, sides, docker, ssh, cwdSides = {}, worktrees = {} } = reply;
+    if (gen !== undefined) {
+      newerThanCache.current = true;
+      // A project removed here or by another client: its session tabs close (they would show a session no longer listed).
+      // The page-load hash session is kept on the first list (as before the cache): its own subscribe forgets it when unknown, and addProject may add its project.
+      const listed = new Set(sessions.map((s) => s.id));
+      const first = restored.current !== undefined;
+      closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd)) && !(first && s.id === hashId())).map((s) => s.id)));
+    }
+    setList(sessions.map((s) => ({ ...s, title: cleanTitle(s.title) })));
+    if (gen !== undefined && gen === connGen.current) listFresh.current = true;
+    setProjects(projects);
+    if (gen !== undefined && !guideDecided.current) {
+      // The first list of this page decides: a fresh browser on a daemon with no projects gets the tour, anything else is only offered it.
+      // A dialog open now (a pairing flow) postpones the decision to the next page load.
+      guideDecided.current = true;
+      let g = loadGuide();
+      if (!g && !document.querySelector('[aria-modal="true"]')) saveGuide((g = decideFirstUse(wasFreshBrowser(), projects.length)));
+      guideState.current = g;
+      setGuideReady(!!g);
+    }
+    setRecentProjects(recentProjects);
+    setSides(sides);
+    if (gen !== undefined) {
+      // A side that became ready: its sessions that failed to follow are asked again.
+      const ready = new Set((sides ?? []).filter((x) => x.state === "ready").map((x) => x.id));
+      if ([...ready].some((id) => !readySides.current.has(id))) retryFailedFollows();
+      readySides.current = ready;
+    }
+    setDocker(docker);
+    setSsh(ssh);
+    setCwdSides(cwdSides);
+    setWorktrees(worktrees);
+    if (gen !== undefined) setListLoaded(true);
+    else setListCached(true);
+    if (permissionModes) setNewModes(permissionModes);
+    if (listedEngines) setEngines(listedEngines);
+    setSideEngines(listedSideEngines ?? {});
+  }
+
   /** `whole`: ask without `since` (a delta that could not be applied). */
   async function loadList(whole = false): Promise<void> {
     const gen = connGen.current;
@@ -844,36 +924,12 @@ export function App() {
       listRows.current = rows;
       listVersion.current = reply.version;
       const sessions = rows;
-      const { projects, recentProjects = [], permissionModes, engines: listedEngines, sideEngines: listedSideEngines, sides, docker, ssh, cwdSides = {}, worktrees = {} } = reply;
-      // A project removed here or by another client: its session tabs close (they would show a session no longer listed).
-      const listed = new Set(sessions.map((s) => s.id));
-      closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd))).map((s) => s.id)));
-      setList(sessions.map((s) => ({ ...s, title: cleanTitle(s.title) })));
-      if (gen === connGen.current) listFresh.current = true;
-      setProjects(projects);
-      if (!guideDecided.current) {
-        // The first list of this page decides: a fresh browser on a daemon with no projects gets the tour, anything else is only offered it.
-        // A dialog open now (a pairing flow) postpones the decision to the next page load.
-        guideDecided.current = true;
-        let g = loadGuide();
-        if (!g && !document.querySelector('[aria-modal="true"]')) saveGuide((g = decideFirstUse(wasFreshBrowser(), projects.length)));
-        guideState.current = g;
-        setGuideReady(!!g);
+      applyList(reply, sessions, gen);
+      {
+        const { delta: _d, ids: _i, ...plain } = reply;
+        listFull.current = { ...plain, sessions };
+        saver.current?.markList();
       }
-      setRecentProjects(recentProjects);
-      setSides(sides);
-      // A side that became ready: its sessions that failed to follow are asked again.
-      const ready = new Set((sides ?? []).filter((x) => x.state === "ready").map((x) => x.id));
-      if ([...ready].some((id) => !readySides.current.has(id))) retryFailedFollows();
-      readySides.current = ready;
-      setDocker(docker);
-      setSsh(ssh);
-      setCwdSides(cwdSides);
-      setWorktrees(worktrees);
-      setListLoaded(true);
-      if (permissionModes) setNewModes(permissionModes);
-      if (listedEngines) setEngines(listedEngines);
-      setSideEngines(listedSideEngines ?? {});
       if (restored.current) {
         // The page-load hash session is left out: its project may be removed (not listed); its own subscribe forgets it when unknown.
         for (const id of new Set(staleTabs(restored.current.filter((id) => id !== hashId()), new Set(sessions.map((s) => s.id))).map(ownerOf))) forget(id);
@@ -883,10 +939,69 @@ export function App() {
       // ponytail: replays every live session's log into this tab; follow state only if that gets heavy.
       // A restored or cached session (`live: false`, idle) has no CLI running: nothing new arrives, so it is not followed.
       for (const s of sessions)
-        if (followed(s) && (s.state !== "error" || isShown(s.id) || Date.now() - s.lastActivity <= FINISHED_MAX_AGE_MS) && !viewsRef.current[s.id] && !requested.current.has(s.id)) requested.current.add(s.id), void subscribe(s.id, false, false, !isShown(s.id));
+        if (followed(s) && (s.state !== "error" || isShown(s.id) || Date.now() - s.lastActivity <= FINISHED_MAX_AGE_MS) && !viewsRef.current[s.id] && !requested.current.has(s.id)) requested.current.add(s.id), void followCached(s.id);
     } catch (e) {
       if ((e as Error).message !== "disconnected") setError((e as Error).message);
     }
+  }
+
+  /** Puts a cached record into the views, infos and titles (the view stays marked in `fromCache` until its first subscribe); only where the session has no view yet. */
+  function applyCachedView(id: string, cv: CachedView) {
+    if (viewsRef.current[id]) return;
+    fromCache.current.add(id);
+    savedSeq.current.set(id, cv.view.lastSeq);
+    viewsRef.current = { ...viewsRef.current, [id]: cv.view };
+    setViews((v) => (v[id] ? v : { ...v, [id]: cv.view }));
+    setInfos((i) => (i[id] ? i : { ...i, [id]: cv.info }));
+    if (cv.title) setTitles((t) => (t[id] ? t : { ...t, [id]: cv.title }));
+  }
+
+  /** A follow of a session that has no view: its cached view (a background one is not read at page load) is put in first, so the subscribe resumes from it. */
+  async function followCached(id: string) {
+    if (cache) {
+      const cv = await cacheGate.current.then(() => cache.readView(id));
+      if (cv) applyCachedView(id, cv);
+    }
+    return subscribe(id, false, false, !isShown(id));
+  }
+
+  /** Page load: reads the cache (at most 300 ms, shown tabs first); undefined when it holds nothing usable (the page starts as without a cache). */
+  async function hydrateCache(): Promise<Hydrated | undefined> {
+    const sp = splitRef.current;
+    const owners = [activeRef.current, ...(sp?.ids ?? []), ...tabsRef.current, hashId()].filter((t): t is string => !!t && t !== NEW_TAB && t !== FOCUS_TAB).map(ownerOf);
+    // A read over the cap is "unknown" (cachedMeta stays undefined, the hello reads the stored meta itself); its late result is drawn only while nothing newer is.
+    const onLate = (late: Hydrated) => {
+      if (newerThanCache.current || helloRef.current) return;
+      cachedMeta.current ??= late.meta;
+      flushSync(() => applyHydrated(late));
+    };
+    const h = await cache!.hydrate({ tokenHash: tokenHash(storedToken() ?? ""), tabIds: [...new Set(owners)], onLate });
+    cachedMeta.current = h.meta;
+    return h.meta ? h : undefined;
+  }
+
+  /** The stored meta for the daemon check at the hello; at most 1 s (a stuck database counts as nothing stored: no clear, the resync goes on). */
+  function readMetaCapped(): Promise<CacheMeta | undefined> {
+    return Promise.race([cacheGate.current.then(() => cache!.readMeta()), new Promise<undefined>((r) => setTimeout(r, 1000))]).catch(() => undefined);
+  }
+
+  /** Draws the cached list and the open tabs' views. */
+  function applyHydrated(h: Hydrated) {
+    if (h.list) {
+      try {
+        const reply = JSON.parse(h.list.json) as ListResult;
+        if (Array.isArray(reply.sessions) && Array.isArray(reply.projects)) {
+          applyList(reply, reply.sessions);
+          // The first real request asks only for what changed since this version.
+          listRows.current = reply.sessions;
+          listVersion.current = String(h.list.version) || undefined;
+          listFull.current = reply;
+        }
+      } catch {
+        // A malformed record: no cached list.
+      }
+    }
+    for (const [id, cv] of h.views) applyCachedView(id, cv);
   }
 
   const failedBatch = useRef<string[]>([]);
@@ -912,6 +1027,13 @@ export function App() {
       const p = view.parts.get(id);
       return p?.type === "user_text" && !p.parentId;
     }) ?? startAt;
+    // GH-771: the daemon sends hashes back as refs instead of the parts the view holds when it answers with a snapshot anyway: another epoch (a daemon restart, here or while
+    // the page was closed), a trimmed cached view (parts, no epoch), or a side session from the cache (the hub's hello has no side epochs). Same epoch: only `sinceSeq`, no hashes.
+    const hello = helloRef.current;
+    const local = (sideOfRef.current.sideOf(listRef.current.find((x) => x.id === sessionId)?.cwd ?? infosRef.current[sessionId]?.cwd ?? "") ?? LOCAL_SIDE) === LOCAL_SIDE;
+    const hasParts = !!view && (view.order.length > 0 || view.aux.length > 0);
+    const wantKnown = !fresh && hasParts && ((local && !!hello && view.logEpoch !== hello.logEpoch) || !view.logEpoch || (!local && fromCache.current.has(sessionId)));
+    const known = wantKnown ? knownOf(view) : [];
     try {
       const r = await client.current!.request<SubscribeResult>({
         type: "session.subscribe",
@@ -920,9 +1042,17 @@ export function App() {
         logEpoch: view?.logEpoch,
         paged: true,
         ...(from && { from }),
+        ...(known.length && { known }),
         ...(addProject && { addProject }),
         ...(background && { background }),
       });
+      // A ref the view no longer holds (it was reset meanwhile): the same subscribe again as a plain snapshot.
+      let merged: SessionView | undefined;
+      if (r.snapshot?.refs) {
+        const m = withSubscribe(viewsRef.current[sessionId] ?? emptySession(), r);
+        if (m === MISSING_REFS) return await subscribe(sessionId, addProject, true, background, startAt);
+        merged = m;
+      }
       if (background) held.current.delete(sessionId);
       else held.current.add(sessionId);
       // Runs before the replayed events: the reply precedes them on the socket and this continuation is a microtask.
@@ -934,7 +1064,9 @@ export function App() {
         failedPage.current.delete(sessionId);
         for (const k of runRequested.current) if (k.startsWith(`${sessionId}:`)) runRequested.current.delete(k);
       }
-      setViews((v) => ({ ...v, [sessionId]: withSubscribe(v[sessionId] ?? emptySession(), r) }));
+      fromCache.current.delete(sessionId);
+      newerThanCache.current = true;
+      setViews((v) => ({ ...v, [sessionId]: merged ?? (withSubscribe(v[sessionId] ?? emptySession(), r) as SessionView) }));
       setInfos((i) => ({ ...i, [sessionId]: r.session }));
       setFailedTabs((f) => (f.has(sessionId) ? new Set([...f].filter((x) => x !== sessionId)) : f));
       setHeirOf((h) => (h[sessionId] ? without(h, sessionId) : h));
@@ -1105,6 +1237,10 @@ export function App() {
 
   /** `deleted`: removed on purpose (this or another tab), so no "no longer exists" error. */
   function forget(sessionId: string, deleted = false) {
+    // Gone from the daemon: nothing of it stays in the view cache.
+    fromCache.current.delete(sessionId);
+    savedSeq.current.delete(sessionId);
+    if (cache) void cacheGate.current.then(() => cache.remove(sessionId));
     // An Aside deleted elsewhere (another tab closed it): its popup goes.
     setAsides((a) => (a.some((x) => x.id === sessionId) ? a.filter((x) => x.id !== sessionId) : a));
     drop(sessionId, false);
@@ -1523,7 +1659,72 @@ export function App() {
     setRevealSeq((n) => n + 1);
   }
 
+  // Saves of the view cache (GH-771): a view 2 s after its last change, the list 1 s after it was applied, everything dirty when the page goes to the background.
   useEffect(() => {
+    if (!cache) return;
+    const openTabsByUsed = () => {
+      const stored = loadUsed();
+      const at = (id: string) => Math.max(usedRef.current[id] ?? 0, stored[id] ?? 0);
+      return [...new Set(tabsRef.current.filter((t) => t !== NEW_TAB && t !== FOCUS_TAB).map(ownerOf))].sort((a, b) => at(b) - at(a));
+    };
+    const s = createSaveScheduler({
+      saveViews: (ids) => {
+        const entries = ids.flatMap((id) => {
+          const view = viewsRef.current[id];
+          const item = listRef.current.find((x) => x.id === id);
+          const info = infosRef.current[id] ?? item;
+          return view && info ? [{ id, view, info, title: titlesRef.current[id] ?? item?.title ?? "" }] : [];
+        });
+        if (entries.length) void cacheGate.current.then(() => cache.saveViews(entries, { openTabsByUsed: openTabsByUsed() }));
+      },
+      saveList: () => {
+        const full = listFull.current;
+        if (full) void cacheGate.current.then(() => cache.saveList(JSON.stringify(full), full.version ?? "", { openTabsByUsed: openTabsByUsed(), listedIds: full.sessions.map((x) => x.id) }));
+      },
+    });
+    saver.current = s;
+    const flush = () => s.flushAll();
+    const onHidden = () => document.visibilityState === "hidden" && s.flushAll();
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onHidden);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onHidden);
+      s.dispose();
+      saver.current = undefined;
+    };
+  }, []);
+  // A view whose lastSeq moved is dirty (identity alone is not enough: a settings-only change keeps the seq).
+  useEffect(() => {
+    const s = saver.current;
+    if (!s) return;
+    for (const [id, v] of Object.entries(views)) {
+      if (savedSeq.current.get(id) === v.lastSeq) continue;
+      savedSeq.current.set(id, v.lastSeq);
+      if (v.lastSeq > 0 || v.order.length) s.markView(id);
+    }
+  }, [views]);
+
+  // The page reads the view cache first (at most 300 ms), then connects; the cached state is committed before any socket event.
+  useEffect(() => {
+    let off = false;
+    let stop: (() => void) | undefined;
+    const go = (h?: Hydrated) => {
+      if (off) return;
+      stop = connectApp();
+      // Committed in this same task, right after connect() (the client exists for what the cached render mounts): no socket event can run before it, so the cached view
+      // is in the DOM before "connected"; a plain setState would let a fast socket open batch "connected" into the first cached render.
+      if (h) flushSync(() => applyHydrated(h));
+    };
+    if (cache) hydrateCache().then(go, () => go());
+    else go();
+    return () => {
+      off = true;
+      stop?.();
+    };
+  }, []);
+  /** The connection and everything hanging off it; returns the teardown. */
+  function connectApp(): () => void {
     const c = connect({
       // One task applies every event received since the last one: one render for the batch, the side logic per event in arrival order.
       onEvents: (es: Event[]) => {
@@ -1598,10 +1799,12 @@ export function App() {
         setConfigChanged((c) => ({ ...c, [m.cwd]: (c[m.cwd] ?? 0) + 1 }));
         setReloadFailed((f) => nextReloadFailed(f, m.reloadFailed));
       },
-      onOpen: () => {
+      onOpen: (hello) => {
         // Clean up tabs (GH-378): every session tab is "loading" until this connection's first list reply.
         connGen.current++;
         listFresh.current = false;
+        helloRef.current = hello;
+        // Per-connection resets and the cache-independent requests run now, before the daemon's burst after the hello is handled.
         if (connGen.current > 1 && wasHidden.current) (awaitReplay.current = true, (wasHidden.current = false), clearTimeout(windowTimer.current), (windowTimer.current = setTimeout(() => (awaitReplay.current = false), 3000)));
         // The daemon sends its update state right after the connect; a restarted one has none.
         setUpdate(undefined);
@@ -1616,6 +1819,37 @@ export function App() {
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
         c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLastEngine(r.settings.sessions?.engine ?? "claude"), setSessionsMode(r.settings.sessions?.defaultMode), setLabels(r.settings.labels), setBack(r.settings.back, true), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setVisualizeOn(r.settings.chat?.visualize === true), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
+        setSynced(false); // the resync below may wait for the daemon check: repos must not load meanwhile
+        // View cache (GH-771): meta of another daemon stored: nothing of the cache applies, the page starts as without a cache. Without a hello (older daemon) nothing is known: keep.
+        // An unknown stored meta (the load read timed out or failed) is read now; none stored (a first load) or unreadable: nothing to clear, only the meta is written.
+        // Only the resync (list, subscribes, follows) waits for that check.
+        if (hello && cache) {
+          newerThanCache.current = true;
+          const gen = connGen.current;
+          const meta = { daemonId: hello.daemonId, tokenHash: tokenHash(storedToken() ?? "") };
+          const known = cachedMeta.current;
+          const stored = known ? Promise.resolve(known) : readMetaCapped();
+          void stored.then((m) => {
+            if (gen !== connGen.current) return;
+            cachedMeta.current = { schema: 1, ...meta };
+            if (m && m.daemonId !== hello.daemonId) {
+              cacheGate.current = cache.clear().then(() => cache.writeMeta(meta));
+              fromCache.current.clear();
+              savedSeq.current.clear();
+              requested.current.clear(); // a follow that drew a view of the other daemon must be asked again
+              viewsRef.current = {};
+              setViews({});
+              setInfos({});
+              setTitles({});
+              // The cached list's version names a list of another daemon: ask for the whole one.
+              listVersion.current = listRows.current = undefined;
+            } else void cacheGate.current.then(() => cache.writeMeta(meta));
+            resume();
+          });
+          return;
+        }
+        resume();
+        function resume() {
         // The resync of a reconnect: the list and the shown sessions first; the background views and the repos follow once they settled (GH-760).
         setSynced(false);
         const resync: Promise<unknown>[] = [refreshList()];
@@ -1654,6 +1888,7 @@ export function App() {
           setPushOn(!!sub);
           if (sub) sendSubscription(c, sub).catch(() => {});
         });
+        }
       },
       onStatus: setStatus,
     });
@@ -1675,7 +1910,7 @@ export function App() {
       navigator.serviceWorker?.removeEventListener("message", onWorkerMessage);
       c.close();
     };
-  }, []);
+  }
 
   // Listed sessions this page covers with in-app cards: only while in-app notifications are on and the page is focused and visible.
   const coveredKey = inApp && focused ? list.filter((s) => !s.archived).map((s) => s.id).sort().slice(0, 2000).join(",") : undefined;
@@ -2145,7 +2380,7 @@ export function App() {
   const groupOfTab = (id: string) => (id === NEW_TAB ? "" : tabGroup(sessionOf(ownerOf(id))?.cwd, grouping, worktrees).key);
   // The stored list stays grouped by the Tab grouping setting (also once the session cwds arrive), so close, next/previous tab and moves all use the order the strip draws.
   // Regrouped only once every tab's key is final: on partial keys the unknown tabs gather in one group and the damaged order is stored (GH-196).
-  const keysFinal = tabKeysFinal(tabs, listLoaded, (id) => !!sessionOf(id), failedTabs);
+  const keysFinal = tabKeysFinal(tabs, listShown, (id) => !!sessionOf(id), failedTabs);
   useGroupedTabs(tabs, setTabs, groupOfTab, keysFinal, pinnedSet);
   // Every owner of an open pane tab is followed (reload, a closed owner, Undo, Reopen); `requested` keeps it to one subscribe.
   const ownersKey = [...new Set(tabs.filter(isPaneRef).map(ownerOf))].sort().join();

@@ -6,6 +6,8 @@ import { backoffMs, connect, type ConnectionStatus } from "./client.ts";
 
 const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
 await new Promise((r) => wss.on("listening", r));
+const HELLO = JSON.stringify({ type: "daemon_hello", daemonId: "d1", logEpoch: "e1" });
+wss.on("connection", (s) => s.send(HELLO));
 const url = `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`;
 afterAll(() => void wss.close());
 
@@ -47,6 +49,61 @@ describe("connect", () => {
     }
     await expect(c.request({ type: "session.subscribe", sessionId: "s", sinceSeq: 0 })).rejects.toMatchObject({ code: "unknown_session", message: "no session s" });
     c.close();
+  });
+
+  it("onOpen waits for daemon_hello and gets it, once per connection", async () => {
+    const hellos: unknown[] = [];
+    const c = connect({ url, token: "t", onEvent: () => {}, onOpen: (h) => hellos.push(h) });
+    await until(() => hellos.length === 1);
+    expect(hellos).toEqual([{ daemonId: "d1", logEpoch: "e1" }]);
+    await sleep(30);
+    expect(hellos).toHaveLength(1);
+    c.close();
+  });
+
+  it("no daemon_hello within 1 s of the socket open: onOpen(undefined); a later hello does not fire it again", async () => {
+    type Listener = (ev: { data?: string; type: string }) => void;
+    const made: FakeSocket[] = [];
+    class FakeSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+      readyState = 1;
+      listeners = new Map<string, Listener[]>();
+      constructor() {
+        made.push(this);
+      }
+      addEventListener(t: string, l: Listener) {
+        this.listeners.set(t, [...(this.listeners.get(t) ?? []), l]);
+      }
+      fire(type: string, ev: object = {}) {
+        this.listeners.get(type)?.forEach((l) => l({ type, ...ev }));
+      }
+      send() {}
+      close() {
+        this.readyState = 3;
+      }
+    }
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.stubGlobal("MessageChannel", undefined);
+    try {
+      const hellos: unknown[] = [];
+      const c = connect({ url: "ws://fake", token: "t", wakeEvents: () => () => {}, onOpen: (h) => hellos.push(h) });
+      made[0]!.fire("open");
+      await vi.advanceTimersByTimeAsync(999);
+      expect(hellos).toEqual([]);
+      await vi.advanceTimersByTimeAsync(2);
+      expect(hellos).toEqual([undefined]);
+      made[0]!.fire("message", { data: HELLO });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(hellos).toEqual([undefined]);
+      c.close();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("a request with timeoutMs rejects when no reply comes in time, connected or not", async () => {
@@ -115,7 +172,7 @@ describe("redial on wake", () => {
     http.on("upgrade", (req, socket, head) => {
       state.upgrades++;
       if (state.refuse) return void socket.destroy();
-      w.handleUpgrade(req, socket, head, (s) => (state.sockets.push(s), onSocket(s, state.sockets.length), w.emit("connection", s, req)));
+      w.handleUpgrade(req, socket, head, (s) => (state.sockets.push(s), s.send(HELLO), onSocket(s, state.sockets.length), w.emit("connection", s, req)));
     });
     await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
     const stop = () => (w.clients.forEach((c) => c.terminate()), http.close());
@@ -394,10 +451,12 @@ describe("batched apply of received messages (GH-760)", () => {
       const second = made[1]!;
       second.readyState = 1;
       second.fire("open");
+      second.fire("message", { data: HELLO });
       second.fire("message", { data: JSON.stringify(ev(51)) });
       await until(() => applied.length > 0);
       await sleep(50);
-      expect(opens).toBe(2);
+      // The first socket closed before its queue ran: it never announced (and its hello timer is gone).
+      expect(opens).toBe(1);
       expect(applied).toEqual([51]);
       c.close();
     } finally {

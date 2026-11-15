@@ -245,6 +245,21 @@ describe("adapter on known SDK noise", () => {
     expect(run([userMsg("b1", i), userMsg("b2", o)])[1]).toMatchObject({ command: "echo '<a>'", stdout: "<a> & b", status: "done" });
   });
 
+  it("GH-771: a bash mode part id is the uuid of the first appended record, so live and restored ids agree", () => {
+    // claude-engine appends the records with uuids [id, outId], the live part has `id`.
+    const id = "11111111-1111-4111-8111-111111111111";
+    const outId = "22222222-2222-4222-8222-222222222222";
+    const [i, o] = bashRecords("echo hi", "hi", "", 0);
+    const restored = run([userMsg(id, i), userMsg(outId, o)]);
+    expect(restored.map((p) => p.id)).toEqual([id, id]);
+    expect(restored[1]).toMatchObject({ type: "bash", id, stdout: "hi" });
+  });
+
+  it("GH-771: a user prompt restores with the transcript uuid it was sent with", () => {
+    const id = "33333333-3333-4333-8333-333333333333";
+    expect(run([userMsg(id, "hello there")])).toMatchObject([{ type: "user_text", id, text: "hello there" }]);
+  });
+
   it("a killed command's records restore as a stopped card; output with a closing tag round-trips", () => {
     const [i, o] = bashRecords("sleep 30", "part </bash-stdout><bash-stderr>x", "Stopped by user", 143);
     const card = run([userMsg("b1", i), userMsg("b2", o)])[1];

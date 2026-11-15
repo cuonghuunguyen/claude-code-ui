@@ -25,6 +25,9 @@ const PROBE_AFTER_MS = 10_000;
 const PROBE_TIMEOUT_MS = 1_000;
 /** One drain task applies received messages for at most this long, then yields so the page can paint, take input and read its socket. */
 const DRAIN_BUDGET_MS = 8;
+/** How long after the socket opened to wait for `daemon_hello` before onOpen runs without it. */
+const HELLO_WAIT_MS = 1_000;
+export type DaemonHello = Extract<ServerMessage, { type: "daemon_hello" }> extends infer H ? Omit<H & object, "type"> : never;
 
 export const backoffMs = (attempt: number) => Math.min(10_000, 500 * 2 ** attempt);
 
@@ -51,7 +54,8 @@ export function connect(opts: {
   onStale?: (note: string) => void;
   /** The daemon's machine slept during a run (GH-518). */
   onSlept?: (m: Extract<ServerMessage, { type: "daemon_slept" }>) => void;
-  onOpen?: () => void;
+  /** A connection is ready: the daemon's `daemon_hello`, or `undefined` when none came within HELLO_WAIT_MS (older daemon). Once per connection. */
+  onOpen?: (hello: DaemonHello | undefined) => void;
   onStatus?: (s: ConnectionStatus) => void;
   /** Test seam: replaces the browser's visibilitychange / pageshow / online (wake.ts). Returns the unsubscribe. */
   wakeEvents?: WakeEvents;
@@ -89,6 +93,9 @@ export function connect(opts: {
     console.warn("claude-ui: socket down:", lastDrop);
   };
   let timer: ReturnType<typeof setTimeout> | undefined;
+  /** Fires onOpen for the current socket (once); undefined when the socket is down. */
+  let announce: ((hello?: DaemonHello) => void) | undefined;
+  let helloTimer: ReturnType<typeof setTimeout> | undefined;
   let markOpen!: () => void;
   let ready = new Promise<void>((r) => (markOpen = r));
 
@@ -105,6 +112,8 @@ export function connect(opts: {
 
   /** The socket stops being current (down, or abandoned by a probe): reject what waits on it and make requests wait for the next one. */
   function markDown() {
+    clearTimeout(helloTimer);
+    announce = undefined;
     if (isOpen) ready = new Promise<void>((r) => (markOpen = r));
     isOpen = false;
     for (const p of pending.values()) p.reject(new Error("disconnected"));
@@ -137,6 +146,7 @@ export function connect(opts: {
 
   /** Applies one message that is not an event. True when it settled a request (its continuation must run before later messages). */
   function dispatch(m: Exclude<ServerMessage, Event>): boolean {
+    if (m.type === "daemon_hello") return announce?.({ daemonId: m.daemonId, logEpoch: m.logEpoch }), false;
     if (m.type === "fs.changed") return fsListeners.forEach((l) => l(m)), false;
     if (m.type === "terminal.output" || m.type === "terminal.exit") return terminalListeners.forEach((l) => l(m)), false;
     if (m.type === "sessions.changed") return opts.onSessionsChanged?.(m), false;
@@ -223,7 +233,14 @@ export function connect(opts: {
         request({ type: "ping", note }).catch(() => {});
       }
       opts.onStatus?.("connected");
-      opts.onOpen?.();
+      let announced = false;
+      announce = (hello) => {
+        if (announced || closed || !current()) return;
+        announced = true;
+        clearTimeout(helloTimer);
+        opts.onOpen?.(hello);
+      };
+      helloTimer = setTimeout(() => announce?.(undefined), HELLO_WAIT_MS);
     });
     sock.addEventListener("message", (ev) => {
       if (!current()) return;

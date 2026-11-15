@@ -113,7 +113,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.agents"; cwd: string; engine?: Engine; /** A live session: its `agents` part is emitted again (the chooser's retry). */ sessionId?: string }
   /** `addProject`: an explicit open (link, notification) of a session of a project that is not added adds the project; a resubscribe must not. */
   /** `background`: follow only (unread markers); it does not keep the session's CLI from the idle close (docs/spec.md "Idle close"). */
-  | { type: "session.subscribe"; sessionId: string; sinceSeq: number; logEpoch?: string; addProject?: boolean; background?: boolean; paged?: boolean; from?: string }
+  | { type: "session.subscribe"; sessionId: string; sinceSeq: number; logEpoch?: string; addProject?: boolean; background?: boolean; paged?: boolean; from?: string; known?: [string, string][] }
   /** Stops this connection's events of the session; reply `{}`. Never restores a session. */
   | { type: "session.unsubscribe"; sessionId: string }
   /** The page of whole turns before `before` (a cursor's id); `until` (part id, or API message id) extends it back to the turn holding that part. Reply `PageResult`. */
@@ -546,6 +546,14 @@ export type TimelinePage = { parts: Part[]; older?: Cursor };
  * unloaded region that whole-session features need (subagent, turn_result, running background Bash calls).
  */
 export type Snapshot = { heads: Event[]; attentionSeq: number; page: TimelinePage; aux: PosPart[] };
+/** A part the client already holds: its current `partHash` equals the one the client sent in `session.subscribe` `known` (GH-771). */
+export type RefPart = { ref: string };
+/** The `Snapshot` as a `session.subscribe` reply carries it when the request had `known`: `refs` is set, and `page.parts` and `aux[].part` may hold `RefPart`s. The client's store merges it into a plain `Snapshot`. */
+export type SnapshotWire = Omit<Snapshot, "page" | "aux"> & { refs?: true; page: { parts: (Part | RefPart)[]; older?: Cursor }; aux: { part: Part | RefPart; pos: number }[] };
+/** Limits of `session.subscribe` `known`: entries, part id length, hash length. */
+export const KNOWN_MAX = 5000;
+export const KNOWN_ID_MAX = 200;
+export const KNOWN_HASH_MAX = 16;
 export type PageResult = { page: TimelinePage };
 export type MediaResult = { dataUrl: string };
 export type EditsResult = { parts: PosPart[] };
@@ -554,6 +562,8 @@ export type ArtifactsResult = { parts: PosPart[] };
 export type ServerMessage =
   | Event
   | { type: "reply"; reqId: string; result: unknown }
+  /** The first message on every connection (before `plan_usage`): this daemon's persistent identity (`<config dir>/daemon-id`) and the epoch of its event log. A side daemon's hello is not relayed by the Hub. */
+  | { type: "daemon_hello"; daemonId: string; logEpoch: string }
   /** A watched file changed on disk; `path` as given in `fs.watch`, `mtime` 0 when it was deleted. */
   | { type: "fs.changed"; path: string; mtime: number }
   /** Sent to every connection after a rename, archive, delete, project open or project remove, worktree create or remove: refetch `session.list`. `deleted`: drop that session. */
@@ -613,7 +623,7 @@ export type AsideOpenResult = { session: SessionInfo; title: string; from: strin
  */
 /** `title`: as `session.list` titles the session, for a tab opened before (or without) the list. */
 /** `planDirs`: the folders the session's CLI keeps plan files in (absolute), to find the plan of an ExitPlanMode call written there. */
-export type SubscribeResult = { logEpoch: string; seq: number; session: SessionInfo; title: string; snapshot?: Snapshot; planDirs?: string[] };
+export type SubscribeResult = { logEpoch: string; seq: number; session: SessionInfo; title: string; snapshot?: SnapshotWire; planDirs?: string[] };
 /** session.setModel, session.setPermissionMode, session.setEffort, session.setAgent. */
 export type SetModelResult = { session: SessionInfo };
 /** opencode.status: `missing` no binary, `old` below OPENCODE_MIN, `failed` the last start failed, `stopped` found and not started, `running`. */

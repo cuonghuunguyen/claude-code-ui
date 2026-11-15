@@ -1,8 +1,8 @@
-import { chmodSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { configDir, loadToken, pairingUrl } from "../src/token.ts";
+import { configDir, loadDaemonId, loadToken, pairingUrl } from "../src/token.ts";
 
 // File modes are POSIX: on Windows chmod only sets the read-only flag, and %APPDATA% is private to the user by its ACL.
 const posix = process.platform !== "win32";
@@ -42,5 +42,32 @@ describe("token", () => {
 
   it("puts the token in the URL fragment so it is never sent in an HTTP request", () => {
     expect(pairingUrl("http://127.0.0.1:4280", "abc")).toBe("http://127.0.0.1:4280/#token=abc");
+  });
+});
+
+describe("daemon id (GH-771)", () => {
+  it("is a random UUID created once as plain text in the config dir and reused", () => {
+    const dir = join(mkdtempSync(join(tmpdir(), "cfg-")), "claude-ui");
+    const first = loadDaemonId(dir);
+    expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(readFileSync(join(dir, "daemon-id"), "utf8").trim()).toBe(first);
+    expect(loadDaemonId(dir)).toBe(first);
+  });
+
+  it("a read or write failure gives a per-run id and one log line", () => {
+    const base = mkdtempSync(join(tmpdir(), "cfg-"));
+    // A file where the directory should be: mkdir and write fail.
+    const blocked = join(base, "blocked");
+    writeFileSync(blocked, "x");
+    const log: string[] = [];
+    const id = loadDaemonId(join(blocked, "claude-ui"), (m) => log.push(m));
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(log).toHaveLength(1);
+    // An unreadable id (a directory named daemon-id) is not an id either.
+    const dir = join(base, "d");
+    mkdirSync(join(dir, "daemon-id"), { recursive: true });
+    const log2: string[] = [];
+    expect(loadDaemonId(dir, (m) => log2.push(m))).toMatch(/^[0-9a-f-]{36}$/);
+    expect(log2).toHaveLength(1);
   });
 });

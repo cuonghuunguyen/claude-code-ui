@@ -35,7 +35,7 @@ import { askUpdate, isWsl, openInBrowser, runClient, updateLiveHub } from "./ctl
 import { pidAlive, readToken, tokenPath } from "./ctl/connect.ts";
 import { retireAttachHub } from "./ctl/retire.ts";
 import { claimDaemonFile, readDaemonFile } from "./ctl/daemon-file.ts";
-import { configDir, loadToken, pairingUrl } from "./token.ts";
+import { configDir, loadDaemonId, loadToken, pairingUrl } from "./token.ts";
 import { defaultUploadsDir } from "./uploads.ts";
 import { installVersion, latestNewer, parseRegistry, pruneVersions, versionsDir } from "./update.ts";
 import { createBuildInfo } from "./build-info.ts";
@@ -118,6 +118,7 @@ const state = { uploadDir: defaultUploadsDir(), historyDir: join(configDir(), "h
 const retire = () => retireAttachHub({ dir: configDir(), alive: pidAlive, ask: askUpdate, token: () => readToken(tokenPath({ env: process.env, dir: configDir() }).file), log: console.error });
 if (!startedBy && process.platform !== "win32") await retire().catch((e: Error) => (console.error(`claude-ui: an attach-started Claude UI here would not retire: ${e.message}`), process.exit(1)));
 const token = loadToken();
+const daemonId = loadDaemonId();
 const sidesFile = join(configDir(), "sides.json");
 const listsFile = join(configDir(), "side-lists.json");
 const graceFile = join(configDir(), "side-grace.json");
@@ -243,7 +244,7 @@ const wslInterop = () => {
   }
 };
 const openExternal = { ...(isWsl && wslInterop() && { winPath: async (p: string) => (await exec("wslpath", ["-w", p])).stdout.trim() }), run: process.env.CLAUDE_UI_OPEN_LOG ? logOpen(process.env.CLAUDE_UI_OPEN_LOG) : spawnOpen, editors: () => detectEditors({ platform: process.platform, env: process.env, exists: existsSync, home: homedir() }) };
-const server = createDaemon({ openExternal, shortcut, addonsDir: configDir(), webRoot, token, roots, push, keepAwake, onRunning: (on) => attachRunning(on), watchSleep: {}, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo, desktopForcedOff: osNotify === false, attached: !!startedBy, warmUp: true });
+const server = createDaemon({ daemonId, openExternal, shortcut, addonsDir: configDir(), webRoot, token, roots, push, keepAwake, onRunning: (on) => attachRunning(on), watchSleep: {}, allowBypass, idleCloseMs: idleCloseMinutes * 60_000, ...state, hostnames, sides, update, buildInfo, desktopForcedOff: osNotify === false, attached: !!startedBy, warmUp: true });
 // The attach server (ADR 0009): every POSIX Hub accepts attaching Hubs on a Unix socket (mode 0600, same user). A Hub started by an attach also
 // records its install folder in `.live` (the install sweep keeps it) and ends after its Grace period.
 const attachSock = process.platform === "win32" ? undefined : attachSocketPath(process.env, configDir());

@@ -51,7 +51,7 @@ export function connect(opts: Opts): Client {
 
   queueMicrotask(() => {
     opts.onStatus?.("connected");
-    opts.onOpen?.();
+    opts.onOpen?.(undefined);
     // After the app's startup requests, so an event lands on a subscribed view.
     setTimeout(() => events.forEach(dispatch), 150);
     setTimeout(markEmitted, 200);
