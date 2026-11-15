@@ -92,6 +92,8 @@ Then("a worker session runs in the scratch worktree", async ({ page, project, me
 });
 
 Then("no worker session exists for the scratch project", async ({ page, project }) => {
+  // A worker group starts collapsed: open every group first, else a worker that did start stays hidden and the step passes.
+  await revealWorkers(page);
   // The daemon is shared by the scenarios of the run: look only at workers whose folder is inside this scratch project.
   const titles = await workerRows(page).evaluateAll((els) => els.map((e) => e.getAttribute("title") ?? ""));
   expect(titles.filter((t) => t.split("\n").some((l) => l.startsWith(project.path)))).toEqual([]);
