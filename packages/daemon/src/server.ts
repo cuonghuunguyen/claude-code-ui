@@ -2027,7 +2027,6 @@ export function createDaemon(opts: {
         end();
       }
     };
-    /** Handles a message in this daemon; its reply or error goes to `out`, events and streams to this connection. */
     /** fs.media of a side's file or commit: the side checks it (media.read, length 0); the hub issues its own URL and reads the bytes from the side per GET. */
     const sideMedia = async (id: string, msg: Extract<ClientMessage, { type: "fs.media" }>, call: (m: ClientMessage) => Promise<ServerMessage>): Promise<ServerMessage> => {
       const args = { path: msg.path, ...(msg.hash !== undefined && { cwd: msg.cwd, hash: msg.hash, ...(msg.exact === true && { exact: true }) }) };

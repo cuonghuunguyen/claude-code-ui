@@ -36,10 +36,10 @@ export type Connection = {
 export const ANSWERED_BEFORE_DISPATCH = ["ping", "side.start", "side.updateRemote", "side.check", "side.prefs", "ssh.add"] as const;
 export type DispatchedType = Exclude<ClientType, (typeof ANSWERED_BEFORE_DISPATCH)[number]>;
 
-/** One lookup table over the handlers of all areas of a connection. A type two areas handle throws. */
 /** Any area: its handlers, whatever types it owns (the exhaustive check is `connectAreas`). */
 export type AnyArea = { handlers: { readonly [type: string]: (msg: never, r: Respond) => unknown }; close?(): void };
 
+/** One lookup table over the handlers of all areas of a connection. A type two areas handle throws. */
 export function createDispatch(areas: readonly AnyArea[]) {
   const table = new Map<string, Handler<ClientType>>();
   for (const a of areas)
