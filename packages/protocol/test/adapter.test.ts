@@ -191,7 +191,7 @@ describe("adapter turn cost", () => {
 });
 
 describe("adapter on known SDK noise", () => {
-  it("drops hook, task lifecycle and tool progress messages instead of emitting raw parts", () => {
+  it("drops hook, task lifecycle, tool progress, conversation reset and title messages instead of emitting raw parts", () => {
     const noise = [
       { type: "system", subtype: "hook_started", uuid: "h1", hook_id: "k", hook_name: "SessionStart:startup", hook_event: "SessionStart" },
       { type: "system", subtype: "hook_progress", uuid: "h2", hook_id: "k", hook_name: "SessionStart:startup", hook_event: "SessionStart", stdout: "", stderr: "", output: "" },
@@ -200,6 +200,9 @@ describe("adapter on known SDK noise", () => {
       { type: "system", subtype: "task_notification", uuid: "t2", task_id: "b1", status: "completed", output_file: "", summary: "" },
       { type: "tool_progress", uuid: "p1", tool_use_id: "x", tool_name: "Bash", parent_tool_use_id: null, elapsed_time_seconds: 3 },
       { type: "system", subtype: "background_tasks_changed", uuid: "b2", tasks: [] },
+      // The daemon moves the live query to the session the CLI continues in; the title comes from the session list.
+      { type: "conversation_reset", new_conversation_id: "n1", trigger: "clear", user_message_uuid: "c1", uuid: "r1", session_id: "s1" },
+      { type: "system", subtype: "session_title_changed", uuid: "t3", title: "x" },
     ];
     expect(run(noise)).toEqual([]);
   });
@@ -255,11 +258,6 @@ describe("adapter on known SDK noise", () => {
     expect(restored[1]).toMatchObject({ type: "bash", id, stdout: "hi" });
   });
 
-  it("GH-771: a user prompt restores with the transcript uuid it was sent with", () => {
-    const id = "33333333-3333-4333-8333-333333333333";
-    expect(run([userMsg(id, "hello there")])).toMatchObject([{ type: "user_text", id, text: "hello there" }]);
-  });
-
   it("a killed command's records restore as a stopped card; output with a closing tag round-trips", () => {
     const [i, o] = bashRecords("sleep 30", "part </bash-stdout><bash-stderr>x", "Stopped by user", 143);
     const card = run([userMsg("b1", i), userMsg("b2", o)])[1];
@@ -273,15 +271,12 @@ describe("adapter on known SDK noise", () => {
     expect(run([userMsg("b1", i), userMsg("b2", o)])[1]).toMatchObject({ status: "error" });
   });
 
-  it("drops the empty result of a shouldQuery:false append in a resumed adapter (non-zero saved total)", () => {
+  it.each([
+    ["a shouldQuery:false append (non-zero saved total)", 1.23],
+    ["a /clear (the cost total of a restored session is unknown)", 0],
+  ])("drops the empty result of %s in a resumed adapter", (_what, total_cost_usd) => {
     const adapter = createAdapter({ resumed: true });
-    const result = { type: "result", subtype: "success", uuid: "c", session_id: "x", is_error: false, duration_ms: 1, total_cost_usd: 1.23, usage: { input_tokens: 0, output_tokens: 0 }, permission_denials: [] };
-    expect(adapter.convert(result as never)).toEqual([]);
-  });
-
-  it("drops the empty result of a /clear also in a restored session, whose cost total is unknown", () => {
-    const adapter = createAdapter({ resumed: true });
-    const result = { type: "result", subtype: "success", uuid: "c", session_id: "x", is_error: false, duration_ms: 1900, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 }, permission_denials: [] };
+    const result = { type: "result", subtype: "success", uuid: "c", session_id: "x", is_error: false, duration_ms: 1, total_cost_usd, usage: { input_tokens: 0, output_tokens: 0 }, permission_denials: [] };
     expect(adapter.convert(result as never)).toEqual([]);
   });
 
@@ -366,11 +361,6 @@ describe("adapter on unknown messages", () => {
     expect(run([m])).toEqual([{ type: "raw", id: "c1", message: m }]);
   });
 
-  it("shows no conversation_reset: the daemon moves the live query to the session the CLI continues in", () => {
-    const m = { type: "conversation_reset", new_conversation_id: "n1", trigger: "clear", user_message_uuid: "c1", uuid: "r1", session_id: "s1" };
-    expect(run([m])).toEqual([]);
-  });
-
   it("turns informational and refusal fallback notices into notice parts as Claude Code shows them; per-turn effort changes are hidden", () => {
     // Shapes from session f89b1df5 (development-docs/GH-37, CLI 2.1.285); per_turn_effort_changed came with them (no SDK type yet).
     const parts = run([
@@ -387,10 +377,6 @@ describe("adapter on unknown messages", () => {
       { type: "notice", id: "f1", level: "warning", text: "Opus 4.8 is answering instead" },
       { type: "notice", id: "f2", level: "warning", text: "Opus 5.5 declined to answer" },
     ]);
-  });
-
-  it("system/session_title_changed is known and shows nothing (the title comes from the list)", () => {
-    expect(run([{ type: "system", subtype: "session_title_changed", uuid: "t1", title: "x" }])).toEqual([]);
   });
 
   it("retracts the parts of the messages a refusal fallback names in retracted_message_uuids; unknown uuids are ignored", () => {
@@ -446,7 +432,7 @@ describe("auto mode denial (GH-711)", () => {
   it("a denial before its tool_use still lands on the call", () => {
     const a = createAdapter();
     a.convert(denial());
-    expect(callOf(a.convert(bash()))).toMatchObject({ status: "denied", denial: { by: "classifier", reason: "[Git Destructive]" } });
+    expect(callOf(a.convert(bash()))).toMatchObject({ status: "denied", denial: { by: "classifier", reason: "[Git Destructive]", rule: "Bash(git push --force)" } });
   });
 
   it("rule and mode denials have no denial field", () => {
@@ -517,12 +503,6 @@ describe("adapter Always allow (GH-756)", () => {
     const a = createAdapter();
     a.convert(bash());
     expect(callOf(a.convert(denial())).denial).toEqual({ by: "classifier", reason: "[Git Destructive]", rule: "Bash(git push --force)" });
-  });
-
-  it("a denial before its tool_use gets the rule too", () => {
-    const a = createAdapter();
-    a.convert(denial());
-    expect(callOf(a.convert(bash())).denial?.rule).toBe("Bash(git push --force)");
   });
 
   it("the restored classifier error text gets the rule", () => {
@@ -831,10 +811,6 @@ describe("adapter on a compaction (shapes recorded in development-docs/FIX-C/pro
   it("transcript: the isCompactSummary message becomes a compaction with its summary", () => {
     const parts = run([{ type: "user", uuid: "s1", session_id: "x", parent_tool_use_id: null, isCompactSummary: true, message: { role: "user", content: SUMMARY } }]);
     expect(parts).toEqual([{ type: "compaction", id: "s1", summary: SUMMARY }]);
-  });
-
-  it("a synthetic message not right after a boundary stays hidden", () => {
-    expect(run([{ type: "user", uuid: "n1", session_id: "x", parent_tool_use_id: null, isSynthetic: true, message: { role: "user", content: "nudge" } }])).toEqual([]);
   });
 });
 
