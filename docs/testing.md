@@ -62,3 +62,8 @@ A scenario that maps to none of these journeys is moved to a unit test or delete
 ## Existing suite
 
 The suite predates this policy. It is pruned one package at a time (`web`, `daemon`, `protocol`, `e2e`): score each test against the keep rule, delete or merge the rest, one PR per package.
+
+- Unsure whether a test is in a keep group: keep it and list it in the PR description for the owner to decide.
+- Regression tests have no marker: find the commit that added the test (`git log --follow`, `git blame`). Added by a bug fix (issue labelled bug, or a fix commit): keep.
+- UI style tests: keep accessibility and layout checks (contrast, touch target size, no horizontal scroll at 390px). Delete tests that pin a className or a specific token value; screenshots cover those.
+- No coverage threshold. Track unit cases per 1k source LOC and suite run time instead.
