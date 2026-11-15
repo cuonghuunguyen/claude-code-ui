@@ -283,23 +283,17 @@ describe("PartIndex", () => {
   });
 });
 
-describe("prompt_queue part", () => {
-  it("is a head (latest wins) and not a timeline part", () => {
-    const q = (n: number): Part => ({ type: "prompt_queue", id: "prompt_queue", items: n ? [{ id: "i", text: "t", imageCount: 0 }] : [] });
-    const { index, log } = build([user(1), q(1), q(0)]);
-    expect(TIMELINE_EXCLUDED.has("prompt_queue")).toBe(true);
-    expect(index.heads().filter((e) => e.part.type === "prompt_queue").map((e) => (e.part as { items: unknown[] }).items.length)).toEqual([0]);
+describe("prompt_queue and model_retry parts (GH-683)", () => {
+  const q = (n: number): Part => ({ type: "prompt_queue", id: "prompt_queue", items: n ? [{ id: "i", text: "t", imageCount: 0 }] : [] });
+  const r = (retry: { attempt: number; message: string; next?: number } | null): Part => ({ type: "model_retry", id: "model_retry", retry });
+  it.each<[string, Part[], (p: Part) => unknown]>([
+    ["prompt_queue", [q(1), q(0)], (p) => (p as { items: unknown[] }).items.length],
+    ["model_retry", [r({ attempt: 1, message: "Rate limit" }), r({ attempt: 2, message: "Rate limit", next: 5000 })], (p) => (p as { retry: { attempt: number } | null }).retry?.attempt],
+  ])("%s is a head (latest wins) and not a timeline part", (type, parts, latest) => {
+    const { index, log } = build([user(1), ...parts]);
+    expect(TIMELINE_EXCLUDED.has(type as never)).toBe(true);
+    expect(index.heads().filter((e) => e.part.type === type).map((e) => latest(e.part))).toEqual([latest(parts.at(-1)!)]);
     expect(fold(log).order).toEqual(["u1"]);
-  });
-});
-
-describe("model_retry part (GH-683)", () => {
-  it("is a head (latest wins) and not a timeline part", () => {
-    const r = (retry: { attempt: number; message: string; next?: number } | null): Part => ({ type: "model_retry", id: "model_retry", retry });
-    const { index, log } = build([user(1), r({ attempt: 1, message: "Rate limit" }), r({ attempt: 2, message: "Rate limit", next: 5000 })]);
-    expect(TIMELINE_EXCLUDED.has("model_retry")).toBe(true);
-    expect(index.heads().filter((e) => e.part.type === "model_retry").map((e) => (e.part as { retry: { attempt: number } | null }).retry?.attempt)).toEqual([2]);
-    expect(fold(log).order).toEqual(["u1"]);
-    expect(allPages(index)[0]!.parts.some((p) => p.type === "model_retry")).toBe(false);
+    expect(allPages(index)[0]!.parts.some((p) => p.type === type)).toBe(false);
   });
 });

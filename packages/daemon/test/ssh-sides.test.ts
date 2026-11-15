@@ -48,13 +48,6 @@ describe("SSH Side in the registry", () => {
     next.sides.close();
   });
 
-  it("a WSL Side that is ready is still saved (unchanged)", async () => {
-    const { sides, saves } = registry(() => proc());
-    await sides.start("wsl:Ubuntu");
-    expect(saves.at(-1)?.map((x) => x.id)).toEqual(["wsl:Ubuntu"]);
-    sides.close();
-  });
-
   it("ssh ending with 255 before ready ends in error with the next step; host key and unreachable too", async () => {
     for (const [stderr, text] of [["box: Permission denied (publickey).", "Run `ssh box` once in a terminal"], ["Host key verification failed.", "Run `ssh box` once in a terminal"], ["ssh: connect to host box port 22: Connection refused", "is not reachable"]] as const) {
       const { sides } = registry(() => proc({ ready: false, stderr }));

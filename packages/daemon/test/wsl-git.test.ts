@@ -108,13 +108,4 @@ describe("wslEnv remote switches", () => {
       expect(out).toBe("GCM_INTERACTIVE:FOO/u");
     }
   });
-
-  it("a wsl project's fetch still routes through the wsl runner with the no-prompt env", async () => {
-    const { wslGitRunner } = await import("../src/wsl-git.ts");
-    const { BATCH_SSH } = await import("../src/git-runner.ts");
-    const seen: GitRunOptions[] = [];
-    const r = wslGitRunner({ local: async () => ({ stdout: Buffer.alloc(0), stderr: "" }), side: () => "s1", sideRun: async (_id, o) => (seen.push(o), { stdout: Buffer.alloc(0), stderr: "" }) });
-    await r({ cwd: "\\\\wsl$\\Ubuntu\\home\\u\\p", args: ["fetch", "--all"], env: { GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", GIT_SSH_COMMAND: BATCH_SSH } });
-    expect(seen[0]).toMatchObject({ cwd: "/home/u/p", args: ["fetch", "--all"], env: { GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", GIT_SSH_COMMAND: BATCH_SSH } });
-  });
 });

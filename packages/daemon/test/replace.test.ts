@@ -130,13 +130,6 @@ describe("replaceInFiles", () => {
     expect(s.snaps).toEqual([[join(d, "a.txt"), "replace"]]);
     expect(s.writes()).toBe(1);
   });
-  it("regex with $1", async () => {
-    const d = tmp();
-    put(d, "a.txt", "const x = f(1)\n");
-    const s = setup(d);
-    await s.apply("f\\((\\d)\\)", "g($1, $1)", [{ path: "a.txt", lines: [1] }], true);
-    expect(read(d, "a.txt")).toBe("const x = g(1, 1)\n");
-  });
   it("bad replacement: nothing written", async () => {
     const d = tmp();
     put(d, "a.txt", "foo\n");

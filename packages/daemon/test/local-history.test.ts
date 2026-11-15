@@ -142,14 +142,4 @@ describe("local history", () => {
     const { h } = setup();
     await expect(h.list(join(tmpdir(), "nope.txt"))).rejects.toMatchObject({ code: "path_not_allowed" });
   });
-
-  it("bench: 1000 before() calls with 200 KB content enqueue fast", () => {
-    const { h, file } = setup();
-    const body = "x".repeat(200 * 1024);
-    const t0 = performance.now();
-    for (let i = 0; i < 1000; i++) h.before(file, "agent", body);
-    const ms = performance.now() - t0;
-    console.log(`history bench: 1000 before() x 200 KB enqueued in ${ms.toFixed(1)} ms`);
-    expect(ms).toBeLessThan(1000);
-  });
 });

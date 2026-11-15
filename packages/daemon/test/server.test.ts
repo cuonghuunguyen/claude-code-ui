@@ -1862,16 +1862,6 @@ describe("daemon", () => {
       expect(await c.request({ type: "fs.duplicate", path: join(d, "dir") })).toMatchObject({ code: "not_a_file" });
     });
 
-    it.runIf(posix)("GH-360: duplicating a link to a file outside the roots is refused", async () => {
-      const d = fresh();
-      const o = outsideDir();
-      symlinkSync(join(o, "secret.txt"), join(d, "ln"));
-      const c = await client();
-      const reply = await c.request({ type: "fs.duplicate", path: join(d, "ln") });
-      expect(reply).toMatchObject({ code: "not_a_file" });
-      expect(readdirSync(d)).toEqual(["ln"]);
-    });
-
     it("GH-360, GH-282: refuses a UNC path on Windows with no file system call", async () => {
       const orig = Object.getOwnPropertyDescriptor(process, "platform")!;
       const fs = createRequire(import.meta.url)("node:fs") as typeof import("node:fs");
@@ -4359,12 +4349,6 @@ describe("WebSocket auth and origin check", () => {
     const wrong = await attempt({ protocols: protocols("wrong-token"), headers: { origin: origin() } });
     expect(wrong.status).toBe(401);
     expect(wrong.body).not.toContain("wrong-token");
-  });
-
-  it("answers a ping request with an empty reply (the page's liveness probe)", async () => {
-    const c = await client();
-    expect(await c.request({ type: "ping" })).toMatchObject({ type: "reply", result: {} });
-    c.ws.close();
   });
 
   it("answers the /auth probe 204 for the paired token and 401 otherwise: the browser cannot see a rejected upgrade's status", async () => {

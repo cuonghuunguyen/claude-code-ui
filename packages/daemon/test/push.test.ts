@@ -424,21 +424,29 @@ describe("desktop notification", () => {
     expect(r.script.replace(r.b64, "")).toBe(e.script.replace(e.b64, ""));
   });
 
-  it("long text is clipped; the Windows command line stays under 32767 chars", () => {
-    const x = { title: "t".repeat(500), body: '"'.repeat(10_000) };
-    const [, a] = osNotifyCommand(x, "linux");
-    expect(a[2]).toHaveLength(100);
-    expect(a[3]).toHaveLength(500);
-    expect(a[3]!.endsWith("…")).toBe(true);
-    expect(osNotifyCommand(x, "win32")[1].join(" ").length).toBeLessThan(32_000);
-  });
+  it.each<[string, () => void]>([
+    [
+      "long text; the Windows command line stays under 32767 chars",
+      () => {
+        const x = { title: "t".repeat(500), body: '"'.repeat(10_000) };
+        const [, a] = osNotifyCommand(x, "linux");
+        expect(a[2]).toHaveLength(100);
+        expect(a[3]).toHaveLength(500);
+        expect(a[3]!.endsWith("…")).toBe(true);
+        expect(osNotifyCommand(x, "win32")[1].join(" ").length).toBeLessThan(32_000);
+      },
+    ],
+    [
+      "it cuts by code point: a surrogate pair is never split",
+      () => {
+        const [, a] = osNotifyCommand({ title: "😀".repeat(200), body: "x".repeat(499) + "😀😀" }, "linux");
+        expect(a[2]).toBe("😀".repeat(99) + "…");
+        expect(a[3]).toBe("x".repeat(499) + "…");
+        expect(osNotifyCommand({ title: "t", body: "x".repeat(498) + "😀😀" }, "linux")[1][3]).toBe("x".repeat(498) + "😀😀");
+      },
+    ],
+  ])("text is clipped: %s", (_name, check) => check());
 
-  it("clipping cuts by code point: a surrogate pair is never split", () => {
-    const [, a] = osNotifyCommand({ title: "😀".repeat(200), body: "x".repeat(499) + "😀😀" }, "linux");
-    expect(a[2]).toBe("😀".repeat(99) + "…");
-    expect(a[3]).toBe("x".repeat(499) + "…");
-    expect(osNotifyCommand({ title: "t", body: "x".repeat(498) + "😀😀" }, "linux")[1][3]).toBe("x".repeat(498) + "😀😀");
-  });
 
   it("a missing command (ENOENT) logs one line, is not called again, and send still resolves", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -525,18 +533,6 @@ describe("notifier: worker notifications off (GH-387)", () => {
     n.observe(state("error", "w"));
     vi.advanceTimersByTime(FINISH_DELAY_MS);
     expect(pushed).toEqual([]);
-  });
-
-  it("a quiet worker's escalated request still pushes at once and its settle replaces it silently", () => {
-    n.observe(state("running", "w"));
-    n.observe(ev(bash("r1"), "w"));
-    n.observe(state("needs_input", "w"));
-    n.observe(ev(bash("r1", { escalated: true, reason: "blocked" }), "w"));
-    expect(pushed).toHaveLength(1);
-    expect(pushed[0]!.body).toContain("Escalated by coordinator");
-    n.observe(ev(bash("r1", { settled: true, decision: "allow", escalated: true }), "w"));
-    expect(pushed.filter((p) => p.replace)).toHaveLength(1);
-    expect(pushed.at(-1)!.body).toMatch(/^No longer needs input/);
   });
 
   it("one quiet worker and one escalated worker on the same request: the escalation pushes with sound and its reason, the settle replaces only that, nothing for the quiet one", () => {

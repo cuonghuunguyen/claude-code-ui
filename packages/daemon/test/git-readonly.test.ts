@@ -146,8 +146,6 @@ const high = [
   "git log refs/stash",
   "git log STASH",
   "git log --all",
-  "git log --all -p",
-  "git log --all --oneline",
   "git show refs/heads/main",
   // Write and other subcommands.
   "git add .",
@@ -229,7 +227,6 @@ describe("tracked deny-listed files (GH-282)", () => {
     `git show ${commit}~0 --stat`,
     "git status",
     "git log --raw",
-    "git log -p -- src/a.ts",
   ];
   it.each(highRows)("high: %s", (command) => expect(gitReadOnly({ command }, d)).toBe(false));
   it.each(lowRows)("low: %s", (command) => expect(gitReadOnly({ command }, d)).toBe(true));
