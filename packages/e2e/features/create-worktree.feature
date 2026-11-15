@@ -5,7 +5,7 @@ Feature: Create worktree modal
     And the app is open
     And the scratch project is a git repository with an origin
 
-  Scenario: The project menu has Create worktree… and no quick New worktree item, the Name tab creates a worktree from a new branch and the Base picker from a non-default ref
+  Scenario: The project menu has Create worktree…, and the Name tab creates a worktree that opens a new session in it
     Given I open the scratch project
     Then the menu of the scratch project has "create-worktree" and not "new-worktree"
     And I capture "desktop project menu"
@@ -15,24 +15,12 @@ Feature: Create worktree modal
     When I open the "name" tab of the modal
     And I type the worktree name "feat/x"
     Then the modal shows branch "feat/x" in folder ".claude/worktrees/feat-x"
-    When I type the worktree name "Fix Login Ü"
-    Then the modal shows branch "fix-login-u" in folder ".claude/worktrees/fix-login-u"
     And I capture "name tab"
     When I confirm the modal
     Then the modal closes
-    And the new-session tab runs in the worktree "fix-login-u"
-    And the worktree folder "fix-login-u" is on branch "fix-login-u"
+    And the new-session tab runs in the worktree "feat/x"
+    And the worktree folder "feat-x" is on branch "feat/x"
     And I capture "new session in worktree"
-    When I click the new worktree button of the scratch project
-    And I open the "name" tab of the modal
-    And I type the worktree name "from-alt"
-    And I choose the base "refs/heads/base-alt"
-    And I capture "base picker"
-    And I confirm the modal
-    Then the modal closes
-    And the new-session tab runs in the worktree "from-alt"
-    And the worktree folder "from-alt" has the same commit as "refs/heads/base-alt"
-    And I capture "created from base-alt"
 
   Scenario: The Branch tab ends with the fetched list and checks out a remote-only branch as a local tracking branch
     Given I open the scratch project

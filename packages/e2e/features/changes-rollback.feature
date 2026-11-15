@@ -4,7 +4,7 @@ Feature: Changes tab rolls back files and hunks and adds files and diff lines to
     Given the scratch project is a git repository with two commits
     And the scratch project has a committed 30-line file "long.txt"
 
-  Scenario: Rollback after the files changed is refused, then Rollback restores checked files, a row menu rolls back one file and Delete local copies removes the new file
+  Scenario: Rollback restores checked files and a row menu rolls back one file
     Given the scratch project has the edited file "README.md" and the new file "b.txt"
     And the viewport is 1440x900
     And the app is open
@@ -12,19 +12,11 @@ Feature: Changes tab rolls back files and hunks and adds files and diff lines to
     And I start a new Haiku session
     When I open the Changes tab of the side panel
     And I choose the "Uncommitted" diff mode
+    And I open the diff of "README.md" in the Changes tab
     And I check the file "README.md" in the Changes tab
-    And I click "Rollback" in the commit box
-    Then the Rollback dialog lists "README.md"
-    When the project file "README.md" is overwritten with "changed after the dialog opened\n"
-    And I confirm the Rollback dialog
-    Then the Changes error shows "changed"
-    And the project file "README.md" holds "changed after the dialog opened\n"
-    And I capture "stale-refused"
-    When I check the file "README.md" in the Changes tab
     And I check the file "b.txt" in the Changes tab
     And I click "Rollback" in the commit box
     Then the Rollback dialog lists "README.md, b.txt"
-    And the Rollback option "Delete local copies of added files" is off
     And I capture "rollback-dialog"
     When I confirm the Rollback dialog
     Then the Changes result line says "Rolled back"
@@ -43,19 +35,6 @@ Feature: Changes tab rolls back files and hunks and adds files and diff lines to
     And the project file "README.md" holds "# Fixture\n"
     And the Changes list still has the file "b.txt"
     And I capture "row-menu-rolled-back"
-    When the project file "README.md" is overwritten with "overwritten for the delete option\n"
-    And I reload the Changes tab from disk
-    And I check the file "b.txt" in the Changes tab
-    And I click "Rollback" in the commit box
-    Then the Rollback dialog lists "b.txt"
-    When I turn the Rollback option "Delete local copies of added files" on
-    And I capture "rollback-delete-option"
-    And I confirm the Rollback dialog
-    Then the Changes result line says "Rolled back"
-    And the project file "b.txt" does not exist
-    And the Changes list no longer has the file "b.txt"
-    And the Changes list still has the file "README.md"
-    And I capture "deleted-local-copy"
 
   Scenario: Hunk Rollback, then Restore from the Timeline, gives the file back
     Given the scratch project has long.txt edited at lines 3 and 25

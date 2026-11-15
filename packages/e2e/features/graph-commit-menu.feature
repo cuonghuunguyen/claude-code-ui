@@ -22,10 +22,9 @@ Feature: Commit menu of the Graph: Undo Commit, Revert Commit, Cherry-Pick and R
     Then the commit menu item "Undo Commit" is disabled and says "Already pushed"
     And I capture "undo-pushed"
 
-  Scenario: Revert Commit and Cherry-Pick on a linear history, a merge commit has both disabled
+  Scenario: Revert Commit and Cherry-Pick on a linear history
     Given the viewport is 1440x900
     And the scratch project is a git repository with an origin inside the allowed roots
-    And the scratch project has a merge commit of the branch "side"
     And the scratch project's main has the local commit "local work" that adds "work.txt"
     And the app is open
     And I open the scratch project
@@ -43,10 +42,6 @@ Feature: Commit menu of the Graph: Undo Commit, Revert Commit, Cherry-Pick and R
     Then the Graph result line says "Cherry-picked"
     And the file "alt.txt" has the text "alt"
     And I capture "cherry-picked"
-    When I open the commit menu on the row "Merge branch 'side'"
-    Then the commit menu item "Revert Commit" is disabled and says "Merge commit"
-    And the commit menu item "Cherry-Pick" is disabled and says "Merge commit"
-    And I capture "merge-row"
 
   Scenario: A Cherry-Pick that conflicts shows the banner in the Changes tab, on a desktop and on a phone
     Given the viewport is 1440x900

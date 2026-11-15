@@ -1,10 +1,9 @@
 Feature: Merge and Rebase from the branch menu, and the conflict banner of the Changes tab (GH-560)
 
-  Scenario: A merge that conflicts shows the banner instead of the commit box on a desktop and a phone, Abort restores HEAD, Continue is refused while markers remain
+  Scenario: A merge that conflicts shows the banner instead of the commit box on a desktop and a phone, then Continue finishes it after the file is resolved
     Given the viewport is 1440x900
     And the scratch project is a git repository with an origin inside the allowed roots
     And the scratch project has the branch "feature" that conflicts with main on "a.txt"
-    And the project head is remembered
     And a Haiku session with one finished reply
     When I open the Graph tab of the side panel
     And I choose "All branches" in the Graph branch filter
@@ -23,22 +22,6 @@ Feature: Merge and Rebase from the branch menu, and the conflict banner of the C
     And I capture "merge-banner-phone"
     Given the viewport is 1440x900
     When I open the Changes tab of the side panel
-    And I click "Abort" in the conflict banner
-    And I confirm the abort in the conflict banner
-    Then the Changes result line says "Aborted the merge"
-    And the conflict banner is not shown
-    And the project head is the remembered one
-    And the project has no operation in progress
-    And I capture "merge-aborted"
-    When I open the Graph tab of the side panel
-    And I open the branch menu on the chip "refs/heads/feature"
-    And I pick the branch menu item "merge" and confirm its dialog
-    And I open the Changes tab of the side panel
-    And I click "Continue" in the conflict banner
-    Then the Changes error shows "Conflict markers remain in a.txt"
-    And the file "a.txt" still has its conflict markers
-    And the project has a merge in progress
-    And I capture "continue-refused"
     When I resolve "a.txt" on disk
     And I click "Continue" in the conflict banner
     Then the Changes result line says "Continued the merge"

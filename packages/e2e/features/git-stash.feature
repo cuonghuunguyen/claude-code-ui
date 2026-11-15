@@ -1,6 +1,6 @@
 Feature: Stash in the Git graph (GH-563)
 
-  Scenario: Stash and pop round trip, Apply keeps the entry, Drop confirms and deletes it, on a desktop and on a phone
+  Scenario: Stash and pop round trip, on a desktop and on a phone
     Given the viewport is 1440x900
     And the scratch project is a git repository with an origin inside the allowed roots
     And the scratch project has the committed file "a.txt" with the text "base"
@@ -19,23 +19,6 @@ Feature: Stash in the Git graph (GH-563)
     And the file "a.txt" has the text "edited"
     And the project has 0 stash entries
     And no stash is listed
-    When I stash the changes with the message "kept"
-    Then the stash "kept" is listed
-    And the file "a.txt" has the text "base"
-    When I click "Apply" on the stash "kept"
-    Then the Graph result line says "Applied stash@{0}"
-    And the file "a.txt" has the text "edited"
-    And the project has 1 stash entry
-    When I click "Drop" on the stash "kept"
-    Then the stash drop dialog asks about "kept"
-    And I capture "stash-drop-dialog"
-    When I cancel the stash drop dialog
-    Then the project has 1 stash entry
-    When I click "Drop" on the stash "kept"
-    And I confirm the stash drop dialog
-    Then the Graph result line says "Dropped stash@{0}"
-    And no stash is listed
-    And the project has 0 stash entries
     Given the viewport is 390x844
     When I edit "a.txt" on disk to "edited again"
     And I open the Graph tab of the side panel

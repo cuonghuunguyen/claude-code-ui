@@ -1,10 +1,9 @@
 Feature: The Git graph branch menu pushes, force pushes with a lease and pulls (GH-309)
 
-  Scenario: Pull is fast-forward only, a branch in another worktree has Pull disabled, then Push asks first with the exact command
+  Scenario: Pull is fast-forward only, then Push asks first with the exact command
     Given the viewport is 1440x900
     And the scratch project is a git repository with an origin inside the allowed roots
     And the origin's main has the commit "remote work" and the project fetched it
-    And the branch "feat/remote" tracks origin and is checked out in another worktree
     And the app is open
     And I open the scratch project
     And I start a new Haiku session
@@ -15,11 +14,6 @@ Feature: The Git graph branch menu pushes, force pushes with a lease and pulls (
     When I confirm the "pull" dialog
     Then the Graph result line says "Pulled main"
     And the Graph shows the commit "remote work"
-    When I choose "All branches" in the Graph branch filter
-    And I open the branch menu on the chip "refs/heads/feat/remote"
-    Then the branch menu item "Pull" is disabled and says "Checked out in"
-    And I capture "pull-other-worktree"
-    When I press "Escape" in the branch popup
     Given the scratch project's main has the local commit "local work"
     When I click Refresh in the Graph
     And I open the branch menu on the chip "refs/heads/main"

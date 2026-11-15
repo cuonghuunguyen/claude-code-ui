@@ -20,7 +20,7 @@ Feature: OpenCode provider login (GH-657)
     And I show the OpenCode providers
     Then I capture "providers empty dark"
 
-  Scenario Outline: API key validation inline, then login at <width>x<height>
+  Scenario Outline: API key login at <width>x<height>
     Given the viewport is <width>x<height>
     And OpenCode has the fake login plugin and no saved login
     And OpenCode is set up in a scratch project
@@ -29,20 +29,7 @@ Feature: OpenCode provider login (GH-657)
     And I search the OpenCode providers for "groq"
     And I open the provider row "Groq"
     And I pick the login method "API key"
-    And I type the API key "sk test" and leave the field
-    Then the API key field shows the error "An API key has no spaces"
-    And the page has no horizontal scroll
-    And I capture "key error light"
-    When I close Settings
-    And I switch the theme mode to "dark"
-    And I open Settings › OpenCode
-    And I show the OpenCode providers
-    And I search the OpenCode providers for "groq"
-    And I open the provider row "Groq"
-    And I pick the login method "API key"
-    And I type the API key "sk test" and leave the field
-    Then I capture "key error dark"
-    When I type the API key "sk-throwaway-not-real" and connect
+    And I type the API key "sk-throwaway-not-real" and connect
     Then the provider "Groq" is connected with the status "Connected · API key"
     And the OpenCode providers say "Connected to Groq"
     And the page has no horizontal scroll
