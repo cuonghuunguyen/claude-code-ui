@@ -2,6 +2,8 @@
 
 Scripted acceptance tests: Cucumber `.feature` files compiled by [playwright-bdd](https://vitalets.github.io/playwright-bdd/) and run by Playwright against a **real daemon and real Claude** (Haiku). Local only: it needs the subscription login (`claude login`, ADR 0002), so it is not part of `npm test` and not run in CI.
 
+The suite holds the critical journeys listed in `docs/testing.md`; nothing else belongs here.
+
 ## One-time
 
 ```sh
@@ -12,13 +14,13 @@ npx playwright install chromium     # once per machine (from the repo root or pa
 ## Run
 
 ```sh
-npm run e2e                                                  # every feature (about 8 Haiku turns, a few minutes)
+npm run e2e                                                  # every feature
 npm run e2e -- permission.feature                            # one feature (a path regex)
 npm run e2e -- permission.feature -g "Deny"                  # one scenario
 npm run e2e:steps                                            # list the steps (bddgen export)
 ```
 
-Everything after `--` goes to `playwright test`. A scenario tagged `@headed` runs in the `chromium-headed` project with a visible window, because headless Chromium does not read the OS clipboard; `--project=chromium` skips them. Environment:
+Everything after `--` goes to `playwright test`. Environment:
 
 | Variable | Effect |
 |---|---|
