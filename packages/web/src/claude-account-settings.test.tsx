@@ -15,8 +15,9 @@ afterEach(() => {
   el.remove();
 });
 
-const render = (request: (m: never) => Promise<unknown>) =>
-  act(async () => root.render(<ClaudeAccountSection active="" accounts={[{ id: "a", name: "One" }, { id: "b", name: "Two" }]} envToken request={request as never} onResult={() => {}} onError={() => {}} onLogin={() => {}} />));
+const render = (request: (m: never) => Promise<unknown>, o: { envToken?: boolean; onLogin?: () => void } = {}) =>
+  act(async () => root.render(<ClaudeAccountSection active="" accounts={[{ id: "a", name: "One" }, { id: "b", name: "Two" }]} envToken={o.envToken ?? true} request={request as never} onResult={() => {}} onError={() => {}} onLogin={o.onLogin ?? (() => {})} />));
+const options = () => [...el.querySelectorAll<HTMLElement>('[data-testid="settings-account-option"]')];
 const tests = () => [...el.querySelectorAll<HTMLButtonElement>('[data-testid="settings-account-test"]')];
 const results = () => [...el.querySelectorAll<HTMLElement>('[data-testid="settings-account-test-result"]')];
 
@@ -54,4 +55,20 @@ it("a refused token shows the prefixed CLI text as an alert; other errors show t
   expect(results().map((r) => r.textContent)).toEqual(["Token refused: 401 invalid", "timed out"]);
   expect(results()[0]!.getAttribute("role")).toBe("alert");
   expect(results()[0]!.getAttribute("title")).toBe("Token refused: 401 invalid");
+});
+
+it("the CLI login button of Settings opens the login", async () => {
+  const onLogin = vi.fn();
+  await render(async () => ({}), { onLogin });
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="settings-claude-login"]')!.click());
+  expect(onLogin).toHaveBeenCalledOnce();
+});
+
+it("picking CLI login sends the account patch, and without a daemon token the default login shows as CLI login", async () => {
+  const request = vi.fn(async () => ({}));
+  await render(request, { envToken: false });
+  expect(options().map((o) => [o.textContent, o.getAttribute("aria-checked")])).toEqual([["CLI login", "true"], ["OneToken set", "false"], ["TwoToken set", "false"]]);
+  await render(request);
+  await act(async () => options().find((o) => o.textContent === "CLI login")!.click());
+  expect(request).toHaveBeenCalledWith({ type: "settings.set", patch: { claude: { account: "cli" } } });
 });

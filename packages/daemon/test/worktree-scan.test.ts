@@ -254,6 +254,24 @@ describe("removal", () => {
     expect(existsSync(path)).toBe(true);
   });
 
+  it.each([
+    ["a tracked edit", (path: string) => writeFileSync(join(path, "a.txt"), "edited\n")],
+    ["an untracked file", (path: string) => writeFileSync(join(path, "notes.txt"), "n\n")],
+    ["a commit", (path: string) => commit(path, "c.txt", "c\n")],
+    ["a tracked edit and an untracked file", (path: string) => (writeFileSync(join(path, "a.txt"), "edited\n"), writeFileSync(join(path, "notes.txt"), "n\n"))],
+  ])("work added after the check (%s) refuses the removal, deletes nothing and keeps the branch", async (_name, change) => {
+    const { main } = repo();
+    const path = wt(main, "wt-safe", { created: true });
+    const listed = await worktreeStatus(main, path, allowed);
+    expect(listed).toMatchObject({ uncommitted: 0, ahead: 0, safety: "safe" });
+    change(path);
+    await expect(removeWorktree(main, path, allowed, { deleteBranch: true, expectSafe: true, expect: { uncommitted: 0, ahead: 0, ignored: 0 } })).rejects.toMatchObject({ code: "stale" });
+    expect(statSync(path).isDirectory()).toBe(true);
+    expect(existsSync(join(path, "a.txt"))).toBe(true);
+    expect(has(main, "wt-safe")).toBe(true);
+    expect(gitOk(main, "worktree", "list")).toContain("wt-safe");
+  });
+
   it("commits that cancel out (add, then delete) are not merged: has_work, no mergedInto, a Created branch is not Safe, deleteBranch keeps a kept one", async () => {
     const { main } = repo();
     const created = wt(main, "net0", { created: true });

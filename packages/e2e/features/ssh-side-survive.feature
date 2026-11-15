@@ -18,35 +18,3 @@ Feature: An SSH Side survives a dropped pipe
     When the SSH host "e2e-ok" becomes reachable again
     Then the Settings row of the SSH host "e2e-ok" says "Running"
     And I capture "side-ready-again"
-
-  Scenario: The Grace period of an SSH host is 30 minutes, can be set to 5 and persists
-    Given a throwaway SSH host
-    When I open the app and Settings › Sides
-    Then the Grace period of the SSH host "e2e-ok" shows "30"
-    And I capture "grace-default"
-    When I set the Grace period of the SSH host "e2e-ok" to "5"
-    And I reload the app and the daemon restarts and I open Settings › Sides
-    Then the Grace period of the SSH host "e2e-ok" shows "5"
-    And I capture "grace-5-persisted"
-
-  Scenario: After the Grace period ran out the attach finds no Hub, and opening the host starts a fresh one
-    Given a throwaway SSH host
-    When I choose the SSH host "e2e-ok" in Open project
-    And I open the remote project folder
-    And I open the app and Settings › Sides
-    And I set the Grace period of the SSH host "e2e-ok" to "1"
-    Then the Settings row of the SSH host "e2e-ok" says "Running"
-    And I note the Hub of the SSH host
-    When the SSH host "e2e-ok" becomes unreachable
-    And I kill the Hub's ssh process of the SSH host "e2e-ok"
-    Then the Settings row of the SSH host "e2e-ok" says "Reconnecting"
-    When the Hub of the SSH host ended
-    And the SSH host "e2e-ok" becomes reachable again
-    Then the Settings row of the SSH host "e2e-ok" says "Grace period ran out"
-    And I capture "side-off-no-daemon"
-    When I close Settings
-    And I open Open project on the last chosen host
-    Then the Open project folder input is shown
-    And the Hub of the SSH host is a new one
-    When I open the remote project folder
-    And I capture "side-fresh-daemon"

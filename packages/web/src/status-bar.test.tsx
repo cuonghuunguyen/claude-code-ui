@@ -72,6 +72,11 @@ it("takes no row when no field has data (no git repo, no turn, no shells)", asyn
   expect(el.querySelector('[data-testid="status-bar"]')).toBeNull();
 });
 
+it("shows the daemon's line counts as they are: a status with no added or removed lines reads (+0,-0)", async () => {
+  const { text } = await render({ git: async (): Promise<GitStatus> => ({ branch: "main", added: 0, removed: 0 }) });
+  expect(text()).toContain("diff=(+0,-0)");
+});
+
 it("refreshes git after each turn", async () => {
   const git = vi.fn(async (): Promise<GitStatus> => ({ branch: "main", added: git.mock.calls.length, removed: 0 }));
   const { text, rerender } = await render({ git, view: { ...view(), state: "running" } });

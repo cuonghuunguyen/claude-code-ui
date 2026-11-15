@@ -20,20 +20,6 @@ Then("the Always allow label shows {string}", async ({ page }, text: string) => 
   await expect(page.getByTestId("always-allowed").first()).toBeDisabled();
 });
 
-Then("the Always allow alert starts with {string}", async ({ page }, text: string) => {
-  const alert = page.getByTestId("always-allow-error").first();
-  await expect(alert).toBeVisible({ timeout: TURN_MS });
-  expect(((await alert.textContent()) ?? "").startsWith(text)).toBe(true);
-});
-
-Then("Allow and retry is still enabled", async ({ page }) => {
-  await expect(page.getByTestId("allow-and-retry").first()).toBeEnabled();
-});
-
-Then("no user message contains {string}", async ({ page }, text: string) => {
-  await expect(page.getByTestId("user-message").filter({ hasText: text })).toHaveCount(0);
-});
-
 Then("the Always allow scope buttons are at least 44px high", async ({ page }) => {
   for (const id of ["always-allow-session", "always-allow-local", "always-allow-cancel"]) {
     const box = await page.getByTestId(id).first().boundingBox();

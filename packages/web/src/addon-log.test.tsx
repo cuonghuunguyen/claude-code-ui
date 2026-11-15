@@ -125,3 +125,23 @@ it("the log bridge call is refused without the log capability", async () => {
   expect(api.log).not.toHaveBeenCalled();
   expect(api.refused).toHaveBeenCalledWith("example", "log", "log needs capability log");
 });
+
+it("a pane's status and toast calls reach the app, and prompt.submit is refused even with every capability", async () => {
+  const api: AddonApi = { insert: vi.fn(), status: vi.fn(), toast: vi.fn(), refused: vi.fn(), log: vi.fn() };
+  const el = await mount(
+    <AddonApiContext value={api}>
+      <AddonFrame addon={{ ...addon, approved: ["ui.status", "ui.toast", "prompt.insert", "session.read"] }} entry="pane.html" role="pane" view="v" sessionId="s1" />
+    </AddonApiContext>,
+  );
+  const win = el.querySelector("iframe")!.contentWindow!;
+  const send = (data: object) => act(async () => void window.dispatchEvent(new MessageEvent("message", { data: { v: 1, id: "1", ...data }, source: win })));
+  await send({ type: "ui.status", text: "ready" });
+  await send({ type: "ui.toast", text: "hello" });
+  expect(api.status).toHaveBeenCalledWith("s1", "example", "ready");
+  expect(api.toast).toHaveBeenCalledWith("example", "hello");
+  expect(api.refused).not.toHaveBeenCalled();
+  await send({ type: "prompt.submit", text: "go" });
+  expect(api.refused).toHaveBeenCalledTimes(1);
+  expect(api.refused).toHaveBeenCalledWith("example", "prompt.submit", expect.any(String));
+  expect(api.insert).not.toHaveBeenCalled();
+});

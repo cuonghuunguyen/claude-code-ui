@@ -1,6 +1,6 @@
 // Clean up scan over the wire (GH-461): worktree.status with a scan id queues behind the status bar, worktree.cancel drops it, git.fetch defaultRemote.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -185,6 +185,23 @@ describe("git.fetch defaultRemote", () => {
     expect(await c.request({ type: "git.fetch", cwd: repo, defaultRemote: true })).toMatchObject({ type: "reply", result: { remote: { refs: expect.any(String) } } });
     git(repo, "remote", "remove", "origin");
     expect(await c.request({ type: "git.fetch", cwd: repo, defaultRemote: true })).toMatchObject({ code: "bad_request" });
+  });
+});
+
+describe("git.fetch with an unreachable origin", () => {
+  it("the fetch replies an error and worktree.status of the worktrees still resolves", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wtscan-u-")));
+    git(root, "init", "-q", "--bare", "-b", "main", "o.git");
+    git(root, "clone", "-q", "o.git", "r");
+    const repo = join(root, "r");
+    git(repo, "commit", "-q", "--allow-empty", "-m", "one");
+    git(repo, "push", "-q", "-u", "origin", "HEAD:main");
+    const wt = join(repo, ".claude", "worktrees", "wt-clean");
+    git(repo, "worktree", "add", "-q", "-b", "wt-clean", wt);
+    rmSync(join(root, "o.git"), { recursive: true });
+    const c = await client(await daemon({ root, repo }));
+    expect(await c.request({ type: "git.fetch", cwd: repo, defaultRemote: true })).toMatchObject({ type: "error" });
+    expect(await c.request({ type: "worktree.status", cwd: repo, path: wt, scan: "s" })).toMatchObject({ type: "reply", result: { safety: "safe" } });
   });
 });
 

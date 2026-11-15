@@ -58,11 +58,6 @@ Then("the Find in files summary says {string}", async ({ page }, text: string) =
   await expect(page.getByTestId("find-summary")).toContainText(text, { timeout: 15_000 });
 });
 
-Then("the Find in files replace error is shown", async ({ page }) => {
-  await expect(page.getByTestId("find-replace-error")).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByTestId("find-replace-all")).toBeDisabled();
-});
-
 Then("the scratch file {string} is {string}", async ({ project }, rel: string, want: string) => {
   const text = readFileSync(join(project.path, rel), "utf8");
   expect(text).toBe(want.replace(/\\r/g, "\r").replace(/\\n/g, "\n"));

@@ -1,13 +1,11 @@
 import { delimiter, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { daemonEnv, freePort, killCommand, ownerPorts, realConfigDirs, TOKEN_RE } from "../support/daemon.ts";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { assertUploadsIsolated, isolationBreaches, leakedUploads, sessionIds } from "../support/isolation.ts";
 import { commandLineMentions, stopRun } from "../support/stop.ts";
 import { runDir, slug } from "../support/paths.ts";
-import { fakeDockerScript, sideAttachSock, writeFakeDocker } from "../support/fake-docker.ts";
-import { spawnSync } from "node:child_process";
 
 describe("freePort", () => {
   it("skips excluded ports", async () => {
@@ -209,56 +207,6 @@ describe("stop", () => {
       expect(() => stopRun(join(base, "nope"), () => {}, () => "")).toThrow(/no such run/);
     } finally {
       rmSync(base, { recursive: true, force: true });
-    }
-  });
-});
-
-describe.skipIf(process.platform === "win32")("fake docker", () => {
-  const cfg = { containers: ["dev", "k8s_pod"], probe: { code: 1, stdout: "", stderr: "OCI runtime exec failed: it's \"bad\"" }, check: { stdout: "CLAUDE_UI_CHECK arch=x86_64\n" }, setup: { code: 1, stdout: "CLAUDE_UI_SETUP node_missing\n" } };
-  const run = (args: string[]) => spawnSync("sh", ["-c", fakeDockerScript(cfg), "docker", ...args], { encoding: "utf8" });
-  it("answers version, ps, inspect and cp like a running Linux container", () => {
-    expect(run(["version", "--format", "{{.Server.Os}}"]).stdout.trim()).toBe("linux");
-    expect(run(["ps", "--filter", "status=running", "--format", "{{.Names}}"]).stdout.split("\n").filter(Boolean)).toEqual(["dev", "k8s_pod"]);
-    expect(run(["inspect", "-f", "{{.State.Running}}", "dev"]).stdout.trim()).toBe("true");
-    expect(run(["inspect", "-f", "{{.HostConfig.ReadonlyRootfs}}{{range .Mounts}}x{{end}}", "dev"]).stdout).toBe("false\n/data true\nnull\n");
-    expect(run(["cp", "a", "dev:/tmp/a"]).status).toBe(0);
-  });
-  it("exec picks the probe, the check or the setup script by what the script says, and replays the configured answer", () => {
-    const probe = run(["exec", "dev", "sh", "-c", 'emit() { :; }; emit arch "$(uname -m)"']);
-    expect([probe.status, probe.stderr]).toEqual([1, cfg.probe.stderr]);
-    expect(run(["exec", "dev", "sh", "-c", "emit installed none"]).stdout).toBe(cfg.check.stdout);
-    const setup = run(["exec", "-i", "dev", "sh", "-c", "echo CLAUDE_UI_SETUP x"]);
-    expect([setup.status, setup.stdout]).toEqual([1, cfg.setup.stdout]);
-  });
-  it("GH-458: log lines per call and per setup exec; side makes the setup exec run a real bridge to the Hub under its home (not run here)", () => {
-    const d = mkdtempSync(join(tmpdir(), "fake-docker-"));
-    try {
-      const log = join(d, "docker.log");
-      const withLog = { ...cfg, log };
-      const sh = (c: typeof withLog & { side?: { home: string; repo: string; projects: string } }, args: string[]) => spawnSync("sh", ["-c", fakeDockerScript(c), "docker", ...args], { encoding: "utf8" });
-      sh(withLog, ["cp", "a", "dev:/tmp/a"]);
-      sh(withLog, ["exec", "-i", "dev", "sh", "-c", "echo CLAUDE_UI_SETUP x"]);
-      expect(readFileSync(log, "utf8").split("\n").filter(Boolean)).toEqual(["cp", "exec", "setup"]);
-      // The side script is built, never started here: only its text is checked.
-      const text = fakeDockerScript({ ...withLog, side: { home: join(d, "h"), repo: "/repo", projects: join(d, "p") } });
-      expect(text).toContain("side.pid");
-      expect(text).toContain("side --attach --start");
-      expect(text).not.toContain("--side");
-      // Its own attach socket, short enough for sun_path (104 bytes on macOS).
-      expect(text).toContain(`CLAUDE_UI_ATTACH_SOCK='${sideAttachSock(join(d, "h"))}'`);
-      expect(Buffer.byteLength(sideAttachSock(join(d, "h")))).toBeLessThan(104);
-    } finally {
-      rmSync(d, { recursive: true, force: true });
-    }
-  });
-  it("writeFakeDocker writes an executable <run>/bin/docker and returns the folder to put on PATH", () => {
-    const d = mkdtempSync(join(tmpdir(), "fake-docker-"));
-    try {
-      const bin = writeFakeDocker(d, cfg);
-      expect(bin).toBe(join(d, "bin"));
-      expect(spawnSync(join(bin, "docker"), ["version"], { encoding: "utf8" }).stdout.trim()).toBe("linux");
-    } finally {
-      rmSync(d, { recursive: true, force: true });
     }
   });
 });

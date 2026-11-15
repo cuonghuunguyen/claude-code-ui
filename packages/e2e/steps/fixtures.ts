@@ -1,7 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test as base, createBdd } from "playwright-bdd";
-import type { FakeJira } from "../support/fake-jira.ts";
 import { startDaemon, type Daemon } from "../support/daemon.ts";
 import { startSshHost, type SshHost } from "../support/ssh-host.ts";
 import { projectsRoot, runDir, slug, testSlugs } from "../support/paths.ts";
@@ -14,13 +13,10 @@ export type Evidence = { next(): number };
 /** Per-scenario scratch for "I note ..." / "... is unchanged" step pairs. */
 export type Memo = { texts?: number; layout?: unknown; creates?: () => number; worktree?: string; envValue?: string; branch?: string; owner?: string };
 
-/** The fake Jira of the scenario, once a step started it. */
-export type JiraBox = { fake?: FakeJira };
-
 /** The throwaway sshd of the SSH Side features: started by the first scenario that asks, removed with the worker. */
 export type SshHostBox = { get(): Promise<SshHost> };
 
-export const test = base.extend<{ project: Project; evidence: Evidence; memo: Memo; jira: JiraBox }, { daemon: Daemon; sshHost: SshHostBox }>({
+export const test = base.extend<{ project: Project; evidence: Evidence; memo: Memo }, { daemon: Daemon; sshHost: SshHostBox }>({
   sshHost: [
     async ({}, use) => {
       let host: SshHost | undefined;
@@ -50,11 +46,6 @@ export const test = base.extend<{ project: Project; evidence: Evidence; memo: Me
     await use({ path, name });
     // A failed scenario keeps the run folder (daemon log, transcripts' project) for the post-mortem.
     if (testInfo.status !== testInfo.expectedStatus) writeFileSync(join(runDir(), "failed.marker"), `${testInfo.title}\n`, { flag: "a" });
-  },
-  jira: async ({}, use) => {
-    const box: JiraBox = {};
-    await use(box);
-    await box.fake?.close();
   },
   memo: async ({}, use) => {
     await use({});

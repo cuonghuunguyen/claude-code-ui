@@ -112,6 +112,18 @@ it("API key: blur empty and a key with a space show an error under the field; su
   expect(onProviders).toHaveBeenCalledTimes(1);
 });
 
+it("the keyboard alone connects: provider rows are buttons, the form heading takes focus, Enter in the key field (form submit) sends the login", async () => {
+  const { calls } = await render(async (m) => (m.type === "opencode.providers" ? { providers: base } : { providers: [P("groq", { connected: true, source: "api" })] }));
+  await type("settings-opencode-connect-search", "groq");
+  expect(row("groq").tagName).toBe("BUTTON");
+  await click(row("groq"));
+  expect(document.activeElement).toBe(el.querySelector("h5"));
+  await type("settings-opencode-key", "sk-throwaway");
+  await act(async () => q("settings-opencode-key")!.closest("form")!.requestSubmit());
+  expect(calls.at(-1)).toEqual({ type: "opencode.login", provider: "groq", method: 0, key: "sk-throwaway" });
+  expect(q("settings-opencode-providers-message")!.textContent).toBe("Connected to Groq");
+});
+
 it("a daemon error `key: …` lands under the field; another error shows under the form; the values stay and Connect works again", async () => {
   let n = 0;
   await render(async (m) => {

@@ -1261,6 +1261,20 @@ it("renders Vietnamese: group list, daemon rows with their hints, and select lab
   }
 });
 
+it("Vietnamese Orchestration shows Close finished workers on with its translated label and the stall row", async () => {
+  const { setLocalePref } = await import("./i18n.ts");
+  act(() => setLocalePref("vi"));
+  try {
+    const { q, pick } = await render();
+    await pick("orchestration");
+    expect(q("settings-orchestration-closeFinished")?.getAttribute("aria-label")).toBe("Đóng worker đã xong");
+    expect(q("settings-orchestration-closeFinished")?.getAttribute("aria-checked")).toBe("true");
+    expect(document.querySelector('label[for="settings-orchestration-stallMinutes"]')?.textContent).toBe("Cảnh báo treo sau (phút)");
+  } finally {
+    act(() => setLocalePref("system"));
+  }
+});
+
 it("Shake to locate is a switch in Tabs, on by default, saved per browser (GH-517)", async () => {
   localStorage.removeItem("claude-ui.shakeLocate");
   const { q, pick } = await render();

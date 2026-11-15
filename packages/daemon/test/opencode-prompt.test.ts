@@ -1456,6 +1456,22 @@ describe("OpenCode broken MCP state (GH-682, GH-681)", { timeout: 30_000 }, () =
     expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
   });
 
+  it("with orchestration on and a slow MCP load, a second prompt also gets its reply: one attach, no warning, no reload", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE_MCP_LOAD_MS: "4000" }, script: ["text", "text"] });
+    await on(d);
+    const s = await d.open();
+    await s.prompt("one");
+    await done(s);
+    const results = s.parts().filter((p) => p.type === "turn_result").length;
+    await s.prompt("two");
+    await until(() => s.parts().filter((p) => p.type === "turn_result").length > results && s.states().at(-1) === "idle", 10_000);
+    expect(s.parts().filter((p) => p.type === "turn_result").every((p) => (p as { isError: boolean }).isError === false)).toBe(true);
+    expect(d.requests("POST", "/mcp").filter((r) => r.body.name === mcpName(s.id))).toHaveLength(1);
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)).toHaveLength(2);
+    expect(s.parts().filter((p) => p.type === "notice")).toHaveLength(0);
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+  });
+
   it("closing a session does not wait for the MCP disconnect and does not cut it off", async () => {
     const d = await boot({ env: { FAKE_OPENCODE_DISCONNECT_DELAY_MS: "4000" }, script: ["text"] });
     await on(d);

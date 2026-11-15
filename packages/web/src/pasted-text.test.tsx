@@ -62,3 +62,41 @@ it("PasteChips shows one chip per token in text order; Remove calls onRemove wit
   const viewer = document.querySelector('[data-testid="paste-viewer"]');
   expect(viewer?.textContent).toContain("line-200");
 });
+
+it("Expand on a chip of the prompt box replaces its token with the pasted text and removes the chip", async () => {
+  const { SessionPane } = await import("./App.tsx");
+  const { emptySession } = await import("./store.ts");
+  const noop = () => {};
+  await act(async () =>
+    root.render(
+      <SessionPane
+        scrollKey={0}
+        onInserted={noop}
+        session={{ id: "s1", cwd: "/tmp", state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: ["default"] }}
+        view={emptySession()}
+        models={[]}
+        onModel={noop}
+        onMode={noop}
+        onEffort={noop}
+        onUpload={async () => "/tmp/u/x.txt"}
+        onPrompt={async () => {}}
+        onSearch={async () => []}
+        onInterrupt={noop}
+        onRewindPreview={async () => ({ filesChanged: [], insertions: 0, deletions: 0, conversation: false })}
+        onRewind={async () => {}}
+        onRespond={noop}
+        onAnswer={noop}
+        connected
+      />,
+    ),
+  );
+  const box = el.querySelector("textarea")!;
+  const e = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(e, "clipboardData", { value: { files: [], getData: () => body } });
+  await act(async () => void box.dispatchEvent(e));
+  expect(box.value).toBe("[Pasted text #1 +199 lines]");
+  expect(el.querySelectorAll('[data-testid="paste-chip"]')).toHaveLength(1);
+  await act(async () => el.querySelector<HTMLButtonElement>('[aria-label="Expand pasted text #1 into the prompt"]')!.click());
+  expect(box.value).toBe(body);
+  expect(el.querySelectorAll('[data-testid="paste-chip"]')).toHaveLength(0);
+});

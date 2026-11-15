@@ -293,6 +293,16 @@ it("labels: a valid map is saved, read back, and {} removes it from the file", (
   expect(JSON.parse(readFileSync(f, "utf8")).labels?.projects).toBeUndefined();
 });
 
+it("labels: a machine name and emoji are saved per side id and read back; {} removes them", () => {
+  const f = file();
+  const s = createSettings({ file: f });
+  const sides = { "ssh:box": { name: "Build box", icon: "🖥️" } };
+  expect(s.set({ labels: { sides } }).labels).toEqual({ projects: {}, sides });
+  expect(createSettings({ file: f }).get().labels.sides).toEqual(sides);
+  s.set({ labels: { sides: {} } });
+  expect(createSettings({ file: f }).get().labels.sides).toEqual({});
+});
+
 it("labels: invalid entries are refused", () => {
   const bad: unknown[] = [
     { "/a": { icon: "data:image/svg+xml;base64,PHN2Zz4=" } },

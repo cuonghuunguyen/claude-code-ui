@@ -129,3 +129,11 @@ it("a ! shell shows the card's output without a request; Kill sends its part id 
   await click(q("shell-kill-confirm"));
   expect(kill).toHaveBeenCalledWith("b1");
 });
+
+it("a shell whose output was cut shows the truncation note above the kept last lines", async () => {
+  const output = async () => ({ output: "39999\n40000\n", truncated: true });
+  await render(view(bash("a", { command: "seq 1 40000" }, "running", { startedAt: 1000 })), { output });
+  await click(q("shell-row"));
+  expect(q("shell-output")?.textContent).toContain("Showing the last 30,000 characters.");
+  expect(q("shell-output")?.textContent).toContain("40000");
+});

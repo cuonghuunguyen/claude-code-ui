@@ -119,3 +119,19 @@ it("phone: the third pick of a neighbour tab shows the swipe tip", async () => {
   expect(seen("adjacentPick")).toBe(3);
   expect(show).toHaveBeenCalledExactlyOnceWith("Tip: swipe up or down on the tab name to switch tabs.", undefined);
 });
+
+it.each([
+  ["terminal", "Terminal"],
+  ["artifact", "Sales dashboard"],
+  ["artifacts", "Artifacts"],
+] as const)("phone: the switcher lists a %s pane tab as a row with its title", async (kind, title) => {
+  const info = (id: string): TabInfo => (id === "pane" ? { title, kind, cwd: "/p/a", unread: false, transcript: false } : INFO[id]!);
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  await act(async () => root!.render(<TabsBar tabs={["a", "pane"]} activeId="a" info={info} onSelect={() => {}} onClose={() => {}} onMove={() => {}} onMoveGroup={() => {}} onMoveGroupTo={() => {}} onNew={() => {}} onAction={() => {}} onRenamed={() => {}} />));
+  await act(async () => void el.querySelector<HTMLElement>('[data-testid="tab-switcher"]')!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 })));
+  await wait(60);
+  const row = rows().find((r) => r.textContent?.includes(title))!;
+  expect(row).toBeTruthy();
+});

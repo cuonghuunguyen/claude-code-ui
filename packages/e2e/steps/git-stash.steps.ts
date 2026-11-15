@@ -13,14 +13,6 @@ Given("the scratch project has the committed file {string} with the text {string
 When("I edit {string} on disk to {string}", async ({ project }, file: string, text: string) => {
   writeFileSync(join(project.path, file), `${text}\n`);
 });
-Given("the scratch project has the stash {string} of {string} with the text {string}", async ({ project }, message: string, file: string, text: string) => {
-  writeFileSync(join(project.path, file), `${text}\n`);
-  git(project.path, "stash", "push", "-q", "-m", message);
-});
-Given("the scratch project commits {string} with the text {string}", async ({ project }, file: string, text: string) => {
-  writeFileSync(join(project.path, file), `${text}\n`);
-  git(project.path, "commit", "-q", "-am", `newer ${file}`);
-});
 
 When("I open the Stashes section of the Graph", async ({ page }) => {
   const toggle = page.getByTestId("graph-stashes");
@@ -41,13 +33,4 @@ Then("the stash {string} is listed", async ({ page }, message: string) => {
 });
 Then("no stash is listed", async ({ page }) => {
   await expect(page.getByTestId("stash-section")).toContainText("No stashes", { timeout: 30_000 });
-});
-When("I cancel the stash drop dialog", async ({ page }) => {
-  await page.getByTestId("git-stash-drop-cancel").click();
-});
-When("I confirm the stash drop dialog", async ({ page }) => {
-  await page.getByTestId("git-stash-drop-confirm").click();
-});
-Then("the stash drop dialog asks about {string}", async ({ page }, text: string) => {
-  await expect(page.getByTestId("git-stash-drop-dialog")).toContainText(text);
 });

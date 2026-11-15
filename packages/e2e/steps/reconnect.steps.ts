@@ -1,6 +1,5 @@
 import type { Page, WebSocketRoute } from "@playwright/test";
 import { expect } from "@playwright/test";
-import { TURN_MS } from "../support/ui.ts";
 import { Given, Then, When } from "./fixtures.ts";
 
 /** The page's daemon sockets of a scenario: `offline` refuses new ones, `open` are the ones a cut closes. */
@@ -30,32 +29,6 @@ When("the connection to the daemon is cut", async ({ page }) => {
 
 When("the connection to the daemon is back", async ({ page }) => {
   cuts.get(page)!.offline = false;
-});
-
-When("I open a second new session tab", async ({ page, project }) => {
-  await page.getByTestId("tab-new").first().click();
-  // The first session's header is still in the page: the choices are scoped to the new-session tab.
-  const tab = page.getByTestId("new-session-tab");
-  await expect(tab).toBeVisible();
-  await expect(tab.getByTestId("project-chip")).toContainText(project.name);
-  const model = tab.getByTestId("session-model");
-  await model.click();
-  await page.getByRole("option", { name: "Haiku" }).click();
-  await expect(model).toContainText("Haiku");
-});
-
-// Tab 0 is Focus; session tabs follow in the order they were opened.
-When("I switch to session tab {int}", async ({ page }, n: number) => {
-  await page.getByTestId("tab-strip").getByRole("tab").nth(n).click();
-});
-
-// Two sessions are mounted: the shared steps expect one, so these look at the shown one only.
-Then("the shown session has a reply from Claude", async ({ page }) => {
-  await expect(page.locator('[data-testid="assistant-text"]:visible').first()).toHaveText(/\S/, { timeout: TURN_MS });
-});
-
-Then("the shown session's turn has finished", async ({ page }) => {
-  await expect(page.locator('[data-testid="send"][data-state="idle"]:visible')).toBeVisible({ timeout: TURN_MS });
 });
 
 // The reply of the counting prompt is whole once its last word shows (a cut-off text would end in a number).

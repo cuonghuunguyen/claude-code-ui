@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { git, makeRepoWithOrigin } from "../support/git-fixture.ts";
@@ -46,32 +45,9 @@ Then("the {string} tool card is shown and finished", async ({ page }, text: stri
   await expect(toolCard(page, text).first()).toHaveAttribute("data-status", "done", { timeout: TURN_MS });
 });
 
-Then("the {string} tool card failed", async ({ page }, text: string) => {
-  await expect(toolCard(page, text).first()).toHaveAttribute("data-status", "error", { timeout: TURN_MS });
-});
-
-Then("the {string} tool card lists the scratch project and its worktree", async ({ page, project, memo }, text: string) => {
-  const worktree = memo.worktree!;
-  const card = toolCard(page, text).first();
-  const open = card.locator("button[aria-expanded='false']").first();
-  if (await open.count()) await open.click();
-  await expect(card).toContainText(project.name, { timeout: 15_000 });
-  await expect(card).toContainText(project.path);
-  await expect(card).toContainText(worktree);
-  await expect(card).toContainText(/branch/i);
-});
-
 Then("the permission request names the scratch project", async ({ page, project }) => {
   await expect(page.getByTestId("permission-panel")).toContainText(project.name, { timeout: TURN_MS });
   await expect(page.getByTestId("permission-panel")).toContainText(/project/i);
-});
-
-Then("the permission request names the scratch worktree and the scratch project", async ({ page, project, memo }) => {
-  const worktree = memo.worktree!;
-  const panel = page.getByTestId("permission-panel");
-  await expect(panel).toContainText(worktree, { timeout: TURN_MS });
-  await expect(panel).toContainText(project.name);
-  await expect(panel).toContainText(/worktree/i);
 });
 
 Then("a worker session runs in the main checkout of the scratch project", async ({ page, project }) => {
@@ -80,58 +56,4 @@ Then("a worker session runs in the main checkout of the scratch project", async 
     const titles = await workerRows(page).evaluateAll((els) => els.map((e) => e.getAttribute("title") ?? ""));
     expect(titles.some((t) => t.split("\n").includes(project.path))).toBe(true);
   }).toPass({ timeout: 90_000 });
-});
-
-Then("a worker session runs in the scratch worktree", async ({ page, project, memo }) => {
-  const dir = join(project.path, ".claude", "worktrees", memo.worktree!);
-  await expect(async () => {
-    await revealWorkers(page);
-    const titles = await workerRows(page).evaluateAll((els) => els.map((e) => e.getAttribute("title") ?? ""));
-    expect(titles.some((t) => t.split("\n").includes(dir))).toBe(true);
-  }).toPass({ timeout: 90_000 });
-});
-
-Then("no worker session exists for the scratch project", async ({ page, project }) => {
-  // A worker group starts collapsed: open every group first, else a worker that did start stays hidden and the step passes.
-  await revealWorkers(page);
-  // The daemon is shared by the scenarios of the run: look only at workers whose folder is inside this scratch project.
-  const titles = await workerRows(page).evaluateAll((els) => els.map((e) => e.getAttribute("title") ?? ""));
-  expect(titles.filter((t) => t.split("\n").some((l) => l.startsWith(project.path)))).toEqual([]);
-});
-
-Then("the {string} tool card shows an error that names no such project", async ({ page }, text: string) => {
-  const card = toolCard(page, text).first();
-  const open = card.locator("button[aria-expanded='false']").first();
-  if (await open.count()) await open.click();
-  // The parameters hold the name too: the error is the part that says the name matches nothing.
-  await expect(card).toContainText(/no (project|worktree)|not (found|a project)|unknown|did not match|candidates/i, { timeout: 15_000 });
-});
-
-// GH-755: `worktree.symlinkDirectories` links `development-docs` into every worktree the daemon creates; the folder is ignored, so the
-// fixture commit (pushed: a new worktree branches from origin/main) only adds the ignore line. `.claude/` is ignored for the settings file.
-Given("the scratch project shares an ignored development-docs folder with its worktrees", async ({ project }) => {
-  const dir = project.path;
-  writeFileSync(join(dir, ".gitignore"), "development-docs/\n.claude/\n");
-  git(dir, "add", ".gitignore");
-  git(dir, "commit", "-m", "ignore the scratch folder");
-  git(dir, "push", "origin", "main");
-  mkdirSync(join(dir, "development-docs"), { recursive: true });
-  writeFileSync(join(dir, ".claude", "settings.local.json"), JSON.stringify({ worktree: { symlinkDirectories: ["development-docs"] } }));
-});
-
-Then("the {string} tool card result says mode {string}", async ({ page }, text: string, mode: string) => {
-  const card = toolCard(page, text).first();
-  await expect(card).toHaveAttribute("data-status", "done", { timeout: TURN_MS });
-  // The card re-renders as it finishes: expand again until the result text is there.
-  await expect(async () => {
-    const open = card.locator("button[aria-expanded='false']").first();
-    if (await open.count()) await open.click({ timeout: 2_000 });
-    await expect(card).toContainText(new RegExp(`"mode":\\s*"${mode}"`), { timeout: 3_000 });
-  }).toPass({ timeout: 30_000 });
-});
-
-Then("the worker wrote {string} in the main checkout of the scratch project", async ({ project }, file: string) => {
-  const dst = join(project.path, file);
-  await expect(async () => expect(existsSync(dst), `${dst} exists`).toBe(true)).toPass({ timeout: 240_000 });
-  expect(readFileSync(dst, "utf8")).toContain("OK");
 });

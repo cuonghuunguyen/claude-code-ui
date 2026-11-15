@@ -158,6 +158,23 @@ describe("merge and rebase", () => {
     expect(run(r.dir, "log", "-1", "--format=%P").split(" ")).toHaveLength(2);
     expect(run(r.dir, "log", "-1", "--format=%s")).toBe("Merge branch 'side'");
   });
+  it("a clean true merge and a clean rebase leave no operation, so the banner does not show", async () => {
+    const r = repo();
+    run(r.dir, "checkout", "-q", "-b", "side", "main~1");
+    put(r.dir, "s.txt", "s\n");
+    run(r.dir, "add", "-A");
+    run(r.dir, "commit", "-q", "-m", "s");
+    run(r.dir, "checkout", "-q", "main");
+    const merged = await start(r, "merge", "refs/heads/side");
+    expect(merged!.operation).toBeUndefined();
+    expect(await gitOperation(r.dir)).toBeUndefined();
+    expect((await gitDiff(r.dir, { base: "head", ...r.o }))!.operation).toBeUndefined();
+    run(r.dir, "checkout", "-q", "side");
+    const rebased = await start(r, "rebase", "refs/heads/main");
+    expect(rebased!.operation).toBeUndefined();
+    expect(await gitOperation(r.dir)).toBeUndefined();
+    expect((await gitDiff(r.dir, { base: "head", ...r.o }))!.operation).toBeUndefined();
+  });
   it("rebases cleanly to a linear history", async () => {
     const r = repo();
     run(r.dir, "checkout", "-q", "-b", "side", "main~1");
@@ -195,6 +212,17 @@ describe("conflicts", () => {
     expect(done!.operation).toBeUndefined();
     expect(run(r.dir, "log", "-1", "--format=%P").split(" ")).toHaveLength(2);
     expect(await gitOperation(r.dir)).toBeUndefined();
+  });
+  it("a merge whose conflicts are resolved but not committed is still a merge in progress, with no conflicted file", async () => {
+    const r = repo();
+    await start(r, "merge");
+    resolved(r);
+    run(r.dir, "add", "a.txt");
+    const before = head(r.dir);
+    expect(await gitOperation(r.dir)).toEqual({ kind: "merge", conflicted: [] });
+    expect((await gitDiff(r.dir, { base: "head", ...r.o }))!.operation).toEqual({ kind: "merge", conflicted: [] });
+    expect(head(r.dir)).toBe(before);
+    expect(existsSync(join(r.dir, ".git", "MERGE_HEAD"))).toBe(true);
   });
   it("rebase with two conflicting commits stops twice", async () => {
     const r = repo();
