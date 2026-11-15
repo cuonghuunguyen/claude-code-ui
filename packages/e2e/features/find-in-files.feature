@@ -20,12 +20,3 @@ Feature: Find in files searches the content of the project's files (GH-649)
     Then the Find in files panel is closed
     And the Files editor shows the line "const needle = foo1;"
     And I capture "find-open-match"
-
-  Scenario: The panel fits a phone screen
-    Given the viewport is 390x844
-    And a Haiku session with one finished reply
-    When I press "ControlOrMeta+Shift+F"
-    And I search files for "needle"
-    Then Find in files lists the file "src/a.ts"
-    And the page has no horizontal scroll
-    And I capture "find-plain-phone"

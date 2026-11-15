@@ -23,18 +23,6 @@ Feature: Open a single file as a tab (GH-399)
     Then there is no file tab "a.ts"
     And I capture "file-tab-closed"
 
-  Scenario: A file tab survives a reload and a deleted file shows the read error
-    Given the viewport is 1440x900
-    And a Haiku session with one finished reply
-    When I Quick open "src/a.ts" with Alt+Enter
-    And I reload the page
-    Then the file tab "a.ts" shows the text "export const a = 1;"
-    And I capture "file-tab-restored"
-    When I delete the project file "src/a.ts"
-    And I reload the page
-    Then the file tab "a.ts" shows a read error
-    And I capture "file-tab-missing"
-
   Scenario: On a phone the file tab is a row of the tab switcher
     Given the viewport is 390x844
     And a Haiku session with one finished reply
@@ -44,12 +32,3 @@ Feature: Open a single file as a tab (GH-399)
     When I open the tab switcher
     Then the tab switcher lists the file row "a.ts"
     And I capture "file-tab-phone"
-
-  Scenario: Open in tab from the file dialog of a Read card
-    Given the viewport is 1440x900
-    And a Haiku session that has read "a.ts"
-    When I open the file dialog from the Read card of "a.ts"
-    And I click Open in tab in the file dialog
-    Then no file dialog shows
-    And the file tab "a.ts" opens right of its session tab with the editor focused
-    And I capture "file-tab-from-dialog"

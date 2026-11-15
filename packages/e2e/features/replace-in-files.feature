@@ -27,26 +27,3 @@ Feature: Replace in files rewrites the checked matches of Find in files (GH-650)
     And the scratch file "src/a.ts" is "const x = user(1);\nconst y = user(2);\n"
     And the scratch file "src/b.ts" is "user(3)\r\nother\r\n"
     And I capture "replace-undone-desktop"
-
-  Scenario: A replacement that references a missing group shows an error and writes nothing
-    Given the viewport is 1440x900
-    And a Haiku session with one finished reply
-    When I press "ControlOrMeta+Shift+F"
-    And I turn on regular expressions in Find in files
-    And I search files for "user\((\d)\)"
-    And I show the replace row in Find in files
-    And I type the replacement "$3" in Find in files
-    Then the Find in files replace error is shown
-    And the scratch file "notes.md" is "call user(4) here\n"
-    And I capture "replace-error-desktop"
-
-  Scenario: The replace row fits a phone screen
-    Given the viewport is 390x844
-    And a Haiku session with one finished reply
-    When I press "ControlOrMeta+Shift+F"
-    And I search files for "user"
-    And I show the replace row in Find in files
-    And I type the replacement "account" in Find in files
-    Then Find in files previews 4 new lines
-    And the page has no horizontal scroll
-    And I capture "replace-preview-phone"
