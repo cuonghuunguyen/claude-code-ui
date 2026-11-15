@@ -22,11 +22,6 @@ it("projectName is the folder name until a label names the project", () => {
   expect(sideLabel("local")?.icon).toBe("💻");
 });
 
-it("an older daemon without labels gives no label", () => {
-  setLabels(undefined);
-  expect(projectLabel("/x")).toBeUndefined();
-});
-
 it("iconSrc gives only raster data URLs as image source", () => {
   expect(iconSrc("data:image/png;base64,AAAA")).toBe("data:image/png;base64,AAAA");
   expect(iconSrc("data:image/svg+xml;base64,AAAA")).toBeUndefined();

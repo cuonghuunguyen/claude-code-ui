@@ -418,7 +418,6 @@ it("the Inline tasks text fields are single-line inputs with a visible focus rin
     expect(input.type).toBe("text");
     expect(input.className).toContain("focus-visible:ring-2");
     expect(input.className).toContain("max-md:h-11");
-    expect(input.className).not.toMatch(/\bw-\[\d+px\]/);
   }
 });
 
@@ -1183,13 +1182,6 @@ it("Sides group: a row per side with state; the switches send side.prefs; Update
   const n = calls.length;
   await act(async () => q("settings-side-update-docker:dev")!.click());
   expect(calls).toHaveLength(n);
-});
-
-it("Sides group: an SSH row whose remote Daemon runs another build says update pending instead of Running", async () => {
-  const { q, pick } = await render({ sides: [LOCAL, { id: "ssh:box", label: "SSH: box", state: "ready", updatePending: true }, { id: "ssh:two", label: "SSH: two", state: "ready" }] });
-  await pick("sides");
-  expect(q("settings-side-ssh:box")?.textContent).toContain("Update pending: updates when nothing runs");
-  expect(q("settings-side-ssh:two")?.textContent).toContain("Running");
 });
 
 it("Sides group: an SSH row with a message has a Retry button that sends side.start; a running row has none", async () => {

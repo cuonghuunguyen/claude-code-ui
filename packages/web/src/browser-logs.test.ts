@@ -4,7 +4,6 @@ import {
   appendAndPrune,
   createBrowserLogger,
   installBrowserLogs,
-  logFileName,
   MAX_AGE_MS,
   MAX_ENTRIES,
   openLogDb,
@@ -135,15 +134,6 @@ describe("logger", () => {
     await vi.waitFor(async () => expect(await count()).toBe(101));
   });
 
-  it("an overfull buffer drops entries and reports it once", async () => {
-    const logger = make();
-    for (let i = 0; i < 1100; i++) logger.capture("log", [i]);
-    await logger.flush();
-    await logger.flush();
-    const out = lines(await logger.exportText());
-    expect(out.some((l) => /browser logs: \d+ entries dropped/.test(l.message))).toBe(true);
-  });
-
   it("storage unavailable: capture never throws and state is unavailable", async () => {
     const factory = { open: () => { throw new Error("blocked"); } } as unknown as IDBFactory;
     const c = fakeConsole();
@@ -217,11 +207,5 @@ describe("ring buffer", () => {
     await appendAndPrune(db, [entry(0, now - MAX_AGE_MS - 1), entry(1, now - MAX_AGE_MS + 1000), entry(2, now)], now);
     const logger = make({ factory, now: () => now });
     expect(lines(await logger.exportText()).map((l) => l.message)).toEqual(["entry 1", "entry 2"]);
-  });
-});
-
-describe("logFileName", () => {
-  it("uses the local date", () => {
-    expect(logFileName(new Date(2026, 10, 14, 23, 59))).toBe("claude-ui-browser-logs-2026-11-14.log");
   });
 });

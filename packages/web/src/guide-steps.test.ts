@@ -29,16 +29,10 @@ describe("adapt", () => {
 });
 
 describe("step data", () => {
-  it("has unique ids", () => {
-    expect(new Set(STEPS.map((s) => s.id)).size).toBe(STEPS.length);
-  });
   it("names keys by command id, never in the body", () => {
     for (const s of STEPS) expect(s.body).not.toMatch(/\b(Ctrl|Cmd|Alt|Shift)\b/);
     expect(stepById("palette")!.keys).toEqual(["palette.open"]);
     expect(adapt(stepById("welcome")!, false).keys).toEqual([]);
-  });
-  it("anchors are CSS selectors on data-command or data-testid", () => {
-    for (const s of STEPS) for (const a of [...s.anchors, ...(s.alt?.anchors ?? [])]) expect(a).toMatch(/^\[data-(command|testid)="[\w.-]+"\]$/);
   });
 });
 

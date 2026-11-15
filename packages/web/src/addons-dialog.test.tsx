@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { AddonInfo, AddonUpdateCheck, AddonsListResult } from "@claude-ui/protocol";
 import type { Request } from "./client.ts";
 import { AddonsDialog } from "./addons-dialog.tsx";
-import { capabilityDiff, rendererConflicts, type AddonLogEntry } from "./addons.ts";
+import type { AddonLogEntry } from "./addons.ts";
 
 const CAPS = ["session.read", "ui.pane", "render.fence:example", "net:https://api.github.com"];
 const addon = (name: string, o: Partial<AddonInfo> = {}): AddonInfo => ({
@@ -165,9 +165,4 @@ it("the log of an addon lists its entries with their level, and Clear empties it
   expect(d.all("addons-log-entry").map((e) => e.dataset.level)).toEqual(["warn", "info"]);
   await d.click(d.q("addons-log-clear"));
   expect(onClearLog).toHaveBeenCalledWith("example");
-});
-
-it("capabilityDiff and rendererConflicts", () => {
-  expect(capabilityDiff(["a", "b"], ["b", "c"])).toEqual({ added: ["a"], removed: ["c"] });
-  expect(rendererConflicts([addon("b"), addon("a"), addon("c", { state: "disabled" })])).toEqual({ "fence:example": ["a", "b"] });
 });

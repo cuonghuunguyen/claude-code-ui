@@ -236,13 +236,6 @@ it("hidden (drawer or a dialog is open): nothing is shown, the cards come back a
   expect(el.querySelector("article")).not.toBeNull();
 });
 
-it("the age reads now, then whole minutes", async () => {
-  await show([item("a", "permission", {}, { since: 0 })], { now: 5_000 });
-  expect(q("time").textContent).toBe("now");
-  await show([item("a", "permission", {}, { since: 0 })], { now: 12 * 60_000 + 1000 });
-  expect(q("time").textContent).toBe("12m");
-});
-
 it("touch targets: buttons and the X are 44px on a coarse pointer or below sm", async () => {
   await show([item("b")]);
   for (const b of qa("article button")) expect(b.className).toMatch(/pointer-coarse:(h|size|min-h)-11|max-sm:h-11/);

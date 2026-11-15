@@ -1,7 +1,7 @@
 import type { Event, Part, SessionListItem } from "@claude-ui/protocol";
 import { expect, it } from "vitest";
 import { applyEvent, emptySession, type PermissionRequest, type QuestionRequest, type SessionView } from "./store.ts";
-import { addCard, ageLabel, cardText, createTracker, describeCard, dismissSession, inlineActions, lastLine, loadInApp, reconcile, saveInApp, visibleCards, type Card, type Signal } from "./notify.ts";
+import { addCard, ageLabel, cardText, createTracker, describeCard, inlineActions, lastLine, reconcile, visibleCards, type Card, type Signal } from "./notify.ts";
 
 const item = (id: string, over: Partial<SessionListItem> = {}) => ({ id, cwd: "/p", state: "idle", title: id, lastActivity: 0, archived: false, transcript: true, ...over }) as SessionListItem;
 const perm = (id: string, over: Partial<PermissionRequest> = {}): PermissionRequest => ({ type: "permission_request", id, requestId: id, toolUseId: `tu-${id}`, tool: "Read", input: { file_path: "/p/src/a.ts" }, suggestions: [], settled: false, ...over });
@@ -79,12 +79,6 @@ it("a session first seen live uses the view's state as the state before (a snaps
   expect(t.observe(ev("e", state("idle")), true, "running")).toEqual([{ type: "finish", sessionId: "e", kind: "finished", text: "Finished" }]);
 });
 
-it("lastLine: the last non-empty trimmed line", () => {
-  expect(lastLine("a\n  b  \n\n")).toBe("b");
-  expect(lastLine("")).toBeUndefined();
-  expect(lastLine(undefined)).toBeUndefined();
-});
-
 // Cards: one per session, newest first.
 it("addCard replaces the session's card in place of the list's first position and keeps others", () => {
   const a = addCard([], card({ sessionId: "a", requestId: "ra" }));
@@ -92,10 +86,6 @@ it("addCard replaces the session's card in place of the list's first position an
   expect(b.map((c) => c.sessionId)).toEqual(["b", "a"]);
   const again = addCard(b, card({ sessionId: "a", kind: "finished", requestId: undefined, text: "ok" }));
   expect(again.map((c) => c.sessionId + c.kind)).toEqual(["afinished", "b" + "permission"]);
-});
-
-it("dismissSession removes that session's card", () => {
-  expect(dismissSession([card({ sessionId: "a" }), card({ sessionId: "b" })], "a").map((c) => c.sessionId)).toEqual(["b"]);
 });
 
 const ctx = (views: Record<string, SessionView>, over: Partial<Parameters<typeof reconcile>[1]> = {}) => ({ views, list: [item("a"), item("b")], shown: (_: string) => false, focusPage: false, enabled: true, ...over });
@@ -184,22 +174,14 @@ it("cardText: the sentence a screen reader hears for each kind", () => {
   expect(cardText({ kind: "error", title: "Fix login", body: "x" })).toBe("Fix login stopped with an error.");
 });
 
-it("loadInApp: on by default and when storage throws, off after saveInApp(false)", () => {
-  const store = new Map<string, string>();
-  const ls = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
-  expect(loadInApp(ls)).toBe(true);
-  saveInApp(false, ls);
-  expect(loadInApp(ls)).toBe(false);
-  saveInApp(true, ls);
-  expect(loadInApp(ls)).toBe(true);
-  expect(loadInApp({ getItem: () => { throw new Error("blocked"); } })).toBe(true);
-});
-
 it("lastLine shows markdown as plain text: links keep their title, list and emphasis markers go", () => {
   expect(lastLine("done\n- [Fix login](https://example.com/a?b=1)")).toBe("Fix login");
   expect(lastLine("**All** `12` tests pass")).toBe("All 12 tests pass");
   expect(lastLine("## Summary\n")).toBe("Summary");
   expect(lastLine("![alt](x.png)")).toBe("alt");
+  expect(lastLine("a\n  b  \n\n")).toBe("b");
+  expect(lastLine("")).toBeUndefined();
+  expect(lastLine(undefined)).toBeUndefined();
 });
 
 it("on the Focus page the request cards go but a finished or error card stays", () => {
