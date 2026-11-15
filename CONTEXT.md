@@ -12,6 +12,10 @@ _Avoid_: server, backend
 The Daemon the browser connects to. It routes each request to itself or to the Side that owns the session, terminal or path.
 _Avoid_: main daemon, host daemon
 
+**Routing class**:
+How the Hub finds the destination of one client message type: `hub` (the Hub only), `session`, `sessionOrPath`, `path`, `terminal`, `named` (a Side by its `side` field), `request` (the Side that raised the request) or `fanOut` (every ready Side, answers merged). Every message type has exactly one, declared in `packages/daemon/src/side-routes.ts`; a class reads only its own field.
+_Avoid_: route type, target kind
+
 **Side**:
 A role: the Hub of a WSL distro, a Docker container or a machine reached over SSH (an **SSH Side**) while another Hub is attached to it and routes sessions, terminals and paths there. One Hub runs per machine; when none runs, the attaching Hub starts one. Never the side panel.
 _Avoid_: remote, node, peer Hub, upstream, side panel (different thing)

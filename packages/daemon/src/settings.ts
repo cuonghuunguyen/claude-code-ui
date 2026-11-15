@@ -129,6 +129,42 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
   back: { marks: { valid: marksOk, label: "Back marks", rule: "valid", patch: () => false, patchRule: "changed with back.set, back.done or back.brief" } },
   app: { icon: { valid: (v) => typeof v === "string" && (v === "" || iconOk(v, APP_ICON_MAX)), label: "App icon", rule: "empty (the built-in icon), an emoji, or a square png, webp or jpeg image of at most 300 KB" }, name: { valid: (v) => v === "" || nameOk(v), label: "App name", rule: `empty (Claude UI) or 1 to ${LABEL_NAME_MAX} characters, no control characters, not only spaces` } },
 };
+/**
+ * Where each section lives: `synced` = copied to a Side the Hub started (a coordinator there gets the same orchestration settings),
+ * `hub` = never sent. A new section without a scope is a typecheck error.
+ */
+export const SETTINGS_SCOPE: { [S in keyof Settings]: "synced" | "hub" } = {
+  orchestration: "synced",
+  sessions: "synced",
+  opencode: "synced",
+  usageLimit: "synced",
+  focus: "synced",
+  notifications: "synced",
+  power: "synced",
+  performance: "synced",
+  chrome: "synced",
+  chat: "synced",
+  terminalAccess: "synced",
+  inlineTask: "synced",
+  fork: "synced",
+  // The Claude account is Hub-local (a token account id is unknown to the Side, "cli" would change its login).
+  claude: "hub",
+  history: "synced",
+  jira: "synced",
+  git: "synced",
+  // The start options of this machine's claude-ui (a later manual start there would use them).
+  launcher: "hub",
+  labels: "synced",
+  // The command runs on the Hub's desktop only.
+  editor: "hub",
+  // Refused in a patch: written by `back.*` only.
+  back: "hub",
+  app: "synced",
+};
+/** The sections of `settings` a Side gets (`SETTINGS_SCOPE` "synced"). */
+export function sideSettings(settings: Settings): SettingsPatch {
+  return Object.fromEntries(Object.entries(settings).filter(([section]) => SETTINGS_SCOPE[section as keyof Settings] === "synced"));
+}
 const same = (a: unknown, b: unknown) => (Array.isArray(a) ? Array.isArray(b) && a.length === b.length && a.every((x, i) => x === b[i]) : isObj(a) ? JSON.stringify(a) === JSON.stringify(b) : a === b);
 // Entries are replaced, never mutated: a shallow copy of a map is enough.
 const copy = (v: unknown) => (Array.isArray(v) ? [...v] : isObj(v) ? { ...v } : v);

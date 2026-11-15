@@ -23,6 +23,8 @@ import { HUB_PROBE, parseHub } from "./hub-probe.ts";
 import { MEDIA_PIECE_TIMEOUT_MS } from "./media.ts";
 import type { Push } from "./push.ts";
 import { logPrefix, MAX_SIDE_LINE_CHARS, parseSideFrame, schemaOverlap, SIDE_SCHEMA, type Schema } from "./side-frame.ts";
+import { routeOf, type Route } from "./side-routes.ts";
+import { sideSettings } from "./settings.ts";
 export { MAX_SIDE_LINE_CHARS };
 
 /** A started side process: `wsl.exe -d <distro> ...` or `docker exec -i <name> ...` (tests: an in-process side). */
@@ -1521,10 +1523,7 @@ export function createRouter(opts: {
       if (r.type !== "reply") return;
       settings = (r.result as SettingsResult).settings;
     }
-    // Not `launcher`: those are the start options of this machine's claude-ui (a later manual start there would use them).
-    // Not `editor`: the command runs on the Hub's desktop only.
-    // Not `claude`: the Claude account is Hub-local (a token account id is unknown to the Side, "cli" would change its login).
-    const { launcher: _launcher, claude: _claude, editor: _editor, back: _back, ...patch } = settings;
+    const patch = sideSettings(settings);
     await sideCall(id, { type: "settings.set", patch, reqId: "" } as ClientMessage);
   }
 
@@ -1578,24 +1577,35 @@ export function createRouter(opts: {
     else if (having.length === 1) await claimSession(having[0]!, sessionId);
   }
 
-  /** The side a message goes to. */
-  async function target(msg: ClientMessage & Record<string, unknown>): Promise<string | null> {
+  /** The side a message goes to, by the one rule of its routing class (side-routes.ts). An explicit `side` wins in the forwardable classes. */
+  async function target(msg: Msg, by: Extract<Route, { onSide?: unknown }>["by"]): Promise<string | null> {
     if (typeof msg.side === "string" && (msg.side === LOCAL_SIDE || sides.has(msg.side))) return msg.side;
-    if (typeof msg.sessionId === "string") {
-      const known = sides.sessionSide.get(msg.sessionId);
-      if (known) return known;
-      if (sides.contested.has(msg.sessionId) && !(await opts.isLocalSession(msg.sessionId))) return null;
-      if (conns.size && !(await opts.isLocalSession(msg.sessionId))) {
-        // A link or notification to a side session this connection has not listed yet: ask every side for its session IDs, never send the ID to one (GH-328).
-        await lookUp(msg.sessionId);
-        const owner = sides.sessionSide.get(msg.sessionId);
-        if (owner) return owner;
-        if (sides.contested.has(msg.sessionId)) return null;
-      }
-      return LOCAL_SIDE;
+    switch (by) {
+      case "named":
+        return LOCAL_SIDE;
+      case "session":
+        return typeof msg.sessionId === "string" ? sessionTarget(msg.sessionId) : LOCAL_SIDE;
+      case "sessionOrPath":
+        return typeof msg.sessionId === "string" ? sessionTarget(msg.sessionId) : (sides.pathSide(msg.cwd ?? msg.path) ?? LOCAL_SIDE);
+      case "path":
+        return sides.pathSide(msg.cwd ?? msg.path) ?? LOCAL_SIDE;
+      case "terminal":
+        return (typeof msg.terminalId === "string" ? sides.terminalSide.get(msg.terminalId) : undefined) ?? LOCAL_SIDE;
     }
-    if (typeof msg.terminalId === "string") return sides.terminalSide.get(msg.terminalId) ?? LOCAL_SIDE;
-    return sides.pathSide(msg.cwd ?? msg.path) ?? LOCAL_SIDE;
+  }
+  /** The owner of a session ID; null when contested. */
+  async function sessionTarget(sessionId: string): Promise<string | null> {
+    const known = sides.sessionSide.get(sessionId);
+    if (known) return known;
+    if (sides.contested.has(sessionId) && !(await opts.isLocalSession(sessionId))) return null;
+    if (conns.size && !(await opts.isLocalSession(sessionId))) {
+      // A link or notification to a side session this connection has not listed yet: ask every side for its session IDs, never send the ID to one (GH-328).
+      await lookUp(sessionId);
+      const owner = sides.sessionSide.get(sessionId);
+      if (owner) return owner;
+      if (sides.contested.has(sessionId)) return null;
+    }
+    return LOCAL_SIDE;
   }
 
   async function mergedList(msg: ClientMessage): Promise<ServerMessage> {
@@ -1650,67 +1660,64 @@ export function createRouter(opts: {
     return { type: "reply", reqId: msg.reqId, result: opts.encodeList && typeof since === "string" ? opts.encodeList(result, since) : result };
   }
 
-  async function handle(msg: ClientMessage & Record<string, unknown>) {
-    if (typeof msg.type === "string" && msg.type.startsWith("addons.")) return opts.local(msg); // Hub only (GH-516): no `side`, `cwd` or `path` routes it
+  type Msg = ClientMessage & Record<string, unknown>;
+  /** Hub-class types the router answers itself (the rest of the `hub` class goes to `opts.local`). */
+  const hubOwn: { [T in ClientMessage["type"]]?: (msg: Msg) => Promise<unknown> } = {
+    "side.start": async (msg) => {
+      if (typeof msg.side !== "string" || !sides.has(msg.side)) return send({ type: "error", reqId: msg.reqId, code: "unknown_side", message: `unknown side ${String(msg.side)}` });
+      if (msg.setup !== undefined && msg.setup !== "never" && msg.setup !== "needed" && msg.setup !== "force") return send({ type: "error", reqId: msg.reqId, code: "bad_request", message: "setup must be never, needed or force" });
+      try {
+        await sides.start(msg.side, msg.setup);
+        router.attach(msg.side);
+        return send({ type: "reply", reqId: msg.reqId, result: {} });
+      } catch (e) {
+        return send({ type: "error", reqId: msg.reqId, code: "side_failed", message: (e as Error).message });
+      }
+    },
+    "side.updateRemote": async (msg) => {
+      if (typeof msg.side !== "string" || !sides.has(msg.side)) return send({ type: "error", reqId: msg.reqId, code: "unknown_side", message: `unknown side ${String(msg.side)}` });
+      try {
+        await sides.updateRemote(msg.side);
+        return send({ type: "reply", reqId: msg.reqId, result: {} });
+      } catch (e) {
+        return send({ type: "error", reqId: msg.reqId, code: (e as Error).message === "nothing to update" ? "bad_request" : "side_failed", message: (e as Error).message });
+      }
+    },
+    "side.prefs": async (msg) => {
+      if (typeof msg.side !== "string" || msg.side === LOCAL_SIDE || !sides.list().some((s) => s.id === msg.side)) return send({ type: "error", reqId: msg.reqId, code: "unknown_side", message: `unknown side ${String(msg.side)}` });
+      const ok = (v: unknown) => v === undefined || typeof v === "boolean";
+      const grace = msg.graceMinutes;
+      if (grace !== undefined && (typeof grace !== "number" || !Number.isInteger(grace) || grace < 1 || grace > 10_080)) return send({ type: "error", reqId: msg.reqId, code: "bad_request", message: "graceMinutes must be a whole number of minutes from 1 to 10080" });
+      if (!ok(msg.start) || !ok(msg.update) || (msg.start === undefined && msg.update === undefined && grace === undefined)) return send({ type: "error", reqId: msg.reqId, code: "bad_request", message: "start and update must be booleans, at least one" });
+      sides.prefs(msg.side, { start: msg.start as boolean | undefined, update: msg.update as boolean | undefined, graceMinutes: grace as number | undefined });
+      return send({ type: "reply", reqId: msg.reqId, result: {} });
+    },
+    "ssh.add": async (msg) => {
+      if (typeof msg.command !== "string" || (msg.alias !== undefined && typeof msg.alias !== "string")) return send({ type: "error", reqId: msg.reqId, code: "bad_request", message: "command must be a string and alias a string" });
+      try {
+        return send({ type: "reply", reqId: msg.reqId, result: { side: await sides.addSshHost(msg.command, msg.alias) } satisfies SshAddResult });
+      } catch (e) {
+        return send({ type: "error", reqId: msg.reqId, code: "bad_request", message: (e as Error).message });
+      }
+    },
+    "side.check": async (msg) => {
+      // Read-only and the hub's own: never forwarded to a side.
+      if (typeof msg.side !== "string" || !sides.has(msg.side)) return send({ type: "error", reqId: msg.reqId, code: "unknown_side", message: `unknown side ${String(msg.side)}` });
+      return send({ type: "reply", reqId: msg.reqId, result: await sides.check(msg.side) });
+    },
+    "settings.set": async (msg) => {
+      const r = await opts.localCall(msg);
+      send(r);
+      if (r.type === "reply") for (const id of conns.keys()) if (sides.attachStarted(id)) void syncSettings(id, (r.result as SettingsResult).settings);
+      return;
+    },
+  };
+
+  /** `fanOut` class: the router splits the message over the Hub and every ready side. */
+  async function fanOut(msg: Msg) {
     switch (msg.type) {
       case "session.list":
         return send(await mergedList(msg));
-      case "side.start": {
-        if (typeof msg.side !== "string" || !sides.has(msg.side)) return send({ type: "error", reqId: msg.reqId, code: "unknown_side", message: `unknown side ${String(msg.side)}` });
-        if (msg.setup !== undefined && msg.setup !== "never" && msg.setup !== "needed" && msg.setup !== "force") return send({ type: "error", reqId: msg.reqId, code: "bad_request", message: "setup must be never, needed or force" });
-        try {
-          await sides.start(msg.side, msg.setup);
-          router.attach(msg.side);
-          return send({ type: "reply", reqId: msg.reqId, result: {} });
-        } catch (e) {
-          return send({ type: "error", reqId: msg.reqId, code: "side_failed", message: (e as Error).message });
-        }
-      }
-      case "side.updateRemote": {
-        if (typeof msg.side !== "string" || !sides.has(msg.side)) return send({ type: "error", reqId: msg.reqId, code: "unknown_side", message: `unknown side ${String(msg.side)}` });
-        try {
-          await sides.updateRemote(msg.side);
-          return send({ type: "reply", reqId: msg.reqId, result: {} });
-        } catch (e) {
-          return send({ type: "error", reqId: msg.reqId, code: (e as Error).message === "nothing to update" ? "bad_request" : "side_failed", message: (e as Error).message });
-        }
-      }
-      case "side.prefs": {
-        if (typeof msg.side !== "string" || msg.side === LOCAL_SIDE || !sides.list().some((s) => s.id === msg.side)) return send({ type: "error", reqId: msg.reqId, code: "unknown_side", message: `unknown side ${String(msg.side)}` });
-        const ok = (v: unknown) => v === undefined || typeof v === "boolean";
-        const grace = msg.graceMinutes;
-        if (grace !== undefined && (typeof grace !== "number" || !Number.isInteger(grace) || grace < 1 || grace > 10_080)) return send({ type: "error", reqId: msg.reqId, code: "bad_request", message: "graceMinutes must be a whole number of minutes from 1 to 10080" });
-        if (!ok(msg.start) || !ok(msg.update) || (msg.start === undefined && msg.update === undefined && grace === undefined)) return send({ type: "error", reqId: msg.reqId, code: "bad_request", message: "start and update must be booleans, at least one" });
-        sides.prefs(msg.side, { start: msg.start as boolean | undefined, update: msg.update as boolean | undefined, graceMinutes: grace as number | undefined });
-        return send({ type: "reply", reqId: msg.reqId, result: {} });
-      }
-      case "ssh.add": {
-        if (typeof msg.command !== "string" || (msg.alias !== undefined && typeof msg.alias !== "string")) return send({ type: "error", reqId: msg.reqId, code: "bad_request", message: "command must be a string and alias a string" });
-        try {
-          return send({ type: "reply", reqId: msg.reqId, result: { side: await sides.addSshHost(msg.command, msg.alias) } satisfies SshAddResult });
-        } catch (e) {
-          return send({ type: "error", reqId: msg.reqId, code: "bad_request", message: (e as Error).message });
-        }
-      }
-      case "side.check": {
-        // Read-only and the hub's own: never forwarded to a side.
-        if (typeof msg.side !== "string" || !sides.has(msg.side)) return send({ type: "error", reqId: msg.reqId, code: "unknown_side", message: `unknown side ${String(msg.side)}` });
-        return send({ type: "reply", reqId: msg.reqId, result: await sides.check(msg.side) });
-      }
-      case "settings.set": {
-        const r = await opts.localCall(msg);
-        send(r);
-        if (r.type === "reply") for (const id of conns.keys()) if (sides.attachStarted(id)) void syncSettings(id, (r.result as SettingsResult).settings);
-        return;
-      }
-      case "permission.respond":
-      case "question.respond": {
-        // Only the side that raised the request gets the answer; a request no side raised is the local daemon's.
-        const owner = typeof msg.requestId === "string" ? requestSide.get(msg.requestId) : undefined;
-        const answer = await call(owner && conns.has(owner) ? owner : LOCAL_SIDE, msg);
-        if (answer.type === "reply" && typeof msg.requestId === "string") forgetRequest(msg.requestId);
-        return send(answer);
-      }
       case "push.focus":
         // Each side suppresses pushes for the sessions shown here that it owns, and learns no other ID.
         for (const id of conns.keys()) {
@@ -1727,34 +1734,27 @@ export function createRouter(opts: {
         const watching = answers.flatMap((a) => (a.type === "reply" ? ((a.result as { watching?: string[] }).watching ?? []) : []));
         return send({ type: "reply", reqId: msg.reqId, result: { watching } });
       }
-      case "fs.media": {
-        const id = await target(msg);
-        if (id === null) return send(sideConflict(msg.reqId));
-        if (id === LOCAL_SIDE) return opts.local(msg);
-        if (!opts.media) return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Preview is not available for files in ${kindName(id)}` });
-        const { side: _side, ...rest } = msg;
-        return send(await opts.media(id, rest as Extract<ClientMessage, { type: "fs.media" }>, (m) => sideCall(id, m, opts.mediaTimeoutMs ?? MEDIA_PIECE_TIMEOUT_MS)));
+    }
+  }
+
+  async function handle(msg: Msg) {
+    const route = routeOf(msg.type);
+    switch (route.by) {
+      case "hub": {
+        const own = typeof msg.type === "string" && Object.hasOwn(hubOwn, msg.type) ? hubOwn[msg.type as ClientMessage["type"]] : undefined;
+        return own ? own(msg) : opts.local(msg);
       }
-      case "fs.openExternal": {
-        const id = await target(msg);
-        if (id === null) return send(sideConflict(msg.reqId));
-        if (id === LOCAL_SIDE) return opts.local(msg);
-        // GH-646: the custom editor command is the Hub's own setting; a Side has none.
-        if (kindOf(id) === "wsl" && msg.with !== "custom") {
-          if (!opts.sameHost) return send({ type: "error", reqId: msg.reqId, code: "not_local", message: "Open in an app only works from a browser on the daemon machine" });
-          const { side: _side, ...rest } = msg;
-          return forward(id, rest as ClientMessage);
-        }
-        return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Opening in an app is not available for files in ${kindName(id)}` });
-      }
-      case "artifact.preview": {
-        const id = await target(msg);
-        if (id === null) return send(sideConflict(msg.reqId));
-        if (id === LOCAL_SIDE) return opts.local(msg);
-        return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Preview is not available for sessions in ${kindName(id)}` });
+      case "fanOut":
+        return fanOut(msg);
+      case "request": {
+        // Only the side that raised the request gets the answer; a request no side raised is the local daemon's.
+        const owner = typeof msg.requestId === "string" ? requestSide.get(msg.requestId) : undefined;
+        const answer = await call(owner && conns.has(owner) ? owner : LOCAL_SIDE, msg);
+        if (answer.type === "reply" && typeof msg.requestId === "string") forgetRequest(msg.requestId);
+        return send(answer);
       }
       default: {
-        const id = await target(msg);
+        const id = await target(msg, route.by);
         if (id === null) return send(sideConflict(msg.reqId));
         if (id === LOCAL_SIDE) {
           // The folder the local daemon opened is local at once, before the next list (GH-320).
@@ -1766,7 +1766,22 @@ export function createRouter(opts: {
           return opts.local(msg);
         }
         const { side: _side, ...rest } = msg;
-        return forward(id, rest as ClientMessage);
+        switch (route.onSide ?? "forward") {
+          case "unsupported":
+            return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Preview is not available for sessions in ${kindName(id)}` });
+          case "media":
+            if (!opts.media) return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Preview is not available for files in ${kindName(id)}` });
+            return send(await opts.media(id, rest as Extract<ClientMessage, { type: "fs.media" }>, (m) => sideCall(id, m, opts.mediaTimeoutMs ?? MEDIA_PIECE_TIMEOUT_MS)));
+          case "wslApp":
+            // GH-646: the custom editor command is the Hub's own setting; a Side has none.
+            if (kindOf(id) === "wsl" && msg.with !== "custom") {
+              if (!opts.sameHost) return send({ type: "error", reqId: msg.reqId, code: "not_local", message: "Open in an app only works from a browser on the daemon machine" });
+              return forward(id, rest as ClientMessage);
+            }
+            return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Opening in an app is not available for files in ${kindName(id)}` });
+          case "forward":
+            return forward(id, rest as ClientMessage);
+        }
       }
     }
   }
