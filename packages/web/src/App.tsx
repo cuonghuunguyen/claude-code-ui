@@ -1804,18 +1804,33 @@ export function App() {
         connGen.current++;
         listFresh.current = false;
         helloRef.current = hello;
+        // Per-connection resets and the cache-independent requests run now, before the daemon's burst after the hello is handled.
+        if (connGen.current > 1 && wasHidden.current) (awaitReplay.current = true, (wasHidden.current = false), clearTimeout(windowTimer.current), (windowTimer.current = setTimeout(() => (awaitReplay.current = false), 3000)));
+        // The daemon sends its update state right after the connect; a restarted one has none.
+        setUpdate(undefined);
+        setStale(undefined);
+        // A transient page failure (a side restarting) is retried after a reconnect.
+        failedPage.current.clear();
+        modelsRequested.current.clear();
+        retryFailedFollows();
+        // Models first: the subscribe replays come before later replies, and the toolbar needs the model names and effort levels.
+        c.request<ModelsResult>({ type: "models.list" }).then(
+          (r) => setModels(r.models),
+          (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
+        );
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLastEngine(r.settings.sessions?.engine ?? "claude"), setSessionsMode(r.settings.sessions?.defaultMode), setLabels(r.settings.labels), setBack(r.settings.back, true), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setVisualizeOn(r.settings.chat?.visualize === true), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
         // View cache (GH-771): meta of another daemon stored: nothing of the cache applies, the page starts as without a cache. Without a hello (older daemon) nothing is known: keep.
         // An unknown stored meta (the load read timed out or failed) is read now; none stored (a first load) or unreadable: nothing to clear, only the meta is written.
+        // Only the resync (list, subscribes, follows) waits for that check.
         if (hello && cache) {
           newerThanCache.current = true;
           const gen = connGen.current;
-          const tokHash = tokenHash(storedToken() ?? "");
-          const meta = { daemonId: hello.daemonId, tokenHash: tokHash };
+          const meta = { daemonId: hello.daemonId, tokenHash: tokenHash(storedToken() ?? "") };
           const known = cachedMeta.current;
-          cachedMeta.current = { schema: 1, ...meta };
           const stored = known ? Promise.resolve(known) : readMetaCapped();
           void stored.then((m) => {
             if (gen !== connGen.current) return;
+            cachedMeta.current = { schema: 1, ...meta };
             if (m && m.daemonId !== hello.daemonId) {
               cacheGate.current = cache.clear().then(() => cache.writeMeta(meta));
               fromCache.current.clear();
@@ -1833,20 +1848,6 @@ export function App() {
         }
         resume();
         function resume() {
-        if (connGen.current > 1 && wasHidden.current) (awaitReplay.current = true, (wasHidden.current = false), clearTimeout(windowTimer.current), (windowTimer.current = setTimeout(() => (awaitReplay.current = false), 3000)));
-        // The daemon sends its update state right after the connect; a restarted one has none.
-        setUpdate(undefined);
-        setStale(undefined);
-        // A transient page failure (a side restarting) is retried after a reconnect.
-        failedPage.current.clear();
-        modelsRequested.current.clear();
-        retryFailedFollows();
-        // Models first: the subscribe replays come before later replies, and the toolbar needs the model names and effort levels.
-        c.request<ModelsResult>({ type: "models.list" }).then(
-          (r) => setModels(r.models),
-          (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
-        );
-        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLastEngine(r.settings.sessions?.engine ?? "claude"), setSessionsMode(r.settings.sessions?.defaultMode), setLabels(r.settings.labels), setBack(r.settings.back, true), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setVisualizeOn(r.settings.chat?.visualize === true), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
         // The resync of a reconnect: the list and the shown sessions first; the background views and the repos follow once they settled (GH-760).
         setSynced(false);
         const resync: Promise<unknown>[] = [refreshList()];
