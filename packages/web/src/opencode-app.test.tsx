@@ -17,7 +17,7 @@ const oc = (modes: string[]) => ({ engine: "opencode", capabilities: OPENCODE_CA
 const claude = { engine: "claude", capabilities: ALL_CAPABILITIES, permissionModes: ["default"] };
 let list: Record<string, unknown> = {};
 let settings: Record<string, unknown> = {};
-let opts: { onOpenCodeProviders?: () => void; onPlanUsage?: (u: unknown) => void } = {};
+let opts: { onProvidersChanged?: (engine: "opencode") => void; onPlanUsage?: (u: unknown) => void } = {};
 /** Error messages the next OpenCode `models.list` replies reject with, in order. */
 const modelFailures: string[] = [];
 const sent: { type: string; [k: string]: unknown }[] = [];
@@ -82,7 +82,7 @@ it("a new-session draft in a side folder asks that side for the OpenCode models,
 
   // The provider set changed: every OpenCode list is asked again, also the side's.
   const before = modelRequests().length;
-  await act(async () => opts.onOpenCodeProviders!());
+  await act(async () => opts.onProvidersChanged!("opencode"));
   await settle();
   expect(modelRequests().length).toBe(before + 1);
 });
@@ -94,7 +94,7 @@ it("an OpenCode session asks for its models once and again after a provider chan
   expect(modelRequests()).toEqual([{ type: "models.list", engine: "opencode", cwd: "/p/demo" }]);
   await act(async () => opts.onPlanUsage!({ plan: "pro", windows: [{ kind: "session", label: "Session", percent: 10, active: true }], status: "allowed" }));
   expect(el.querySelector('[data-testid="plan-meter"]')).toBeNull();
-  await act(async () => opts.onOpenCodeProviders!());
+  await act(async () => opts.onProvidersChanged!("opencode"));
   await settle();
   expect(modelRequests()).toHaveLength(2);
   act(() => root.unmount());

@@ -1,6 +1,6 @@
 // One WebSocket per tab, reconnected with backoff. Requests resolve on the reply with the same reqId; events go to onEvent.
 // onOpen runs after every (re)connect, so the caller resubscribes there with its last seq and logEpoch.
-import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type Event, type PlanUsage, type ServerMessage, type SessionsSearchResult } from "@claude-ui/protocol";
+import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ClientMessage, type Engine, type Event, type PlanUsage, type ServerMessage, type SessionsSearchResult } from "@claude-ui/protocol";
 import { storedToken } from "./pairing.ts";
 import { stallLog } from "./stall-log.ts";
 import { browserWakeEvents, type WakeEvents } from "./wake.ts";
@@ -45,7 +45,7 @@ export function connect(opts: {
   /** A config write (e.g. an MCP server added) in a project: an open config dialog of it refreshes. */
   onConfigChanged?: (m: Extract<ServerMessage, { type: "config.changed" }>) => void;
   /** OpenCode read a changed provider set (login, logout): its model list is stale. */
-  onOpenCodeProviders?: () => void;
+  onProvidersChanged?: (engine: Engine) => void;
   /** Another client changed the app settings. */
   onSettingsChanged?: (m: Extract<ServerMessage, { type: "settings_changed" }>) => void;
   /** A newer claude-ui and the update under way (update.tsx). */
@@ -153,7 +153,7 @@ export function connect(opts: {
     if (m.type === "plan_usage") return opts.onPlanUsage?.(m.usage), false;
     if (m.type === "config.changed") return opts.onConfigChanged?.(m), false;
     if (m.type === "settings_changed") return opts.onSettingsChanged?.(m), false;
-    if (m.type === "opencode.providersChanged") return opts.onOpenCodeProviders?.(), false;
+    if (m.type === "opencode.providersChanged") return opts.onProvidersChanged?.("opencode"), false;
     if (m.type === "update_available" || m.type === "update_state") return opts.onUpdate?.(m), false;
     if (m.type === "daemon_stale") return opts.onStale?.(m.note), false;
     if (m.type === "daemon_slept") return opts.onSlept?.(m), false;

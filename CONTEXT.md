@@ -56,6 +56,9 @@ _Avoid_: chat, conversation, thread
 The agent runtime that runs a Session: Claude (Claude Agent SDK) or OpenCode. Chosen per Session when it is created, fixed afterwards, and shown as a tag on the Session in the sidebar. The UI is the same for every Engine; a control the Engine cannot support is hidden or disabled for its Sessions. Coordinators and Workers each pick their own Engine.
 _Avoid_: provider (OpenCode's word for a model vendor), backend, agent
 
+**Engine catalogue**:
+The part of the Daemon that owns everything about one Engine's stored Sessions outside a live run: which Session IDs are the Engine's, listing, restoring, renaming, archiving, deleting, forking an Aside, slash commands, agents and models. One per Engine; the Daemon asks the catalogue that owns an ID and never tests for an Engine by name. The Engine (the live run) is reached through it.
+
 **OpenCode server**:
 The one `opencode serve` process a Daemon starts on the first OpenCode Session. It holds OpenCode Session history and provider credentials; the Daemon keeps neither.
 _Avoid_: OpenCode daemon

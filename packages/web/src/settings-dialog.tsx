@@ -4,7 +4,7 @@
 // A later setting is one more row in SECTIONS or a section component; a later section joins a group in `groups`, a later group is one
 // more entry there.
 import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { APP_ICON_MAX, APP_ICON_PX, APP_NAME_DEFAULT, DEFAULT_COMMIT_INSTRUCTION, LOCAL_SIDE, type ClaudeAccountInfo, type DockerState, type Settings, type SettingsPatch, type SettingsResult, type SideInfo, type UpdateCheckResult } from "@claude-ui/protocol";
+import { APP_ICON_MAX, APP_ICON_PX, APP_NAME_DEFAULT, DEFAULT_COMMIT_INSTRUCTION, LOCAL_SIDE, type ClaudeAccountInfo, type DockerState, type Engine, type Settings, type SettingsPatch, type SettingsResult, type SideInfo, type UpdateCheckResult } from "@claude-ui/protocol";
 import { sideStatus, sideTitle } from "./sides.tsx";
 import { LabelDialog } from "./label-dialog.tsx";
 import { LabelIcon } from "./label-icon.tsx";
@@ -865,7 +865,7 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
 export type PushUi = { on: boolean; supported: boolean; busy: boolean; error?: string; toggle: () => void };
 
 /** `changed`: bumped when another client changed the settings (reloads them). */
-export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onAddons, onOpenCodeProviders, onLogin, onRestartGuide, push, sides, docker, update, onCheckUpdate, project }: { /** Opens the Claude login terminal (none: no project is open). */ onLogin?: () => void; /** The project shown: its own commit message instruction gets a row in Settings › Git. */ project?: { cwd: string; name: string }; update?: UpdateInfo; onCheckUpdate?: () => Promise<UpdateCheckResult>; sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onAddons?: () => void; /** OpenCode login or logout happened: its model lists are stale. */ onOpenCodeProviders?: () => void; onRestartGuide?: () => void }) {
+export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onAddons, onProvidersChanged, onLogin, onRestartGuide, push, sides, docker, update, onCheckUpdate, project }: { /** Opens the Claude login terminal (none: no project is open). */ onLogin?: () => void; /** The project shown: its own commit message instruction gets a row in Settings › Git. */ project?: { cwd: string; name: string }; update?: UpdateInfo; onCheckUpdate?: () => Promise<UpdateCheckResult>; sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onAddons?: () => void; /** An Engine's login or logout happened: its model lists are stale. */ onProvidersChanged?: (engine: Engine) => void; onRestartGuide?: () => void }) {
   const t = useT();
   const [settings, setSettings] = useState<Settings>();
   const [error, setError] = useState<string>();
@@ -1109,7 +1109,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       ? [{ id: "jira", title: "Jira", category: "Integrations" as const, body: <JiraSection jira={settings.jira} tokenSet={jiraToken} tokenReset={jiraTokenReset} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined))} onError={setError} /> }]
       : []),
     // An older daemon has no `opencode` settings: no group.
-    ...(settings?.opencode ? [{ id: "opencode", title: "OpenCode", category: "Integrations" as const, body: <OpenCodeSection opencode={settings.opencode} saving={saving} save={save} request={request} onProviders={onOpenCodeProviders} /> }] : []),
+    ...(settings?.opencode ? [{ id: "opencode", title: "OpenCode", category: "Integrations" as const, body: <OpenCodeSection opencode={settings.opencode} saving={saving} save={save} request={request} onProviders={() => onProvidersChanged?.("opencode")} /> }] : []),
     ...(chrome ? [{ id: "chrome", title: sectionTitle(chrome.id), category: "Integrations" as const, body: daemonSection(chrome) }] : []),
     ...(launcher
       ? [

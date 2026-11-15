@@ -28,8 +28,11 @@ export type InlineHooks = {
   toolUseId?: string;
   /** The same input as the call (OpenCode correlates by it). */
   input?: Record<string, unknown>;
-  /** OpenCode only: setting `inlineTask.openCodeModel` ("" or absent = OpenCode's `small_model`, else the parent's model). Read by the caller at the call. */
-  openCodeModel?: string;
+  /**
+   * Setting `inlineTask`, read by the caller at the call; each Engine takes its own model from it when the spec names none:
+   * Claude `model`, OpenCode `openCodeModel` ("" or absent = OpenCode's `small_model`, else the parent's model).
+   */
+  settings?: { model?: string; openCodeModel?: string };
 };
 export type InlineStatus = "done" | "limit" | "stopped" | "error";
 export type InlineResult = {

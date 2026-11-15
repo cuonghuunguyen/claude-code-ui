@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT, ASIDE_NO_WORKERS } from "./aside.ts";
 import { COORDINATOR_DENIED } from "./claude-engine.ts";
+import { DeniedRetryError } from "./denied-retry.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 import { MAX_WAIT_MS } from "./orchestration.ts";
 import { DAEMON_SERVER } from "./daemon-mcp.ts";
@@ -22,7 +23,7 @@ import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 export const OPENCODE_MODES: PermissionMode[] = ["config", "default", "acceptEdits", "plan", "bypassPermissions"];
 /** Modes offered: config first (the default, GH-705); plan is the plan agent (GH-684). */
 export const OPENCODE_PERMISSION_MODES: PermissionMode[] = ["config", "default", "acceptEdits", "bypassPermissions"];
-export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_PERMISSION_MODES, agents: true, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true, shell: true };
+export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_PERMISSION_MODES, agents: true, providers: true, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true, shell: true };
 
 export type Rule = { permission: string; pattern: string; action: "allow" | "ask" | "deny" };
 /** An entry of `GET /agent`. */
@@ -437,6 +438,14 @@ class OpenCodeSession implements EngineSession {
     this.session.emit({ type: "session_permission_mode", id: "session_permission_mode", mode });
     this.changed("permissionMode");
   }
+  /** Auto mode is Claude's (EngineCapabilities.permissionModes has no auto). */
+  allowDenied(_toolUseId: string): string | undefined {
+    throw new DeniedRetryError("unsupported", "this session's engine has no auto mode");
+  }
+  alwaysAllowDenied(_toolUseId: string, _scope: "session" | "local"): Promise<string | undefined> {
+    throw new DeniedRetryError("unsupported", "this session's engine has no auto mode");
+  }
+
   async setEffort(effort: Effort) {
     this.effort = effort;
     this.session.emit({ type: "session_effort", id: "session_effort", effort });
@@ -842,7 +851,7 @@ class OpenCodeSession implements EngineSession {
 
   /** Model of the child: the input, else setting `openCodeModel`, else OpenCode's `small_model`, else the parent's (none: OpenCode's default). */
   private async inlineModel(spec: InlineSpec, hooks: InlineHooks) {
-    let value = spec.model || hooks.openCodeModel || undefined;
+    let value = spec.model || hooks.settings?.openCodeModel || undefined;
     value ??= (await this.server.request<{ small_model?: string }>("/config", { directory: this.cwd }).catch(() => undefined))?.small_model || undefined;
     value ??= this.model !== "default" ? this.model : undefined;
     const [providerID, ...rest] = (value ?? "").split("/");
