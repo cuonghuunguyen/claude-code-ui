@@ -179,6 +179,15 @@ describe("Side registry: an SSH Side survives the pipe", () => {
     h.sides.close();
   });
 
+  it("the Grace period of a host with no saved value is 30 minutes on attach", async () => {
+    const { d } = daemon();
+    const h = hub(d, { grace: { read: () => ({}), write: () => {} } });
+    await h.sides.start("ssh:box");
+    await vi.advanceTimersByTimeAsync(5);
+    expect(h.pipes[0]!.sent.join("")).toContain(`"grace":${30 * MIN}`);
+    h.sides.close();
+  });
+
   it("an attach that finds no Daemon ends in off with the way back; opening the host starts a fresh one", async () => {
     const { d } = daemon();
     const first = pipe(d);
