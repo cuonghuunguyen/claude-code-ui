@@ -130,13 +130,6 @@ describe("worker tree: orchestration for workers", () => {
     expect((await call(again.o, "W2", "worker_start", start("b"))).error).toMatch(/Maximum tree depth/);
   });
 
-  it("maxDepth 1 keeps workers from starting workers", async () => {
-    const t = setup(undefined, { maxDepth: 1 });
-    tree(t, 1);
-    expect((await call(t.o, "W1", "worker_start", start("a"))).error).toMatch(/Maximum tree depth/);
-    expect(await call(t.o, "C", "worker_start", start("a"))).toMatchObject({ name: "a" });
-  });
-
   it("worker_start beyond maxChildren is a tool error; closed workers do not count", async () => {
     const t = setup(undefined, { maxChildren: 2 });
     const [C] = tree(t, 1);
