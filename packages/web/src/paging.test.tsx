@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Paged session timeline (GH-137): paged subscribe, older pages on reaching the top, older pages on reaching the top (the fresh snapshot after a stale cursor: session-follow.test.ts).
+// Paged session timeline (GH-137): paged subscribe, older pages on reaching the top (the fresh snapshot after a stale cursor: session-follow.test.ts).
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
