@@ -9,7 +9,8 @@ Feature: Orchestration workers: targets, worker trees and closing finished worke
     And I start a new Haiku session
 
   Scenario: worker_targets lists the project and its worktree
-    When I send "Load the worker_targets tool with ToolSearch (query select:mcp__orchestration__worker_targets), then call it with no arguments. Do nothing else." with the scratch project and worktree names filled in
+    # The run keeps every scratch project: unfiltered, the list of a full run outgrows the tool result limit.
+    When I send "Load the worker_targets tool with ToolSearch (query select:mcp__orchestration__worker_targets), then call it with exactly {\"project\":\"<project>\"}. Do nothing else." with the scratch project and worktree names filled in
     Then the "worker_targets" tool card is shown and finished
     And the "worker_targets" tool card lists the scratch project and its worktree
     And the turn has finished
