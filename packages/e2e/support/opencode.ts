@@ -1,4 +1,3 @@
-
 import { join } from "node:path";
 import { cacheHome, configHome } from "./paths.ts";
 
