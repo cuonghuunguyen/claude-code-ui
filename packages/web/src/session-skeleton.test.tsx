@@ -123,6 +123,27 @@ describe("session skeleton", () => {
     expect(one('textarea[aria-label="Prompt"]')).toBeTruthy();
   });
 
+  it("an aside popup shows the skeleton while its subscribe is pending, then the aside timeline", async () => {
+    const AS = "99999999-2222-3333-4444-555555555555";
+    const asInfo = { ...info, id: AS, title: "two?" };
+    const asSub = defer<unknown>();
+    replies["session.subscribe"] = (m: unknown) => ((m as { sessionId: string }).sessionId === AS ? asSub.promise : { logEpoch: "e1", seq: 0, session: info, title: "Old" });
+    replies["aside.open"] = { session: asInfo, title: "two?", from: "q1" };
+    await mount("#" + OLD);
+    const box = one<HTMLTextAreaElement>('textarea[aria-label="Prompt"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, "/btw two?");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => void box.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" })));
+    await settle();
+    expect(document.querySelector('[data-aside-popup] [data-testid="session-skeleton"]')).toBeTruthy();
+    await act(async () => asSub.resolve({ logEpoch: "e1", seq: 0, session: asInfo, title: "two?" }));
+    await settle();
+    expect(document.querySelector('[data-aside-popup] [data-testid="session-skeleton"]')).toBeNull();
+    expect(document.querySelector('[data-aside-popup] textarea')).toBeTruthy();
+  });
+
   it("a failed subscribe ends the skeleton", async () => {
     replies["session.subscribe"] = () => Promise.reject(new Error("boom"));
     await mount("#" + OLD);
