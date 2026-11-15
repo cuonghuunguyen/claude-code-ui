@@ -221,7 +221,7 @@ describe("requests and processes", () => {
   it("KNOWN_TYPES holds every client message type of the wire", () => {
     const wire = readFileSync(new URL("../../protocol/src/wire.ts", import.meta.url), "utf8");
     const block = wire.slice(wire.indexOf("export type ClientMessage"), wire.indexOf("export type ServerMessage"));
-    const types = [...block.matchAll(/\{ type: "([a-zA-Z_.]+)"/g)].map((m) => m[1]!);
+    const types = [...block.matchAll(/\{ type: "([a-zA-Z_.]+)"/g)].map((m) => m[1]!).filter((t) => t !== "event"); // `Event` sits between the two types in wire.ts; no client sends it
     expect(types.length).toBeGreaterThan(50);
     expect(types.filter((t) => !KNOWN_TYPES.has(t)), "add the new message type to KNOWN_TYPES in perf.ts").toEqual([]);
   });

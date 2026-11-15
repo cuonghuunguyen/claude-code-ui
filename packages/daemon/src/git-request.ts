@@ -1,3 +1,4 @@
+import type { Respond } from "./dispatch.ts";
 import { WorktreeError } from "./git.ts";
 
 /** What a git request needs from the daemon. Injected: the unit test passes fakes, the daemon passes its own. */
@@ -55,4 +56,9 @@ export async function gitRequest(ctx: GitRequestContext, msg: { cwd?: unknown; e
     if (op.write && staleAfterFailure(error.code)) ctx.markStale(cwd);
     return { error };
   }
+}
+
+/** Sends a git outcome: its result as the reply, its error as the request's error. */
+export function answer(r: Respond, o: GitOutcome) {
+  return "error" in o ? r.fail(o.error.code, o.error.message, o.error.size) : r.reply(o.result);
 }
