@@ -31,6 +31,7 @@ import { performance } from "node:perf_hooks";
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
 import { createJira, JiraError, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
+import { GitRequestError, NOT_TOP, gitFailure, gitRequest, read as gitRead, write as gitWrite, type GitOutcome, type GitRequestContext } from "./git-request.ts";
 import { createWorktree, listBranches, pullRequestBranches, gitBlame, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitOperationOf, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, cachedStatuses, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush, gitTagDelete, gitTagRemote } from "./git-remote.ts";
 import { createWarmCommitMessage, generateCommitMessage, instructionFor, promptFor } from "./commit-message.ts";
@@ -730,7 +731,7 @@ export function createDaemon(opts: {
   const reposOf = (cwd: string, open: string[], fresh = false) => {
     const settings = appSettings.get().git;
     const key = [cwd, JSON.stringify(settings), [...open].sort().join("\0")].join("\0");
-    return reposCache.get(key, () => listRepos(cwd, { settings, openFiles: open, refused, allowed: (p) => inRoots(real(p) ?? p) }), fresh);
+    return reposCache.get(key, () => listRepos(cwd, { settings, openFiles: open, refused, allowed: inside }), fresh);
   };
   const broadcast = (m: ServerMessage) => {
     if (m.type === "sessions.changed" || m.type === "settings_changed") (reposCache.clear(), clearSearchCache());
@@ -796,8 +797,10 @@ export function createDaemon(opts: {
       const rel = relative(r, path);
       return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
     });
+  /** Path callback of git.ts, git-write.ts and git-remote.ts: inside a root, symlinks resolved. */
+  const inside = (p: string) => inRoots(real(p) ?? p);
   /** A repository (top, git dirs: GH-290) that is not entirely inside the roots: no git request may read it. */
-  const gitOutside = (cwd: string) => gitEscapes(cwd, (p) => inRoots(real(p) ?? p));
+  const gitOutside = (cwd: string) => gitEscapes(cwd, inside);
   /** The canonical path when it is an existing path inside a root. */
   const allowed = (path: unknown) => {
     const p = typeof path === "string" && isAbsolute(path) && !refused(path) ? real(path) : undefined;
@@ -874,7 +877,7 @@ export function createDaemon(opts: {
     const hit = worktreeLists.get(cwd);
     if (hit?.stamp === stamp) return hit.list;
     const sp = perfMon.span("worktree.list");
-    const entry = { stamp, list: listWorktrees(cwd, (p) => inRoots(real(p) ?? p)).finally(() => sp.end()) };
+    const entry = { stamp, list: listWorktrees(cwd, inside).finally(() => sp.end()) };
     worktreeLists.set(cwd, entry);
     // A failed read of a git folder (spawn error, killed process) is not kept: the next list reads again.
     void entry.list.then((l) => l === null && stamp !== "-" && worktreeLists.get(cwd) === entry && worktreeLists.delete(cwd));
@@ -888,14 +891,14 @@ export function createDaemon(opts: {
   const statusReads = new Map<string, ReturnType<typeof gitStatus>>();
   const statusOf = (cwd: string) => {
     let read = statusReads.get(cwd);
-    if (!read) statusReads.set(cwd, (read = gitStatus(cwd, { allowed: (p) => inRoots(real(p) ?? p), ignoreSubmodules: appSettings.get().git.ignoreSubmodules }).finally(() => statusReads.delete(cwd))));
+    if (!read) statusReads.set(cwd, (read = gitStatus(cwd, { allowed: inside, ignoreSubmodules: appSettings.get().git.ignoreSubmodules }).finally(() => statusReads.delete(cwd))));
     return read;
   };
 
   /** New worktree of `cwd`'s repository (roots enforced); other clients refresh their list. */
   const createIn = async (cwd: string, o: Pick<CreateWorktreeOptions, "name" | "branch" | "base" | "checkout" | "onCreated"> = {}) => {
     // The new path is no project: a session created in it (worker_start) must not add it.
-    const r = await createWorktree(cwd, { ...o, allowed: (p) => inRoots(real(p) ?? p), claudeDir, onCreated: (r) => { worktreePaths.add(r.path); return o.onCreated?.(r); } });
+    const r = await createWorktree(cwd, { ...o, allowed: inside, claudeDir, onCreated: (r) => { worktreePaths.add(r.path); return o.onCreated?.(r); } });
     markRepoStale(cwd);
     broadcast({ type: "sessions.changed" });
     return r;
@@ -924,7 +927,7 @@ export function createDaemon(opts: {
     try {
       if (await gitOutside(cwd)) throw new WorktreeError("cwd_not_allowed", "The repository is outside the allowed roots");
       // The mark is set inside the repository lock once the worktree is validated (main, locked and symlink are refused before it), before any further await.
-      const result = await removeWorktree(cwd, path, (p) => inRoots(real(p) ?? p), { ...o, mark: (w) => {
+      const result = await removeWorktree(cwd, path, inside, { ...o, mark: (w) => {
         for (const m of new Set([w.path, path])) {
           if (!marked.includes(m)) marked.push(m);
           removing.add(m);
@@ -2300,33 +2303,29 @@ export function createDaemon(opts: {
         end();
       }
     };
-    const NOT_TOP = "Not a repository top";
-    /** `exact: true` and `cwd` is not its repository's top (an uninitialised submodule folder would answer for the superproject). Both sides canonical. */
-    const notTop = async (m: { exact?: unknown }, cwd: string) => m.exact === true && (await gitTopOf(cwd)) !== cwd;
+    /** What git requests need from this daemon (git-request.ts). */
+    const git: GitRequestContext = { allowed, inside, topOf: gitTopOf, markStale: markRepoStale };
     /** Handles a message in this daemon; its reply or error goes to `out`, events and streams to this connection. */
     type MediaFail = { code: string; message: string; size?: number };
     /** media.read and fs.media {hash}: a piece of a media file or of a file at a commit, with the roots and extension checks. */
     const readMedia = async (m: { path: unknown; cwd?: unknown; hash?: unknown; exact?: unknown; offset: number; length: number }): Promise<MediaReadResult | MediaFail> => {
       if (typeof m.path !== "string") return { code: "bad_request", message: "path must be a string" };
-      const mime = mediaType(m.path);
+      const path = m.path;
+      const mime = mediaType(path);
       if (m.hash !== undefined) {
-        const cwd = allowed(m.cwd);
-        if (!cwd) return { code: "cwd_not_allowed", message: `outside the allowlisted roots: ${String(m.cwd)}` };
-        if (await notTop(m, cwd)) return { code: "not_git", message: NOT_TOP };
-        if (!mime) return { code: "unsupported_type", message: `not an image, video or audio file: ${m.path}` };
-        const key = `${cwd}\0${String(m.hash)}\0${m.path}`;
-        try {
+        const o = await gitRequest(git, m, gitRead(async (cwd, inside) => {
+          if (!mime) throw new GitRequestError("unsupported_type", `not an image, video or audio file: ${path}`);
+          const key = `${cwd}\0${String(m.hash)}\0${path}`;
           let buf = blobCached(key);
           // Size only (the first read of every GET): git cat-file -s, no blob read.
-          if (!buf && m.length === 0) return { data: "", size: (await gitBlobRef(cwd, m.hash as string, m.path, (p) => inRoots(real(p) ?? p), MEDIA_BLOB_MAX)).size, mtime: 0, mime };
+          if (!buf && m.length === 0) return { data: "", size: (await gitBlobRef(cwd, m.hash as string, path, inside, MEDIA_BLOB_MAX)).size, mtime: 0, mime };
           if (!buf) {
-            buf = await gitBlobRead(await gitBlobRef(cwd, m.hash as string, m.path, (p) => inRoots(real(p) ?? p), MEDIA_BLOB_MAX));
+            buf = await gitBlobRead(await gitBlobRef(cwd, m.hash as string, path, inside, MEDIA_BLOB_MAX));
             blobKeep(key, buf);
           }
           return { data: buf.subarray(m.offset, m.offset + m.length).toString("base64"), size: buf.length, mtime: 0, mime };
-        } catch (e) {
-          return { code: e instanceof WorktreeError ? e.code : "git_failed", message: (e as Error).message, size: e instanceof WorktreeError ? e.size : undefined };
-        }
+        }));
+        return "error" in o ? o.error : (o.result as MediaReadResult);
       }
       const file = allowed(m.path);
       if (!file) return missingInRoots(m.path) ? { code: "not_found", message: `no such file: ${m.path}` } : { code: "path_not_allowed", message: `outside the allowlisted roots: ${m.path}` };
@@ -2374,6 +2373,7 @@ export function createDaemon(opts: {
     const local = async (msg: ClientMessage, out: (m: ServerMessage) => void) => {
       const reply = (result: unknown) => out({ type: "reply", reqId: msg.reqId, result });
       const fail = (code: string, message: string, size?: number) => out({ type: "error", reqId: msg.reqId, code, message, size });
+      const answer = (o: GitOutcome) => ("error" in o ? fail(o.error.code, o.error.message, o.error.size) : reply(o.result));
       /** An fs.read/fs.write failure: a path that changed during the request is refused; a directory is not a file. */
       const fsFail = (err: unknown, path: string) => {
         const code = (err as { code?: string }).code;
@@ -3203,7 +3203,7 @@ export function createDaemon(opts: {
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (typeof msg.query !== "string") return fail("bad_query", "query must be a string");
           // A symlink pointing outside the roots is not offered: the SDK would read its target (like fs.read refuses it).
-          return reply({ paths: (await searchFiles(cwd, msg.query, 50, (await reposOf(cwd, lastOpen.get(cwd) ?? []).then((r) => r.repos, () => [])), (p) => inRoots(real(p) ?? p))).filter((p) => allowed(join(cwd, p))) });
+          return reply({ paths: (await searchFiles(cwd, msg.query, 50, (await reposOf(cwd, lastOpen.get(cwd) ?? []).then((r) => r.repos, () => [])), inside)).filter((p) => allowed(join(cwd, p))) });
         }
         case "fs.grep": {
           grepping?.abort();
@@ -3218,7 +3218,7 @@ export function createDaemon(opts: {
           const ctl = (grepping = new AbortController());
           try {
             const repos = await reposOf(cwd, lastOpen.get(cwd) ?? []).then((r) => r.repos, () => []);
-            const r = await findInFiles(cwd, { query: msg.query, regex: !!msg.regex, globs, includeIgnored: msg.includeIgnored }, { signal: ctl.signal, allowed: (p) => !!allowed(p), repoAllowed: (p) => inRoots(real(p) ?? p), repos });
+            const r = await findInFiles(cwd, { query: msg.query, regex: !!msg.regex, globs, includeIgnored: msg.includeIgnored }, { signal: ctl.signal, allowed: (p) => !!allowed(p), repoAllowed: inside, repos });
             // No query text in the log (it may hold a secret).
             console.log(`fs.grep: ${r.files.length} files, ${r.matches} matches, ${r.ms} ms${r.stopped ? `, stopped: ${r.stopped}` : ""}`);
             return reply(r);
@@ -3301,170 +3301,80 @@ export function createDaemon(opts: {
           console.log(`sessions.search: ${done.scannedFiles} files, ${Math.round(done.scannedBytes / 1e6)} MB, ${done.ms} ms, first result ${done.firstMs ?? "-"} ms${done.stopped ? `, stopped: ${done.stopped}` : ""}`);
           return reply(done);
         }
-        case "git.status": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          return reply({ status: await statusOf(cwd) });
-        }
-        case "git.refs": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          return reply({ refs: await gitRefs(cwd, (p) => inRoots(real(p) ?? p)) });
-        }
-        case "git.repos": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          const files = msg.openFiles;
-          if (files !== undefined && (!Array.isArray(files) || files.length > 50 || files.some((f) => typeof f !== "string" || f.length > 4096 || f.includes("\0")))) return fail("bad_request", "openFiles must be at most 50 paths");
-          const open = (files ?? []).filter((f) => isAbsolute(f) && !refused(f));
-          if (lastOpen.size > 64) lastOpen.clear();
-          lastOpen.set(cwd, open);
-          return reply(await reposOf(cwd, open, msg.fresh === true));
-        }
+        case "git.status":
+          return answer(await gitRequest(git, msg, gitRead(async (cwd) => ({ status: await statusOf(cwd) }))));
+        case "git.refs":
+          return answer(await gitRequest(git, msg, gitRead(async (cwd, inside) => ({ refs: await gitRefs(cwd, inside) }))));
+        case "git.repos":
+          return answer(await gitRequest(git, msg, gitRead(async (cwd) => {
+            const files = msg.openFiles;
+            if (files !== undefined && (!Array.isArray(files) || files.length > 50 || files.some((f) => typeof f !== "string" || f.length > 4096 || f.includes("\0")))) throw new GitRequestError("bad_request", "openFiles must be at most 50 paths");
+            const open = (files ?? []).filter((f) => isAbsolute(f) && !refused(f));
+            if (lastOpen.size > 64) lastOpen.clear();
+            lastOpen.set(cwd, open);
+            return await reposOf(cwd, open, msg.fresh === true);
+          })));
         case "git.log":
         case "git.diff":
         case "git.commit":
         case "git.blame":
-        case "git.fileAt": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          const inside = (p: string) => inRoots(real(p) ?? p);
+        case "git.fileAt":
           // No filter text in the log (it may hold a secret).
-          try {
-            if (msg.type === "git.log") return reply({ log: await gitLog(cwd, { skip: msg.skip, limit: msg.limit, ref: msg.ref, author: msg.author, text: msg.text, fresh: msg.fresh === true, path: msg.path, allowed: inside }) });
-            if (msg.type === "git.diff") return reply({ diff: await gitDiff(cwd, { base: msg.base, ref: msg.ref, allowed: inside, ignoreSubmodules: appSettings.get().git.ignoreSubmodules }) });
+          return answer(await gitRequest(git, msg, gitRead(async (cwd, inside) => {
+            if (msg.type === "git.log") return { log: await gitLog(cwd, { skip: msg.skip, limit: msg.limit, ref: msg.ref, author: msg.author, text: msg.text, fresh: msg.fresh === true, path: msg.path, allowed: inside }) };
+            if (msg.type === "git.diff") return { diff: await gitDiff(cwd, { base: msg.base, ref: msg.ref, allowed: inside, ignoreSubmodules: appSettings.get().git.ignoreSubmodules }) };
             if (msg.type === "git.commit") {
               const c = await gitShow(cwd, msg.hash, inside);
-              return c ? reply({ commit: c }) : fail("not_git", "Not in a git repository");
+              if (!c) throw new GitRequestError("not_git", "Not in a git repository");
+              return { commit: c };
             }
-            if (msg.type === "git.blame") return reply({ blame: await gitBlame(cwd, msg.path, inside, MAX_FILE_BYTES) });
+            if (msg.type === "git.blame") return { blame: await gitBlame(cwd, msg.path, inside, MAX_FILE_BYTES) };
             const buf = await gitFileAt(cwd, msg.hash, msg.path, inside, MAX_FILE_BYTES);
             const t = decodeText(buf);
-            return "code" in t ? fail(t.code, `${t.code === "binary" ? "binary file" : "not UTF-8 text"}: ${msg.path}`, buf.length) : reply({ content: t.content });
-          } catch (e) {
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message, e instanceof WorktreeError ? e.size : undefined);
-          }
-        }
-        case "git.fetch": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          if (msg.defaultRemote !== undefined && typeof msg.defaultRemote !== "boolean") return fail("bad_request", "defaultRemote must be a boolean");
-          const inside = (p: string) => inRoots(real(p) ?? p);
+            if ("code" in t) throw new GitRequestError(t.code, `${t.code === "binary" ? "binary file" : "not UTF-8 text"}: ${msg.path}`, buf.length);
+            return { content: t.content };
+          })));
+        case "git.fetch":
           // Output and URLs are never logged.
-          try {
-            const remote = await (msg.defaultRemote ? netSlot(() => gitFetch(cwd, { allowed: inside, defaultRemote: true })) : gitFetch(cwd, { allowed: inside }));
-            markRepoStale(cwd);
-            return reply({ remote });
-          } catch (e) {
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
-          }
-        }
-        case "git.commitFiles": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          // Paths, message and output are never logged. A hook may have changed files even when the commit failed.
-          try {
-            const committed = await gitCommitFiles(cwd, { paths: msg.paths, message: msg.message, amend: msg.amend, push: msg.push, allowed: (p) => inRoots(real(p) ?? p) });
-            markRepoStale(cwd);
-            return reply({ committed });
-          } catch (e) {
-            if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
-          }
-        }
+          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => {
+            if (msg.defaultRemote !== undefined && typeof msg.defaultRemote !== "boolean") throw new GitRequestError("bad_request", "defaultRemote must be a boolean");
+            return { remote: await (msg.defaultRemote ? netSlot(() => gitFetch(cwd, { allowed: inside, defaultRemote: true })) : gitFetch(cwd, { allowed: inside })) };
+          })));
+        case "git.commitFiles":
+          // Paths, message and output are never logged.
+          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => ({ committed: await gitCommitFiles(cwd, { paths: msg.paths, message: msg.message, amend: msg.amend, push: msg.push, allowed: inside }) }))));
         case "git.rollbackPreview":
         case "git.rollback":
-        case "git.rollbackHunk": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          // Paths and output are never logged. A failed git call may have changed files too.
-          const o = { allowed: (p: string) => inRoots(real(p) ?? p), snapshot: localHistory.before };
-          try {
-            if (msg.type === "git.rollbackPreview") return reply({ preview: await gitRollbackPreview(cwd, { paths: msg.paths, ...o }) });
-            const rolledBack = msg.type === "git.rollback" ? await gitRollback(cwd, { paths: msg.paths, token: msg.token, deleteAdded: msg.deleteAdded, ...o }) : await gitRollbackHunk(cwd, { path: msg.path, hunk: msg.hunk, maxBytes: MAX_FILE_BYTES, ...o });
-            markRepoStale(cwd);
-            return reply({ rolledBack });
-          } catch (e) {
-            if (msg.type !== "git.rollbackPreview" && (e instanceof WorktreeError ? e.code === "git_failed" : true)) markRepoStale(cwd);
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
-          }
-        }
+        case "git.rollbackHunk":
+          // Paths and output are never logged.
+          return answer(await gitRequest(git, msg, (msg.type === "git.rollbackPreview" ? gitRead : gitWrite)(async (cwd, inside) => {
+            const o = { allowed: inside, snapshot: localHistory.before };
+            if (msg.type === "git.rollbackPreview") return { preview: await gitRollbackPreview(cwd, { paths: msg.paths, ...o }) };
+            return { rolledBack: await (msg.type === "git.rollback" ? gitRollback(cwd, { paths: msg.paths, token: msg.token, deleteAdded: msg.deleteAdded, ...o }) : gitRollbackHunk(cwd, { path: msg.path, hunk: msg.hunk, maxBytes: MAX_FILE_BYTES, ...o })) };
+          })));
         case "git.merge":
-        case "git.rebase": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          // Output is never logged. A hook may have changed files even when the run failed.
-          try {
-            const written = await gitMergeRebase(cwd, msg.type === "git.merge" ? "merge" : "rebase", { ref: msg.ref, local: msg.local, headRef: msg.headRef, headHash: msg.headHash, argv: msg.argv, allowed: (p) => inRoots(real(p) ?? p) });
-            markRepoStale(cwd);
-            return reply({ written });
-          } catch (e) {
-            if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
-          }
-        }
+        case "git.rebase":
+          // Output is never logged.
+          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => ({ written: await gitMergeRebase(cwd, msg.type === "git.merge" ? "merge" : "rebase", { ref: msg.ref, local: msg.local, headRef: msg.headRef, headHash: msg.headHash, argv: msg.argv, allowed: inside }) }))));
         case "git.continue":
-        case "git.abort": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          try {
-            const written = await (msg.type === "git.continue" ? gitContinue : gitAbort)(cwd, { kind: msg.kind, allowed: (p) => inRoots(real(p) ?? p), snapshot: localHistory.before });
-            markRepoStale(cwd);
-            return reply({ written });
-          } catch (e) {
-            if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
-          }
-        }
-        case "git.commitMenu": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          try {
-            return reply({ commitMenu: await gitCommitMenu(cwd, { hash: msg.hash, hard: msg.hard, allowed: (p) => inRoots(real(p) ?? p) }) });
-          } catch (e) {
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
-          }
-        }
+        case "git.abort":
+          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => ({ written: await (msg.type === "git.continue" ? gitContinue : gitAbort)(cwd, { kind: msg.kind, allowed: inside, snapshot: localHistory.before }) }))));
+        case "git.commitMenu":
+          return answer(await gitRequest(git, msg, gitRead(async (cwd, inside) => ({ commitMenu: await gitCommitMenu(cwd, { hash: msg.hash, hard: msg.hard, allowed: inside }) }))));
         case "git.undoCommit":
         case "git.revert":
         case "git.cherryPick":
-        case "git.reset": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          // Output is never logged. A hook may have changed files even when the run failed.
-          try {
+        case "git.reset":
+          // Output is never logged.
+          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => {
             const action = msg.type === "git.undoCommit" ? "undo" : msg.type === "git.cherryPick" ? "cherryPick" : msg.type === "git.revert" ? "revert" : "reset";
-            const written = await gitCommitAction(cwd, action, { hash: msg.hash, headRef: msg.headRef, headHash: msg.headHash, argv: msg.argv, mode: msg.type === "git.reset" ? msg.mode : undefined, dirty: msg.type === "git.reset" ? msg.dirty : undefined, snapshot: localHistory.before, allowed: (p) => inRoots(real(p) ?? p) });
-            markRepoStale(cwd);
-            return reply({ written });
-          } catch (e) {
-            if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
-          }
-        }
+            return { written: await gitCommitAction(cwd, action, { hash: msg.hash, headRef: msg.headRef, headHash: msg.headHash, argv: msg.argv, mode: msg.type === "git.reset" ? msg.mode : undefined, dirty: msg.type === "git.reset" ? msg.dirty : undefined, snapshot: localHistory.before, allowed: inside }) };
+          })));
         case "git.reword": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          // Output is never logged. A hook may have changed files even when the run failed.
+          // Output is never logged.
           const ctl = (rewording = new AbortController());
           try {
-            const written = await gitReword(cwd, { hash: msg.hash, message: msg.message, headRef: msg.headRef, headHash: msg.headHash, argv: msg.argv, signal: ctl.signal, allowed: (p) => inRoots(real(p) ?? p) });
-            markRepoStale(cwd);
-            return reply({ written });
-          } catch (e) {
-            if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+            return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => ({ written: await gitReword(cwd, { hash: msg.hash, message: msg.message, headRef: msg.headRef, headHash: msg.headHash, argv: msg.argv, signal: ctl.signal, allowed: inside }) }))));
           } finally {
             if (rewording === ctl) rewording = undefined;
           }
@@ -3473,107 +3383,49 @@ export function createDaemon(opts: {
           rewording?.abort();
           return reply({});
         case "git.branchCreate":
-        case "git.checkout": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          try {
-            const o = { allowed: (p: string) => inRoots(real(p) ?? p), snapshot: localHistory.before };
-            const written = await (msg.type === "git.checkout" ? gitCheckout(cwd, { ref: msg.ref, smart: msg.smart, ...o }) : gitBranchCreate(cwd, { name: msg.name, at: msg.at, checkout: msg.checkout, smart: msg.smart, ...o }));
-            markRepoStale(cwd);
-            return reply({ written });
-          } catch (e) {
-            if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
-          }
-        }
+        case "git.checkout":
+          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => {
+            const o = { allowed: inside, snapshot: localHistory.before };
+            return { written: await (msg.type === "git.checkout" ? gitCheckout(cwd, { ref: msg.ref, smart: msg.smart, ...o }) : gitBranchCreate(cwd, { name: msg.name, at: msg.at, checkout: msg.checkout, smart: msg.smart, ...o })) };
+          })));
         case "git.tagCreate":
-        case "git.tagDelete": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
+        case "git.tagDelete":
           // Output and URLs are never logged.
-          try {
-            const o = { allowed: (p: string) => inRoots(real(p) ?? p) };
+          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => {
+            const o = { allowed: inside };
             const ctl = msg.type === "git.tagCreate" ? (tagging = new AbortController()) : undefined;
             try {
-              const written = await (msg.type === "git.tagCreate" ? gitTagCreate(cwd, { hash: msg.hash, name: msg.name, message: msg.message, sign: msg.sign, argv: msg.argv, signal: ctl!.signal, ...o }) : gitTagDelete(cwd, { name: msg.name, hash: msg.hash, argv: msg.argv, remotes: msg.remotes, ...o }));
-              markRepoStale(cwd);
-              return reply({ written });
+              return { written: await (msg.type === "git.tagCreate" ? gitTagCreate(cwd, { hash: msg.hash, name: msg.name, message: msg.message, sign: msg.sign, argv: msg.argv, signal: ctl!.signal, ...o }) : gitTagDelete(cwd, { name: msg.name, hash: msg.hash, argv: msg.argv, remotes: msg.remotes, ...o })) };
             } finally {
               if (ctl && tagging === ctl) tagging = undefined;
             }
-          } catch (e) {
-            if (e instanceof WorktreeError ? e.code !== "bad_request" : true) markRepoStale(cwd);
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
-          }
-        }
+          })));
         case "git.tagCancel":
           tagging?.abort();
           return reply({});
-        case "git.tagSigning": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          try {
-            return reply({ signing: await gitTagSigning(cwd, { allowed: (p: string) => inRoots(real(p) ?? p) }) });
-          } catch (e) {
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
-          }
-        }
+        case "git.tagSigning":
+          return answer(await gitRequest(git, msg, gitRead(async (cwd, inside) => ({ signing: await gitTagSigning(cwd, { allowed: inside }) }))));
         case "git.tag":
-        case "git.tagRemote": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          try {
-            const o = { allowed: (p: string) => inRoots(real(p) ?? p) };
-            if (msg.type === "git.tag") return reply({ tag: await gitTag(cwd, { name: msg.name, ...o }) });
-            return reply({ remoteTag: await netSlot(() => gitTagRemote(cwd, { name: msg.name, remote: msg.remote, ...o })) });
-          } catch (e) {
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
-          }
-        }
-        case "git.operation": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          try {
-            return reply({ operation: await gitOperationOf(cwd, (p) => inRoots(real(p) ?? p)) });
-          } catch (e) {
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
-          }
-        }
-        case "git.stashList": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          try {
-            return reply({ stashes: await gitStashList(cwd, { allowed: (p) => inRoots(real(p) ?? p) }) });
-          } catch (e) {
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
-          }
-        }
+        case "git.tagRemote":
+          return answer(await gitRequest(git, msg, gitRead(async (cwd, inside) => {
+            if (msg.type === "git.tag") return { tag: await gitTag(cwd, { name: msg.name, allowed: inside }) };
+            return { remoteTag: await netSlot(() => gitTagRemote(cwd, { name: msg.name, remote: msg.remote, allowed: inside })) };
+          })));
+        case "git.operation":
+          return answer(await gitRequest(git, msg, gitRead(async (cwd, inside) => ({ operation: await gitOperationOf(cwd, inside) }))));
+        case "git.stashList":
+          return answer(await gitRequest(git, msg, gitRead(async (cwd, inside) => ({ stashes: await gitStashList(cwd, { allowed: inside }) }))));
         case "git.stashPush":
         case "git.stashApply":
         case "git.stashPop":
         case "git.stashDrop": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          const inside = (p: string) => inRoots(real(p) ?? p);
           const VERB = { "git.stashApply": "apply", "git.stashPop": "pop", "git.stashDrop": "drop" } as const;
-          // Output is never logged. A hook may have changed files even when the run failed.
-          try {
-            const written = msg.type === "git.stashPush"
+          // Output is never logged.
+          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => ({
+            written: msg.type === "git.stashPush"
               ? await gitStashPush(cwd, { message: msg.message, includeUntracked: msg.includeUntracked, allowed: inside })
-              : await gitStash(cwd, VERB[msg.type], { index: msg.index, hash: msg.hash, allowed: inside, snapshot: localHistory.before });
-            markRepoStale(cwd);
-            return reply({ written });
-          } catch (e) {
-            if (e instanceof WorktreeError ? e.code === "git_failed" : true) markRepoStale(cwd);
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
-          }
+              : await gitStash(cwd, VERB[msg.type], { index: msg.index, hash: msg.hash, allowed: inside, snapshot: localHistory.before }),
+          }))));
         }
         case "git.commitMessageCancel":
           generating?.abort();
@@ -3583,49 +3435,37 @@ export function createDaemon(opts: {
           generating?.abort();
           const ctl = (generating = new AbortController());
           try {
-            const cwd = allowed(msg.cwd);
-            if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-            if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-            // `project` is only a key of the settings map: never a path.
-            if (msg.project !== undefined && (typeof msg.project !== "string" || msg.project.length > 4096 || msg.project.includes("\0"))) return fail("bad_request", "project must be a project folder");
-            // Paths, diff, instruction and reply are never logged.
-            const d = await gitCommitDiff(cwd, { paths: msg.paths, allowed: (p) => inRoots(real(p) ?? p) });
-            if (!d) return fail("not_git", NOT_TOP);
-            const prompt = promptFor(instructionFor(appSettings.get().git, msg.project), d);
-            const message = await generateCommitMessage({ cwd, prompt, signal: ctl.signal, query: opts.query, ...(appSettings.get().git.commitMessageWarm && { warm: warmCommit }) });
-            return reply({ message, ...(d.cut && { truncated: true }) });
-          } catch (e) {
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+            return answer(await gitRequest(git, msg, gitRead(async (cwd, inside) => {
+              // `project` is only a key of the settings map: never a path.
+              if (msg.project !== undefined && (typeof msg.project !== "string" || msg.project.length > 4096 || msg.project.includes("\0"))) throw new GitRequestError("bad_request", "project must be a project folder");
+              // Paths, diff, instruction and reply are never logged.
+              const d = await gitCommitDiff(cwd, { paths: msg.paths, allowed: inside });
+              if (!d) throw new GitRequestError("not_git", NOT_TOP);
+              const prompt = promptFor(instructionFor(appSettings.get().git, msg.project), d);
+              const message = await generateCommitMessage({ cwd, prompt, signal: ctl.signal, query: opts.query, ...(appSettings.get().git.commitMessageWarm && { warm: warmCommit }) });
+              return { message, ...(d.cut && { truncated: true }) };
+            })));
           } finally {
             if (generating === ctl) generating = undefined;
           }
         }
         case "git.branch":
+          return answer(await gitRequest(git, msg, gitRead(async (cwd, inside) => ({ branch: await gitBranch(cwd, msg.ref, { allowed: inside }) }))));
         case "git.push":
-        case "git.pull": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (await notTop(msg, cwd)) return fail("not_git", NOT_TOP);
-          const inside = (p: string) => inRoots(real(p) ?? p);
-          try {
-            if (msg.type === "git.branch") return reply({ branch: await gitBranch(cwd, msg.ref, { allowed: inside }) });
-            if (typeof msg.ref !== "string" || !isHash(msg.local) || !Array.isArray(msg.argv) || !msg.argv.every((a) => typeof a === "string") || (msg.type === "git.push" && msg.lease !== undefined && !isHash(msg.lease))) return fail("bad_request", "ref, local, lease and argv must be a branch, full commit hashes and the shown command");
+        case "git.pull":
+          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => {
+            if (typeof msg.ref !== "string" || !isHash(msg.local) || !Array.isArray(msg.argv) || !msg.argv.every((a) => typeof a === "string") || (msg.type === "git.push" && msg.lease !== undefined && !isHash(msg.lease))) throw new GitRequestError("bad_request", "ref, local, lease and argv must be a branch, full commit hashes and the shown command");
             // Output and URLs are never logged.
-            const remote = msg.type === "git.push" ? await gitPush(cwd, { ref: msg.ref, local: msg.local, argv: msg.argv, lease: msg.lease, tracking: msg.tracking, allowed: inside }) : await gitPull(cwd, { ref: msg.ref, local: msg.local, argv: msg.argv, tracking: msg.tracking, allowed: inside });
-            markRepoStale(cwd);
-            return reply({ remote });
-          } catch (e) {
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
-          }
-        }
+            return { remote: msg.type === "git.push" ? await gitPush(cwd, { ref: msg.ref, local: msg.local, argv: msg.argv, lease: msg.lease, tracking: msg.tracking, allowed: inside }) : await gitPull(cwd, { ref: msg.ref, local: msg.local, argv: msg.argv, tracking: msg.tracking, allowed: inside }) };
+          })));
         case "worktree.branches": {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (msg.fetch !== undefined && typeof msg.fetch !== "boolean") return fail("bad_request", "fetch must be a boolean");
           try {
-            return reply(await listBranches(cwd, { allowed: (p) => inRoots(real(p) ?? p), claudeDir, fetch: msg.fetch === true }));
+            return reply(await listBranches(cwd, { allowed: inside, claudeDir, fetch: msg.fetch === true }));
           } catch (e) {
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+            return answer({ error: gitFailure(e) });
           }
         }
         case "worktree.pr": {
@@ -3633,9 +3473,9 @@ export function createDaemon(opts: {
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (typeof msg.url !== "string" || msg.url.length > 2000) return fail("bad_request", "url must be a string of at most 2000 characters");
           try {
-            return reply(await pullRequestBranches(cwd, msg.url, { allowed: (p) => inRoots(real(p) ?? p) }));
+            return reply(await pullRequestBranches(cwd, msg.url, { allowed: inside }));
           } catch (e) {
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+            return answer({ error: gitFailure(e) });
           }
         }
         case "worktree.cancel": {
@@ -3682,7 +3522,7 @@ export function createDaemon(opts: {
             if (msg.type === "worktree.create") return reply(await createIn(cwd, { name: msg.name || undefined, ...(msg.branch !== undefined && { branch: msg.branch }), ...(msg.base && { base: msg.base }), ...(msg.checkout !== undefined && { checkout: msg.checkout }) }));
             if (msg.type === "worktree.status") {
               // Always a fresh read (never the cache): the cache only feeds `worktree.cached`, which the dialogs show as Checking… until this lands.
-              const check = () => worktreeStatus(cwd, msg.path, (p) => inRoots(real(p) ?? p));
+              const check = () => worktreeStatus(cwd, msg.path, inside);
               let st: Awaited<ReturnType<typeof worktreeStatus>>;
               if (msg.scan === undefined) st = await check();
               else {
@@ -3698,7 +3538,7 @@ export function createDaemon(opts: {
             }
             return reply(await removeIn(cwd, msg.path, { expectSafe: msg.expectSafe === true, expect: msg.expect, deleteBranch: msg.deleteBranch === true }));
           } catch (e) {
-            return fail(e instanceof WorktreeError ? e.code : "git_failed", (e as Error).message);
+            return answer({ error: gitFailure(e) });
           }
         }
         case "push.key":
