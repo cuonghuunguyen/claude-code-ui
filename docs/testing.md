@@ -14,17 +14,26 @@ A committed test must belong to at least one group:
 
 Tests written while building to explore branches are allowed. Before commit, delete every test outside these groups.
 
-## High-risk areas
+## Risk
 
-Prefer depth here; elsewhere one test per behaviour is enough.
+Risk = user impact × usage frequency. Technical areas (protocol, concurrency, remote sides) are not risks by themselves; test them when a failure there causes one of the impacts below.
 
-- Data loss: sessions, transcripts, uncommitted files, local history.
-- Destructive git: rollback, stash, conflict resolution, worktree remove, checkout.
-- Permissions and security: permission prompts, always-allow scope, path and command escaping.
-- Protocol: daemon ↔ web messages, part model, adapter parsing.
-- Persistence and restore: daemon restart, reconnect, config migration.
-- Concurrency: multiple clients, reconnect bursts, parallel turns.
-- Remote sides: SSH and Docker attach, reattach, survive.
+| Frequency \ Impact | Data loss, security, user blocked | Wrong and visible to the user | Wrong, hard for the user to notice |
+|---|---|---|---|
+| Frequently used flow | Unit + E2E | Unit + E2E | Unit |
+| Rarely used flow | Unit (always required) | Unit | No test |
+
+Raise the impact one level when:
+
+| Factor | Examples |
+|---|---|
+| Not undoable | Rollback, worktree remove, stash drop, file delete |
+| Silent failure (wrong result, no error) | Transcript missing a part, wrong diff, commit missing files |
+| External dependency changes format | Claude Agent SDK, OpenCode, git output: contract test on recorded fixtures |
+| First run (install, login, setup) | Provider login, side install error, launcher settings |
+| Platform-specific | Windows/WSL paths and shells, 390px layout |
+
+Order of pruning only, not keep or delete: high churn, past bug density and complex logic (state machines, async) are pruned last.
 
 ## Rules
 
