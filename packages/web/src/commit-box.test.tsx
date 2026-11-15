@@ -22,7 +22,7 @@ const rows = [
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
 const byId = (id: string) => document.querySelector<HTMLElement>(`[data-testid=${id}]`)!;
 
-function mount(opts: { checked?: string[]; base?: string; reply?: unknown; generate?: (m: Record<string, unknown>) => Promise<unknown> } = {}) {
+function mount(opts: { checked?: string[]; base?: string; reply?: unknown; reject?: Error; generate?: (m: Record<string, unknown>) => Promise<unknown> } = {}) {
   const sent: Record<string, unknown>[] = [];
   const client = {
     request: vi.fn((m: Record<string, unknown>) => {
@@ -30,6 +30,7 @@ function mount(opts: { checked?: string[]; base?: string; reply?: unknown; gener
       if (m.type === "git.commitMessage" && opts.generate) return opts.generate(m);
       if (m.type === "git.commitMessageCancel") return Promise.resolve({});
       if (m.type === "git.commit") return Promise.resolve({ commit: { message: "old subject\n\nold body\n" } });
+      if (opts.reject) return Promise.reject(opts.reject);
       return Promise.resolve(opts.reply ?? { committed: { hash: "abcdef1234567", output: "ok", refs: "s1" } });
     }),
   } as unknown as ReturnType<typeof connect>;
@@ -89,6 +90,17 @@ it("Commit sends the checked paths (a rename: both sides) and the message, then 
   expect((byId("commit-message") as HTMLTextAreaElement).value).toBe("");
   expect((m.onChecked.mock.calls.at(-1)![0] as Set<string>).size).toBe(0);
   expect(m.onCommitted).toHaveBeenCalledTimes(1);
+});
+
+it("a rejected commit (failing pre-commit hook) shows the hook's output and keeps the message and the checked files", async () => {
+  const m = mount({ checked: ["/p/a.txt"], reject: new Error("hook says no") });
+  await type("blocked");
+  await act(async () => byId("commit-button").click());
+  await flush();
+  expect(remoteOpOf("/p").result).toEqual({ ok: false, text: "hook says no" });
+  expect((byId("commit-message") as HTMLTextAreaElement).value).toBe("blocked");
+  expect(m.onChecked).not.toHaveBeenCalled();
+  expect(m.onCommitted).not.toHaveBeenCalled();
 });
 
 it("Amend loads HEAD's message, keeps what was typed and restores it on uncheck; amend is sent", async () => {

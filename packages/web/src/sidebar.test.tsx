@@ -45,7 +45,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-async function render(props: { sideState?: ContextType<typeof SideState>; reveal?: number; activeId?: string | null; list?: SessionListItem[]; renaming?: string; projects?: string[]; worktrees?: Record<string, Worktree[]>; side?: (cwd: string) => { label: string; short: string } | undefined; openTabs?: Set<string>; state?: (s: SessionListItem) => SessionState; cleanUp?: boolean; removing?: (path: string) => boolean } = {}) {
+async function render(props: { copy?: boolean; sideState?: ContextType<typeof SideState>; reveal?: number; activeId?: string | null; list?: SessionListItem[]; renaming?: string; projects?: string[]; worktrees?: Record<string, Worktree[]>; side?: (cwd: string) => { label: string; short: string } | undefined; openTabs?: Set<string>; state?: (s: SessionListItem) => SessionState; cleanUp?: boolean; removing?: (path: string) => boolean } = {}) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
@@ -61,6 +61,7 @@ async function render(props: { sideState?: ContextType<typeof SideState>; reveal
   const onWorkers = vi.fn();
   const onArchiveIdle = vi.fn();
   const onCleanUp = vi.fn();
+  const onCopy = vi.fn();
   const ui = (reveal = props.reveal) => (
       <SideLabel value={props.side ?? (() => undefined)}>
       <SideState value={props.sideState ?? { of: () => undefined, act: () => {} }}>
@@ -86,6 +87,7 @@ async function render(props: { sideState?: ContextType<typeof SideState>; reveal
         renaming={props.renaming}
         onAction={onAction}
         onRenamed={onRenamed}
+        onCopy={props.copy ? onCopy : undefined}
         reveal={reveal}
       />
       </SideState>
@@ -104,7 +106,7 @@ async function render(props: { sideState?: ContextType<typeof SideState>; reveal
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
   };
-  return { el, rerender, groups, rows, toggle, search, onOpen, onNew, onRemove, onNewWorktree, onRemoveWorktree, onWarmWorktree, onOpenProject, onAction, onRenamed, onWorkers, onArchiveIdle, onCleanUp };
+  return { el, rerender, groups, rows, toggle, search, onOpen, onNew, onRemove, onNewWorktree, onRemoveWorktree, onWarmWorktree, onOpenProject, onAction, onRenamed, onWorkers, onArchiveIdle, onCleanUp, onCopy };
 }
 
 it("one group per working directory with the project name as header and the full path only as tooltip", async () => {
@@ -1239,6 +1241,29 @@ it("GH-358 Shift+F10 and the ContextMenu key open the menu of a session row, a p
       await closeMenu();
       expect(document.querySelector("[role=menu]")).toBeNull();
     }
+});
+
+it("Copy path: the keyboard menu of a project row and of a worktree row lists it and copies that row's path", async () => {
+  const managed = "/home/u/web/.claude/worktrees/fix";
+  const { el, onCopy } = await render({ copy: true, activeId: null, list: [old("x", managed, "In wt", 2)], worktrees: { "/home/u/web": [...MAIN, { path: managed, branch: "fix", main: false }] } });
+  const open = (t: Element) => act(async () => void t.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "F10", shiftKey: true })));
+  for (const [target, path] of [[el.querySelector('[data-testid="group-toggle"]')!, "/home/u/web"], [el.querySelector(`[data-path="${managed}"] [data-testid="worktree-toggle"]`)!, managed]] as const) {
+    await open(target);
+    expect(texts()).toContain("Copy path");
+    await act(async () => menuItems().find((i) => i.textContent === "Copy path")!.click());
+    expect(onCopy).toHaveBeenLastCalledWith(path, "path");
+  }
+});
+
+it("Copy path: the kebab of a project row below md lists it and copies the project path", async () => {
+  const mm = window.matchMedia;
+  window.matchMedia = ((q: string) => ({ matches: q.includes("48rem"), media: q, addEventListener() {}, removeEventListener() {} })) as never;
+  const { el, onCopy } = await render({ copy: true, activeId: null });
+  window.matchMedia = mm;
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="project-menu"]')!.click());
+  expect(texts()).toContain("Copy path");
+  await act(async () => menuItems().find((i) => i.textContent === "Copy path")!.click());
+  expect(onCopy).toHaveBeenCalledWith("/home/u/web", "path");
 });
 
 it("GH-358 a long press opens the project row's menu with touch", async () => {

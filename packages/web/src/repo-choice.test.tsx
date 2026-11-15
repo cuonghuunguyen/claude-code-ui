@@ -104,6 +104,14 @@ it("repoLabel: rel for nested and submodules, folder name for the own repository
   expect(repoLabel({ path: "/p/x", rel: "..cache", kind: "nested" })).toBe("..cache");
 });
 
+it("a choice survives a reload (page memory forgotten) and belongs to its project only", () => {
+  setRepoChoice("/p", "libs/lib");
+  forgetRepoChoices();
+  expect(getRepoChoice("/p")).toBe("libs/lib");
+  expect(getRepoChoice("/q")).toBeUndefined();
+  expect(resolveRepoChoice([main, sub], getRepoChoice("/p"))).toBe(sub);
+});
+
 it("a corrupt stored value reads as no choice", () => {
   localStorage.setItem(KEY, "[1");
   expect(getRepoChoice("/p")).toBeUndefined();
