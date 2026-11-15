@@ -368,7 +368,8 @@ function apply(d: Draft, i: WorkspaceIntent) {
       const inSplit = !!s.split?.ids.includes(i.id);
       const here = i.id === s.active || inSplit;
       const next = here ? neighbourAfterDock(s.tabs, s.docked, i.id) : undefined;
-      if (inSplit) s.split = undefined;
+      // The split ends with the dock. When the neighbour is the other split's tab it takes over through the split (its subagent view comes with it); `normalize` ends the split.
+      if (inSplit && !(next && s.split!.ids.includes(next) && splitOn(d))) s.split = undefined;
       s.docked = dock(s.docked, i.id, i.area);
       selectDocked(d, i.id);
       if (here) activate(d, next);

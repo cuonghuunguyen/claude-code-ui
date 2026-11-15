@@ -1151,8 +1151,8 @@ export function App() {
 
   /** A tab dropped on the middle of a split: it shows there (a tab shown in the other split swaps with it). */
   function showInSplit(t: string, i: number) {
-    if (!ws.dispatch({ type: "placeInSplit", id: t, at: i }).applied) return setDrawer(false);
     setError(undefined);
+    if (!ws.dispatch({ type: "placeInSplit", id: t, at: i }).applied) return setDrawer(false);
     focusSplitContent(t);
   }
 

@@ -92,3 +92,10 @@ it("docking a split tab ends the split and the main area shows its strip neighbo
   expect(r.state).toMatchObject({ split: undefined, active: C, docked: { [B]: "side" }, dockSel: { side: B } });
   has(r.effects, { type: "revealDock", area: "side" });
 });
+
+it("docking the active split tab next to the other split tab keeps that tab's subagent view and ends the split", () => {
+  const split = { dir: "row" as const, ids: [A, B], at: 1, ratio: 0.5, runs: { [A]: "r1" } };
+  const r = run(ws({ tabs: [A, B], active: B, split }), { type: "dock", id: B, area: "side" });
+  expect(r.state).toMatchObject({ split: undefined, active: A, run: "r1", docked: { [B]: "side" } });
+  has(r.effects, { type: "url", hash: `#${A}/agent/r1` });
+});
