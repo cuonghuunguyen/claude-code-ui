@@ -12,9 +12,9 @@ Default five labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for
 
 Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 
-## Talking to the user about tickets
+## Talking to the user about tickets and PRs
 
-Never refer to a ticket by ID alone (`#455`, `GH-455`). Name it by its title or a short description of it. An ID may follow in parentheses, never stand alone. Applies to chat, tables, lists and status reports.
+The user does not read ticket or PR numbers. Name every ticket and PR by its title or a short description of it (`Inline session`, `Graph tags + signing`). Never use a number as the reference (`#455`, `GH-455`, `PR #751`, `stacked on #745`), not even in parentheses. Exception: a command the user must run, or a link, may contain the number. Applies to chat, tables, lists and status reports. Prompts sent to workers may still use numbers.
 
 ## Before every push: scan for internal and personal data
 
