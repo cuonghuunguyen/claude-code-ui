@@ -3370,15 +3370,16 @@ export function createDaemon(opts: {
             const action = msg.type === "git.undoCommit" ? "undo" : msg.type === "git.cherryPick" ? "cherryPick" : msg.type === "git.revert" ? "revert" : "reset";
             return { written: await gitCommitAction(cwd, action, { hash: msg.hash, headRef: msg.headRef, headHash: msg.headHash, argv: msg.argv, mode: msg.type === "git.reset" ? msg.mode : undefined, dirty: msg.type === "git.reset" ? msg.dirty : undefined, snapshot: localHistory.before, allowed: inside }) };
           })));
-        case "git.reword": {
+        case "git.reword":
           // Output is never logged.
-          const ctl = (rewording = new AbortController());
-          try {
-            return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => ({ written: await gitReword(cwd, { hash: msg.hash, message: msg.message, headRef: msg.headRef, headHash: msg.headHash, argv: msg.argv, signal: ctl.signal, allowed: inside }) }))));
-          } finally {
-            if (rewording === ctl) rewording = undefined;
-          }
-        }
+          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => {
+            const ctl = (rewording = new AbortController());
+            try {
+              return { written: await gitReword(cwd, { hash: msg.hash, message: msg.message, headRef: msg.headRef, headHash: msg.headHash, argv: msg.argv, signal: ctl.signal, allowed: inside }) };
+            } finally {
+              if (rewording === ctl) rewording = undefined;
+            }
+          })));
         case "git.rewordCancel":
           rewording?.abort();
           return reply({});

@@ -33,3 +33,18 @@ describe("gitRequest stale marking", () => {
     expect(marked).toEqual(marks ? ["/r"] : []);
   });
 });
+
+describe("gitRequest refusals", () => {
+  it.each([
+    ["outside the roots", { cwd: undefined }, "cwd_not_allowed"],
+    ["not a repository top", { cwd: "/r", exact: true }, "not_git"],
+  ])("%s: run is not called and nothing is marked stale", async (_name, msg, code) => {
+    const { ctx, marked } = context();
+    ctx.allowed = (p) => (p === undefined ? undefined : String(p));
+    ctx.topOf = async () => "/other";
+    let ran = false;
+    const out = await gitRequest(ctx, msg, write(async () => { ran = true; return {}; }));
+    expect(out).toMatchObject({ error: { code } });
+    expect([ran, marked]).toEqual([false, []]);
+  });
+});
