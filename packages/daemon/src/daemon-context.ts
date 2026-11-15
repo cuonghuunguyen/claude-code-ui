@@ -2,7 +2,7 @@
 // Type only. Each area narrows it with `Pick<DaemonContext, ...>`, so a test fakes only what its area reads.
 import type { Session } from "./session.ts";
 import type { Conn, DaemonOptions } from "./server.ts";
-import type { Settings } from "@claude-ui/protocol";
+import type { ServerMessage, Settings } from "@claude-ui/protocol";
 import type { createSettings } from "./settings.ts";
 import type { createSecrets } from "./secrets.ts";
 import type { createJira } from "./jira.ts";
@@ -24,6 +24,13 @@ import type { createUploads } from "./uploads.ts";
 import type { createTerminals } from "./terminals.ts";
 import type { createConfig } from "./config.ts";
 import type { createPlugins } from "./plugins.ts";
+import type { createListVersions } from "./list-versions.ts";
+import type { createPromptQueue } from "./prompt-queue.ts";
+import type { createSessionSettings } from "./session-settings.ts";
+import type { createOrchestration } from "./orchestration.ts";
+import type { Projects } from "./projects.ts";
+import type { Engine as EngineName, ListResult, PromptResult } from "@claude-ui/protocol";
+import type { listSessions } from "@anthropic-ai/claude-agent-sdk";
 
 /** Piece of a media file: undefined when it can no longer be read (gone, outside the roots, side stopped). */
 export type MediaRead = (offset: number, length: number) => Promise<MediaReadResult | undefined>;
@@ -99,9 +106,57 @@ export type DaemonContext = {
   focused: Map<Conn, string>;
   /** Sessions a connection's page shows in-app notification cards for. */
   covered: Map<Conn, Set<string>>;
+  // Sessions
+  /** The live session, else restored from disk (`background`: a reconnect resubscribe, not a user's open). */
+  findSession(id: string, background?: boolean): Promise<Session | undefined>;
+  /** Where a session is: its folder and whether it is live (undefined: no such session). */
+  locate(id: string): Promise<{ cwd: string; live: Session | undefined } | undefined>;
+  titleOf(s: Session): Promise<string>;
+  list(): Promise<ListResult>;
+  listVersions: ReturnType<typeof createListVersions>;
+  sessionIds(): Promise<string[]>;
+  /** Remembers the Engine of the last new session. */
+  rememberEngine(engine: EngineName): void;
+  addProject(cwd: string): void;
+  projects: Projects;
+  /** Sessions being deleted. */
+  deleting: Set<string>;
+  localFiles(cwd: string): Promise<string[]>;
+  localFilesCache: Map<string, string[]>;
+  /** Follows the session's transcript file for changes made by a terminal CLI; the function releases it. */
+  mirror(s: Session): () => void;
+  /** Subscribers per session that keep its CLI from idle close. */
+  holds: Map<string, number>;
+  unhold(id: string): void;
+  queue: ReturnType<typeof createPromptQueue>;
+  sendPrompt(s: Session, text: string, images?: string[], stillWanted?: () => boolean, out?: PromptResult): Promise<{ code: string; message: string } | undefined>;
+  runBash(s: Session, command: string): Promise<{ code: string; message: string } | undefined>;
+  briefDropped(sessionId: string, item: { brief?: string } | undefined): unknown;
+  briefFailed(sessionId: string, partId: string, why: string, at?: number): unknown;
+  startBrief(s: Session, partId: string, refresh: boolean): Promise<unknown>;
+  dropQueuedBrief(sessionId: string, partId: string): void;
+  /** The owner of an Aside, undefined for any other session. */
+  asideOf(id: string): string | undefined;
+  /** The links of sessions (sessions.json). */
+  settings: ReturnType<typeof createSessionSettings>;
+  saveSettings(change: () => void): void;
+  orchestration: ReturnType<typeof createOrchestration>;
+  deleteSessionById(id: string, force?: boolean): Promise<{ code: string; message: string } | undefined>;
+  broadcast(m: ServerMessage): void;
+  clock: () => number;
+  logEpoch: string;
+  checkArtifact(named: string, kind?: "page" | "asset", confine?: string[]): { path: string; size: number; mtime: number } | { code: string; message: string };
+  scratchpadRoot(cwd: string, sessionId: string): string | undefined;
+  within(path: string, dir: string): boolean;
+  transcripts(): ReturnType<typeof listSessions>;
+  transcriptCwd(id: string, cwd: string): string;
+  sessionCwd(cwd: string): string;
+  projectsDir: string;
+  /** The port this daemon listens on. */
+  port(): number | undefined;
   // Engines
   /** Requests only one Engine answers (its provider login, its server restart), by message type. */
   engineRequests: ReadonlyMap<string, EngineRequest>;
   /** The options createDaemon was given that handlers read. */
-  opts: Pick<DaemonOptions, "keepAwake" | "push" | "shortcut" | "query" | "openExternal" | "claudeBin">;
+  opts: Pick<DaemonOptions, "keepAwake" | "attached" | "replayMaxEvents" | "push" | "shortcut" | "query" | "openExternal" | "claudeBin">;
 };

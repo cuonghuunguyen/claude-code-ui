@@ -40,7 +40,7 @@ export type DispatchedType = Exclude<ClientType, (typeof ANSWERED_BEFORE_DISPATC
 /** Any area: its handlers, whatever types it owns (the exhaustive check is `connectAreas`). */
 export type AnyArea = { handlers: { readonly [type: string]: (msg: never, r: Respond) => unknown }; close?(): void };
 
-export function createDispatch(areas: readonly AnyArea[], fallback?: (msg: ClientMessage, out: (m: ServerMessage) => void) => Promise<void>) {
+export function createDispatch(areas: readonly AnyArea[]) {
   const table = new Map<string, Handler<ClientType>>();
   for (const a of areas)
     for (const [type, h] of Object.entries(a.handlers) as [string, Handler<ClientType>][]) {
@@ -51,7 +51,6 @@ export function createDispatch(areas: readonly AnyArea[], fallback?: (msg: Clien
     /** Runs the handler of `msg.type`; its reply or error goes to `out`. A Map lookup: `constructor` or `__proto__` is an unknown type. */
     async dispatch(msg: ClientMessage, out: (m: ServerMessage) => void): Promise<void> {
       const h = table.get(msg.type) as Handler<ClientType> | undefined;
-      if (!h && fallback) return fallback(msg, out);
       const r: Respond = {
         reply: (result) => out({ type: "reply", reqId: msg.reqId, result }),
         fail: (code, message, size) => out({ type: "error", reqId: msg.reqId, code, message, size }),

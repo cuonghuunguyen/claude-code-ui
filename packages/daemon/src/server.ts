@@ -1,20 +1,19 @@
 // HTTP server for the built web app plus the WebSocket endpoint at /ws.
 import { planDirs } from "./plan-dirs.ts";
-import { DeniedRetryError } from "./denied-retry.ts";
-import { localSettingsFile, localSettingsFiles } from "./local-settings.ts";
-import { closeSync, createReadStream, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
+import { localSettingsFiles } from "./local-settings.ts";
+import { closeSync, createReadStream, existsSync, fstatSync, lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unwatchFile, watchFile, type Stats } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { homedir, hostname as osHostname, tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { DEFAULT_ENGINE, KNOWN_HASH_MAX, KNOWN_ID_MAX, KNOWN_MAX, createAdapter, editorLabel, EFFORTS, ENGINES, type Engine as EngineName, type AsideOpenResult, type PromptResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_MARKS_MAX, BACK_TAG, type ClientMessage, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { DEFAULT_ENGINE, createAdapter, editorLabel, type Engine as EngineName, type PromptResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_UPLOAD_BYTES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_TAG, type ClientMessage, type ListResult, type MediaReadResult, type ModelInfo, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
+import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
 import { createLocalHistory} from "./local-history.ts";
 import { createSleepWatch, SLEEP_CHECK_MS, SLEEP_KEEP_MS, type Slept } from "./sleep-watch.ts";
@@ -32,13 +31,13 @@ import { connectAreas } from "./areas.ts";
 import { WATCH_INTERVAL_MS } from "./area-files.ts";
 import type { DaemonContext, MediaEntry, MediaRead } from "./daemon-context.ts";
 import type { Connection } from "./dispatch.ts";
-import { createJira, JiraError, jiraOrigin } from "./jira.ts";
+import { createJira, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
 import { createWorktree, gitDirsOf, gitEscapes, gitStatus, gitTopOf, limiter, listRepos, listWorktrees, removeWorktree, WorktreeError, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
 import { createWarmCommitMessage } from "./commit-message.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
-import { createCatalogues, EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx } from "./engine-catalogue.ts";
+import { createCatalogues, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx } from "./engine-catalogue.ts";
 import { ARCHIVED_TAG, createClaudeCatalogue, transcriptFile, type History } from "./claude-catalogue.ts";
 import { createOpenCodeCatalogue } from "./opencode-catalogue.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
@@ -46,23 +45,21 @@ import { claudeEnv, setClaudeToken } from "./claude-env.ts";
 import { TEST_ARGS, TEST_TIMEOUT_MS, testOutcome } from "./claude-test.ts";
 import { createPlanTracker, RESET_GRACE_MS, usesOauthToken } from "./plan-usage.ts";
 import { createPromptQueue } from "./prompt-queue.ts";
-import { briefPrompt, checkSet, find as findMark, total as marksTotal, upsert as upsertMark } from "./back-marks.ts";
+import { briefPrompt, find as findMark } from "./back-marks.ts";
 import { createBackReminders, TICK_MS as BACK_TICK_MS, type Due } from "./back-reminders.ts";
 import { CONTINUE_GAP_MS, CONTINUE_PROMPT, createAutoContinue } from "./auto-continue.ts";
 import { listModels, queuedQuery, Session, type SessionSettings, type Transcript } from "./session.ts";
 import { createTerminals } from "./terminals.ts";
 import { ConfigError, createConfig, runCli, timed, type CliRunner} from "./config.ts";
-import { createPlugins, redact} from "./plugins.ts";
-import { addonAssetHeaders, addonHeaders, createAddons, type AddonsRequest } from "./addons.ts";
-import { searchTranscripts } from "./content-search.ts";
+import { createPlugins } from "./plugins.ts";
+import { addonAssetHeaders, addonHeaders, createAddons } from "./addons.ts";
 import { cliTurnRunning, JsonlTail, parseJsonl, transcriptEnd, withoutForkPrefix } from "./transcript.ts";
 import type { KeepAwake } from "./keep-awake.ts";
 import { EDITORS, type Launcher, type OpenCommand } from "./open-external.ts";
 import { createRouter, type Sides } from "./sides.ts";
-import { createFeeds } from "./feed.ts";
 import { createListVersions } from "./list-versions.ts";
 import { createSessionSettings } from "./session-settings.ts";
-import { createUploads, SESSION_DIR } from "./uploads.ts";
+import { createUploads } from "./uploads.ts";
 import { createUpdater, type Updater } from "./update.ts";
 import { createOrchestration, SERVER as ORCHESTRATION_SERVER } from "./orchestration.ts";
 import { createDaemonMcp, DAEMON_SERVER, ToolError } from "./daemon-mcp.ts";
@@ -74,12 +71,6 @@ import { serveAppIcon } from "./app-icon.ts";
 import { serveStatic } from "./static.ts";
 import { VISUALIZE_HEADERS, VISUALIZE_SHELL, visualizePluginDir } from "./visualize.ts";
 import { listSessionsOffThread, mapLimit, transcriptStamp } from "./session-scan.ts";
-
-/** The reply field with the folders of the session's plan files (a side's own reply carries its own). */
-const planDirsOf = (s: object) => {
-  const dirs = (s as { planDirs?: () => string[] | undefined }).planDirs?.();
-  return dirs ? { planDirs: dirs } : {};
-};
 
 export { MAX_SETTINGS } from "./session-settings.ts";
 
@@ -103,22 +94,7 @@ export interface Conn {
 // Compile-time check: a real ws socket satisfies Conn (wss.on/emit are loosely typed, so nothing else would notice a new Conn member it lacks).
 void ((w: WebSocket): Conn => w);
 
-const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
-
-/** A background resubscribe that is behind by more events than this gets the snapshot (last page) instead of the replay (GH-767). */
-export const REPLAY_MAX_EVENTS = 500;
-
-/** `session.subscribe` `known` as a part id -> hash map; undefined when absent, null when malformed (GH-771). */
-function parseKnown(v: unknown): Map<string, string> | undefined | null {
-  if (v === undefined) return undefined;
-  if (!Array.isArray(v) || v.length > KNOWN_MAX) return null;
-  const out = new Map<string, string>();
-  for (const e of v) {
-    if (!Array.isArray(e) || e.length !== 2 || typeof e[0] !== "string" || typeof e[1] !== "string" || e[0].length > KNOWN_ID_MAX || e[1].length > KNOWN_HASH_MAX) return null;
-    out.set(e[0], e[1]);
-  }
-  return out;
-}
+export { REPLAY_MAX_EVENTS } from "./area-sessions.ts";
 
 /** ws maxPayload (default 100 MiB): a prompt with two images at MAX_UPLOAD_BYTES as base64, plus the JSON around them. */
 export const MAX_FRAME_BYTES = 64 * 1024 * 1024;
@@ -1910,6 +1886,44 @@ export function createDaemon(opts: {
 
   /** What the areas (area-*.ts) reach of this daemon. Built once, after every closure it names exists. */
   const ctx: DaemonContext = {
+    findSession,
+    locate,
+    titleOf,
+    list,
+    listVersions,
+    sessionIds,
+    rememberEngine,
+    addProject,
+    projects,
+    deleting,
+    localFiles,
+    localFilesCache,
+    mirror,
+    holds,
+    unhold,
+    queue,
+    sendPrompt,
+    runBash,
+    briefDropped,
+    briefFailed,
+    startBrief,
+    dropQueuedBrief,
+    asideOf,
+    settings,
+    saveSettings,
+    orchestration,
+    deleteSessionById,
+    broadcast,
+    clock,
+    logEpoch,
+    checkArtifact,
+    scratchpadRoot,
+    within,
+    transcripts,
+    transcriptCwd,
+    sessionCwd,
+    projectsDir,
+    port: () => (http.address() as AddressInfo | null)?.port,
     allowed,
     inside,
     refused,
@@ -1979,14 +1993,9 @@ export function createDaemon(opts: {
     if (stale) send(ws, { type: "daemon_stale", note: stale });
     if (slept && (opts.watchSleep?.now ?? Date.now)() - slept.at > SLEEP_KEEP_MS) slept = undefined;
     if (slept) send(ws, { type: "daemon_slept", ...slept });
-    const unsubscribes = new Map<string, () => void>();
-    /** This connection's session feeds: events go to the socket while its buffer allows, else from the log later (feed.ts). */
-    const feeds = createFeeds(ws, (e) => send(ws, e));
-    let subscribeOrder = 0;
     // fs.media: key (canonical path, "blob\0cwd\0hash\0path", "<side>\0cwd\0hash\0path") -> nonce issued to this connection.
     const mediaNonces = new Map<string, string>();
     const nonceFor = (key: string) => mediaNonces.get(key) ?? (mediaNonces.set(key, randomBytes(16).toString("hex")), mediaNonces.get(key)!);
-    let searching: AbortController | undefined;
     // Without a listener a socket error (e.g. a frame above maxPayload) is thrown and the daemon exits; ws closes the socket itself.
     ws.on("error", (err) => console.warn("ws:", err.message));
     ws.on("close", (code) => {
@@ -1994,8 +2003,6 @@ export function createDaemon(opts: {
       router?.close();
       connections.delete(ws);
       mediaNonces.forEach((n) => (media.get(n)?.live?.forEach((r) => r.destroy()), media.delete(n)));
-      unsubscribes.forEach((u) => u());
-      searching?.abort();
       areas.close();
       focused.delete(ws);
       covered.delete(ws);
@@ -2040,619 +2047,8 @@ export function createDaemon(opts: {
       media.set(nonce, { src: { kind: "bytes", read, mime, name }, ws, used: Date.now() });
       return { type: "reply", reqId: msg.reqId, result: { url: `/media/${nonce}/${encodeURIComponent(name)}?v=${msg.hash ?? r.mtime}`, mime, size: r.size, mtime: r.mtime } };
     };
-    const legacy = async (msg: ClientMessage, out: (m: ServerMessage) => void) => {
-      const reply = (result: unknown) => out({ type: "reply", reqId: msg.reqId, result });
-      const fail = (code: string, message: string, size?: number) => out({ type: "error", reqId: msg.reqId, code, message, size });
-      const find = async (id: string, background = false) => (await findSession(id, background)) ?? void fail("unknown_session", `no session ${id}`);
-
-      switch (msg.type) {
-        case "session.create": {
-          if (typeof msg.cwd === "string" && refused(msg.cwd)) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (typeof msg.cwd !== "string" || !existsSync(msg.cwd) || !statSync(msg.cwd).isDirectory())
-            return fail("bad_cwd", `not a directory: ${msg.cwd}`);
-          if (msg.model !== undefined && !isModel(msg.model)) return fail("bad_model", "model must be a non-empty string");
-          if (msg.engine !== undefined && !(ENGINES as readonly unknown[]).includes(msg.engine)) return fail("bad_request", `engine must be one of ${ENGINES.join(", ")}`);
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (isRemoving(cwd)) return fail("worktree_removing", "This worktree is being removed");
-          const catalogue = catalogues.byName(msg.engine ?? DEFAULT_ENGINE);
-          if (!catalogue) return fail("bad_request", `no engine ${msg.engine}`);
-          let s: Session | undefined;
-          try {
-            // The new-session tab's draft uploads are claimed only by an Engine that lets us choose the session id (OpenCode chooses its own).
-            const permissionMode = await catalogue.startMode(cwd, msg.model);
-            s = await catalogue.create(cwd, { model: msg.model, permissionMode }, { draft: msg.draft });
-          } catch (err) {
-            if (err instanceof EngineError) return fail(err.code, err.message);
-            throw err;
-          }
-          // A removal may have started during the awaits: no live session in a deleted directory.
-          if (!s) return fail("worktree_removing", "This worktree is being removed");
-          rememberEngine(catalogue.engine.name);
-          return reply({ session: s.info() });
-        }
-        case "session.defaultMode": {
-          const cwd = typeof msg.cwd === "string" && allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          return reply({ mode: (await catalogues.byName(DEFAULT_ENGINE)?.startMode(cwd)) ?? "default" });
-        }
-        case "session.commands": {
-          const cwd = typeof msg.cwd === "string" && allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          try {
-            const catalogue = catalogues.byName(msg.engine ?? DEFAULT_ENGINE);
-            if (!catalogue) return fail("bad_request", `no engine ${msg.engine}`);
-            return reply({ commands: await catalogue.commands(cwd) });
-          } catch (e) {
-            return fail("commands_failed", (e as Error).message);
-          }
-        }
-        case "session.agents": {
-          const cwd = typeof msg.cwd === "string" && allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          try {
-            if (typeof msg.sessionId === "string") void (await find(msg.sessionId))?.refreshAgents();
-            const catalogue = catalogues.byName(msg.engine ?? DEFAULT_ENGINE);
-            if (!catalogue) return fail("bad_request", `no engine ${msg.engine}`);
-            return reply({ agents: await catalogue.agents(cwd) });
-          } catch (e) {
-            return fail("agents_failed", (e as Error).message);
-          }
-        }
-        case "session.subscribe": {
-          // Before the first await: the page's order of asking, for the feed order (the lookups below finish in any order).
-          const order = ++subscribeOrder;
-          const known = parseKnown(msg.known);
-          if (known === null) return fail("bad_request", `known must be an array of at most ${KNOWN_MAX} [part id, hash] string pairs (id <= ${KNOWN_ID_MAX}, hash <= ${KNOWN_HASH_MAX} characters)`);
-          const span = perfMon.span("session.open");
-          try {
-            const s = await find(msg.sessionId, msg.background === true);
-            const title = s && (await titleOf(s));
-            if (!s || ws.readyState !== ws.OPEN) return;
-            // The snapshot below is synchronous and reads the plan folders: warm the local settings files first.
-            if (!localFilesCache.has(s.cwd)) await localFiles(s.cwd);
-            if (ws.readyState !== ws.OPEN) return;
-            // Only an explicit open (link, notification) adds the project; a reconnect resubscribe must not bring back a removed one.
-            if (msg.addProject === true) addProject(s.cwd);
-            unsubscribes.get(s.id)?.();
-            // A plain subscribe holds the session's CLI (idle close) until it is released; `background` only follows.
-            // An Aside is held by any subscriber: its popup is open (a reconnect resubscribes in the background otherwise).
-            const hold = msg.background !== true || !!asideOf(s.id);
-            const keep = (stop: () => void, release: () => void) => {
-              if (hold) holds.set(s.id, (holds.get(s.id) ?? 0) + 1);
-              unsubscribes.set(s.id, () => (stop(), release(), hold && unhold(s.id)));
-            };
-            // Different epoch: the client's seqs belong to an earlier daemon run, so replay everything.
-            // Same epoch but ahead of the log: the session was dropped and restored in this run (its seq restarted); the client's seq means nothing, so snapshot.
-            const since = msg.logEpoch === logEpoch && msg.sinceSeq <= s.seq() ? msg.sinceSeq : 0;
-            // A shown tab (plain subscribe) is sent first when the link is slow.
-            const shown = msg.background !== true;
-            const from = typeof msg.from === "string" ? msg.from : undefined;
-            // Paged, first subscribe or new epoch: a snapshot (last page) instead of the replay; reply, snapshot and subscribe in one synchronous step.
-            // `known` (part hashes the page holds) only shrinks a snapshot reply: refs for the parts it already has (GH-771).
-            const snapshotOf = (f: string | undefined) => (known ? s.snapshot(f, known) : s.snapshot(f));
-            let snap = msg.paged === true && since === 0 ? snapshotOf(from) : undefined;
-            // A background view far behind (a reconnect after a long gap) takes the snapshot too when the page is clearly smaller than the gap (GH-767; a page is at
-            // most PAGE_PARTS parts, but one giant turn comes whole, where the replay is the cheaper one). A shown tab keeps the replay (its scroll position).
-            if (!snap && msg.paged === true && !shown && since > 0) {
-              const gap = s.countAfter(since);
-              if (gap > (opts.replayMaxEvents ?? REPLAY_MAX_EVENTS)) {
-                const page = snapshotOf(from);
-                if (page.snapshot.page.parts.length * 2 < gap) snap = page;
-              }
-            }
-            if (snap) {
-              reply({ logEpoch, seq: snap.seq, session: s.info(), title: title!, snapshot: snap.snapshot, ...planDirsOf(s) });
-              const stop = feeds.follow(s, snap.seq, shown, order);
-              return keep(stop, mirror(s));
-            }
-            reply({ logEpoch, seq: s.seq(), session: s.info(), title: title!, ...planDirsOf(s) });
-            const stop = feeds.follow(s, since, shown, order);
-            return keep(stop, mirror(s));
-          } finally {
-            span.end();
-          }
-        }
-        case "session.page":
-        case "session.edits":
-        case "session.artifacts": {
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          if (msg.logEpoch !== logEpoch) return fail("stale_epoch", "the daemon restarted since this view was loaded");
-          if (typeof msg.before !== "string") return fail("bad_request", "before must be a part id");
-          if (msg.type === "session.edits" || msg.type === "session.artifacts") {
-            const parts = msg.type === "session.edits" ? s.edits(msg.before) : s.artifacts(msg.before);
-            return parts ? reply({ parts }) : fail("unknown_cursor", `no part ${msg.before}`);
-          }
-          if (msg.until !== undefined && (typeof msg.until !== "string" || msg.until.length > 200)) return fail("bad_request", "until must be a string of at most 200 characters");
-          const page = s.page(msg.before, msg.until);
-          return page ? reply({ page }) : fail("unknown_cursor", `no part ${msg.before}`);
-        }
-        case "session.media": {
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          if (typeof msg.partId !== "string" || msg.partId.length > 200 || !Number.isInteger(msg.index) || msg.index < 0) return fail("bad_request", "partId must be a part id and index a non-negative integer");
-          const dataUrl = s.media(msg.partId, msg.index);
-          return dataUrl ? reply({ dataUrl }) : fail("unknown_media", `no media ${msg.index} in part ${msg.partId}`);
-        }
-        case "artifact.preview": {
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          if (typeof msg.partId !== "string" || msg.partId.length > 200) return fail("bad_request", "partId must be a part id");
-          const f = s.artifactFile(msg.partId);
-          if ("code" in f) return fail(f.code, f.message);
-          const c = checkArtifact(f.path);
-          if ("code" in c) return fail(c.code, c.message);
-          const page = basename(c.path);
-          // The project folder; the page's directory only when the page itself is in the project, in this session's upload folder or in this session's Claude scratchpad (a page elsewhere must not widen it).
-          const cwdReal = real(s.cwd);
-          const upReal = real(join(uploads.parent, msg.sessionId));
-          const spReal = scratchpadRoot(s.cwd, msg.sessionId);
-          const confine = [cwdReal, ...[cwdReal, upReal, spReal].filter((r) => r !== undefined && within(c.path, r)).map(() => dirname(c.path))].filter((d) => d !== undefined);
-          const assets = new Map<string, { named: string; path: string; type: string }>();
-          const unavailable = [...f.unavailable];
-          for (const a of f.assets as ArtifactAsset[]) {
-            const ac = a.key === page ? undefined : checkArtifact(a.path, "asset", confine);
-            if (!ac || "code" in ac) unavailable.push(a.key);
-            else assets.set(a.key, { named: a.path, path: ac.path, type: a.type });
-          }
-          const nonce = nonceFor(`artifact\0${msg.sessionId}\0${msg.partId}`);
-          media.set(nonce, { src: { kind: "artifact", named: f.path, path: c.path, page, confine, assets }, ws, used: Date.now() });
-          return reply({ url: `/artifact/${nonce}/${encodeURIComponent(page)}?v=${c.mtime}`, size: c.size, mtime: c.mtime, title: f.title, ...(unavailable.length > 0 && { unavailable }) });
-        }
-        case "session.unsubscribe": {
-          // No find(): this must not restore a session.
-          unsubscribes.get(msg.sessionId)?.();
-          unsubscribes.delete(msg.sessionId);
-          return reply({});
-        }
-        case "session.prompt": {
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          autoContinue.cancel(s.id);
-          const images = msg.images ?? [];
-          if (!Array.isArray(images) || !images.every((i) => imageBlock(i)))
-            return fail("bad_images", "images must be base64 data URLs of type png, jpeg, gif or webp");
-          if (typeof msg.text !== "string" || (!msg.text.trim() && !images.length)) return fail("bad_prompt", "empty prompt");
-          const out: PromptResult = {};
-          const err = await sendPrompt(s, msg.text, images, undefined, out);
-          // A refused prompt keeps a usage-limit pause.
-          if (!err) queue.release(s.id);
-          return err ? fail(err.code, err.message) : reply(out);
-        }
-        case "session.enqueue": {
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          const images = msg.images ?? [];
-          if (!Array.isArray(images) || !images.every((i) => imageBlock(i)))
-            return fail("bad_images", "images must be base64 data URLs of type png, jpeg, gif or webp");
-          if (typeof msg.text !== "string" || (!msg.text.trim() && !images.length)) return fail("bad_prompt", "empty prompt");
-          if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
-          const r = queue.enqueue(s.id, { text: msg.text, images });
-          return typeof r === "string" ? reply({ itemId: r }) : fail(r.code, r.message);
-        }
-        case "session.dequeue": {
-          // In memory only: a session not loaded has no queue, and find() would restore it from disk.
-          const s = sessions.get(msg.sessionId);
-          if (!s) return fail("unknown_item", "queued message not found (already sent?)");
-          const item = queue.take(s.id, msg.itemId);
-          briefDropped(s.id, item);
-          return item ? reply({ text: item.text, images: item.images, ...(item.bash && { bash: true }) }) : fail("unknown_item", "queued message not found (already sent?)");
-        }
-        case "session.sendQueued": {
-          const s = sessions.get(msg.sessionId);
-          if (!s || !queue.items(s.id).some((i) => i.id === msg.itemId)) return fail("unknown_item", "queued message not found (already sent?)");
-          const queued = queue.items(s.id).find((i) => i.id === msg.itemId);
-          const bash = queued?.bash;
-          // A brief turn never steers into a running turn: Send now only while the session takes a prompt.
-          if (queued?.brief && !s.takesQueued()) return fail("session_busy", "The brief waits for the current turn to end");
-          const err = await queue.sendNow(s.id, msg.itemId);
-          // A refused Send now (any reason) leaves a scheduled auto-continue alone.
-          if (err) return fail(err.code, err.message);
-          // A shell command does not end a usage-limit pause; only a prompt does (runBash cancelled the auto-continue).
-          if (!bash) {
-            autoContinue.cancel(s.id);
-            queue.release(s.id);
-          }
-          return reply({});
-        }
-        case "session.bash": {
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          if (typeof msg.command !== "string" || !msg.command.trim()) return fail("bad_command", "empty command");
-          // A send of the queue is in flight (a prompt awaiting its sync): the command goes behind it, in submit order.
-          const err = queue.sending(s.id) ? { code: "session_busy", message: "queue sending" } : await runBash(s, msg.command);
-          if (err?.code === "session_busy" || err?.code === "external_turn") {
-            const r = queue.enqueue(s.id, { text: msg.command.trim(), images: [], bash: true });
-            return typeof r === "string" ? reply({ itemId: r }) : fail(r.code, r.message);
-          }
-          return err ? fail(err.code, err.message) : reply({});
-        }
-        case "session.setModel": {
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          if (!isModel(msg.model)) return fail("bad_model", "model must be a non-empty string");
-          if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
-          try {
-            await s.setModel(msg.model);
-          } catch (e) {
-            return fail("set_model_failed", (e as Error).message);
-          }
-          return reply({ session: s.info() });
-        }
-        case "session.setAgent": {
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          if (typeof msg.agent !== "string" || !msg.agent || msg.agent.length > 200) return fail("bad_agent", "agent must be a non-empty string");
-          if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
-          try {
-            await s.setAgent(msg.agent);
-          } catch (e) {
-            return fail("set_failed", (e as Error).message);
-          }
-          return reply({ session: s.info() });
-        }
-        case "session.setPermissionMode":
-        case "session.setEffort": {
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          if (msg.type === "session.setPermissionMode" && !PERMISSION_MODES.includes(msg.mode) && !catalogues.all.some((c) => c.engine.capabilities.permissionModes.includes(msg.mode))) return fail("bad_mode", `unknown permission mode ${msg.mode}`);
-          if (msg.type === "session.setEffort" && !EFFORTS.includes(msg.effort)) return fail("bad_effort", `unknown effort ${msg.effort}`);
-          try {
-            await (msg.type === "session.setPermissionMode" ? s.setPermissionMode(msg.mode) : s.setEffort(msg.effort));
-          } catch (e) {
-            return fail("set_failed", (e as Error).message);
-          }
-          // An Aside stops being read-only with a mode change; the next CLI start has the editing tools.
-          if (msg.type === "session.setPermissionMode" && settings.get(s.id)?.readOnly) {
-            saveSettings(() => settings.set(s.id, { readOnly: undefined }, ["readOnly"]));
-            // shortcut: while a turn runs the edits stay off until its CLI ends (idle close, restart); restart at turn end if users ask.
-            if (s.info().state === "idle" && s.live()) s.restartQuery();
-          }
-          return reply({ session: s.info() });
-        }
-        case "fs.upload": {
-          if (typeof msg.data !== "string" || typeof msg.name !== "string") return fail("bad_upload", "name and data (base64) required");
-          let owner: string | undefined;
-          if (msg.sessionId !== undefined) {
-            if (typeof msg.sessionId !== "string" || !SESSION_DIR.test(msg.sessionId) || deleting.has(msg.sessionId) || !(await locate(msg.sessionId)))
-              return fail("unknown_session", "no such session");
-            // After /clear the heir's CLI still reads its parent's folder: the file goes where the CLI can read it.
-            owner = sessions.get(msg.sessionId)?.uploadOwner ?? msg.sessionId;
-          } else if (msg.draft !== undefined) {
-            owner = uploads.ownerOfDraft(msg.draft);
-            if (!owner) return typeof msg.draft === "string" && uploads.draftClaimed(msg.draft) ? fail("draft_claimed", "draft already used; use a new draft or the sessionId") : fail("bad_upload", "draft must be 64 hex characters");
-          } else return fail("bad_upload", "sessionId or draft required; reload the page");
-          const buf = Buffer.from(msg.data, "base64");
-          if (buf.length > MAX_UPLOAD_BYTES) return fail("too_large", `larger than ${MAX_UPLOAD_BYTES} bytes: ${msg.name}`);
-          try {
-            const path = uploads.store(owner, msg.name, buf);
-            clearSearchCache();
-            return reply({ path });
-          } catch (err) {
-            return fail("fs_error", String(err));
-          }
-        }
-        case "session.cancelContinue": {
-          // No find(): a cancel must not restore a session.
-          autoContinue.cancel(msg.sessionId);
-          return reply({});
-        }
-        case "session.interrupt": {
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          try {
-            await s.interrupt();
-          } catch (e) {
-            return fail("interrupt_failed", (e as Error).message);
-          }
-          return reply({});
-        }
-        case "session.stopSubagent": {
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          try {
-            if (!(await s.stopSubagent(msg.subagentId))) return fail("unknown_subagent", "no running subagent run with that ID");
-          } catch (e) {
-            return fail("stop_failed", (e as Error).message);
-          }
-          return reply({});
-        }
-        case "session.backgroundShell": {
-          if (typeof msg.toolUseId !== "string") return fail("bad_request", "toolUseId required");
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          try {
-            if (!(await s.backgroundShell(msg.toolUseId))) return fail("unknown_shell", "no foreground Bash call with that ID runs");
-          } catch (e) {
-            return fail("background_failed", (e as Error).message);
-          }
-          return reply({});
-        }
-        case "session.allowDenied": {
-          if (typeof msg.toolUseId !== "string") return fail("bad_request", "toolUseId required");
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
-          // Like sendPrompt: the follow-up continues after the terminal CLI's turns.
-          if (s.info().state === "idle") await s.sync();
-          if (s.externalTurnRunning()) return fail("external_turn", "A terminal CLI turn is running in this session");
-          try {
-            s.allowDenied(msg.toolUseId);
-          } catch (e) {
-            return e instanceof DeniedRetryError ? fail(e.code, e.message) : fail("prompt_failed", (e as Error).message);
-          }
-          autoContinue.cancel(s.id);
-          queue.release(s.id);
-          return reply({});
-        }
-        case "session.localSettingsFile": {
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          return reply({ file: await localSettingsFile(s.cwd) });
-        }
-        case "session.alwaysAllowDenied": {
-          if (typeof msg.toolUseId !== "string") return fail("bad_request", "toolUseId required");
-          if (msg.scope !== "session" && msg.scope !== "local") return fail("bad_request", "scope must be session or local");
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          if (!s.isLive()) return fail("session_not_live", `session ${s.id} is ${s.info().state}`);
-          if (s.info().state === "idle") await s.sync();
-          if (s.externalTurnRunning()) return fail("external_turn", "A terminal CLI turn is running in this session");
-          try {
-            await s.alwaysAllowDenied(msg.toolUseId, msg.scope);
-          } catch (e) {
-            return e instanceof DeniedRetryError ? fail(e.code, e.message) : fail("prompt_failed", (e as Error).message);
-          }
-          autoContinue.cancel(s.id);
-          queue.release(s.id);
-          return reply({});
-        }
-        case "session.shellOutput": {
-          if (typeof msg.toolUseId !== "string") return fail("bad_request", "toolUseId required");
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          let r;
-          try {
-            r = await s.shellOutput(msg.toolUseId);
-          } catch (e) {
-            return fail("no_output", (e as Error).message);
-          }
-          return r ? reply(r) : fail("no_output", "Output is not available");
-        }
-        case "session.stopShell": {
-          if (typeof msg.toolUseId !== "string") return fail("bad_request", "toolUseId required");
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          try {
-            if (!(await s.stopShell(msg.toolUseId))) return fail("unknown_shell", "no running shell with that ID");
-          } catch (e) {
-            return fail("stop_failed", (e as Error).message);
-          }
-          return reply({});
-        }
-        case "permission.respond": {
-          if (typeof msg.requestId !== "string" || !["allow", "allow_always", "deny"].includes(msg.decision))
-            return fail("bad_request", "requestId and decision (allow, allow_always, deny) required");
-          if (msg.ruleIndex !== undefined && !Number.isInteger(msg.ruleIndex)) return fail("bad_request", "ruleIndex must be an integer");
-          if (msg.message !== undefined && typeof msg.message !== "string") return fail("bad_request", "message must be a string");
-          const u = msg.updatedInput as unknown;
-          if (u !== undefined && (typeof u !== "object" || u === null || Array.isArray(u))) return fail("bad_request", "updatedInput must be an object");
-          // requestIds are UUIDs unique across sessions; the first answer from any tab wins.
-          const settled = [...sessions.values()].some((s) => s.respond(msg.requestId, msg));
-          return reply({ settled });
-        }
-        case "question.respond": {
-          const { answers } = msg;
-          if (typeof msg.requestId !== "string" || typeof answers !== "object" || !answers || Object.values(answers).some((v) => typeof v !== "string"))
-            return fail("bad_request", "requestId and answers (question text -> string) required");
-          const { choices } = msg;
-          // Each list is the chosen labels and the Other text: bounded like the answers a user can type.
-          if (choices !== undefined && (typeof choices !== "object" || !choices || Array.isArray(choices) || Object.values(choices).some((l) => !Array.isArray(l) || l.length > 50 || l.some((v) => typeof v !== "string" || v.length > 10_000))))
-            return fail("bad_request", "choices must map a question text to at most 50 strings");
-          const settled = [...sessions.values()].some((s) => s.answer(msg.requestId, answers, undefined, choices));
-          return reply({ settled });
-        }
-        case "models.list": {
-          try {
-            const catalogue = catalogues.byName(msg.engine ?? DEFAULT_ENGINE);
-            if (!catalogue) return fail("bad_request", `no engine ${msg.engine}`);
-            const cwd = msg.cwd === undefined ? undefined : allowed(msg.cwd);
-            if (msg.cwd !== undefined && !cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-            return reply({ models: await catalogue.models(cwd) });
-          } catch (e) {
-            return fail("models_failed", (e as Error).message);
-          }
-        }
-        case "session.list":
-          // `since` (even empty) = the page understands versions; the hub's own calls send none and get the plain list.
-          return reply(typeof msg.since === "string" ? listVersions.encode(await list(), msg.since) : await list());
-        case "session.ids":
-          return reply({ ids: await sessionIds() } satisfies SessionIdsResult);
-        case "project.open": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd || !statSync(cwd).isDirectory()) return fail("cwd_not_allowed", `not a directory inside the allowlisted roots: ${msg.cwd}`);
-          try {
-            projects.open(cwd);
-          } catch (err) {
-            return fail("fs_error", String(err));
-          }
-          // Other connected clients refresh their project list.
-          broadcast({ type: "sessions.changed" });
-          return reply({ cwd });
-        }
-        case "project.remove":
-          if (typeof msg.cwd !== "string" || !isAbsolute(msg.cwd)) return fail("bad_cwd", "cwd must be an absolute path");
-          try {
-            projects.remove(msg.cwd);
-          } catch (err) {
-            return fail("fs_error", String(err));
-          }
-          broadcast({ type: "sessions.changed" });
-          return reply({});
-        case "back.set":
-        case "back.done":
-        case "back.brief": {
-          if (opts.attached) return fail("back_unsupported", "Back marks are kept by the Hub; mark this reply on the Hub");
-          if (typeof msg.sessionId !== "string" || typeof msg.partId !== "string") return fail("bad_request", "sessionId and partId must be strings");
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          const marks = appSettings.get().back.marks;
-          if (msg.type === "back.done") {
-            // Existing mark or not: Done is idempotent. A queued brief leaves the queue; a running one ends into nothing.
-            dropQueuedBrief(s.id, msg.partId);
-            try {
-              appSettings.changeMarks((m) => {
-                const list = m[s.id]?.filter((x) => x.partId !== msg.partId);
-                if (list?.length) m[s.id] = list;
-                else delete m[s.id];
-              });
-            } catch (e) {
-              return fail("save_failed", (e as Error).message);
-            }
-            broadcastSettings();
-            return reply({});
-          }
-          if (msg.type === "back.brief") {
-            const m = findMark(marks, s.id, msg.partId);
-            if (!m) return fail("unknown_mark", "no such mark");
-            if (m.briefState === "queued" || m.briefState === "running") return fail("brief_busy", "a brief is already being written");
-            await startBrief(s, msg.partId, !!m.brief);
-            return reply({});
-          }
-          const bad = checkSet(msg);
-          if (bad) return fail("bad_request", bad);
-          const exists = !!findMark(marks, s.id, msg.partId);
-          if (!exists && marksTotal(marks) >= BACK_MARKS_MAX) return fail("too_many_marks", `at most ${BACK_MARKS_MAX} marks`);
-          let isNew = false;
-          try {
-            appSettings.changeMarks((m) => {
-              const list = (m[s.id] ??= []);
-              const r = upsertMark(list, msg as { partId: string; title: string }, clock());
-              isNew = r.isNew;
-              // In the same write: the first settings_changed already shows the pending brief, not the fallback.
-              if (isNew) r.mark.briefState = "queued";
-            });
-          } catch (e) {
-            return fail("save_failed", (e as Error).message);
-          }
-          broadcastSettings();
-          if (isNew) void startBrief(s, msg.partId, false).catch((e) => briefFailed(s.id, msg.partId, (e as Error).message));
-          return reply({});
-        }
-        case "session.rename":
-        case "session.archive": {
-          const title = msg.type === "session.rename" && typeof msg.title === "string" ? msg.title.trim() : "";
-          // 200: the web title input's maxLength.
-          if (msg.type === "session.rename" && (!title || title.length > 200)) return fail("bad_title", "title must be 1 to 200 characters");
-          if (msg.type === "session.archive" && typeof msg.archived !== "boolean") return fail("bad_request", "archived must be a boolean");
-          const at = await locate(msg.sessionId);
-          if (!at) return fail("unknown_session", `no session ${msg.sessionId}`);
-          try {
-            const owner = catalogues.ownerOf(msg.sessionId, at.live);
-            if (msg.type === "session.rename") await owner?.rename(msg.sessionId, at.cwd, title);
-            else await owner?.archive(msg.sessionId, at.cwd, msg.archived);
-          } catch (e) {
-            // A session with no prompt yet has no transcript to write to.
-            return fail(`${msg.type.slice("session.".length)}_failed`, (e as Error).message);
-          }
-          broadcast({ type: "sessions.changed" });
-          return reply({});
-        }
-        case "session.delete": {
-          const err = await deleteSessionById(msg.sessionId);
-          return err ? fail(err.code, err.message) : reply({});
-        }
-        case "aside.open": {
-          if (typeof msg.text !== "string" || !msg.text.trim()) return fail("bad_prompt", "text must be a non-empty string");
-          const owner = await find(msg.sessionId);
-          if (!owner) return;
-          const text = msg.text.trim();
-          const title = text.split("\n")[0]!.trim().slice(0, 80);
-          const catalogue = catalogues.ownerOf(owner.id, owner);
-          if (!catalogue) return fail("aside_failed", `no engine for session ${owner.id}`);
-          let id: string | undefined;
-          try {
-            const fork = await catalogue.forkForAside(owner, title);
-            if ("unavailable" in fork) return fail("aside_unavailable", fork.unavailable);
-            id = fork.id;
-            const oi = owner.info();
-            // Right after the fork, no await between: a list scan reads the link after its transcript scan.
-            saveSettings(() => settings.set(id!, { ownerId: owner.id, readOnly: true, port: (http.address() as AddressInfo | null)?.port, model: oi.model, permissionMode: "default", effort: oi.effort }));
-            const s = await findSession(id);
-            if (!s) throw new Error("the fork could not be restored");
-            const from = s.prompt(text) ?? "";
-            return reply({ session: s.info(), title, from } satisfies AsideOpenResult);
-          } catch (e) {
-            if (id) {
-              const err = await deleteSessionById(id, true).catch(() => undefined);
-              if (err?.code === "unknown_session" || !(await locate(id))) saveSettings(() => settings.delete([id!]));
-            }
-            return fail("aside_failed", (e as Error).message);
-          }
-        }
-        case "aside.close": {
-          if (typeof msg.sessionId !== "string" || !asideOf(msg.sessionId)) return fail("not_an_aside", "this session is not an aside");
-          const err = await deleteSessionById(msg.sessionId, true);
-          if (err?.code === "unknown_session") return saveSettings(() => settings.delete([msg.sessionId])), reply({});
-          return err ? fail(err.code, err.message) : reply({});
-        }
-        case "aside.keep": {
-          if (typeof msg.sessionId !== "string" || !asideOf(msg.sessionId)) return fail("not_an_aside", "this session is not an aside");
-          saveSettings(() => settings.set(msg.sessionId, { ownerId: undefined }, ["ownerId"]));
-          broadcast({ type: "sessions.changed" });
-          return reply({});
-        }
-        case "worker.close":
-        case "worker.remove": {
-          if (typeof msg.sessionId !== "string") return fail("bad_request", "sessionId must be a string");
-          const err = await orchestration.userOp(msg.type === "worker.close" ? "close" : "remove", msg.sessionId);
-          return err ? fail(err.code, err.message) : reply({});
-        }
-        case "session.rewindPreview":
-        case "session.rewind": {
-          const s = await find(msg.sessionId);
-          if (!s) return;
-          if (msg.type === "session.rewind" && !REWIND_MODES.includes(msg.mode)) return fail("bad_mode", `unknown rewind mode ${msg.mode}`);
-          if (msg.type === "session.rewind") autoContinue.cancel(s.id);
-          try {
-            return reply(msg.type === "session.rewind" ? (await s.rewind(msg.userMessageId, msg.mode), {}) : await s.previewRewind(msg.userMessageId));
-          } catch (err) {
-            return fail("rewind_failed", (err as Error).message);
-          }
-        }
-        case "sessions.search": {
-          // One search per connection: a newer query (or an empty one, the palette closing) stops the running scan.
-          searching?.abort();
-          searching = undefined;
-          if (typeof msg.query !== "string" || (msg.cwd !== undefined && typeof msg.cwd !== "string")) return fail("bad_query", "query must be a string");
-          const query = msg.query.trim();
-          if (query.length < MIN_SEARCH_CHARS) return reply({ scannedFiles: 0, scannedBytes: 0, ms: 0 });
-          if (query.length > MAX_SEARCH_CHARS) return fail("bad_query", `query longer than ${MAX_SEARCH_CHARS} characters`);
-          const cwd = msg.cwd === undefined ? undefined : allowed(msg.cwd);
-          if (msg.cwd !== undefined && !cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          const ctl = (searching = new AbortController());
-          // Only transcripts whose cwd is inside the roots (as session.list); newest first. Many transcripts share a cwd: allowed() once each.
-          const ok = new Map<string, string | undefined>();
-          const inside = (c: string) => (ok.has(c) ? ok.get(c) : (ok.set(c, allowed(c)), ok.get(c)));
-          // An Aside's transcript copies its owner's: its hits would duplicate the owner's.
-          const linked = new Map(settings.entries());
-          const files = (await transcripts())
-            .filter((t) => t.cwd && inside(t.cwd) && !deleting.has(t.sessionId) && !linked.get(t.sessionId)?.ownerId && (!cwd || trim(inside(t.cwd)!) === trim(cwd)))
-            .sort((a, b) => b.lastModified - a.lastModified)
-            .map((t) => ({ sessionId: t.sessionId, cwd: sessionCwd(t.cwd!), title: redact(t.summary), file: transcriptFile(projectsDir, transcriptCwd(t.sessionId, t.cwd!), t.sessionId) }));
-          const done = await searchTranscripts(files, query, (r) => out({ type: "sessions.search.result", reqId: msg.reqId, ...r }), { signal: ctl.signal });
-          if (searching === ctl) searching = undefined;
-          // No query text in the log (it may hold a secret).
-          console.log(`sessions.search: ${done.scannedFiles} files, ${Math.round(done.scannedBytes / 1e6)} MB, ${done.ms} ms, first result ${done.firstMs ?? "-"} ms${done.stopped ? `, stopped: ${done.stopped}` : ""}`);
-          return reply(done);
-        }
-        default:
-          return fail("unknown_type", `unknown message type ${(msg as { type?: string }).type}`);
-      }
-    };
     const conn: Connection = { ws, send: (m) => send(ws, m), sameHost, sameBrowser, nonceFor };
-    const areas = connectAreas(ctx, conn, (msg, out) => legacy(msg, out));
+    const areas = connectAreas(ctx, conn);
     /** Handles a message in this daemon; its reply or error goes to `out`, events and streams to this connection. */
     const local = areas.dispatch;
     const router =
