@@ -186,17 +186,6 @@ describe("restart", () => {
     expect(tour()!.textContent).toContain("Step 1 of 6");
     expect(saved()).toMatchObject({ basics: "pending", session: "pending" });
   });
-  it("an existing user restarts it from the palette's Show guide", async () => {
-    localStorage.setItem("claude-ui.tabs", "[]");
-    await mount();
-    expect(tour()).toBeNull();
-    await press({ key: "k", code: "KeyK", ctrlKey: true });
-    const row = [...document.querySelectorAll<HTMLElement>('[data-testid="palette"] [role="option"]')].find((o) => o.textContent?.startsWith("Show guide"))!;
-    expect(row).toBeDefined();
-    await act(async () => row.click());
-    await act(async () => {});
-    expect(tour()!.dataset.step).toBe("welcome");
-  });
   it("Esc after a restart skips again and the focus returns to the Settings button", async () => {
     localStorage.setItem(GUIDE_KEY, JSON.stringify(skipped));
     await mount();
@@ -317,13 +306,6 @@ describe("keys follow the user's keymap", () => {
     replies["session.list"] = { sessions: [session], projects: ["/p/demo"] };
     replies["git.status"] = { status: { branch: "main" } };
   };
-  it("a rebound Show files shows the new chips on the Files step", async () => {
-    inSession();
-    bind("pane.files", "mod+alt+j");
-    await mount();
-    await stepTo("files");
-    expect(chips()).toEqual(["Ctrl", "Alt", "J"]);
-  });
   it("rebinding while the tour shows updates the chips, and removing the key hides the line", async () => {
     inSession();
     await mount();

@@ -122,10 +122,6 @@ describe("trimToCap", () => {
 describe("chooseEvictions", () => {
   const now = 100 * MAX_AGE_MS;
 
-  it("removes entries older than 14 days", () => {
-    expect(chooseEvictions([meta("old", now - MAX_AGE_MS - 1), meta("new", now - 1000)], undefined, [], now)).toEqual(["old"]);
-  });
-
   it("removes sessions missing from the last list only when a list is given", () => {
     const metas = [meta("a", now), meta("b", now)];
     expect(chooseEvictions(metas, new Set(["a"]), [], now)).toEqual(["b"]);

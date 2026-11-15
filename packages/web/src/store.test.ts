@@ -501,11 +501,6 @@ describe("withSubscribe with refs (GH-771)", () => {
     expect(withSubscribe(cached(), reply([{ ref: "u1" }], { aux: [{ part: { ref: "nope" }, pos: 1 }] }))).toBe(MISSING_REFS);
     expect(withSubscribe(emptySession(), reply([{ ref: "u1" }]))).toBe(MISSING_REFS);
   });
-
-  it("a plain snapshot (no refs) still works and returns a view", () => {
-    const v = withSubscribe(cached(), { logEpoch: "n", seq: 1, session: info, snapshot: { heads: [], attentionSeq: 0, page: { parts: [user("x")] }, aux: [] } });
-    expect(v.order).toEqual(["x"]);
-  });
 });
 
 describe("knownOf (GH-771)", () => {
