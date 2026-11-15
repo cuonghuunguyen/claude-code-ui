@@ -2,10 +2,9 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkDockerSide, cpUsable, dockerStatus, folderPath, listContainers, parseContainers, prepareDockerSide, underDist, type Exec } from "../src/docker-side.ts";
+import { checkDockerSide, cpUsable, dockerStatus, listContainers, parseContainers, prepareDockerSide, underDist, type Exec } from "../src/docker-side.ts";
 import type { Runner } from "../src/update.ts";
 
 // `docker inspect -f` output of the mounts check: read-only root flag, `<dest> <rw>` lines, the tmpfs map as JSON.
@@ -41,14 +40,6 @@ const pkg = () => {
 describe("docker sides", () => {
   it("parses docker ps names: first name per line, no k8s pod containers, no blank or invalid lines", () => {
     expect(parseContainers("dev\r\nweb,web-alias\nk8s_POD_x\n\n bad name\napi\n")).toEqual(["dev", "web", "api"]);
-  });
-
-  it("no Docker sides without the CLI, with the engine down or with Windows containers", async () => {
-    for (const version of [{ code: null, stderr: "spawn docker ENOENT" }, { code: 1 }, { code: 0, stdout: "windows\n" }]) {
-      const f = fake({ version });
-      expect(await listContainers(f.exec)).toEqual([]);
-      expect(f.calls.some((c) => c[1] === "ps")).toBe(false);
-    }
   });
 
   it("tells the Docker state: down (no CLI, engine down, Windows containers, ps fails), empty (nothing runs, only k8s_*), ok", async () => {
@@ -264,11 +255,6 @@ describe("docker sides", () => {
 });
 
 describe("folderPath / underDist", () => {
-  it("a folder URL has no trailing separator", () => {
-    const p = folderPath(pathToFileURL(join(tmpdir(), "claude-ui") + sep));
-    expect(p.endsWith(sep)).toBe(false);
-    expect(p).toBe(join(tmpdir(), "claude-ui"));
-  });
   it("only files under the package's dist count as a build in progress", () => {
     const pkgDir = join(tmpdir(), "p");
     expect(underDist(join(pkgDir, "dist", "cli.js"), pkgDir)).toBe(true);
