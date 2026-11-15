@@ -12,7 +12,8 @@ import { NODE_MIN, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type PushPayload, type Se
 import { runGit } from "../src/git-runner.ts";
 import { SideGone } from "../src/wsl-git.ts";
 import { createProjects } from "../src/projects.ts";
-import { createSettings } from "../src/settings.ts";
+import { createSettings, DEFAULTS } from "../src/settings.ts";
+import { ROUTES } from "../src/side-routes.ts";
 import { createDaemon } from "../src/server.ts";
 import { checkMessage, checkScript, createRouter, createSides, dockerExecArgs, dockerSide, parseDistros, runSide, setupMessage, setupScript, wslArgs, wslSide, type SavedSide, type SideProcess } from "../src/sides.ts";
 import { fakeQuery } from "./fake-query.ts";
@@ -547,6 +548,26 @@ describe("sides", () => {
     const router = createRouter({ sides: s, send: (m) => sent.push(m), local: async () => {}, localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: {} }), isLocalSession: async () => false, sameHost: true });
     await router.handle({ type: "fs.openExternal", path: "/p/a", cwd: "/p", with: "custom", side: "wsl:Ubuntu", reqId: "r" } as never);
     expect(sent[0]).toMatchObject({ type: "error", code: "side_unsupported" });
+  });
+
+  // Hub-local data (Claude account, Jira token, launcher, updates) must never reach a Side machine, whatever routing field the message carries.
+  const hubTypes = Object.entries(ROUTES).filter(([, r]) => r.by === "hub").map(([t]) => t);
+  it.each(hubTypes)("a Hub-only type is answered by the Hub and never forwarded to a Side: %s", async (type) => {
+    const frames: { type: string; reqId: string }[] = [];
+    const s = createSides({ targets: [wslSide("Ubuntu")], discoverMs: 0, discover: async () => [], spawn: () => scriptedSide((m) => (frames.push(m as never), {})) });
+    await s.refresh();
+    await s.start("wsl:Ubuntu");
+    s.sessionSide.set("side-session", "wsl:Ubuntu");
+    s.terminalSide.set("side-terminal", "wsl:Ubuntu");
+    s.claimCwd("wsl:Ubuntu", "/side/project");
+    const sent: ServerMessage[] = [];
+    const local: unknown[] = [];
+    const router = createRouter({ sides: s, send: (m) => sent.push(m), local: async (m) => void local.push(m), localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: { settings: DEFAULTS } }), isLocalSession: async () => false });
+    // The router's own handlers refuse an unknown side (nothing starts, no ssh config is touched).
+    const side = type.startsWith("side.") ? "nope" : "wsl:Ubuntu";
+    await router.handle({ type, reqId: "browser", side, sessionId: "side-session", cwd: "/side/project", path: "/side/project/a", terminalId: "side-terminal" } as never);
+    expect(frames.filter((f) => f.reqId === "browser")).toEqual([]);
+    expect(local.length + sent.filter((m) => "reqId" in m && m.reqId === "browser").length).toBeGreaterThan(0);
   });
 
   it("fs.openExternal: a WSL side is refused for a browser on another machine; a Docker side is side_unsupported", async () => {
