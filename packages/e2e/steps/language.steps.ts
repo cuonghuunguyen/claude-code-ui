@@ -49,9 +49,10 @@ When("I switch the language to {word}", async ({ page }, lang: string) => {
 
 Then("no text is clipped in the open dialog or the sidebar", async ({ page }) => {
   // A label cut by its box: an element with text whose content is wider than the box while it hides overflow (no ellipsis by design).
+  // Screen-reader-only text (`sr-only`, e.g. the engine name behind the sidebar's engine logo) is a 1px box by design: not a label.
   const clipped = await page.evaluate(() =>
     [...document.querySelectorAll<HTMLElement>("[role=dialog] *, aside *")]
-      .filter((e) => e.childElementCount === 0 && e.textContent?.trim() && e.offsetParent !== null)
+      .filter((e) => e.childElementCount === 0 && e.textContent?.trim() && e.offsetParent !== null && !e.closest(".sr-only"))
       .filter((e) => {
         const s = getComputedStyle(e);
         return s.overflowX === "hidden" && s.textOverflow !== "ellipsis" && e.scrollWidth > e.clientWidth + 1;

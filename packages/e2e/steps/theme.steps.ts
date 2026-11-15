@@ -11,12 +11,20 @@ const token = (page: Page, name: string) => page.evaluate((n) => getComputedStyl
 /** CSS may write #fff for #ffffff. */
 const long = (hex: string) => (/^#[0-9a-f]{3}$/i.test(hex) ? `#${[...hex.slice(1)].map((c) => c + c).join("")}` : hex).toLowerCase();
 
+/** The button's label per mode in English and Vietnamese (language.feature sets the mode while the app is in Vietnamese). */
+const MODE_LABEL: Record<string, RegExp> = {
+  system: /^(Theme: system|Chủ đề: hệ thống) /,
+  light: /^(Theme: light|Chủ đề: sáng) /,
+  dark: /^(Theme: dark|Chủ đề: tối) /,
+};
+
 /** Titlebar (or drawer) theme button cycles System, Light, Dark: click until its label names the mode. */
 async function setMode(page: Page, mode: string): Promise<void> {
   const drawer = page.getByTestId("open-drawer");
   const button = (await drawer.isVisible()) ? page.getByTestId("drawer-theme") : page.getByTestId("theme-toggle");
-  for (let i = 0; i < 3 && !(await button.getAttribute("aria-label"))?.startsWith(`Theme: ${mode} `); i++) await button.click();
-  await expect(button).toHaveAttribute("aria-label", new RegExp(`^Theme: ${mode} `));
+  const label = MODE_LABEL[mode]!;
+  for (let i = 0; i < 3 && !label.test((await button.getAttribute("aria-label")) ?? ""); i++) await button.click();
+  await expect(button).toHaveAttribute("aria-label", label);
 }
 
 When("I open Settings › Appearance", async ({ page }) => {
