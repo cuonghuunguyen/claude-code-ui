@@ -1552,6 +1552,19 @@ it("Esc stops the turn of an Aside pane only from inside its popup, and of an ow
   expect(owner).toHaveBeenCalledOnce();
 });
 
+it("Esc stops the turn of a docked pane only from inside its dock, not from the main area", async () => {
+  const running = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "session_state", id: "session_state", state: "running" } as never });
+  const run = { id: "s1", cwd: "/tmp", state: "running" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: ["default" as const] };
+  const esc = (t: EventTarget) => act(async () => void t.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" })));
+  const onInterrupt = vi.fn();
+  const d = await render({ docked: true, onInterrupt, session: run }, running);
+  d.el.setAttribute("data-docked-session", "s1");
+  await esc(document.body);
+  expect(onInterrupt).not.toHaveBeenCalled();
+  await esc(d.el);
+  expect(onInterrupt).toHaveBeenCalledOnce();
+});
+
 it("while a permission card replaces the prompt box, Ask aside still opens an Aside (button, and the palette's /btw insert)", async () => {
   const perm = applyEvent(emptySession(), { type: "event", sessionId: "s1", seq: 1, part: { type: "permission_request", id: "p1", requestId: "p1", toolUseId: "t1", tool: "Bash", input: { command: "rm x" }, suggestions: [], settled: false } as never });
   const onAside = vi.fn(async () => {});

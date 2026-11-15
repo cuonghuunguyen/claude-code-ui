@@ -116,3 +116,25 @@ it("the footer's Connect closes the picker and calls back; a short list keeps th
   expect(search()).toBeNull();
   expect(footerEl()!.querySelector('[data-testid="models-connect"]')).not.toBeNull();
 });
+
+const press = async (key: string) => {
+  await act(async () => {
+    search()!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+  });
+};
+
+it("the keyboard picks a filtered model with ArrowDown and Enter, and Escape closes the picker without a pick", async () => {
+  const onChange = await mount();
+  const trigger = document.querySelector<HTMLElement>('[data-testid="m"]')!;
+  await type("gam");
+  await press("ArrowDown");
+  await press("Enter");
+  expect(onChange).toHaveBeenCalledWith("zen/gamma");
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  onChange.mockClear();
+  await act(async () => trigger.click());
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  await press("Escape");
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  expect(onChange).not.toHaveBeenCalled();
+});
