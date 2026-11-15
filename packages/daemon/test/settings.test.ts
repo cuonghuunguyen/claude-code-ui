@@ -171,15 +171,19 @@ it("a notifications patch with a non-boolean or an unknown field is refused", ()
   expect(() => s.set({ notifications: { foo: true } as never })).toThrow("unknown setting notifications.foo");
 });
 
-// A settings.json without the section gets the default too.
+// `seed`: a settings.json that holds another section only ("section absent" gets the default too); else no file at all.
 it.each([
-  ["performance", "monitor", "x", "Performance monitor must be on or off"],
-  ["chat", "visualize", "yes", "Inline visualizations must be on or off"],
-  ["terminalAccess", "enabled", 1, "Let sessions use open terminals must be on or off"],
-  ["fork", "enabled", 1, "Fork subagents must be on or off"],
-])("boolean setting %s.%s: default on, saved, a non-boolean is refused", (section, key, bad, message) => {
+  ["performance", "monitor", "x", "Performance monitor must be on or off", false],
+  ["chat", "visualize", "yes", "Inline visualizations must be on or off", true],
+  ["terminalAccess", "enabled", 1, "Let sessions use open terminals must be on or off", false],
+  ["fork", "enabled", 1, "Fork subagents must be on or off", false],
+  ["terminalAccess", "enabled", 1, "Let sessions use open terminals must be on or off", true],
+  ["fork", "enabled", 1, "Fork subagents must be on or off", true],
+  ["performance", "monitor", "x", "Performance monitor must be on or off", true],
+  ["chat", "visualize", "yes", "Inline visualizations must be on or off", false],
+])("boolean setting %s.%s: default on, saved, a non-boolean is refused (seeded with another section: %s)", (section, key, bad, message, seed) => {
   const f = file();
-  writeFileSync(f, JSON.stringify({ chrome: { enabled: true } }));
+  if (seed) writeFileSync(f, JSON.stringify({ chrome: { enabled: true } }));
   const s = createSettings({ file: f });
   expect(s.get()[section as "chat"]).toEqual({ [key]: true });
   expect(s.set({ [section]: { [key]: false } } as never)[section as "chat"]).toEqual({ [key]: false });

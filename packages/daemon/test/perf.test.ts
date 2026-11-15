@@ -10,6 +10,10 @@ const make = () => {
   perfs.push(p);
   return { p, eld };
 };
+const tick = (ms: number) => {
+  clock += ms;
+  vi.advanceTimersByTime(ms);
+};
 
 beforeEach(() => {
   clock = 0;
@@ -19,6 +23,44 @@ afterEach(() => {
   perfs.forEach((p) => p.close());
   perfs = [];
   vi.useRealTimers();
+});
+
+describe("event loop", () => {
+  it("memory keeps the last 60 samples", () => {
+    const { p } = make();
+    p.setEnabled(true);
+    for (let i = 0; i < 70; i++) tick(10_000);
+    expect(p.report().memory).toHaveLength(60);
+  });
+});
+
+describe("spans", () => {
+  it("a session.start span that never ends closes as a timeout after 60 s, with no stall label afterwards", () => {
+    const { p } = make();
+    p.setEnabled(true);
+    const s = p.span("session.start");
+    tick(61_000);
+    const r = p.report();
+    expect(r.spans["session.start"]).toBeUndefined();
+    expect(r.spans["session.start.timeout"]?.n).toBe(1);
+    expect(vi.getTimerCount()).toBe(1);
+    s.end();
+    expect(p.report().spans["session.start"]).toBeUndefined();
+    const q = p.span("session.open");
+    tick(300);
+    const stall = p.report().worst.filter((w) => w.kind === "stall").at(-1);
+    expect(stall && stall.kind === "stall" && stall.spans.map((x) => x.name)).toEqual(["session.open"]);
+    q.end();
+  });
+  it("no watchdog timer without an open span", () => {
+    const { p } = make();
+    p.setEnabled(true);
+    expect(vi.getTimerCount()).toBe(1);
+    const s = p.span("session.open");
+    expect(vi.getTimerCount()).toBe(2);
+    s.end();
+    expect(vi.getTimerCount()).toBe(1);
+  });
 });
 
 describe("privacy", () => {
