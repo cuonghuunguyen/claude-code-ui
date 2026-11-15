@@ -66,7 +66,7 @@ export function saveDocked(d: Docked) {
   listeners.forEach((f) => f());
 }
 
-function subscribe(l: () => void) {
+export function subscribeDocked(l: () => void) {
   listeners.add(l);
   const onStorage = (e: StorageEvent) => (e.key === KEY || e.key === null) && l();
   window.addEventListener("storage", onStorage);
@@ -76,4 +76,4 @@ function subscribe(l: () => void) {
   };
 }
 
-export const useDocked = (): Docked => useSyncExternalStore(subscribe, loadDocked, () => NONE);
+export const useDocked = (): Docked => useSyncExternalStore(subscribeDocked, loadDocked, () => NONE);
