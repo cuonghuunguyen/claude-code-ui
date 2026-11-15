@@ -1171,6 +1171,12 @@ export function createDaemon(opts: {
       createForkGroup(() => appSettings.get().fork.enabled),
     ],
   });
+  /** Orchestration reads OpenCode's agents and models for its own checks; fake catalogues without OpenCode have none. */
+  const openCodeCatalogue = () => {
+    const c = catalogues.byName("opencode");
+    if (!c) throw new Error("This daemon has no OpenCode engine");
+    return c;
+  };
   const orchestration = createOrchestration({
     links: settings,
     held: (id) => !!holds.get(id),
@@ -1198,10 +1204,10 @@ export function createDaemon(opts: {
     createWorktree: (repo, o) => createIn(repo, o),
     port: () => (http.address() as AddressInfo | null)?.port,
     heldElsewhere: (id) => cliTurnRunning(claudeDir, id, true),
-    openCodeAgents: async (cwd) => (await catalogues.byName("opencode")!.agents(cwd)).map((a) => a.name),
+    openCodeAgents: async (cwd) => (await openCodeCatalogue().agents(cwd)).map((a) => a.name),
     agents: (cwd) => queuedQuery((q) => q.supportedAgents(), opts.query, { cwd, persistSession: false }).then((l) => l.map((a) => a.name)),
     models: () => known,
-    openCodeModels: () => catalogues.byName("opencode")!.models(),
+    openCodeModels: () => openCodeCatalogue().models(),
     remove: async (id) => {
       const err = await deleteSessionById(id);
       if (err?.code !== "unknown_session") return err;

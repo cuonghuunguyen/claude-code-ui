@@ -4298,7 +4298,7 @@ export function App() {
                   onDraft={changeDraft}
                   modes={draftModes}
                   caps={engineEntry?.capabilities}
-                  onOpenOpenCodeSettings={() => openSettingsGroup(draftEngine)}
+                  onOpenOpenCodeSettings={openSettingsGroup}
                   onOpenProject={() => setOpeningProject(true)}
                   onUpload={upload(() => uploadOwnerFor(unprompted.current, draftProject, draftUpload.current), draftProject, () => void (draftUpload.current = rotateDraftToken()))}
                   onSearch={search}
@@ -5102,7 +5102,7 @@ export function NewSession({
   /** Flags of the draft's Engine; none = all. */
   caps?: EngineCapabilities;
   /** The inline OpenCode error's button. */
-  onOpenOpenCodeSettings?: () => void;
+  onOpenOpenCodeSettings?: (engine: Engine) => void;
   /** The model picker's footer (OpenCode): link to its providers, and a failed list with Retry. */
   modelFooter?: ModelFooterProps;
   onOpenProject: () => void;
@@ -5128,12 +5128,13 @@ export function NewSession({
   const { model, mode, effort } = draft;
   const engine = draft.engine ?? DEFAULT_ENGINE;
   // A failed start of the OpenCode engine (missing, too old, failed to start) shows under the chips with the way to fix it.
-  const [engineError, setEngineError] = useState<string>();
+  // `engine`: the Engine of the failed start (the draft may be switched meanwhile); the settings button opens its group.
+  const [engineError, setEngineError] = useState<{ message: string; engine: Engine }>();
   const start = (c: string, first: FirstMessage) => {
     setEngineError(undefined);
     return onStart(c, { model, mode, effort, engine: draft.engine, ...(agent && { agent }) }, first).catch((e: RequestError) => {
       // Shown under the chips with the settings button: the prompt box keeps the draft and adds no "Prompt not sent" line.
-      if (e.code === "opencode_missing" || e.code === "opencode_old" || e.code === "opencode_failed") (setEngineError(e.message), (e as ShownError).shown = true);
+      if (e.code === "opencode_missing" || e.code === "opencode_old" || e.code === "opencode_failed") (setEngineError({ message: e.message, engine }), (e as ShownError).shown = true);
       throw e;
     });
   };
@@ -5290,9 +5291,9 @@ export function NewSession({
         )}
         {engineError && (
           <div role="alert" className="flex w-full flex-col items-center gap-1 text-center text-destructive text-sm" data-testid="engine-error">
-            <p>{engineError}</p>
+            <p>{engineError.message}</p>
             {onOpenOpenCodeSettings && (
-              <Button variant="secondary" size="sm" onClick={onOpenOpenCodeSettings} className="max-md:h-11" data-testid="engine-error-settings">
+              <Button variant="secondary" size="sm" onClick={() => onOpenOpenCodeSettings(engineError.engine)} className="max-md:h-11" data-testid="engine-error-settings">
                 {tr("app.main.openOpenCodeSettings")}
               </Button>
             )}

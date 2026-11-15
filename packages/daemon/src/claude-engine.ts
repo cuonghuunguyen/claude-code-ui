@@ -900,13 +900,13 @@ export class ClaudeSession implements EngineSession {
     else this.setMode(mode);
   }
 
-  /** Applies from the next turn on; "default" goes back to the model's default effort. */
   /** Claude has no agents (EngineCapabilities.agents). */
   setAgent(_agent: string): Promise<void> {
     throw new Error("this session's engine has no agents");
   }
   async refreshAgents() {}
 
+  /** Applies from the next turn on; "default" goes back to the model's default effort. */
   async setEffort(effort: Effort) {
     if (!this.session.isLive()) throw new Error(`session ${this.id} is not live (${this.session.currentState()})`);
     await this.query?.applyFlagSettings({ effortLevel: effort === "default" ? null : effort });
