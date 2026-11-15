@@ -502,7 +502,7 @@ export class ClaudeSession implements EngineSession {
     if (policy === "allow") return Promise.resolve({ behavior: "allow", updatedInput: input });
     if (policy === "no_rules") suggestions = [];
     // The visualize skill's HTML file in the upload folder the CLI was granted (GH-807): no card in Ask or Plan mode.
-    if (isVisualizeWrite(tool, input, this.opts.uploadDir?.(this.session.uploadOwner))) return { behavior: "allow", updatedInput: input };
+    if (tool === "Write" && isVisualizeWrite(tool, input, this.opts.uploadDir?.(this.session.uploadOwner))) return { behavior: "allow", updatedInput: input };
     // A call over a limit shows no card: it runs and the tool refuses it with its own error (a card would stall an unattended run).
     if (this.opts.preflight?.(this.id, tool, input, mcpServer) !== undefined) return { behavior: "allow", updatedInput: input };
     const made = this.opts.permissionCard?.(this.id, tool, input, mcpServer);
