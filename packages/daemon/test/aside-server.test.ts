@@ -152,6 +152,20 @@ describe("aside.open", () => {
   });
 });
 
+describe("aside.open while the owner waits for permission", () => {
+  it("opens the Aside and the owner's pending permission request is still answerable", async () => {
+    const t = await start({ extra: { query: permissionQuery } });
+    await t.request({ type: "session.subscribe", sessionId: OWNER, sinceSeq: 0 });
+    await t.request({ type: "session.prompt", sessionId: OWNER, text: "run it" });
+    const ask = () => t.inbox.find((m) => m.type === "event" && m.sessionId === OWNER && m.part.type === "permission_request") as { part: { requestId: string } } | undefined;
+    await until(() => !!ask());
+    const r = await t.request({ type: "aside.open", sessionId: OWNER, text: "what are you waiting on?" });
+    expect(r.type).toBe("reply");
+    const settled = await t.request({ type: "permission.respond", requestId: ask()!.part.requestId, decision: "allow" });
+    expect(settled).toMatchObject({ type: "reply", result: { settled: true } });
+  });
+});
+
 describe("listing, close and keep", () => {
   it("session.list never lists an Aside; it is listed after aside.keep, which keeps readOnly", async () => {
     const t = await start();
@@ -173,6 +187,16 @@ describe("listing, close and keep", () => {
     expect(t.deleted).toEqual([session.id]);
     expect(linkOf(t.settingsFile, session.id)).toBeUndefined();
     expect(t.inbox.some((m) => m.type === "sessions.changed" && (m as { deleted?: string }).deleted === session.id)).toBe(true);
+  });
+
+  it("a restored session whose transcript is deleted outside the daemon drops out of the next list and is announced as deleted", async () => {
+    const t = await start();
+    await t.request({ type: "session.create", cwd: webRoot });
+    expect((await t.request({ type: "session.subscribe", sessionId: OWNER })).type).toBe("reply");
+    expect(await t.ids()).toContain(OWNER);
+    t.transcripts.delete(OWNER);
+    expect(await t.ids()).not.toContain(OWNER);
+    expect(t.inbox.some((m) => m.type === "sessions.changed" && (m as { deleted?: string }).deleted === OWNER)).toBe(true);
   });
 
   it("setPermissionMode clears readOnly; the next CLI start has no editing tools restriction", async () => {
