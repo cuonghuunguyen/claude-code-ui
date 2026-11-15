@@ -7,6 +7,8 @@ Feature: Theme picker (GH-468)
     And I open the scratch project
 
   Scenario: Appearance lists seven themes; the mode button cycles inside a theme; Dracula in light mode shows Default light; it fits a phone
+    # The daemon serves the whole run: an addon scenario may have left the example addon and its theme.
+    Given the example addon is not installed
     When I open Settings › Appearance
     Then the theme list is "Default, Catppuccin, Tokyo Night, Solarized, Nord, Dracula, One"
     And the theme "Dracula" is marked dark only
@@ -42,6 +44,7 @@ Feature: Theme picker (GH-468)
     When I mark the page
     And I choose the theme "Catppuccin"
     Then the app card colour is "#1e1e2e"
+    And the terminal toggle is shown
     When I open the terminal with the shortcut
     Then the terminal background is "#1e1e2e"
     When I open the Changes tab of the side panel

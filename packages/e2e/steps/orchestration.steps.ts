@@ -14,9 +14,10 @@ import { Given, Then, When } from "./fixtures.ts";
 /** A worker row of the sidebar (the rows of a coordinator's workers may sit behind its "N workers" toggle). */
 const workerRows = (page: Page): Locator => page.locator('[data-testid="session-item"][data-worker]');
 
+// The daemon keeps the workers of earlier scenarios, and a worker group starts collapsed: open every collapsed group, not just the first.
 async function revealWorkers(page: Page): Promise<void> {
-  const toggle = page.getByTestId("worker-group-toggle").first();
-  if ((await workerRows(page).count()) === 0 && (await toggle.count()) > 0 && (await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  const collapsed = page.locator('[data-testid="worker-group-toggle"][aria-expanded="false"]');
+  for (let n = await collapsed.count(); n > 0; n--) await collapsed.first().click();
 }
 
 // One daemon serves every scenario and keeps every scratch project, so the worktree name must be unique per scenario and retry (a shared name is ambiguous).

@@ -81,7 +81,8 @@ Then("the sidebar has no side status under {string}", async ({ page }, project: 
 // The auto start at hub start can still be running (Starting…, then the error): retry until the error and its open Details hold for a moment.
 When("I open the Details of the sidebar status", async ({ page }) => {
   await expect(async () => {
-    const toggle = page.getByTestId("session-list").getByRole("button", { name: "Details" });
+    // exact: the run keeps the projects of earlier scenarios, and one may have "details" in its name.
+    const toggle = page.getByTestId("session-list").getByRole("button", { name: "Details", exact: true });
     if ((await toggle.getAttribute("aria-expanded", { timeout: 2_000 })) !== "true") await toggle.click({ timeout: 2_000 });
     await expect(page.getByTestId("sidebar-side-details")).toBeVisible({ timeout: 1_000 });
     await page.waitForTimeout(1_000); // + the 500 ms of the capture step
