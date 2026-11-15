@@ -45,6 +45,7 @@ import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 import { gitDirty, runInlineClaude, type InlineBridge } from "./inline-claude.ts";
 import type { InlineHooks, InlineResult, InlineSpec } from "./inline-types.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
+import { isVisualizeWrite } from "./visualize-write.ts";
 
 /** The SDK types the rest of the daemon's session code names; session.ts imports them from here, never from the SDK. */
 export type QueryFn = typeof sdkQuery;
@@ -500,6 +501,8 @@ export class ClaudeSession implements EngineSession {
     const policy = this.opts.toolPolicy?.(tool, mcpServer);
     if (policy === "allow") return Promise.resolve({ behavior: "allow", updatedInput: input });
     if (policy === "no_rules") suggestions = [];
+    // The visualize skill's HTML file in the upload folder the CLI was granted (GH-807): no card in Ask or Plan mode.
+    if (isVisualizeWrite(tool, input, this.opts.uploadDir?.(this.session.uploadOwner))) return { behavior: "allow", updatedInput: input };
     // A call over a limit shows no card: it runs and the tool refuses it with its own error (a card would stall an unattended run).
     if (this.opts.preflight?.(this.id, tool, input, mcpServer) !== undefined) return { behavior: "allow", updatedInput: input };
     const made = this.opts.permissionCard?.(this.id, tool, input, mcpServer);

@@ -74,6 +74,7 @@ import type { AddressInfo } from "node:net";
 import { serveAppIcon } from "./app-icon.ts";
 import { serveStatic } from "./static.ts";
 import { VISUALIZE_HEADERS, VISUALIZE_SHELL, visualizePluginDir } from "./visualize.ts";
+import { visualizeReadable } from "./visualize-write.ts";
 import { lastEntryTime, listSessionsOffThread, mapLimit, transcriptStamp } from "./session-scan.ts";
 
 /** The reply field with the folders of the session's plan files (a side's own reply carries its own). */
@@ -3715,7 +3716,8 @@ export function createDaemon(opts: {
           else covered.set(ws, new Set(msg.covered));
           return reply({});
         case "fs.read": {
-          const file = allowed(msg.path);
+          // GH-807: a visualize file of a session's upload folder is readable without a root covering that folder.
+          const file = allowed(msg.path) ?? visualizeReadable(msg.path, uploads.parent);
           // A missing file whose nearest existing ancestor is allowed (deleted after an Edit, also with its directory): the changes tab shows it deleted.
           if (!file && missingInRoots(msg.path)) return fail("not_found", `no such file: ${msg.path}`);
           if (!file) return fail("path_not_allowed", `outside the allowlisted roots: ${msg.path}`);

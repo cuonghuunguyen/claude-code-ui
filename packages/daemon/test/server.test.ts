@@ -1687,6 +1687,18 @@ describe("daemon", () => {
     expect(await c.request({ type: "fs.search", cwd: webRoot, query: "linked" })).toMatchObject({ result: { paths: ["linkedin"] } });
   });
 
+  it("fs.read reads <upload folder>/<id>/visualize/<name>.html outside the roots (GH-807); other upload files and fs.write stay refused", async () => {
+    const dir = join(uploadParent, "vis-s1", "visualize");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "chart.html"), "<b>chart</b>");
+    writeFileSync(join(uploadParent, "vis-s1", "other.html"), "x");
+    const c = await client();
+    expect(await c.request({ type: "fs.read", path: join(dir, "chart.html") })).toMatchObject({ result: { content: "<b>chart</b>" } });
+    expect(await c.request({ type: "fs.read", path: join(uploadParent, "vis-s1", "other.html") })).toMatchObject({ code: "path_not_allowed" });
+    expect(await c.request({ type: "fs.write", path: join(dir, "chart.html"), content: "y", baseMtime: 0 })).toMatchObject({ type: "error" });
+    expect(readFileSync(join(dir, "chart.html"), "utf8")).toBe("<b>chart</b>");
+  });
+
   it("two consecutive saves with the returned mtime both succeed; fs.write keeps the inode, leaves no tail bytes, and refuses a directory; fs.read keeps a BOM, CRLF and a missing final newline byte for byte", async () => {
     {
       const file = join(webRoot, "proj", "twice.txt");
