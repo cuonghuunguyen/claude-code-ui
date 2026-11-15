@@ -2,10 +2,14 @@
 // A type set is a template-literal `Extract`, so a new type in wire.ts is a typecheck error until its area handles it.
 import type { ClientMessage, ServerMessage } from "@claude-ui/protocol";
 import { createEngineArea } from "./area-engine.ts";
+import { createGitArea } from "./area-git.ts";
+import { createWorktreeArea } from "./area-worktree.ts";
 import { createSettingsArea } from "./area-settings.ts";
 import type { DaemonContext } from "./daemon-context.ts";
 import { createDispatch, type ClientType, type Connection, type DispatchedType, type Handlers } from "./dispatch.ts";
 
+export type GitTypes = Extract<ClientType, `git.${string}`>;
+export type WorktreeTypes = Extract<ClientType, `worktree.${string}`>;
 export type EngineTypes = Extract<ClientType, `opencode.${string}`>;
 export type SettingsTypes = "settings.get" | "settings.set" | "launcher.shortcut" | Extract<ClientType, `jira.${string}` | `claude.account.${string}` | `perf.${string}` | `push.${string}` | `addons.${string}` | `update.${string}`>;
 
@@ -13,9 +17,11 @@ export type SettingsTypes = "settings.get" | "settings.set" | "launcher.shortcut
 export function connectAreas(ctx: DaemonContext, conn: Connection, fallback?: (msg: ClientMessage, out: (m: ServerMessage) => void) => Promise<void>) {
   const engine = createEngineArea(ctx);
   const settings = createSettingsArea(ctx, conn);
+  const git = createGitArea(ctx);
+  const worktree = createWorktreeArea(ctx);
   // Every dispatched type has a handler: a missing key is a typecheck error (relaxed to Partial until every area exists).
-  const handlers = { ...engine.handlers, ...settings.handlers } satisfies Partial<Handlers<DispatchedType>>;
+  const handlers = { ...engine.handlers, ...settings.handlers, ...git.handlers, ...worktree.handlers } satisfies Partial<Handlers<DispatchedType>>;
   void handlers;
-  return createDispatch([engine, settings], fallback);
+  return createDispatch([engine, settings, git, worktree], fallback);
 }
 export type { Handlers };

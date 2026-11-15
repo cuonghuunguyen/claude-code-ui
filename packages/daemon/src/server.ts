@@ -30,15 +30,14 @@ import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA
 import { performance } from "node:perf_hooks";
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
 import { connectAreas } from "./areas.ts";
+import { MAX_FILE_BYTES, decodeText } from "./area-git.ts";
 import type { DaemonContext } from "./daemon-context.ts";
 import type { Connection } from "./dispatch.ts";
 import { createJira, JiraError, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
-import { GitRequestError, NOT_TOP, gitFailure, gitRequest, read as gitRead, write as gitWrite, type GitOutcome, type GitRequestContext } from "./git-request.ts";
-import { createWorktree, listBranches, pullRequestBranches, gitBlame, gitBlobRead, gitBlobRef, gitDiff, gitDirsOf, gitEscapes, gitFileAt, gitLog, gitOperationOf, gitRefs, gitShow, gitStatus, gitTopOf, isHash, classify, limiter, listRepos, listWorktrees, lowPriority, removeWorktree, WorktreeError, worktreeStatus, cachedStatuses, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
-import { gitBranch, gitFetch, gitPull, gitPush, gitTagDelete, gitTagRemote } from "./git-remote.ts";
-import { createWarmCommitMessage, generateCommitMessage, instructionFor, promptFor } from "./commit-message.ts";
-import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff, gitCommitFiles, gitCommitMenu, gitContinue, gitMergeRebase, gitReword, gitRollback, gitRollbackHunk, gitRollbackPreview, gitStash, gitStashList, gitStashPush, gitTag, gitTagCreate, gitTagSigning } from "./git-write.ts";
+import { GitRequestError, gitRequest, read as gitRead } from "./git-request.ts";
+import { createWorktree, gitBlobRead, gitBlobRef, gitDirsOf, gitEscapes, gitStatus, gitTopOf, limiter, listRepos, listWorktrees, removeWorktree, WorktreeError, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
+import { createWarmCommitMessage } from "./commit-message.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
 import { createCatalogues, EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx } from "./engine-catalogue.ts";
@@ -131,19 +130,6 @@ export const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 /** Transcript restores running at once. */
 const MAX_RESTORES = 2;
 
-/** Larger files are not opened in the editor. */
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
-/** UTF-8 text of a file's bytes; a UTF-16 BOM or NUL means binary-ish, invalid UTF-8 is refused (a lossy decode would be written back by a save). */
-function decodeText(buf: Buffer): { content: string } | { code: "binary" | "not_utf8" } {
-  if ((buf[0] === 0xff && buf[1] === 0xfe) || (buf[0] === 0xfe && buf[1] === 0xff)) return { code: "not_utf8" };
-  if (buf.includes(0)) return { code: "binary" };
-  try {
-    // ignoreBOM keeps the BOM in the content.
-    return { content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buf) };
-  } catch {
-    return { code: "not_utf8" };
-  }
-}
 // ponytail: stat polling, robust to atomic rename-writes and WSL; fs.watch per directory if many tabs make polling costly.
 const WATCH_INTERVAL_MS = 1000;
 /** Idle close of unheld sessions (docs/spec.md "Idle close"): the one place of the timeout and the scan interval. */
@@ -1933,6 +1919,21 @@ export function createDaemon(opts: {
 
   /** What the areas (area-*.ts) reach of this daemon. Built once, after every closure it names exists. */
   const ctx: DaemonContext = {
+    allowed,
+    inside,
+    refused,
+    claudeDir,
+    git: { allowed, inside, topOf: gitTopOf, markStale: markRepoStale },
+    statusOf,
+    reposOf,
+    lastOpen,
+    localHistory,
+    netSlot,
+    gitOutside,
+    createIn,
+    removeIn,
+    isRemoving,
+    inDir,
     appSettings,
     secrets,
     jira,
@@ -2011,14 +2012,6 @@ export function createDaemon(opts: {
     /** The running `fs.replace` dry run of this connection (a newer one and the close stop it), and whether an apply or undo is running. */
     let replacing: AbortController | undefined;
     let writingReplace = false;
-    /** The running `git.commitMessage` of this connection: stopped by `git.commitMessageCancel`, a newer one, and the close. */
-    let generating: AbortController | undefined;
-    /** The signed `git.tagCreate` of this connection, aborted by `git.tagCancel` and when the connection closes. */
-    let tagging: AbortController | undefined;
-    /** The `git.reword` of this connection, aborted by `git.rewordCancel` and when the connection closes. */
-    let rewording: AbortController | undefined;
-    /** Clean up scans (`worktree.status` with `scan`) of this connection: aborted by `worktree.cancel` and when it closes. */
-    const scans = new Map<string, AbortController>();
     const unwatchAll = () => {
       watched.forEach((w) => unwatchFile(w.real, w.listener));
       watched.clear();
@@ -2037,11 +2030,6 @@ export function createDaemon(opts: {
       searching?.abort();
       grepping?.abort();
       replacing?.abort();
-      generating?.abort();
-      tagging?.abort();
-      rewording?.abort();
-      scans.forEach((a) => a.abort());
-      scans.clear();
       areas.close();
       focused.delete(ws);
       covered.delete(ws);
@@ -2066,8 +2054,6 @@ export function createDaemon(opts: {
         end();
       }
     };
-    /** What git requests need from this daemon (git-request.ts). */
-    const git: GitRequestContext = { allowed, inside, topOf: gitTopOf, markStale: markRepoStale };
     /** Handles a message in this daemon; its reply or error goes to `out`, events and streams to this connection. */
     type MediaFail = { code: string; message: string; size?: number };
     /** media.read and fs.media {hash}: a piece of a media file or of a file at a commit, with the roots and extension checks. */
@@ -2076,7 +2062,7 @@ export function createDaemon(opts: {
       const path = m.path;
       const mime = mediaType(path);
       if (m.hash !== undefined) {
-        const o = await gitRequest(git, m, gitRead(async (cwd, inside) => {
+        const o = await gitRequest(ctx.git, m, gitRead(async (cwd, inside) => {
           if (!mime) throw new GitRequestError("unsupported_type", `not an image, video or audio file: ${path}`);
           const key = `${cwd}\0${String(m.hash)}\0${path}`;
           let buf = blobCached(key);
@@ -2136,7 +2122,6 @@ export function createDaemon(opts: {
     const legacy = async (msg: ClientMessage, out: (m: ServerMessage) => void) => {
       const reply = (result: unknown) => out({ type: "reply", reqId: msg.reqId, result });
       const fail = (code: string, message: string, size?: number) => out({ type: "error", reqId: msg.reqId, code, message, size });
-      const answer = (o: GitOutcome) => ("error" in o ? fail(o.error.code, o.error.message, o.error.size) : reply(o.result));
       /** An fs.read/fs.write failure: a path that changed during the request is refused; a directory is not a file. */
       const fsFail = (err: unknown, path: string) => {
         const code = (err as { code?: string }).code;
@@ -2862,247 +2847,6 @@ export function createDaemon(opts: {
           // No query text in the log (it may hold a secret).
           console.log(`sessions.search: ${done.scannedFiles} files, ${Math.round(done.scannedBytes / 1e6)} MB, ${done.ms} ms, first result ${done.firstMs ?? "-"} ms${done.stopped ? `, stopped: ${done.stopped}` : ""}`);
           return reply(done);
-        }
-        case "git.status":
-          return answer(await gitRequest(git, msg, gitRead(async (cwd) => ({ status: await statusOf(cwd) }))));
-        case "git.refs":
-          return answer(await gitRequest(git, msg, gitRead(async (cwd, inside) => ({ refs: await gitRefs(cwd, inside) }))));
-        case "git.repos":
-          return answer(await gitRequest(git, msg, gitRead(async (cwd) => {
-            const files = msg.openFiles;
-            if (files !== undefined && (!Array.isArray(files) || files.length > 50 || files.some((f) => typeof f !== "string" || f.length > 4096 || f.includes("\0")))) throw new GitRequestError("bad_request", "openFiles must be at most 50 paths");
-            const open = (files ?? []).filter((f) => isAbsolute(f) && !refused(f));
-            if (lastOpen.size > 64) lastOpen.clear();
-            lastOpen.set(cwd, open);
-            return await reposOf(cwd, open, msg.fresh === true);
-          })));
-        case "git.log":
-        case "git.diff":
-        case "git.commit":
-        case "git.blame":
-        case "git.fileAt":
-          // No filter text in the log (it may hold a secret).
-          return answer(await gitRequest(git, msg, gitRead(async (cwd, inside) => {
-            if (msg.type === "git.log") return { log: await gitLog(cwd, { skip: msg.skip, limit: msg.limit, ref: msg.ref, author: msg.author, text: msg.text, fresh: msg.fresh === true, path: msg.path, allowed: inside }) };
-            if (msg.type === "git.diff") return { diff: await gitDiff(cwd, { base: msg.base, ref: msg.ref, allowed: inside, ignoreSubmodules: appSettings.get().git.ignoreSubmodules }) };
-            if (msg.type === "git.commit") {
-              const c = await gitShow(cwd, msg.hash, inside);
-              if (!c) throw new GitRequestError("not_git", "Not in a git repository");
-              return { commit: c };
-            }
-            if (msg.type === "git.blame") return { blame: await gitBlame(cwd, msg.path, inside, MAX_FILE_BYTES) };
-            const buf = await gitFileAt(cwd, msg.hash, msg.path, inside, MAX_FILE_BYTES);
-            const t = decodeText(buf);
-            if ("code" in t) throw new GitRequestError(t.code, `${t.code === "binary" ? "binary file" : "not UTF-8 text"}: ${msg.path}`, buf.length);
-            return { content: t.content };
-          })));
-        case "git.fetch":
-          // Output and URLs are never logged.
-          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => {
-            if (msg.defaultRemote !== undefined && typeof msg.defaultRemote !== "boolean") throw new GitRequestError("bad_request", "defaultRemote must be a boolean");
-            return { remote: await (msg.defaultRemote ? netSlot(() => gitFetch(cwd, { allowed: inside, defaultRemote: true })) : gitFetch(cwd, { allowed: inside })) };
-          })));
-        case "git.commitFiles":
-          // Paths, message and output are never logged.
-          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => ({ committed: await gitCommitFiles(cwd, { paths: msg.paths, message: msg.message, amend: msg.amend, push: msg.push, allowed: inside }) }))));
-        case "git.rollbackPreview":
-        case "git.rollback":
-        case "git.rollbackHunk":
-          // Paths and output are never logged.
-          return answer(await gitRequest(git, msg, (msg.type === "git.rollbackPreview" ? gitRead : gitWrite)(async (cwd, inside) => {
-            const o = { allowed: inside, snapshot: localHistory.before };
-            if (msg.type === "git.rollbackPreview") return { preview: await gitRollbackPreview(cwd, { paths: msg.paths, ...o }) };
-            return { rolledBack: await (msg.type === "git.rollback" ? gitRollback(cwd, { paths: msg.paths, token: msg.token, deleteAdded: msg.deleteAdded, ...o }) : gitRollbackHunk(cwd, { path: msg.path, hunk: msg.hunk, maxBytes: MAX_FILE_BYTES, ...o })) };
-          })));
-        case "git.merge":
-        case "git.rebase":
-          // Output is never logged.
-          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => ({ written: await gitMergeRebase(cwd, msg.type === "git.merge" ? "merge" : "rebase", { ref: msg.ref, local: msg.local, headRef: msg.headRef, headHash: msg.headHash, argv: msg.argv, allowed: inside }) }))));
-        case "git.continue":
-        case "git.abort":
-          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => ({ written: await (msg.type === "git.continue" ? gitContinue : gitAbort)(cwd, { kind: msg.kind, allowed: inside, snapshot: localHistory.before }) }))));
-        case "git.commitMenu":
-          return answer(await gitRequest(git, msg, gitRead(async (cwd, inside) => ({ commitMenu: await gitCommitMenu(cwd, { hash: msg.hash, hard: msg.hard, allowed: inside }) }))));
-        case "git.undoCommit":
-        case "git.revert":
-        case "git.cherryPick":
-        case "git.reset":
-          // Output is never logged.
-          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => {
-            const action = msg.type === "git.undoCommit" ? "undo" : msg.type === "git.cherryPick" ? "cherryPick" : msg.type === "git.revert" ? "revert" : "reset";
-            return { written: await gitCommitAction(cwd, action, { hash: msg.hash, headRef: msg.headRef, headHash: msg.headHash, argv: msg.argv, mode: msg.type === "git.reset" ? msg.mode : undefined, dirty: msg.type === "git.reset" ? msg.dirty : undefined, snapshot: localHistory.before, allowed: inside }) };
-          })));
-        case "git.reword":
-          // Output is never logged.
-          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => {
-            const ctl = (rewording = new AbortController());
-            try {
-              return { written: await gitReword(cwd, { hash: msg.hash, message: msg.message, headRef: msg.headRef, headHash: msg.headHash, argv: msg.argv, signal: ctl.signal, allowed: inside }) };
-            } finally {
-              if (rewording === ctl) rewording = undefined;
-            }
-          })));
-        case "git.rewordCancel":
-          rewording?.abort();
-          return reply({});
-        case "git.branchCreate":
-        case "git.checkout":
-          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => {
-            const o = { allowed: inside, snapshot: localHistory.before };
-            return { written: await (msg.type === "git.checkout" ? gitCheckout(cwd, { ref: msg.ref, smart: msg.smart, ...o }) : gitBranchCreate(cwd, { name: msg.name, at: msg.at, checkout: msg.checkout, smart: msg.smart, ...o })) };
-          })));
-        case "git.tagCreate":
-        case "git.tagDelete":
-          // Output and URLs are never logged.
-          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => {
-            const o = { allowed: inside };
-            const ctl = msg.type === "git.tagCreate" ? (tagging = new AbortController()) : undefined;
-            try {
-              return { written: await (msg.type === "git.tagCreate" ? gitTagCreate(cwd, { hash: msg.hash, name: msg.name, message: msg.message, sign: msg.sign, argv: msg.argv, signal: ctl!.signal, ...o }) : gitTagDelete(cwd, { name: msg.name, hash: msg.hash, argv: msg.argv, remotes: msg.remotes, ...o })) };
-            } finally {
-              if (ctl && tagging === ctl) tagging = undefined;
-            }
-          })));
-        case "git.tagCancel":
-          tagging?.abort();
-          return reply({});
-        case "git.tagSigning":
-          return answer(await gitRequest(git, msg, gitRead(async (cwd, inside) => ({ signing: await gitTagSigning(cwd, { allowed: inside }) }))));
-        case "git.tag":
-        case "git.tagRemote":
-          return answer(await gitRequest(git, msg, gitRead(async (cwd, inside) => {
-            if (msg.type === "git.tag") return { tag: await gitTag(cwd, { name: msg.name, allowed: inside }) };
-            return { remoteTag: await netSlot(() => gitTagRemote(cwd, { name: msg.name, remote: msg.remote, allowed: inside })) };
-          })));
-        case "git.operation":
-          return answer(await gitRequest(git, msg, gitRead(async (cwd, inside) => ({ operation: await gitOperationOf(cwd, inside) }))));
-        case "git.stashList":
-          return answer(await gitRequest(git, msg, gitRead(async (cwd, inside) => ({ stashes: await gitStashList(cwd, { allowed: inside }) }))));
-        case "git.stashPush":
-        case "git.stashApply":
-        case "git.stashPop":
-        case "git.stashDrop": {
-          const VERB = { "git.stashApply": "apply", "git.stashPop": "pop", "git.stashDrop": "drop" } as const;
-          // Output is never logged.
-          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => ({
-            written: msg.type === "git.stashPush"
-              ? await gitStashPush(cwd, { message: msg.message, includeUntracked: msg.includeUntracked, allowed: inside })
-              : await gitStash(cwd, VERB[msg.type], { index: msg.index, hash: msg.hash, allowed: inside, snapshot: localHistory.before }),
-          }))));
-        }
-        case "git.commitMessageCancel":
-          generating?.abort();
-          return reply({});
-        case "git.commitMessage": {
-          // Before any await or early return: a cancel or a close at any moment aborts this request.
-          generating?.abort();
-          const ctl = (generating = new AbortController());
-          try {
-            return answer(await gitRequest(git, msg, gitRead(async (cwd, inside) => {
-              // `project` is only a key of the settings map: never a path.
-              if (msg.project !== undefined && (typeof msg.project !== "string" || msg.project.length > 4096 || msg.project.includes("\0"))) throw new GitRequestError("bad_request", "project must be a project folder");
-              // Paths, diff, instruction and reply are never logged.
-              const d = await gitCommitDiff(cwd, { paths: msg.paths, allowed: inside });
-              if (!d) throw new GitRequestError("not_git", NOT_TOP);
-              const prompt = promptFor(instructionFor(appSettings.get().git, msg.project), d);
-              const message = await generateCommitMessage({ cwd, prompt, signal: ctl.signal, query: opts.query, ...(appSettings.get().git.commitMessageWarm && { warm: warmCommit }) });
-              return { message, ...(d.cut && { truncated: true }) };
-            })));
-          } finally {
-            if (generating === ctl) generating = undefined;
-          }
-        }
-        case "git.branch":
-          return answer(await gitRequest(git, msg, gitRead(async (cwd, inside) => ({ branch: await gitBranch(cwd, msg.ref, { allowed: inside }) }))));
-        case "git.push":
-        case "git.pull":
-          return answer(await gitRequest(git, msg, gitWrite(async (cwd, inside) => {
-            if (typeof msg.ref !== "string" || !isHash(msg.local) || !Array.isArray(msg.argv) || !msg.argv.every((a) => typeof a === "string") || (msg.type === "git.push" && msg.lease !== undefined && !isHash(msg.lease))) throw new GitRequestError("bad_request", "ref, local, lease and argv must be a branch, full commit hashes and the shown command");
-            // Output and URLs are never logged.
-            return { remote: msg.type === "git.push" ? await gitPush(cwd, { ref: msg.ref, local: msg.local, argv: msg.argv, lease: msg.lease, tracking: msg.tracking, allowed: inside }) : await gitPull(cwd, { ref: msg.ref, local: msg.local, argv: msg.argv, tracking: msg.tracking, allowed: inside }) };
-          })));
-        case "worktree.branches": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (msg.fetch !== undefined && typeof msg.fetch !== "boolean") return fail("bad_request", "fetch must be a boolean");
-          try {
-            return reply(await listBranches(cwd, { allowed: inside, claudeDir, fetch: msg.fetch === true }));
-          } catch (e) {
-            return answer({ error: gitFailure(e) });
-          }
-        }
-        case "worktree.pr": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (typeof msg.url !== "string" || msg.url.length > 2000) return fail("bad_request", "url must be a string of at most 2000 characters");
-          try {
-            return reply(await pullRequestBranches(cwd, msg.url, { allowed: inside }));
-          } catch (e) {
-            return answer({ error: gitFailure(e) });
-          }
-        }
-        case "worktree.cancel": {
-          if (typeof msg.scan !== "string" || !msg.scan || msg.scan.length > 64) return fail("bad_request", "scan must be a string of at most 64 characters");
-          // The aborted id stays (a request that arrives later is cancelled too), the oldest ones go past 1000.
-          const ac = scans.get(msg.scan) ?? new AbortController();
-          ac.abort();
-          scans.set(msg.scan, ac);
-          if (scans.size > 1000) scans.delete(scans.keys().next().value!);
-          return reply({});
-        }
-        case "worktree.cached": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (!Array.isArray(msg.paths) || msg.paths.length > 500) return fail("bad_request", "paths must be an array of at most 500 paths");
-          const paths = msg.paths.filter((p): p is string => typeof p === "string" && !!allowed(p));
-          const statuses = await cachedStatuses(paths);
-          for (const [p, st] of Object.entries(statuses)) {
-            const running = [...sessions.values()].filter((s) => inDir(s.cwd, p) && ["running", "needs_input"].includes(s.info().state)).length;
-            statuses[p] = classify({ ...st, running, blocked: st.blocked ?? (isRemoving(p) ? "removing" : running ? "sessions_running" : undefined) });
-          }
-          return reply({ statuses });
-        }
-        case "worktree.create":
-        case "worktree.status":
-        case "worktree.remove": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (msg.type === "worktree.create" && msg.name !== undefined && typeof msg.name !== "string") return fail("bad_name", "name must be a string");
-          if (msg.type === "worktree.create" && msg.branch !== undefined && typeof msg.branch !== "string") return fail("bad_name", "branch must be a string");
-          if (msg.type === "worktree.create" && ((msg.base !== undefined && typeof msg.base !== "string") || (msg.checkout !== undefined && typeof msg.checkout !== "string"))) return fail("bad_request", "base and checkout must be strings");
-          if (msg.type !== "worktree.remove" && (await gitOutside(cwd))) return fail("cwd_not_allowed", "The repository is outside the allowed roots");
-          // A path that is itself a link is refused before `allowed` resolves it; git.ts checks the path git registers too.
-          if (msg.type !== "worktree.create" && typeof msg.path === "string" && isAbsolute(msg.path) && !refused(msg.path) && lstatSync(msg.path, { throwIfNoEntry: false })?.isSymbolicLink()) return fail("not_removable", "The worktree path is a symbolic link");
-          const path = msg.type === "worktree.create" ? undefined : allowed(msg.path);
-          if (msg.type !== "worktree.create" && !path) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.path}`);
-          if (msg.type === "worktree.status" && msg.scan !== undefined && !(typeof msg.scan === "string" && msg.scan && msg.scan.length <= 64)) return fail("bad_request", "scan must be a string of at most 64 characters");
-          if (msg.type === "worktree.remove") {
-            for (const k of ["expectSafe", "deleteBranch"] as const) if (msg[k] !== undefined && typeof msg[k] !== "boolean") return fail("bad_request", "expectSafe and deleteBranch must be booleans");
-            const x = msg.expect as Record<string, unknown> | undefined;
-            if (x !== undefined && !(x && typeof x === "object" && ["uncommitted", "ahead", "ignored"].every((k) => (k === "ignored" && x[k] === undefined) || (Number.isInteger(x[k]) && (x[k] as number) >= 0)))) return fail("bad_request", "expect must hold counts uncommitted and ahead, and optionally ignored");
-          }
-          try {
-            if (msg.type === "worktree.create") return reply(await createIn(cwd, { name: msg.name || undefined, ...(msg.branch !== undefined && { branch: msg.branch }), ...(msg.base && { base: msg.base }), ...(msg.checkout !== undefined && { checkout: msg.checkout }) }));
-            if (msg.type === "worktree.status") {
-              // Always a fresh read (never the cache): the cache only feeds `worktree.cached`, which the dialogs show as Checking… until this lands.
-              const check = () => worktreeStatus(cwd, msg.path, inside);
-              let st: Awaited<ReturnType<typeof worktreeStatus>>;
-              if (msg.scan === undefined) st = await check();
-              else {
-                // The ids are the client's: one per Clean up; requests with the same id share one abort.
-                const ac = scans.get(msg.scan) ?? new AbortController();
-                scans.set(msg.scan, ac);
-                if (ac.signal.aborted) return fail("cancelled", "cancelled");
-                st = await lowPriority(ac.signal, check);
-                if (ac.signal.aborted) return fail("cancelled", "cancelled");
-              }
-              const running = [...sessions.values()].filter((s) => inDir(s.cwd, path!) && ["running", "needs_input"].includes(s.info().state)).length;
-              return reply(classify({ ...st, running, blocked: st.blocked ?? (isRemoving(path!) ? "removing" : running ? "sessions_running" : undefined) }));
-            }
-            return reply(await removeIn(cwd, msg.path, { expectSafe: msg.expectSafe === true, expect: msg.expect, deleteBranch: msg.deleteBranch === true }));
-          } catch (e) {
-            return answer({ error: gitFailure(e) });
-          }
         }
         case "fs.read": {
           // GH-807: a visualize file of a session's upload folder is readable without a root covering that folder.
