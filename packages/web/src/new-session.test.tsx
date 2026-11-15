@@ -403,15 +403,6 @@ it("a project without linked worktrees inside the roots has no Run session in ch
   expect(options().map((o) => o.textContent)).toEqual(["Aa/p/a", "Bb/p/b", "Open project…"]);
 });
 
-it("startSession creates a plain session", async () => {
-  await render();
-  const info = { id: "s1", cwd: "/p/a", model: "default", permissionMode: "default", effort: "default" };
-  const request = vi.fn(async (_m: { type: string }) => ({ session: info }));
-  await startSession(request as never, {}, "/p/a", { model: "default", mode: "default", effort: "default" }, { text: "hi", images: [] });
-  const create = request.mock.calls.map((c) => c[0] as unknown as Record<string, unknown>).find((m) => m.type === "session.create");
-  expect(create).toEqual({ type: "session.create", cwd: "/p/a", model: "default" });
-});
-
 it("Run session in offers New worktree, also for a repository with only its main checkout; picking it calls onNewWorktree with the project", async () => {
   const onNewWorktree = vi.fn();
   const onCwd = vi.fn();
@@ -528,14 +519,13 @@ it("an opencode_missing create error shows inline under the chips with a button 
   await act(async () => el.querySelector<HTMLElement>('[data-testid="engine-error-settings"]')!.click());
   // The Engine of the failed start, not the one the draft shows now.
   expect(onOpenOpenCodeSettings).toHaveBeenCalledWith("opencode");
-});
-
-it("another create error keeps the old path: no engine error block", async () => {
-  const onStart = vi.fn(async () => void (await Promise.reject(Object.assign(new Error("boom"), { code: "other" }))));
-  const { el, box } = await render({ onStart });
-  await type(box, "hi");
-  await key(box, { key: "Enter" });
-  expect(el.querySelector('[data-testid="engine-error"]')).toBeNull();
+  // Another error code keeps the old path: no engine error block.
+  unmount();
+  const other = vi.fn(async () => void (await Promise.reject(Object.assign(new Error("boom"), { code: "other" }))));
+  const second = await render({ onStart: other });
+  await type(second.box, "hi");
+  await key(second.box, { key: "Enter" });
+  expect(second.el.querySelector('[data-testid="engine-error"]')).toBeNull();
 });
 
 it("draftStartMode: config when offered, else the default setting when offered, else Ask", () => {

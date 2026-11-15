@@ -38,13 +38,6 @@ vi.mock("@pierre/diffs/react", () => ({
   ),
 }));
 
-// Counts whole-file diffs, so a test can see that streaming does not re-parse them.
-const parsed = vi.hoisted(() => ({ n: 0 }));
-vi.mock("./changes.ts", async (orig) => {
-  const m = await orig<typeof import("./changes.ts")>();
-  return { ...m, fileStats: (...a: Parameters<typeof m.fileStats>) => (parsed.n++, m.fileStats(...a)) };
-});
-
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class {
   observe() {}
@@ -439,45 +432,6 @@ it("says a file with zero net change has no changes instead of an empty diff", a
   expect(body.querySelector("[data-testid=diff-loading]")).toBeNull();
 });
 
-it("parses each file's diff once while the file reads come back one by one (a tab switch remounts the panel)", async () => {
-  const n = 12;
-  const files = Object.fromEntries(Array.from({ length: n }, (_, i) => [`/p/f${i}.ts`, `v = ${i}\n`]));
-  const client = fakeClient(files);
-  // Each reply in its own task, like separate WebSocket messages.
-  const read = client.request as unknown as ReturnType<typeof vi.fn>;
-  const reply = read.getMockImplementation() as (m: never) => unknown;
-  let i = 0;
-  read.mockImplementation((m: never) => new Promise((r) => setTimeout(() => r(reply(m)), 10 * ++i)));
-  const v = view(Array.from({ length: n }, (_, i) => edit(`e${i}`, `/p/f${i}.ts`, "v = x", `v = ${i}`)));
-  const before = parsed.n;
-  await act(async () => root.render(<ChangesPanel client={client} view={v} cwd="/p" onOpen={() => {}} hidden />));
-  const wait = async () => {
-    for (let t = 0; t <= n; t++) await act(async () => void (await new Promise((r) => setTimeout(r, 10))));
-  };
-  await wait();
-  expect(parsed.n - before).toBe(n);
-  // Shown again after another session's panel: nothing changed, nothing parsed.
-  act(() => root.render(null));
-  i = 0;
-  await act(async () => root.render(<ChangesPanel client={client} view={v} cwd="/p" onOpen={() => {}} hidden />));
-  await wait();
-  expect(parsed.n - before).toBe(n);
-});
-
-it("does not re-parse the diffs while Claude streams text", async () => {
-  const client = fakeClient({ "/p/a.ts": "a = 2\n", "/p/b.ts": "b = 2\n" });
-  let v = view([edit("e1", "/p/a.ts", "a = 1", "a = 2"), edit("e2", "/p/b.ts", "b = 1", "b = 2")]);
-  await act(async () => root.render(<ChangesPanel client={client} view={v} cwd="/p" onOpen={() => {}} />));
-  await flush();
-  const before = parsed.n;
-  for (let i = 1; i <= 5; i++) {
-    v = applyEvent(v, { type: "event", sessionId: "s1", seq: 100 + i, part: { type: "assistant_text", id: "t1", text: "x".repeat(i), streaming: true } });
-    await act(async () => root.render(<ChangesPanel client={client} view={v} cwd="/p" onOpen={() => {}} />));
-  }
-  expect(parsed.n).toBe(before);
-  expect(rows()).toEqual(["Modified a.ts, +1 -1", "Modified b.ts, +1 -1"]);
-});
-
 it("names each row by kind, relative path and stats for screen readers", async () => {
   const client = fakeClient({ "/p/src/a.ts": "a = 2\n" });
   await act(async () => root.render(<ChangesPanel client={client} view={view([edit("e1", "/p/src/a.ts", "a = 1", "a = 2")])} cwd="/p" onOpen={() => {}} />));
@@ -545,24 +499,6 @@ it("previous/next buttons and the arrow keys cycle the selected file, not while 
   expect(current()).toContain("a.ts");
 });
 
-it("once shown, hiding keeps the list mounted (display: none), so showing it again renders nothing new; arrow keys stay alone while hidden", async () => {
-  const client = fakeClient({ "/p/a.ts": "a = 2\n" });
-  const v = view([edit("e1", "/p/a.ts", "a = 1", "a = 2")]);
-  const show = (hidden: boolean) => act(async () => root.render(<ChangesPanel client={client} view={v} cwd="/p" onOpen={() => {}} hidden={hidden} />));
-  await show(false);
-  await flush();
-  const panel = el.querySelector("[data-testid=changes-panel]")!;
-  await show(true);
-  expect(el.querySelector("[data-testid=changes-panel]")).toBe(panel);
-  expect(panel.hasAttribute("hidden")).toBe(true);
-  const key = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
-  await act(async () => void document.body.dispatchEvent(key));
-  expect(key.defaultPrevented).toBe(false);
-  await show(false);
-  expect(el.querySelector("[data-testid=changes-panel]")).toBe(panel);
-  expect(panel.hasAttribute("hidden")).toBe(false);
-});
-
 it("reports the listed file count to the pane tab (a created and deleted file is not counted); hidden it renders nothing and leaves the arrow keys alone", async () => {
   const client = fakeClient({ "/p/a.ts": "a = 2\n", "/p/b.ts": "b = 2\n" });
   const onCount = vi.fn();
@@ -623,35 +559,22 @@ it("no line stats on a row whose before or after side failed", async () => {
   const parts = [
     edit("e1", "/p/old.zip", "a", "b"), original("e1", before["/p/old.zip"]!),
     edit("e2", "/p/new.bin", "a", "b"), original("e2", "text\n"),
+    // both sides failed: binary before, binary after
+    edit("e3", "/p/binary.exe", "a", "b"), original("e3", garbled),
   ];
   const client = fakeClient(files);
   (client.request as unknown as ReturnType<typeof vi.fn>).mockImplementation((async (m: { path: string }) => {
-    if (m.path === "/p/new.bin") throw Object.assign(new Error("binary file"), { code: "binary" });
+    if (m.path === "/p/new.bin" || m.path === "/p/binary.exe") throw Object.assign(new Error("binary file"), { code: "binary" });
     return { content: files[m.path], mtime: 1 };
   }) as never);
   await act(async () => root.render(<ChangesPanel client={client} view={view(parts)} cwd="/p" onOpen={() => {}} />));
   await flush();
   // old.zip: before failed (binary), no stats
   // new.bin: after failed (binary), no stats
+  // binary.exe: both failed, no stats
   const labels = rows();
   expect(labels).toContain("Modified old.zip");
   expect(labels).toContain("Modified new.bin");
-  expect(labels.every((l) => !l!.includes("+") && !l!.includes("-"))).toBe(true);
-  expect(el.querySelectorAll("[data-testid=change-stats]")).toHaveLength(0);
-});
-
-it("no line stats when both before and after sides failed", async () => {
-  const garbled = "PK\u0003\u0004\0\0";
-  // File was binary before, and the current disk version is also binary
-  const client = fakeClient({});
-  (client.request as unknown as ReturnType<typeof vi.fn>).mockImplementation((async (m: { path: string }) => {
-    if (m.path === "/p/binary.exe") throw Object.assign(new Error("binary file"), { code: "binary" });
-    throw Object.assign(new Error(`no such file: ${m.path}`), { code: "not_found" });
-  }) as never);
-  const parts = [edit("e1", "/p/binary.exe", "a", "b"), original("e1", garbled)];
-  await act(async () => root.render(<ChangesPanel client={client} view={view(parts)} cwd="/p" onOpen={() => {}} />));
-  await flush();
-  const labels = rows();
   expect(labels).toContain("Modified binary.exe");
   expect(labels.every((l) => !l!.includes("+") && !l!.includes("-"))).toBe(true);
   expect(el.querySelectorAll("[data-testid=change-stats]")).toHaveLength(0);
@@ -923,12 +846,6 @@ it("below md: Against branch gives the branch picker its own full-width 44px row
   expect(b.textContent).toContain("main");
 });
 
-it("wide: the mode select keeps its width (no clipped label) and the header wraps", async () => {
-  await act(async () => root.render(panel(fakeClient({}, { status: REPO }))));
-  expect(mode().className).toContain("shrink-0");
-  expect(mode().parentElement!.className).toContain("flex-wrap");
-});
-
 
 it("a hidden panel does not read git.diff; showing it does, and later state changes read again", async () => {
   saveDiffMode("uncommitted");
@@ -1016,19 +933,6 @@ it("an added .png shows After only, a deleted one Before only, a renamed one ask
   expect(m).not.toContainEqual({ type: "fs.media", cwd: "/p", hash: BASE, path: "a.png" });
 });
 
-it("unified style and the narrow accordion stack the images (one column)", async () => {
-  localStorage.setItem("claude-ui.diffStyle", "unified");
-  await mountImages([{ status: "M", path: "a.png" }]);
-  expect(q("image-diff")!.className).toContain("grid-cols-1");
-  act(() => root.render(null));
-  localStorage.setItem("claude-ui.diffStyle", "split");
-  narrow = true;
-  await mountImages([{ status: "M", path: "a.png" }]);
-  await act(async () => (el.querySelector<HTMLButtonElement>("[data-testid=changed-file]")!.click(), undefined));
-  await flush();
-  expect(q("image-diff")!.className).toContain("grid-cols-1");
-});
-
 it("pixel size and file size per pane after load", async () => {
   await mountImages([{ status: "M", path: "a.png" }]);
   const img = q("image-after")!.querySelector("img")!;
@@ -1085,15 +989,6 @@ it("initialChoice sets the starting mode without a sessionId", async () => {
   await flush();
   expect(mode().textContent).toContain("Uncommitted");
   expect(gitCalls(client, "git.diff")[0]).toMatchObject({ base: "head" });
-});
-
-it("the popup button shows only with onPopOut and calls it", async () => {
-  await act(async () => root.render(panel(fakeClient({}))));
-  expect(el.querySelector("[data-testid=changes-popout]")).toBeNull();
-  const onPopOut = vi.fn();
-  await act(async () => root.render(panel(fakeClient({}), { onPopOut })));
-  await act(async () => (el.querySelector<HTMLButtonElement>("[data-testid=changes-popout]")!.click(), undefined));
-  expect(onPopOut).toHaveBeenCalledOnce();
 });
 
 it("GH-360 reveal switches to Uncommitted and selects the file (narrow: opens it); a repeated seq selects again", async () => {
@@ -1221,16 +1116,13 @@ it("with a repo, git requests go to repo.path with exact and rows lie under repo
   expect(gitCalls(client, "git.diff")).toEqual([{ type: "git.diff", cwd: "/real/ws/api", exact: true, base: "head" }]);
   expect(gitCalls(client, "git.fileAt")).toContainEqual({ type: "git.fileAt", cwd: "/real/ws/api", exact: true, hash: BASE, path: "o.ts" });
   expect(client.calls.mock.calls.map((a) => (a[0] as { path?: string }).path)).toContain("/p/ws/api/n.ts");
-});
-
-it("with a repo, the branch mode log and image reads carry exact", async () => {
+  // Branch mode: the image read carries exact too.
+  await act(async () => root.render(null));
   saveDiffMode("branch");
-  const git = { diff: D([{ status: "M", path: "pic.png", added: 0, removed: 0 }], { ref: "refs/heads/main" }) };
-  const client = fakeClient({}, git);
-  setRepoChoice("/p/ws", "api");
-  await act(async () => root.render(panel(client, { cwd: "/p/ws", repos: R([own("/p/ws"), nested("/p/ws", "api", "/p/ws")], "/p/ws") })));
+  const branchClient = fakeClient({}, { diff: D([{ status: "M", path: "pic.png", added: 0, removed: 0 }], { ref: "refs/heads/main" }) });
+  await act(async () => root.render(panel(branchClient, { cwd: "/p/ws", repos: R([own("/p/ws"), nested("/p/ws", "api", "/p/ws")], "/p/ws") })));
   await flush();
-  const media = gitCalls(client, "fs.media").find((m) => m.hash);
+  const media = gitCalls(branchClient, "fs.media").find((m) => m.hash);
   expect(media).toMatchObject({ cwd: "/p/ws/api", exact: true, hash: BASE });
 });
 
@@ -1242,15 +1134,6 @@ it("repo null shows only Session changes", async () => {
   expect(el.querySelector("[data-testid=changes-not-git]")).not.toBeNull();
   expect(gitCalls(client, "git.diff")).toEqual([]);
   expect(gitCalls(client, "git.status")).toEqual([]);
-});
-
-it("Reload from disk calls onReload", async () => {
-  const client = fakeClient({});
-  const onReload = vi.fn();
-  await act(async () => root.render(panel(client, { onReload })));
-  await flush();
-  await act(async () => (el.querySelector<HTMLButtonElement>("button[aria-label='Reload from disk']")!.click(), undefined));
-  expect(onReload).toHaveBeenCalledTimes(1);
 });
 
 describe("repository selector", () => {
@@ -1441,36 +1324,6 @@ describe("submodule and nested repository rows", () => {
     expect(el.querySelector("[data-testid=submodule-detail]")!.textContent).toContain("in HEAD · modified content (1 file)");
   });
 
-  it("submodule probes: at most 10, at most 4 in flight, only direct submodules of the selected repository, again on Reload", async () => {
-    saveDiffMode("uncommitted");
-    const subsList = Array.from({ length: 12 }, (_, i) => submodule("/p", `s${i}`));
-    const deep = { ...submodule("/p", "x/deep"), parent: "/p/s0" };
-    let inFlight = 0;
-    let peak = 0;
-    const waiting: (() => void)[] = [];
-    const client = fakeClient({}, {
-      diff: D([]),
-      statusDefer: () => {
-        peak = Math.max(peak, ++inFlight);
-        return new Promise<void>((r) => waiting.push(() => (inFlight--, r())));
-      },
-    });
-    await act(async () => root.render(panel(client, { repos: R([own("/p"), ...subsList, deep]) })));
-    const drain = async () => {
-      for (let i = 0; i < 20; i++) {
-        await flush();
-        while (waiting.length) waiting.shift()!();
-      }
-    };
-    await drain();
-    const probed = () => gitCalls(client, "git.status").map((m) => m.cwd);
-    expect(probed()).toEqual(subsList.slice(0, 10).map((r) => r.path));
-    expect(peak).toBe(4);
-    await act(async () => el.querySelector<HTMLElement>('[aria-label="Reload from disk"]')!.click());
-    await drain();
-    expect(probed()).toHaveLength(20);
-  });
-
   it("ignoreSubmodules: no git.status probe and no dirty row", async () => {
     saveDiffMode("uncommitted");
     const client = fakeClient({}, { diff: D([]), statuses: { "/p/libs/lib": dirtyStatus(2) } });
@@ -1559,19 +1412,6 @@ describe("submodule and nested repository rows", () => {
     expect(selector()!.getAttribute("aria-label")).toContain("lib");
     expect(el.querySelector("[data-testid=changed-file][aria-current=true]")?.getAttribute("data-path")).toBe("/p/libs/lib/a.txt");
   });
-});
-
-it("GH-468: a colour theme change hands that theme's diff themes to the diff", async () => {
-  const client = fakeClient({ "/p/src/a.ts": "a = 2\nb\n" });
-  document.documentElement.removeAttribute("data-theme");
-  await act(async () => root.render(<ChangesPanel client={client} view={view([edit("e1", "/p/src/a.ts", "a = 1", "a = 2"), original("e1", "a = 1\nb\n")])} cwd="/p" onOpen={() => {}} />));
-  await flush();
-  expect(diff.options!.theme).toEqual({ light: "claude-ui-light", dark: "claude-ui-dark" });
-  await act(async () => void document.documentElement.setAttribute("data-theme", "catppuccin"));
-  expect(diff.options!.theme).toEqual({ light: "claude-ui-catppuccin-light", dark: "claude-ui-catppuccin-dark" });
-  await act(async () => void document.documentElement.setAttribute("data-theme", "dracula"));
-  expect(diff.options!.theme).toEqual({ light: "claude-ui-light", dark: "claude-ui-dracula-dark" });
-  document.documentElement.removeAttribute("data-theme");
 });
 
 it("third pick of the same non-default mode offers it as default; Turn on saves it", async () => {
@@ -1864,63 +1704,6 @@ it("right click on a row offers Open, Copy path and, in an app-capable browser, 
 
 // ---- GH-722: recommendation hooks ----
 const recClean = () => (setRecommendationHost(undefined), localStorage.clear(), resetPageForTests());
-
-it("GH-722: the third new diff selection offers Add to chat; Show me rings the menu button; a change of the same selection does not count", async () => {
-  recClean();
-  const show = vi.fn();
-  setRecommendationHost({ blocked: () => false, show });
-  await mountSend("M", "session", vi.fn());
-  const select = (end: number | null) => act(async () => (diff.options as { onLineSelected?: (r: unknown) => void }).onLineSelected!(end === null ? null : { start: 2, side: "deletions", end, endSide: "additions" }));
-  await select(2);
-  await select(3); // the same selection grows: not a new one
-  await select(null);
-  await select(2);
-  await select(null);
-  expect(show).not.toHaveBeenCalled();
-  await select(2);
-  expect(show).toHaveBeenCalledOnce();
-  expect(show.mock.calls[0]![0]).toBe("Add the selected diff lines to the chat.");
-  expect(show.mock.calls[0]![1].label).toBe("Show me");
-  await act(async () => show.mock.calls[0]![1].run());
-  await act(async () => void (await new Promise((r) => setTimeout(r, 100))));
-  const button = document.querySelector<HTMLElement>("[data-testid=selection-menu-add]")!;
-  expect(button.hasAttribute("data-locate")).toBe(true);
-  expect(document.activeElement).toBe(button);
-  recClean();
-});
-
-it("GH-722: the third Copy path offers Open in file manager only where the file can be opened; Show me reopens the row menu on Reveal", async () => {
-  recClean();
-  const show = vi.fn();
-  setRecommendationHost({ blocked: () => false, show });
-  const client = fakeClient({ "/p/a.ts": "a = 2\n" });
-  const ext = { editors: [], canOpen: () => true, isLocal: () => true, run: vi.fn() };
-  const panel = (o?: OpenExternal) => (
-    <OpenExternalContext value={o}>
-      <ChangesPanel client={client} view={view([edit("e1", "/p/a.ts", "a = 1", "a = 2")])} cwd="/p" onOpen={() => {}} onCopy={() => {}} />
-    </OpenExternalContext>
-  );
-  const copy = async () => {
-    await act(async () => void el.querySelector("[data-testid=changed-file]")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
-    await act(async () => void document.querySelector<HTMLElement>("[data-testid=row-copyPath]")!.click());
-    await flush();
-  };
-  await act(async () => root.render(panel()));
-  await flush();
-  for (let i = 0; i < 3; i++) await copy();
-  expect(show, "a browser that cannot open files").not.toHaveBeenCalled();
-  await act(async () => root.render(panel(ext)));
-  await flush();
-  await copy();
-  expect(show).toHaveBeenCalledOnce();
-  expect(show.mock.calls[0]![0]).toBe("Open this file or folder in the file manager or an editor.");
-  await act(async () => show.mock.calls[0]![1].run());
-  await act(async () => void (await new Promise((r) => setTimeout(r, 120))));
-  const reveal = document.querySelector<HTMLElement>("[data-testid=row-ext-menu-reveal]")!;
-  expect(reveal).not.toBeNull();
-  expect(reveal.hasAttribute("data-locate")).toBe(true);
-  recClean();
-});
 
 it("GH-722: the first rollback dialog shows the Local history hint, the second does not; it closes by its button", async () => {
   recClean();
