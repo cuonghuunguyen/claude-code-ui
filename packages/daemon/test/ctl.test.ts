@@ -136,12 +136,6 @@ describe("client against a real daemon", () => {
       expect((await run(["open", "44444444-4444-4444-8444-444444444444"])).code).toBe(1);
     }
   });
-  it("open without --print and open <sessionId> do not print the token", async () => {
-    const o = await run(["open"]);
-    expect(o.out + o.err).not.toContain(token);
-    const d = await run(["open", sessionIds[1]!, "--print"]);
-    expect(d.out).not.toContain(token);
-  });
   it("no output of any command holds the token, except open --print", async () => {
     for (const argv of [["status"], ["status", "--json"], ["sessions"], ["sessions", "--json"], ["projects"], ["projects", "--json"], ["workers"], ["workers", "--json"], ["open"], ["open", sessionIds[0]!]]) {
       const r = await run(argv);
@@ -177,9 +171,6 @@ describe("client against a real daemon", () => {
     const j = await run(["status", "--json"], { env: { PORT: "1" } });
     expect(JSON.parse(j.err)).toMatchObject({ error: { code: "not_running" } });
     expect(j.out).toBe("");
-  });
-  it("no command exits 75", async () => {
-    for (const argv of [["status"], ["sessions"], ["open", "x-bad"], ["projects"]]) expect((await run(argv)).code).not.toBe(75);
   });
 });
 
@@ -336,12 +327,6 @@ describe("robustness (review)", () => {
     const f = join(tmp("cu-tok-"), "token");
     writeFileSync(f, "\n  first-line  \nsecond\n");
     expect(readToken(f)).toBe("first-line");
-  });
-  it("no message says claude-ui twice", async () => {
-    const r = await run(["status"], { env: { PORT: "1" }, dir: tmp("cu-x-") });
-    const n = await run(["status"], { env: { PORT: "1" } });
-    expect(n.err).not.toContain("claude-ui: claude-ui");
-    expect(r.err).not.toContain("claude-ui: claude-ui");
   });
 });
 

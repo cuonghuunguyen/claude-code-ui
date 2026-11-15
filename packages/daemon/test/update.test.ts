@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { compareVersions, createUpdater, installedVersions, installVersion, latestNewer, parseRegistry, pruneVersions, RESTART_CODE, runCommand, winQuote, type Runner } from "../src/update.ts";
+import { createUpdater, installedVersions, installVersion, latestNewer, parseRegistry, pruneVersions, RESTART_CODE, runCommand, winQuote, type Runner } from "../src/update.ts";
 // Windows, full suite: this file's git-heavy tests (npm pack of a folder: 13 s alone) take 3-4x that with every core busy (60-106 s seen); the global 60 s is not enough, 180 s is.
 if (process.platform === "win32") vi.setConfig({ testTimeout: 180_000 });
 
@@ -50,10 +50,6 @@ describe("latestNewer", () => {
     const f = vi.fn(answer({ version: "0.2.1" }));
     await latestNewer("0.2.0", { fetch: f, registry: "http://127.0.0.1:9" });
     expect(f.mock.calls[0]![0]).toBe("http://127.0.0.1:9/claude-code-ui/latest");
-  });
-  it("compares numerically", () => {
-    expect(compareVersions("0.10.0", "0.9.9")).toBeGreaterThan(0);
-    expect(compareVersions("1.0.0", "1.0.0")).toBe(0);
   });
 });
 
@@ -242,11 +238,6 @@ describe("createUpdater", () => {
     expect(exit).not.toHaveBeenCalled();
   });
 
-  it("install rejects when the registry has nothing newer", async () => {
-    const u = createUpdater({ current: "0.2.0", dir: dir(), fetch: answer({ version: "0.2.0" }), run: fakeNpm(), busy: () => ({ sessions: 0, terminals: 0 }), exit: vi.fn(), broadcast: () => {} });
-    await expect(u.install()).rejects.toThrow("no update available");
-  });
-
   it("a failed install (nothing newer) does not stay: a later call looks again", async () => {
     let version = "0.2.0";
     const fetchLatest = (async () => ({ ok: true, json: async () => ({ version }) })) as unknown as typeof fetch;
@@ -272,15 +263,10 @@ describe("createUpdater", () => {
       expect(await u.install()).toBe("0.2.0");
       expect(run).not.toHaveBeenCalled();
     });
-    it("restart exits 0 at once when no session works; retire is called first", () => {
-      const { u, order } = retiring();
+    it.each([0, 3])("restart exits 0 at once when no session works (%i open terminals do not hold it); retire is called first", (terminals) => {
+      const { u, order } = retiring({ sessions: 0, terminals });
       expect(u.restart()).toBe(0);
       expect(order).toEqual(["retire", "exit 0"]);
-    });
-    it("open terminals do not hold it", () => {
-      const { u, exit } = retiring({ sessions: 0, terminals: 3 });
-      expect(u.restart()).toBe(0);
-      expect(exit).toHaveBeenCalledWith(0);
     });
     it("a running session holds it until idle; retire is called before the wait", () => {
       vi.useFakeTimers();

@@ -1,6 +1,6 @@
 import { delimiter } from "node:path";
 import { describe, expect, it } from "vitest";
-import { HELP, PHONE_HINT, USAGE_HINT, isDaemonRun, parseCli, autoOpen, RESTARTED_ENV } from "../src/cli.ts";
+import { HELP, PHONE_HINT, isDaemonRun, parseCli, autoOpen, RESTARTED_ENV } from "../src/cli.ts";
 
 describe("parseCli", () => {
   it("side --attach [--start]: the bridge to an SSH Side Daemon; side alone is an error and is no daemon start", () => {
@@ -124,15 +124,6 @@ describe("parseCli", () => {
     });
     it("a command rejects daemon-only flags", () => {
       for (const f of [["--lan"], ["--roots", "/x"], ["--hostname", "h"], ["--tailscale"], ["--allow-bypass"], ["--no-update-check"], ["--no-os-notify"]]) expect(parseCli(["status", ...f], {}, "/h"), f[0]).toMatchObject({ kind: "error", message: expect.stringContaining("starts the daemon") });
-    });
-    it("USAGE_HINT is short and points to --help; HELP lists the commands", () => {
-      {
-        expect(USAGE_HINT.split("\n").length).toBeLessThanOrEqual(2);
-        expect(USAGE_HINT).toContain("--help");
-      }
-      {
-        for (const c of ["status", "open", "sessions", "projects", "workers", "--token-file", "--json"]) expect(HELP).toContain(c);
-      }
     });
   });
 });

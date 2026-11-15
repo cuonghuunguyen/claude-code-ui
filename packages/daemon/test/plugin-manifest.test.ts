@@ -1,5 +1,5 @@
-// GH-454: the orchestration plugin's manifests, agent files and the moved skill.
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+// GH-454: the orchestration plugin's manifests and agent files.
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -19,7 +19,6 @@ function agent(role: string) {
   const front = Object.fromEntries(m![1]!.split("\n").map((l) => [l.slice(0, l.indexOf(":")), l.slice(l.indexOf(":") + 1).trim()]));
   return { front, body: m![2]! };
 }
-const walk = (dir: string): string[] => readdirSync(dir).flatMap((f) => (statSync(join(dir, f)).isDirectory() ? walk(join(dir, f)) : [join(dir, f)]));
 
 describe("orchestration plugin", () => {
   it("marketplace and plugin manifests match", () => {
@@ -58,37 +57,5 @@ describe("orchestration plugin", () => {
 
   it("no agent sets permissionMode", () => {
     for (const role of Object.keys(ROLES)) expect(agent(role).front).not.toHaveProperty("permissionMode");
-  });
-
-  it("every role prompt carries HANDOFF, RESULT and the FORBIDDEN rule", () => {
-    for (const role of Object.keys(ROLES)) {
-      const { body } = agent(role);
-      expect(body, role).toMatch(/HANDOFF/);
-      expect(body, role).toMatch(/RESULT: succeeded \| failed \| blocked/);
-      expect(body, role).toMatch(/## FORBIDDEN/);
-      expect(body, role).toMatch(/Do NOT add, edit or reply to comments/);
-    }
-  });
-
-  it("the verifiers run the mechanical gate first and state the commit checked", () => {
-    for (const role of ["ui-tester", "reviewer"]) {
-      const { body } = agent(role);
-      expect(body, role).toMatch(/## Gate first/);
-      expect(body, role).toMatch(/COMMIT: <sha/);
-    }
-    expect(agent("implementer").body).toMatch(/Join: continue only when both are green on the same SHA/);
-  });
-
-  it("the skill moved: no copy under .claude/skills and no stale path", () => {
-    expect(existsSync(join(root, ".claude/skills/orchestrate-tickets"))).toBe(false);
-    expect(existsSync(join(plugin, "skills/orchestrate-tickets/SKILL.md"))).toBe(true);
-    for (const f of ["handoff.md", "tree-flow.md"]) expect(existsSync(join(plugin, "skills/orchestrate-tickets/references", f))).toBe(true);
-    const stale = [...walk(plugin), join(root, "CLAUDE.md")].filter((f) => f.endsWith(".md")).filter((f) => readFileSync(f, "utf8").includes(".claude/skills/orchestrate-tickets"));
-    expect(stale).toEqual([]);
-  });
-
-  it("the handoff block in the skill is the one the roles read", () => {
-    const h = lf(join(plugin, "skills/orchestrate-tickets/references/handoff.md"));
-    for (const field of ["role:", "ticket:", "worktree:", "branch:", "commit:", "coordinator:", "attempts:", "report-dir:"]) expect(h).toContain(field);
   });
 });

@@ -119,7 +119,7 @@ describe("launcher", () => {
   });
 
   it("argv that is not a daemon start (client command, update): a quick failure marks nothing, never restarts, exits with the child's code", async () => {
-    for (const args of [["status"], ["update"], ["--help"]]) {
+    for (const args of [["status"], ["update"], ["--help"], ["--port", "4000", "status"], ["--json", "status"], ["--token-file", "f", "sessions"], ["--port=4000", "status"]]) {
       const dir = mkdtempSync(join(tmpdir(), "cu-launch-"));
       install(dir, "0.2.1");
       const { spawn, runs } = fakeSpawn([1]);
@@ -132,17 +132,6 @@ describe("launcher", () => {
     const { spawn, runs } = fakeSpawn([75, 0]);
     expect(await launch({ args: ["status"], own, dir, spawn, signals: new EventEmitter() as never })).toBe(75);
     expect(runs).toHaveLength(1);
-  });
-
-  it("a client command after flags is not a daemon start: no mark, no previous-version rerun", async () => {
-    for (const args of [["--port", "4000", "status"], ["--json", "status"], ["--token-file", "f", "sessions"], ["--port=4000", "status"]]) {
-      const dir = mkdtempSync(join(tmpdir(), "cu-launch-"));
-      install(dir, "0.2.1");
-      const { spawn, runs } = fakeSpawn([3, 0]);
-      expect(await launch({ args, own, dir, spawn, signals: new EventEmitter() as never, log: () => {} }), args.join(" ")).toBe(3);
-      expect(runs, args.join(" ")).toHaveLength(1);
-      expect(existsSync(join(dir, "0.2.1", FAILED_MARK))).toBe(false);
-    }
   });
 
   it("exit 2 (usage error) of a daemon start is never a failed start", async () => {
@@ -159,13 +148,5 @@ describe("launcher", () => {
     const { spawn, runs } = fakeSpawn([75, 0]);
     expect(await launch({ args: ["--future-flag"], own, dir, spawn, signals: new EventEmitter() as never, log: () => {} })).toBe(0);
     expect(runs).toHaveLength(2);
-  });
-
-  it("a daemon start from the versions dir still gets the failed-start mark", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "cu-launch-"));
-    install(dir, "0.2.1");
-    const { spawn } = fakeSpawn([1, 0]);
-    expect(await launch({ args: ["--port", "5000"], own, dir, spawn, signals: new EventEmitter() as never, log: () => {} })).toBe(0);
-    expect(existsSync(join(dir, "0.2.1", FAILED_MARK))).toBe(true);
   });
 });

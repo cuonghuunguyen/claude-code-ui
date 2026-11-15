@@ -150,16 +150,18 @@ describe("static files: cache headers and validators", () => {
 });
 
 describe("static files: CSP and anti-framing (GH-280)", () => {
-  const paths = ["/", "/index.html", "/sw.js", "/manifest.webmanifest", "/icon-192.png", "/assets/app-abc123.js", "/some/client/route", "/assets/missing.js", "/missing.png", "/assets/app-abc123.js.br"];
-  for (const method of ["GET", "HEAD"]) {
-    for (const path of paths) {
-      it(`${method} ${path} carries anti-framing and CSP headers`, async () => {
-        const r = await get(path, { "accept-encoding": "br" }, method);
-        expect(r.headers["x-frame-options"]).toBe("DENY");
-        expect(String(r.headers["content-security-policy"])).toBe(APP_CSP);
-        expect(r.headers["x-content-type-options"]).toBe("nosniff");
-      });
-    }
+  // One row per response builder (200 file or index, 404) and method; every builder spreads SECURITY_HEADERS.
+  const rows: [string, string][] = [
+    ["GET", "/"], ["GET", "/assets/app-abc123.js"], ["GET", "/assets/missing.js"],
+    ["HEAD", "/"], ["HEAD", "/assets/app-abc123.js"],
+  ];
+  for (const [method, path] of rows) {
+    it(`${method} ${path} carries anti-framing and CSP headers`, async () => {
+      const r = await get(path, { "accept-encoding": "br" }, method);
+      expect(r.headers["x-frame-options"]).toBe("DENY");
+      expect(String(r.headers["content-security-policy"])).toBe(APP_CSP);
+      expect(r.headers["x-content-type-options"]).toBe("nosniff");
+    });
   }
   it("304 and 405 (Allow: GET, HEAD) responses carry them too", async () => {
     const first = await get("/index.html");

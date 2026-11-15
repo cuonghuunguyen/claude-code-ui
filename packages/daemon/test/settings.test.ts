@@ -171,12 +171,19 @@ it("a notifications patch with a non-boolean or an unknown field is refused", ()
   expect(() => s.set({ notifications: { foo: true } as never })).toThrow("unknown setting notifications.foo");
 });
 
-it("performance.monitor defaults to true and accepts a boolean; a string is refused", () => {
+// A settings.json without the section gets the default too.
+it.each([
+  ["performance", "monitor", "x", "Performance monitor must be on or off"],
+  ["chat", "visualize", "yes", "Inline visualizations must be on or off"],
+  ["terminalAccess", "enabled", 1, "Let sessions use open terminals must be on or off"],
+  ["fork", "enabled", 1, "Fork subagents must be on or off"],
+])("boolean setting %s.%s: default on, saved, a non-boolean is refused", (section, key, bad, message) => {
   const f = file();
+  writeFileSync(f, JSON.stringify({ chrome: { enabled: true } }));
   const s = createSettings({ file: f });
-  expect(s.get().performance).toEqual({ monitor: true });
-  expect(s.set({ performance: { monitor: false } }).performance).toEqual({ monitor: false });
-  expect(() => s.set({ performance: { monitor: "x" as never } })).toThrow("Performance monitor must be on or off");
+  expect(s.get()[section as "chat"]).toEqual({ [key]: true });
+  expect(s.set({ [section]: { [key]: false } } as never)[section as "chat"]).toEqual({ [key]: false });
+  expect(() => s.set({ [section]: { [key]: bad } } as never)).toThrow(message);
 });
 
 it("chrome.enabled defaults to off, saves, refuses a non-boolean", () => {
@@ -326,18 +333,18 @@ it("closeFinished defaults to on, saves off, refuses a non-boolean with 'Close f
   for (const bad of ["off", 0, null]) expect(() => s.set({ orchestration: { closeFinished: bad as never } })).toThrow(/^Close finished workers must be on or off$/);
 });
 
-it("stallMinutes defaults to 20 and accepts 0 to 240 only", () => {
+it.each([
+  ["stallMinutes", 20, 240, "Stall alert after (minutes) must be a whole number from 0 to 240"],
+  ["keepWarmMinutes", 55, 59, "Keep coordinator cache warm (minutes) must be a whole number from 0 to 59"],
+])("whole-number setting orchestration.%s: default %i, accepts 0 to %i only", (key, dflt, max, message) => {
   const s = createSettings({ file: file() });
-  expect(s.get().orchestration.stallMinutes).toBe(20);
-  for (const stallMinutes of [-1, 241, 1.5]) expect(() => s.set({ orchestration: { stallMinutes } as never })).toThrow("Stall alert after (minutes) must be a whole number from 0 to 240");
-  for (const stallMinutes of [0, 240]) expect(s.set({ orchestration: { stallMinutes } }).orchestration.stallMinutes).toBe(stallMinutes);
-});
-
-it("keepWarmMinutes defaults to 55 and accepts 0 to 59 only", () => {
-  const s = createSettings({ file: file() });
-  expect(s.get().orchestration.keepWarmMinutes).toBe(55);
-  for (const keepWarmMinutes of [-1, 60, 1.5]) expect(() => s.set({ orchestration: { keepWarmMinutes } as never })).toThrow("Keep coordinator cache warm (minutes) must be a whole number from 0 to 59");
-  for (const keepWarmMinutes of [0, 59]) expect(s.set({ orchestration: { keepWarmMinutes } }).orchestration.keepWarmMinutes).toBe(keepWarmMinutes);
+  const get = () => s.get().orchestration[key as "stallMinutes"];
+  expect(get()).toBe(dflt);
+  for (const v of [-1, (max as number) + 1, 1.5]) expect(() => s.set({ orchestration: { [key]: v } } as never)).toThrow(message as string);
+  for (const v of [0, max as number]) {
+    s.set({ orchestration: { [key as string]: v } } as never);
+    expect(get()).toBe(v);
+  }
 });
 
 it("app icon: accepts the built-in icon, an emoji and a small raster data URL; stored and reset", () => {
@@ -415,22 +422,6 @@ it("editor: defaults empty; accepts a command and a name; refuses newline, NUL, 
   expect(s.set({ editor: { command: "" } }).editor.command).toBe("");
 });
 
-it("chat.visualize defaults to on (also for a settings.json without chat), saves, refuses a non-boolean", () => {
-  const f = file();
-  writeFileSync(f, JSON.stringify({ chrome: { enabled: true } }));
-  const s = createSettings({ file: f });
-  expect(s.get().chat).toEqual({ visualize: true });
-  expect(s.set({ chat: { visualize: false } }).chat).toEqual({ visualize: false });
-  expect(() => s.set({ chat: { visualize: "yes" as never } })).toThrow("Inline visualizations must be on or off");
-});
-
-it("terminalAccess.enabled defaults to on, saves, refuses a non-boolean (GH-709)", () => {
-  const s = createSettings({ file: file() });
-  expect(s.get().terminalAccess).toEqual({ enabled: true });
-  expect(s.set({ terminalAccess: { enabled: false } }).terminalAccess).toEqual({ enabled: false });
-  expect(() => s.set({ terminalAccess: { enabled: 1 as never } })).toThrow("Let sessions use open terminals must be on or off");
-});
-
 it("inlineTask defaults, saves and refuses bad values (GH-734)", () => {
   const s = createSettings({ file: file() });
   expect(s.get().inlineTask).toEqual({ enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 });
@@ -440,11 +431,4 @@ it("inlineTask defaults, saves and refuses bad values (GH-734)", () => {
   expect(() => s.set({ inlineTask: { model: "" } })).toThrow("Inline task model must be");
   expect(() => s.set({ inlineTask: { openCodeModel: "nomodel" } })).toThrow("Inline task OpenCode model must be");
   expect(() => s.set({ inlineTask: { enabled: 1 as never } })).toThrow("Inline tasks must be on or off");
-});
-
-it("fork.enabled defaults to on, saves, refuses a non-boolean (GH-718)", () => {
-  const s = createSettings({ file: file() });
-  expect(s.get().fork).toEqual({ enabled: true });
-  expect(s.set({ fork: { enabled: false } }).fork).toEqual({ enabled: false });
-  expect(() => s.set({ fork: { enabled: 1 as never } })).toThrow("Fork subagents must be on or off");
 });
