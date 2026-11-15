@@ -37,17 +37,15 @@ describe("localSettingsFile", () => {
     expect(await localSettingsFile(wt, env())).toBe(join(dir, ".claude", "settings.local.json"));
   });
   // The root's file is not used: the cwd's own file is.
-  it.each<[string, (dir: string) => ReturnType<typeof env>]>([
-    ["outside a repository", () => env()],
-    ["on Windows", () => env({ platform: "win32" })],
-    ["when the root is the home directory", (dir) => env({ home: dir })],
-    ["when the root belongs to another user", () => env({ uid: (process.getuid?.() ?? 0) + 1 })],
-  ])("is the cwd's own file %s", async (name, envOf) => {
-    const dir = name === "outside a repository" ? join(root, "plain") : repo();
-    const cwd = join(dir, "sub");
+  it.each<[string, () => string, (dir: string) => ReturnType<typeof env>]>([
+    ["outside a repository", () => join(root, "plain"), () => env()],
+    ["on Windows", () => join(repo(), "sub"), () => env({ platform: "win32" })],
+    ["when the root is the home directory", () => join(repo(), "sub"), (dir) => env({ home: dir })],
+    ["when the root belongs to another user", () => join(repo(), "sub"), () => env({ uid: (process.getuid?.() ?? 0) + 1 })],
+  ])("is the cwd's own file %s", async (_name, cwdOf, envOf) => {
+    const cwd = cwdOf();
     mkdirSync(cwd, { recursive: true });
-    const cwdIn = name === "outside a repository" ? dir : cwd;
-    expect(await localSettingsFile(cwdIn, envOf(dir))).toBe(join(cwdIn, ".claude", "settings.local.json"));
+    expect(await localSettingsFile(cwd, envOf(join(cwd, "..")))).toBe(join(cwd, ".claude", "settings.local.json"));
   });
 });
 

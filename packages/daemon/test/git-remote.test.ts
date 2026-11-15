@@ -86,9 +86,9 @@ describe("gitFetch", () => {
   });
 
   it.each([
-    ["https://user:secret@127.0.0.1:9/x.git", ["secret", "user:"]],
-    ["git://bob:pw9x@127.0.0.1:9/x.git", ["bob", "pw9x"]],
-  ])("shows git's message for a failure, without credentials in the URL %#", async (url, secrets) => {
+    ["https", "https://user:secret@127.0.0.1:9/x.git", ["secret", "user:"]],
+    ["git", "git://bob:pw9x@127.0.0.1:9/x.git", ["bob", "pw9x"]],
+  ])("shows git's message for a failure, without credentials in the %s URL", async (_scheme, url, secrets) => {
     const { a, inside } = remoteRepo();
     run(a, "remote", "remove", "origin");
     run(a, "remote", "add", "bad", url);
