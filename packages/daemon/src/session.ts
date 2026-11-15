@@ -336,10 +336,9 @@ export class Session {
     return this.run.setPermissionMode(mode);
   }
   refreshAgents() {
-    return this.run.refreshAgents?.();
+    return this.run.refreshAgents();
   }
   setAgent(agent: string) {
-    if (!this.run.setAgent) throw new Error("this session's engine has no agents");
     return this.run.setAgent(agent);
   }
   setEffort(effort: Effort) {
@@ -353,12 +352,10 @@ export class Session {
   }
   /** Allow and retry (GH-711); `unsupported` without the Engine's support (OpenCode). */
   allowDenied(toolUseId: string) {
-    if (!this.run.allowDenied) throw new DeniedRetryError("unsupported", "this session's engine has no auto mode");
     return this.run.allowDenied(toolUseId);
   }
   /** Always allow (GH-756); `unsupported` without the Engine's support (OpenCode). */
   alwaysAllowDenied(toolUseId: string, scope: "session" | "local") {
-    if (!this.run.alwaysAllowDenied) throw new DeniedRetryError("unsupported", "this session's engine has no auto mode");
     return this.run.alwaysAllowDenied(toolUseId, scope);
   }
   backgroundShell(toolUseId: string) {

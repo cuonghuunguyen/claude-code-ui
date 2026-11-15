@@ -108,8 +108,12 @@ describe("session-scan", () => {
 
   it("server.ts reads the stamp and last-message times async (no sync tail read)", () => {
     const src = readFileSync(join(import.meta.dirname, "../src/server.ts"), "utf8");
-    expect(src).toMatch(/import \{[^}]*\blastEntryTime\b[^}]*\btranscriptStamp\b[^}]*\} from "\.\/session-scan\.ts"/);
+    // The last-message read moved with the Claude catalogue.
+    const claude = readFileSync(join(import.meta.dirname, "../src/claude-catalogue.ts"), "utf8");
+    expect(claude).toMatch(/import \{[^}]*\blastEntryTime\b[^}]*\} from "\.\/session-scan\.ts"/);
+    expect(src).toMatch(/import \{[^}]*\btranscriptStamp\b[^}]*\} from "\.\/session-scan\.ts"/);
     expect(src).not.toMatch(/\breadSync\b/);
+    expect(claude).not.toMatch(/\breadSync\b/);
     expect(src).not.toMatch(/function transcriptStamp/);
   });
 

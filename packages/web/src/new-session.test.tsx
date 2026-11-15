@@ -526,7 +526,8 @@ it("an opencode_missing create error shows inline under the chips with a button 
   expect(el.textContent).not.toContain("Prompt not sent");
   expect(box.value).toBe("hi");
   await act(async () => el.querySelector<HTMLElement>('[data-testid="engine-error-settings"]')!.click());
-  expect(onOpenOpenCodeSettings).toHaveBeenCalled();
+  // The Engine of the failed start, not the one the draft shows now.
+  expect(onOpenOpenCodeSettings).toHaveBeenCalledWith("opencode");
 });
 
 it("another create error keeps the old path: no engine error block", async () => {

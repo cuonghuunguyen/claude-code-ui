@@ -43,19 +43,19 @@ export interface EngineSession {
   setModel(model: string): Promise<void>;
   setPermissionMode(mode: PermissionMode): Promise<void>;
   setEffort(effort: Effort): Promise<void>;
-  /** Engines with `agents` (OpenCode); Claude has none. */
-  setAgent?(agent: string): Promise<void>;
-  /** Engines with `agents`: reads the agent list again and emits the `agents` part (the chooser's retry). */
-  refreshAgents?(): Promise<void>;
+  /** Engines with `agents` (OpenCode); the others throw. */
+  setAgent(agent: string): Promise<void>;
+  /** Engines with `agents`: reads the agent list again and emits the `agents` part (the chooser's retry); the others do nothing. */
+  refreshAgents(): Promise<void>;
   interrupt(): Promise<void>;
-  /** Runs an inline task (GH-734) as a child of the running `inline_task` call; Engines without it refuse the tool. */
-  inlineTask?: InlineRunner;
+  /** Runs an inline task (GH-734) as a child of the running `inline_task` call; an Engine without it throws a ToolError. */
+  inlineTask: InlineRunner;
   stopSubagent(callId: string): Promise<boolean>;
   backgroundShell(toolUseId: string): Promise<boolean>;
-  /** Allow and retry (GH-711), Claude only: approves the classifier-denied call once and sends the follow-up message; throws DeniedRetryError. */
-  allowDenied?(toolUseId: string): string | undefined;
-  /** Always allow (GH-756), Claude only: saves the call's allow rule for `scope`, then like allowDenied; throws DeniedRetryError. */
-  alwaysAllowDenied?(toolUseId: string, scope: "session" | "local"): Promise<string | undefined>;
+  /** Allow and retry (GH-711), Claude only: approves the classifier-denied call once and sends the follow-up message; throws DeniedRetryError (`unsupported` on the other Engines). */
+  allowDenied(toolUseId: string): string | undefined;
+  /** Always allow (GH-756), Claude only: saves the call's allow rule for `scope`, then like allowDenied; throws DeniedRetryError (`unsupported` on the other Engines). */
+  alwaysAllowDenied(toolUseId: string, scope: "session" | "local"): Promise<string | undefined>;
   stopShell(id: string): Promise<boolean>;
   shellOutput(toolUseId: string): Promise<{ output: string; truncated: boolean } | undefined>;
   previewRewind(userMessageId: string): Promise<RewindPreview>;

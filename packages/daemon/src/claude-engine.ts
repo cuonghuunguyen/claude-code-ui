@@ -900,6 +900,12 @@ export class ClaudeSession implements EngineSession {
     else this.setMode(mode);
   }
 
+  /** Claude has no agents (EngineCapabilities.agents). */
+  setAgent(_agent: string): Promise<void> {
+    throw new Error("this session's engine has no agents");
+  }
+  async refreshAgents() {}
+
   /** Applies from the next turn on; "default" goes back to the model's default effort. */
   async setEffort(effort: Effort) {
     if (!this.session.isLive()) throw new Error(`session ${this.id} is not live (${this.session.currentState()})`);
@@ -956,8 +962,10 @@ export class ClaudeSession implements EngineSession {
   }
 
   /** Inline task (GH-734): a minimized query on a small model; its steps are child parts of the running `inline_task` call. */
-  inlineTask = (spec: InlineSpec, hooks: InlineHooks): Promise<InlineResult> =>
-    runInlineClaude(
+  inlineTask = (spec: InlineSpec, hooks: InlineHooks): Promise<InlineResult> => {
+    // The Settings model applies when the spec names none.
+    const model = spec.model ?? hooks.settings?.model;
+    return runInlineClaude(
       {
         query: (p) => (this.opts.query ?? sdkQuery)(p as never),
         parent: () => {
@@ -982,9 +990,10 @@ export class ClaudeSession implements EngineSession {
         env: () => claudeEnv(),
         runs: this.inlineRuns,
       },
-      spec,
+      model ? { ...spec, model } : spec,
       hooks,
     );
+  };
 
   /**
    * Stops the task of call `callId`: a subagent run (Stop agent; the parent turn goes on with the run's error result) or a

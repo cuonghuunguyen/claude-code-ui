@@ -12,13 +12,13 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { ALL_CAPABILITIES, CHUNK_BYTES, KNOWN_HASH_MAX, KNOWN_ID_MAX, KNOWN_MAX, createAdapter, editorLabel, parseEditorCommand, EFFORTS, ENGINES, type Engine as EngineName, type AsideOpenResult, type PromptResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, permissionModesFor, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_MARKS_MAX, BACK_TAG, type ClientMessage, type FsEntry, type FsGrepResult, type ListResult, type MediaReadResult, type ModelInfo, type PermissionMode, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
-import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SDKMessage, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import { CHUNK_BYTES, DEFAULT_ENGINE, KNOWN_HASH_MAX, KNOWN_ID_MAX, KNOWN_MAX, createAdapter, editorLabel, parseEditorCommand, EFFORTS, ENGINES, type Engine as EngineName, type AsideOpenResult, type PromptResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_MARKS_MAX, BACK_TAG, type ClientMessage, type FsEntry, type FsGrepResult, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
 import { createLocalHistory, HistoryError } from "./local-history.ts";
 import { createSleepWatch, SLEEP_CHECK_MS, SLEEP_KEEP_MS, type Slept } from "./sleep-watch.ts";
-import { asideDisallowed, asideForkPoint, portListening } from "./aside.ts";
+import { asideDisallowed, portListening } from "./aside.ts";
 import { createReplaceUndo, replaceInFiles, ReplaceError, undoReplace } from "./replace.ts";
 import { clearSearchCache, searchFiles } from "./search.ts";
 import { findInFiles, GREP_LIMITS, GrepError, matcher, parseGlobs } from "./grep.ts";
@@ -37,11 +37,10 @@ import { gitBranch, gitFetch, gitPull, gitPush, gitTagDelete, gitTagRemote } fro
 import { createWarmCommitMessage, generateCommitMessage, instructionFor, promptFor } from "./commit-message.ts";
 import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff, gitCommitFiles, gitCommitMenu, gitContinue, gitMergeRebase, gitReword, gitRollback, gitRollbackHunk, gitRollbackPreview, gitStash, gitStashList, gitStashPush, gitTag, gitTagCreate, gitTagSigning } from "./git-write.ts";
 import { createNotifier, type Push } from "./push.ts";
-import { readDefaultMode } from "./default-mode.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
-import { brokenState, createOpenCodeEngine, ProviderStateBroken, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels, primaryAgents } from "./opencode-engine.ts";
-import { createOpenCodeServer, OpenCodeError } from "./opencode-server.ts";
-import { checkLogin, listProviders, loginError } from "./opencode-providers.ts";
+import { createCatalogues, EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx } from "./engine-catalogue.ts";
+import { ARCHIVED_TAG, createClaudeCatalogue, transcriptFile, type History } from "./claude-catalogue.ts";
+import { createOpenCodeCatalogue } from "./opencode-catalogue.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
 import { claudeBin } from "./claude-bin.ts";
 import { claudeEnv, setClaudeToken } from "./claude-env.ts";
@@ -51,13 +50,13 @@ import { createPromptQueue } from "./prompt-queue.ts";
 import { briefPrompt, checkSet, find as findMark, total as marksTotal, upsert as upsertMark } from "./back-marks.ts";
 import { createBackReminders, TICK_MS as BACK_TICK_MS, type Due } from "./back-reminders.ts";
 import { CONTINUE_GAP_MS, CONTINUE_PROMPT, createAutoContinue } from "./auto-continue.ts";
-import { listModels, queuedQuery, Session, transcriptModel, type SessionSettings, type Transcript } from "./session.ts";
+import { listModels, queuedQuery, Session, type SessionSettings, type Transcript } from "./session.ts";
 import { createTerminals } from "./terminals.ts";
 import { ConfigError, createConfig, runCli, timed, type CliRunner, type McpRequest, type SkillsRequest } from "./config.ts";
 import { createPlugins, redact, type PluginsRequest } from "./plugins.ts";
 import { addonAssetHeaders, addonHeaders, createAddons, type AddonsRequest } from "./addons.ts";
 import { searchTranscripts } from "./content-search.ts";
-import { cliTurnRunning, interleaveRuns, JsonlTail, parseJsonl, transcriptEnd, withoutForkPrefix } from "./transcript.ts";
+import { cliTurnRunning, JsonlTail, parseJsonl, transcriptEnd, withoutForkPrefix } from "./transcript.ts";
 import type { KeepAwake } from "./keep-awake.ts";
 import { customCommand, EDITORS, findOnPath, isOpenWith, openCommand, type Launcher, type OpenCommand } from "./open-external.ts";
 import { createRouter, type Sides } from "./sides.ts";
@@ -76,7 +75,7 @@ import { serveAppIcon } from "./app-icon.ts";
 import { serveStatic } from "./static.ts";
 import { VISUALIZE_HEADERS, VISUALIZE_SHELL, visualizePluginDir } from "./visualize.ts";
 import { visualizeReadable } from "./visualize-write.ts";
-import { lastEntryTime, listSessionsOffThread, mapLimit, transcriptStamp } from "./session-scan.ts";
+import { listSessionsOffThread, mapLimit, transcriptStamp } from "./session-scan.ts";
 
 /** The reply field with the folders of the session's plan files (a side's own reply carries its own). */
 const planDirsOf = (s: object) => {
@@ -108,10 +107,6 @@ void ((w: WebSocket): Conn => w);
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 
-/** SDK title of a transcript whose only prompt is /clear (or its aliases /reset, /new). */
-const CLEARED = /^\/(clear|reset|new)$/;
-/** session.list waits this long for the model list (auto mode of new sessions) before it replies without it. */
-export const MODEL_LIST_WAIT_MS = 2000;
 /** A background resubscribe that is behind by more events than this gets the snapshot (last page) instead of the replay (GH-767). */
 export const REPLAY_MAX_EVENTS = 500;
 
@@ -126,8 +121,6 @@ function parseKnown(v: unknown): Map<string, string> | undefined | null {
   }
   return out;
 }
-/** The longest `session.list` waits for the OpenCode server (it may start, or hang, for the first list). */
-const OPENCODE_LIST_WAIT_MS = 3000;
 
 /** ws maxPayload (default 100 MiB): a prompt with two images at MAX_UPLOAD_BYTES as base64, plus the JSON around them. */
 export const MAX_FRAME_BYTES = 64 * 1024 * 1024;
@@ -166,29 +159,6 @@ const LAG_LOG_MS = 1_000;
 const MEM_LOG_MS = 10 * 60_000;
 const mb = (n: number) => Math.round(n / 2 ** 20);
 
-/** An OpenCode session id: it reaches a request path, so only this shape does. */
-const OPENCODE_ID = /^ses_[A-Za-z0-9]+$/;
-type OpenCodeSessionRow = { id: string; directory: string; title: string; time: { created: number; updated: number; archived?: number } };
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-type History = {
-  listSessions: typeof listSessions;
-  getSessionInfo: typeof getSessionInfo;
-  getSessionMessages: typeof getSessionMessages;
-  /** Subagent run transcripts (`<session>/subagents/agent-<id>.jsonl`); not in getSessionMessages(). */
-  listSubagents?: typeof listSubagents;
-  getSubagentMessages?: typeof getSubagentMessages;
-  renameSession?: typeof renameSession;
-  tagSession?: typeof tagSession;
-  deleteSession?: typeof deleteSession;
-  /** Aside (docs/spec.md "Aside"): copies the owner transcript up to a message into a new session. */
-  forkSession?: typeof forkSession;
-};
-
-const OPENCODE_RESTART_BUSY = "OpenCode is busy: a turn runs, a login waits or a session is being created. Restart it when that is done.";
-const PROVIDERS_BROKEN_BUSY = "OpenCode's provider list is broken. It is reloaded when no OpenCode turn runs: press Retry then.";
-/** SDK session tag that marks an archived session (no archive flag of its own; ADR 0001: no store of ours). */
-const ARCHIVED_TAG = "archived";
 
 const LOCAL_HOSTNAMES = ["127.0.0.1", "localhost"];
 /** A connection whose browser runs on this machine: a local Host name and a loopback peer (a Tailscale or LAN Host, and a side's virtual connection, are not). */
@@ -200,8 +170,6 @@ const sameMachine = (req: IncomingMessage | undefined) => {
   }
 };
 
-/** Bytes read from a transcript's end to find its last message; more than a few large tool results. */
-const TAIL_BYTES = 256 * 1024;
 /**
  * What `git worktree list` of `cwd` reads, from file stats only (no process): the shared HEAD, the worktrees folder and each
  * worktree's HEAD and checkout path. A worktree added, removed or moved (from a terminal too), or a checkout changes it;
@@ -239,28 +207,6 @@ function worktreeStamp(cwd: string) {
   return [dirs.common, stamp(join(dirs.common, "HEAD")), stamp(wts), ...names.flatMap((n) => [n, stamp(join(wts, n, "HEAD")), checkout(join(wts, n, "gitdir"))])].join("|");
 }
 
-/** Transcript path → last message time for the file version (mtime, size) it was read from. */
-/** `listed`: the transcript scan's mtime and size when the file was read (lastMessageAt skips the open while they hold). */
-const lastMessageCache = new Map<string, { version: string; listed?: string; at: number | undefined }>();
-
-// ponytail: the SDK's project folder name for cwds up to 200 chars; longer ones get a hash suffix and are not found.
-const transcriptFile = (projectsDir: string, cwd: string, sessionId: string) => join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${sessionId}.jsonl`);
-
-/**
- * Permission mode of the last prompt and effort of the last reply in a session's raw transcript (getSessionMessages() drops
- * both fields): the restore fallback when sessions.json has no entry. Absent fields stay undefined. Reads the raw lines readTranscript
- * parsed (GH-274: no second read of the file).
- */
-function transcriptSettings(entries: readonly unknown[]): { permissionMode?: unknown; effort?: unknown } {
-  const found: { permissionMode?: unknown; effort?: unknown } = {};
-  for (let i = entries.length - 1; i >= 0 && (found.permissionMode === undefined || found.effort === undefined); i--) {
-    const e = entries[i] as { type?: string; isSidechain?: boolean; permissionMode?: unknown; effort?: unknown } | null;
-    if (!e || typeof e !== "object" || e.isSidechain) continue;
-    if (e.type === "user" && found.permissionMode === undefined && "permissionMode" in e) found.permissionMode = e.permissionMode;
-    if (e.type === "assistant" && found.effort === undefined && "effort" in e) found.effort = e.effort;
-  }
-  return found;
-}
 
 /**
  * getSubagentMessages() keeps only the run transcript's last parentUuid chain (SDK 0.3.285). Parallel tool calls branch: each
@@ -307,22 +253,6 @@ async function withParallelCalls(file: string | undefined, messages: SessionMess
   };
   messages.forEach(add);
   return out.sort((a, b) => (index.get(a.uuid) ?? 0) - (index.get(b.uuid) ?? 0));
-}
-
-/**
- * Time of the last user or assistant entry in a session's transcript, read from its end. Not the file mtime: on exit
- * the CLI appends metadata (`last-prompt`, `cost-state`), so every live session looks just used after a daemon restart.
- * Undefined when the file or such an entry is not found (e.g. the entry is further back than `TAIL_BYTES`).
- */
-async function lastMessageAt(projectsDir: string, cwd: string, sessionId: string, scanned?: { lastModified: number; fileSize?: number }) {
-  const file = transcriptFile(projectsDir, cwd, sessionId);
-  const listed = scanned?.fileSize !== undefined ? `${scanned.lastModified}:${scanned.fileSize}` : undefined;
-  const hit = listed && lastMessageCache.get(file);
-  if (hit && hit.listed === listed) return hit.at;
-  const read = await lastEntryTime(file, TAIL_BYTES);
-  if (!read) return undefined;
-  lastMessageCache.set(file, { version: read.version, listed, at: read.at });
-  return read.at;
 }
 
 /**
@@ -374,6 +304,8 @@ export function createDaemon(opts: {
   secrets?: Secrets;
   /** Test seam: `command` replaces the PATH lookup of `opencode` (argv prefix), `env` is added to the OpenCode child's environment. */
   opencode?: { command?: string[]; env?: () => NodeJS.ProcessEnv; startTimeoutMs?: number; /** How long `session.list` waits for OpenCode (default 3 s). */ listWaitMs?: number };
+  /** Test seam: replaces the built-in Claude and OpenCode catalogues (fake Engines need no process). */
+  catalogues?: (ctx: CatalogueContext) => EngineCatalogue[];
   /** Test seam (GH-447): the fetch of the Jira client. */
   jiraFetch?: typeof fetch;
   /** Test seam (GH-164): delays of auto-continue.ts. */
@@ -513,8 +445,6 @@ export function createDaemon(opts: {
   const restoring = new Map<string, Promise<Session | undefined>>();
   // Sessions whose delete is in progress (session.delete).
   const deleting = new Set<string>();
-  // Claude sessions whose transcript this run has seen (listed or restored): one that is gone later was deleted outside the daemon.
-  const hadTranscript = new Set<string>();
   const history = { listSessions: listSessionsOffThread, getSessionInfo, getSessionMessages, listSubagents, getSubagentMessages, renameSession, tagSession, deleteSession, forkSession, ...opts.history };
   const claudeDir = opts.claudeDir ?? (process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"));
   const projectsDir = opts.projectsDir ?? join(claudeDir, "projects");
@@ -522,11 +452,6 @@ export function createDaemon(opts: {
   const appSettings = opts.appSettings ?? createSettings();
   /** GH-668: the ready Haiku process of Generate; used only while `git.commitMessageWarm` is on. */
   const warmCommit = createWarmCommitMessage(opts.query);
-  /** The OpenCode server: started on first use (docs/spec.md "OpenCode engine"), stopped with the daemon. */
-  const openCode = createOpenCodeServer({ path: () => appSettings.get().opencode.path, ...opts.opencode });
-  /** Directory and title of each OpenCode session this daemon listed, created or opened. */
-  const openCodeMeta = new Map<string, { cwd: string; title: string }>();
-  const openCodeFail = (err: unknown) => (err instanceof OpenCodeError ? { code: err.code, message: err.message } : { code: "opencode_failed", message: (err as Error).message });
   /**
    * Orchestration MCP of OpenCode sessions (docs/spec.md "Orchestration"): OpenCode connects to `/opencode-mcp` of this daemon with a
    * per-session bearer token (token -> session id); one stateful transport and server per token, a new `initialize` replaces both.
@@ -536,30 +461,6 @@ export function createDaemon(opts: {
     void mcpRoutes.get(token)?.live?.server.close().catch(() => {});
     mcpRoutes.delete(token);
   };
-  const openCodeEngine = createOpenCodeEngine(openCode, {
-    onTitle: (id, title) => {
-      const m = openCodeMeta.get(id);
-      if (!m || m.title === title) return;
-      openCodeMeta.set(id, { ...m, title });
-      broadcast({ type: "sessions.changed" });
-    },
-    mcp: {
-      // The local OpenCode server always reaches the daemon on 127.0.0.1 (it listens there or on 0.0.0.0).
-      url: () => {
-        const a = http.address();
-        return a && typeof a === "object" ? `http://127.0.0.1:${a.port}/opencode-mcp` : undefined;
-      },
-      token: (id, server) => {
-        for (const [t, r] of mcpRoutes) if (r.id === id && r.server === server) return t;
-        const t = randomBytes(32).toString("base64url");
-        mcpRoutes.set(t, { id, server });
-        return t;
-      },
-      drop: (id) => {
-        for (const [t, r] of mcpRoutes) if (r.id === id) dropMcp(t);
-      },
-    },
-  });
   async function serveOpenCodeMcp(req: IncomingMessage, res: ServerResponse) {
     // The token before any body read.
     const token = /^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1];
@@ -599,65 +500,6 @@ export function createDaemon(opts: {
     }
     if (!route.live) return void res.writeHead(404).end();
     await route.live.transport.handleRequest(req, res, body);
-  }
-  /** One OAuth wait (`opencode.loginFinish`) per provider; a cancel or a new login aborts it. */
-  const oauthWaits = new Map<string, AbortController>();
-  /** Login and logout change OpenCode's provider set; `POST /global/dispose` makes its instances read it, but cancels running turns: it waits for idle. */
-  let providersStale = false;
-  const openCodeBusy = () => [...sessions.values()].some((s) => OPENCODE_ID.test(s.id) && (s.currentState() !== "idle" || s.pendingCount() > 0));
-  async function flushProviders() {
-    if (!providersStale || openCodeBusy() || !openCode.running()) return;
-    providersStale = false;
-    // Clients drop their OpenCode model list only after OpenCode read the new providers.
-    await openCode.request("/global/dispose", { method: "POST" }).then(() => (openCodeEngine.dropLimits(), broadcast({ type: "opencode.providersChanged" })), (err) => (providersStale = true, console.error("OpenCode dispose failed:", (err as Error).message)));
-  }
-  /** OpenCode sessions being created (POST /session in flight): a restart of OpenCode's server would lose them. */
-  let openCodeCreating = 0;
-  let openCodeRestarts = 0;
-  let openCodeRestart: Promise<void> | undefined;
-  /** A restart of OpenCode's server now would lose a turn, an OAuth login or a session creation. */
-  const openCodeHeld = () => openCodeBusy() || oauthWaits.size > 0 || openCodeCreating > 0;
-  /** Stops OpenCode's server (the next request starts it again; open sessions resync on the new event stream) and drops its cached limits. One at a time. */
-  const restartOpenCode = () =>
-    (openCodeRestart ??= (async () => {
-      await openCode.reset();
-      openCodeEngine.dropLimits();
-      openCodeRestarts++;
-    })().finally(() => (openCodeRestart = undefined)));
-  /**
-   * OpenCode's model list. Only a read that still answers 499 after the folder's instance was disposed means the provider state is broken server-wide
-   * (nothing else clears it): then OpenCode's server restarts, unless a turn, an OAuth login or a session creation would be lost. A refused or failed
-   * folder repair, or a busy server, is `models_failed` with the reason. One restart at a time; a caller that saw the break before a restart reads again.
-   */
-  async function openCodeModelsRepaired(cwd?: string): Promise<ModelInfo[]> {
-    const seen = openCodeRestarts;
-    try {
-      return await openCodeModels(openCodeEngine, cwd);
-    } catch (err) {
-      if (err instanceof ProviderStateBroken) {
-        if (seen === openCodeRestarts) {
-          if (openCodeHeld()) throw new Error(PROVIDERS_BROKEN_BUSY);
-          await restartOpenCode();
-        } else await openCodeRestart;
-        return openCodeModels(openCodeEngine, cwd);
-      }
-      throw brokenState(err) ? new Error(PROVIDERS_BROKEN_BUSY) : err;
-    }
-  }
-  const refreshProviders = () => ((providersStale = true), flushProviders());
-  const openCodeSessionOpts = (initial: Partial<SessionSettings>) => ({ ...sessionOpts(initial), engine: openCodeEngine });
-  /** A new OpenCode session in `cwd` with the rules of its mode (tracked, its project added); undefined when the folder is being removed meanwhile. Throws OpenCode's error. */
-  async function createOpenCodeSession(cwd: string, initial: { model?: string; permissionMode: PermissionMode; effort?: SessionSettings["effort"] }): Promise<Session | undefined> {
-    // No timeout: the first request of a cold folder boots its instance (> 3 s) and the user waits for the session; a timeout would lose the created session for good.
-    // `resend`: a create cut off by a server that died is sent again to the next server; at worst (it died after creating) an empty session is left over.
-    const permission = await openCodeEngine.block(initial.permissionMode, cwd); // may reject: before the counter goes up
-    openCodeCreating++;
-    const row = await openCode.request<OpenCodeSessionRow>("/session", { method: "POST", directory: cwd, timeoutMs: 0, resend: true, body: { permission } }).finally(() => openCodeCreating--);
-    if (isRemoving(cwd) || !existsSync(cwd)) return undefined;
-    const s = track(new Session(cwd, openCodeSessionOpts(initial), { id: row.id }));
-    openCodeMeta.set(s.id, { cwd, title: row.title });
-    addProject(cwd);
-    return s;
   }
   /** Settings `sessions.engine`: the Engine of the last created session. */
   const rememberEngine = (engine: EngineName) => {
@@ -944,7 +786,7 @@ export function createDaemon(opts: {
           touched.delete(s.id);
           await s.close().catch(() => {});
         }
-        if (live.some((s) => OPENCODE_ID.test(s.id))) void flushProviders();
+        for (const c of new Set(live.map((s) => catalogues.ownerOf(s.id, s)))) c?.settled?.();
         // Its terminals too: a shell running in the folder keeps Windows from deleting it ("Permission denied").
         await terminals.closeIn(isRemoving);
       } });
@@ -1255,7 +1097,7 @@ export function createDaemon(opts: {
         if (t === "session_state") (queue.setNotLive(s.id, !s.isLive()), syncRunning());
         queue.kick(s.id);
         // A turn may have changed files (an untracked file is in no fingerprint): its worktree is checked again.
-        if (t === "session_state" && (e.part as { state?: string }).state === "idle") (markWorktreeStale(s.cwd), OPENCODE_ID.test(s.id) && void flushProviders());
+        if (t === "session_state" && (e.part as { state?: string }).state === "idle") (markWorktreeStale(s.cwd), catalogues.ownerOf(s.id, s)?.settled?.());
       }
     });
     s.subscribe(Infinity, notifier.observe);
@@ -1321,15 +1163,20 @@ export function createDaemon(opts: {
         real: (p) => real(p) ?? p,
         run: async (id, spec, signal, toolUseId, input) => {
           const s = sessions.get(id);
-          if (!s?.run.inlineTask) throw new ToolError("This engine cannot run inline tasks.");
-          // The Claude model setting applies to Claude sessions; OpenCode reads its own setting (`openCodeModel`) when the spec names none.
-          const model = spec.model ?? (s.info().engine === "claude" ? appSettings.get().inlineTask.model : undefined);
-          return s.run.inlineTask({ ...spec, ...(model && { model }) }, { signal, toolUseId, input, openCodeModel: appSettings.get().inlineTask.openCodeModel });
+          if (!s) throw new ToolError("This engine cannot run inline tasks.");
+          // Each Engine takes its own model from the setting when the spec names none.
+          return s.run.inlineTask(spec, { signal, toolUseId, input, settings: appSettings.get().inlineTask });
         },
       }),
       createForkGroup(() => appSettings.get().fork.enabled),
     ],
   });
+  /** Orchestration reads OpenCode's agents and models for its own checks; fake catalogues without OpenCode have none. */
+  const openCodeCatalogue = () => {
+    const c = catalogues.byName("opencode");
+    if (!c) throw new Error("This daemon has no OpenCode engine");
+    return c;
+  };
   const orchestration = createOrchestration({
     links: settings,
     held: (id) => !!holds.get(id),
@@ -1338,7 +1185,7 @@ export function createDaemon(opts: {
     find: findSession,
     create: async (cwd, initial, engine) => {
       if (isRemoving(cwd)) throw new Error("This worktree is being removed");
-      const s = engine === "opencode" ? await createOpenCodeSession(cwd, { model: initial.model, permissionMode: initial.permissionMode ?? "default", effort: initial.effort }) : track(new Session(cwd, sessionOpts(initial)));
+      const s = await catalogues.byName(engine ?? DEFAULT_ENGINE)?.create(cwd, initial);
       if (!s) throw new Error("This worktree is being removed");
       addProject(cwd);
       // worker_start writes the link right after this call (no await): the refresh lists the worker with it.
@@ -1357,10 +1204,10 @@ export function createDaemon(opts: {
     createWorktree: (repo, o) => createIn(repo, o),
     port: () => (http.address() as AddressInfo | null)?.port,
     heldElsewhere: (id) => cliTurnRunning(claudeDir, id, true),
-    openCodeAgents: async (cwd) => primaryAgents(await openCodeEngine.agents(cwd)).map((a) => a.name),
+    openCodeAgents: async (cwd) => (await openCodeCatalogue().agents(cwd)).map((a) => a.name),
     agents: (cwd) => queuedQuery((q) => q.supportedAgents(), opts.query, { cwd, persistSession: false }).then((l) => l.map((a) => a.name)),
     models: () => known,
-    openCodeModels: () => openCodeModels(openCodeEngine),
+    openCodeModels: () => openCodeCatalogue().models(),
     remove: async (id) => {
       const err = await deleteSessionById(id);
       if (err?.code !== "unknown_session") return err;
@@ -1420,38 +1267,71 @@ export function createDaemon(opts: {
     return (nextScan ??= scan.catch(() => {}).then(() => ((nextScan = undefined), transcripts())));
   }
 
-  /** First prompt of a session cleared into, by ID; found once, it stays. */
-  const clearedTitles = new Map<string, string>();
-  /**
-   * The SDK titles a session cleared into (/clear) "/clear" until it finds a prompt in the transcript's head read window, which
-   * a background task's notification turn can fill: its first prompt from the transcript, none yet "New session".
-   */
-  /** Cleared sessions read without a prompt, by ID: the scan's mtime and size then; not read again while they hold. */
-  const untitledAt = new Map<string, string>();
-  async function clearedTitle(id: string, cwd: string, scanned?: { lastModified: number; fileSize?: number }) {
-    if (clearedTitles.has(id)) return clearedTitles.get(id)!;
-    // A /clear that was never prompted stays "New session": without this, every list read each such transcript again.
-    const stamp = scanned?.fileSize !== undefined ? `${scanned.lastModified}:${scanned.fileSize}` : undefined;
-    if (stamp && untitledAt.get(id) === stamp) return "New session";
-    const main = await readTranscript(id, cwd).then((t) => t.main, () => []);
-    const adapter = createAdapter();
-    const prompt = main.flatMap((m) => adapter.convert(m as SDKMessage)).find((p) => p.type === "user_text");
-    if (!prompt) {
-      if (stamp) untitledAt.set(id, stamp);
-      return "New session";
-    }
-    untitledAt.delete(id);
-    clearedTitles.set(id, prompt.text);
-    return prompt.text;
-  }
+  /** The Engine catalogues (engine-catalogue.ts): everything about the stored sessions of an Engine. `opts.catalogues` replaces the built-in pair (tests). */
+  const catalogueCtx: CatalogueContext = {
+    track,
+    sessionOpts,
+    settings,
+    appSettings,
+    allowed: (p) => allowed(p),
+    isRemoving,
+    addProject,
+    broadcast,
+    liveSessions: () => sessions.values(),
+    session: (id) => sessions.get(id),
+    restoreSlot,
+    allowBypass: opts.allowBypass,
+  };
+  const catalogues = createCatalogues(
+    opts.catalogues?.(catalogueCtx) ?? [
+      createClaudeCatalogue(catalogueCtx, {
+        history: history as never,
+        claudeDir,
+        projectsDir,
+        transcripts,
+        readTranscript,
+        transcriptCwds,
+        stamps,
+        statStamp,
+        transcriptCwd,
+        sessionCwd,
+        modelList: () => modelList(),
+        supportsAuto,
+        localFiles,
+        commandsOf,
+        claimUpload: (draft) => uploads.claim(draft),
+        deleting,
+        dropGone,
+        modelListWaitMs: opts.modelListWaitMs,
+      }),
+      createOpenCodeCatalogue(catalogueCtx, {
+        server: opts.opencode,
+        // The local OpenCode server always reaches the daemon on 127.0.0.1 (it listens there or on 0.0.0.0).
+        mcp: {
+          url: () => {
+            const a = http.address();
+            return a && typeof a === "object" ? `http://127.0.0.1:${a.port}/opencode-mcp` : undefined;
+          },
+          token: (id, server) => {
+            for (const [t, r] of mcpRoutes) if (r.id === id && r.server === server) return t;
+            const t = randomBytes(32).toString("base64url");
+            mcpRoutes.set(t, { id, server });
+            return t;
+          },
+          drop: (id) => {
+            for (const [t, r] of mcpRoutes) if (r.id === id) dropMcp(t);
+          },
+        },
+      }),
+    ],
+  );
+  /** Requests only one Engine answers, by message type. */
+  const engineRequests = new Map<string, EngineRequest>(catalogues.all.flatMap((c) => Object.entries(c.requests ?? {}) as [string, EngineRequest][]));
 
-  /** A session's title as list() gives it: the SDK summary, a cleared session's first prompt, "New session" without transcript. */
+  /** A session's title as list() gives it: its Engine's title, "New session" without stored data. */
   async function titleOf(s: Session) {
     if (s.untitled()) return "New session";
-    if (OPENCODE_ID.test(s.id)) return openCodeMeta.get(s.id)?.title ?? "New session";
-    const info = await history.getSessionInfo(s.id).catch(() => undefined);
-    if (!info) return "New session";
-    return CLEARED.test(info.summary) ? clearedTitle(s.id, info.cwd ?? s.cwd) : info.summary;
+    return (await catalogues.ownerOf(s.id, s)?.title(s)) ?? "New session";
   }
 
   /**
@@ -1465,129 +1345,41 @@ export function createDaemon(opts: {
     return (nextListing ??= listing.catch(() => {}).then(() => ((nextListing = undefined), list())));
   }
 
-  /** session.ids: what findSession could restore, without reading any transcript (the cached scan, one realpath per cwd). */
+  /** session.ids: what findSession could restore, without reading any stored session (each Engine's known ids). */
   async function sessionIds(): Promise<string[]> {
-    const ok = new Map<string, boolean>();
-    const inRootsCwd = (cwd: string) => (ok.has(cwd) ? ok.get(cwd)! : (ok.set(cwd, !!allowed(cwd)), ok.get(cwd)!));
-    const ids = new Set((await transcripts()).filter((t) => t.cwd && inRootsCwd(t.cwd)).map((t) => t.sessionId));
+    const ids = new Set<string>();
+    for (const c of catalogues.all) for (const id of await c.knownIds()) ids.add(id);
     for (const id of sessions.keys()) ids.add(id);
-    for (const id of openCodeMeta.keys()) ids.add(id);
     for (const id of deleting) ids.delete(id);
     return [...ids];
   }
 
-  /** The error text of the last failed OpenCode listing: logged once per change, not on every list. */
-  let openCodeListError: string | undefined;
-  /**
-   * OpenCode sessions of `cwds` (docs/spec.md "OpenCode engine"). Only when the server runs or the last created session was OpenCode's, so a Claude-only
-   * user never starts it. shortcut: a user whose last engine is Claude sees OpenCode-TUI sessions only after the server started in this daemon run.
-   * `ran`: the listing answered for every folder (an entry missing from it is gone); a failing OpenCode lists none and never fails the Claude list.
-   */
-  async function listOpenCode(cwds: string[], linked: Map<string, Partial<SessionSettings>>, links: (id: string) => object) {
-    const none = () => ({ items: [] as SessionListItem[], ids: new Set<string>(), ran: false });
-    if (!openCode.running() && appSettings.get().sessions.engine !== "opencode") return none();
-    // Not answering within the wait: no OpenCode items and no prune (`ran` false); the start goes on and the next list has them. The late result is dropped.
-    // Before OpenCode's first answer the list does not wait: projects and Claude sessions show at once on page load.
-    let timer: NodeJS.Timeout | undefined;
-    let timedOut = false;
-    const late = new Promise<ReturnType<typeof none>>((resolve) => {
-      timer = setTimeout(() => {
-        timedOut = true;
-        const text = "OpenCode did not answer the session list in time";
-        if (openCodeAnswered && text !== openCodeListError) console.error(`listing OpenCode sessions failed: ${text}`);
-        openCodeListError = text;
-        resolve(none());
-      }, openCodeAnswered ? (opts.opencode?.listWaitMs ?? OPENCODE_LIST_WAIT_MS) : 0);
-    });
-    try {
-      const read = readOpenCodeList(cwds, linked, links);
-      const r = await Promise.race([read, late]);
-      // The list that did not wait: clients ask again once OpenCode answered.
-      // No pile-up: one read per folder is in flight and it has at most one push. A folder that stays slow for several reads can push once per read.
-      if (!r.ran && timedOut && !lateRefresh) lateRefresh = read.then((x) => x.ran && broadcast({ type: "sessions.changed" })).finally(() => (lateRefresh = undefined));
-      return r;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  /** OpenCode answered a session list once in this run. */
-  let openCodeAnswered = false;
-  /** The late push of a list that did not wait is pending. */
-  let lateRefresh: Promise<unknown> | undefined;
-  /** The `GET /session` of a folder in flight: concurrent lists, and a list that starts while an earlier one still waits, share it (the requests are never aborted, so they would pile up on a slow OpenCode). */
-  const sessionReads = new Map<string, Promise<OpenCodeSessionRow[]>>();
-  const readSessions = (cwd: string) => {
-    let p = sessionReads.get(cwd);
-    if (!p) sessionReads.set(cwd, (p = openCode.request<OpenCodeSessionRow[]>("/session?roots=true", { directory: cwd, timeoutMs: 0 }).finally(() => sessionReads.delete(cwd))));
-    return p;
-  };
-  async function readOpenCodeList(cwds: string[], linked: Map<string, Partial<SessionSettings>>, links: (id: string) => object) {
-    const out = { items: [] as SessionListItem[], ids: new Set<string>(), ran: false };
-    try {
-      // No timeout: a cold OpenCode answers after its folder's first load (> 3 s). `list()` waits `listWaitMs` for it; the late answer is pushed as `sessions.changed` (listOpenCode).
-      const rows = await mapLimit(cwds, 4, async (cwd) => [cwd, await readSessions(cwd)] as const);
-      openCodeListError = undefined;
-      openCodeAnswered = true;
-      out.ran = true;
-      for (const [cwd, list] of rows)
-        for (const row of list) {
-          const loaded = sessions.get(row.id);
-          const saved = linked.get(row.id);
-          const savedMode = OPENCODE_MODES.find((m) => m === saved?.permissionMode) ?? "default";
-          // Plan is the plan agent (GH-684): a saved plan mode lists as default + agent plan.
-          const mode = savedMode === "plan" ? "default" : savedMode;
-          const agent = savedMode === "plan" ? "plan" : (saved?.agent ?? "build");
-          const info = loaded?.info() ?? { id: row.id, cwd, state: "closed" as const, model: saved?.model ?? "default", permissionMode: mode, agent, effort: saved?.effort ?? "default", permissionModes: openCodeEngine.permissionModes({ allowBypass: opts.allowBypass }), capabilities: OPENCODE_CAPABILITIES, engine: "opencode" as const };
-          openCodeMeta.set(row.id, { cwd, title: row.title });
-          out.ids.add(row.id);
-          out.items.push({ ...info, id: row.id, cwd, title: row.title, lastActivity: row.time.updated, archived: !!row.time.archived, transcript: true, live: false, ...links(row.id) });
-        }
-    } catch (err) {
-      const text = (err as Error).message;
-      if (text !== openCodeListError) console.error("listing OpenCode sessions failed:", text);
-      openCodeListError = text;
-    }
-    return out;
-  }
-
   async function listNow(): Promise<ListResult> {
-    // The model list starts a CLI: not waiting longer than this offers no auto mode until it is there.
-    await new Promise<void>((done) => {
-      const t = setTimeout(done, opts.modelListWaitMs ?? MODEL_LIST_WAIT_MS);
-      modelList().catch(() => {}).then(() => (clearTimeout(t), done()));
-    });
+    // One read of sessions.json per list (settings.get() reads the file again on every call, json-file.ts), made when the first catalogue asks.
+    let snapshot: ReturnType<ListCtx["read"]> | undefined;
+    const read = () =>
+      (snapshot ??= (() => {
+        const linked = new Map(settings.entries());
+        // A coordinator is a session with a worker.
+        const coordinators = new Set([...linked.values()].flatMap((l) => (l.coordinatorId && l.name ? [l.coordinatorId] : [])));
+        const links = (id: string) => {
+          const l = linked.get(id);
+          return { ...(coordinators.has(id) && { coordinator: true as const }), ...(l?.coordinatorId && l.name && { coordinatorId: l.coordinatorId, workerName: l.name }) };
+        };
+        return { linked, links };
+      })());
+    const lists: CatalogueList[] = [];
     const items = new Map<string, SessionListItem>();
-    const all = await transcripts();
-    // One read of sessions.json per list: settings.get() reads the file again on every call (json-file.ts), once per transcript here.
-    const linked = new Map(settings.entries());
-    // A coordinator is a session with a worker.
-    const coordinators = new Set([...linked.values()].flatMap((l) => (l.coordinatorId && l.name ? [l.coordinatorId] : [])));
-    const links = (id: string) => {
-      const l = linked.get(id);
-      return { ...(coordinators.has(id) && { coordinator: true as const }), ...(l?.coordinatorId && l.name && { coordinatorId: l.coordinatorId, workerName: l.name }) };
-    };
-    const known = new Set(all.map((t) => t.sessionId));
-    // One realpath per distinct cwd per list, not two per transcript: each is a blocking call (slow on Windows), and hundreds of
-    // transcripts share a few dozen cwds.
-    const canonical = new Map<string, string | undefined>();
-    const allowedCwd = (cwd: string) => (canonical.has(cwd) ? canonical.get(cwd) : (canonical.set(cwd, allowed(cwd)), canonical.get(cwd)));
-    const lastAt = new Map(await mapLimit(all, 8, async (t) => [t.sessionId, t.cwd && allowedCwd(t.cwd) ? await lastMessageAt(projectsDir, t.cwd, t.sessionId, t) : undefined] as const));
-    for (const t of all) {
-      // An Aside is not a session of the list until Keep as session.
-      if (!t.cwd || !allowedCwd(t.cwd) || linked.get(t.sessionId)?.ownerId) continue;
-      const loaded = sessions.get(t.sessionId);
-      const live = loaded?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [], capabilities: ALL_CAPABILITIES, engine: "claude" as const };
-      const title = CLEARED.test(t.summary) ? (sessions.get(t.sessionId)?.untitled() ? "New session" : await clearedTitle(t.sessionId, t.cwd, t)) : t.summary;
-      if (sessions.has(t.sessionId)) hadTranscript.add(t.sessionId);
-      items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastAt.get(t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...(!loaded?.live() && { live: false as const }), ...links(t.sessionId) });
-    }
-    // A loaded session whose transcript existed and is gone, with no CLI process: deleted outside the daemon (docs/spec.md "Sessions").
-    const gone = new Set<string>();
-    for (const s of [...sessions.values()])
-      if (hadTranscript.has(s.id) && !known.has(s.id) && !s.live() && !linked.get(s.id)?.ownerId && !deleting.has(s.id) && !(await history.getSessionInfo(s.id).catch(() => undefined)) && (await dropGone(s.id))) gone.add(s.id);
-    // Sessions whose transcript was never seen in this run (no prompt sent, or its first prompt failed before the CLI wrote one).
+    // The Engines whose store is one global scan list first: their sessions seed the project list.
+    for (const c of catalogues.all)
+      if (c.listScope === "roots") {
+        const l = await c.list({ read });
+        lists.push(l);
+        for (const i of l.items) items.set(i.id, i);
+      }
+    // Sessions whose stored data was never seen in this run (no prompt sent, or its first prompt failed before the CLI wrote one).
     for (const s of sessions.values())
-      if (!gone.has(s.id) && !items.has(s.id) && !linked.get(s.id)?.ownerId) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false, transcript: false, ...(!s.live() && { live: false as const }), ...links(s.id) });
+      if (!items.has(s.id) && !read().linked.get(s.id)?.ownerId) items.set(s.id, { ...s.info(), title: "New session", lastActivity: s.createdAt, archived: false, transcript: false, ...(!s.live() && { live: false as const }), ...read().links(s.id) });
     const listed = [...items.values()];
     // Upgrade from "every transcript cwd is a project": the projects with saved claude-ui state stay, once.
     if (!projects.seeded)
@@ -1610,48 +1402,28 @@ export function createDaemon(opts: {
     worktreePaths = new Set(Object.values(worktrees).flatMap((l) => l.filter((w) => !w.outsideRoots).map((w) => w.path)));
     // Sessions of a project's worktrees show under the project (outside the roots there are none: `listed` has only allowed cwds).
     const shown = new Set([...open, ...worktreePaths]);
-    const oc = await listOpenCode([...shown], linked, links);
     const byId = new Map(listed.map((s) => [s.id, s]));
-    for (const s of oc.items) byId.set(s.id, s);
+    // The Engines whose store is asked per folder list after the project list, for the shown folders.
+    for (const c of catalogues.all)
+      if (c.listScope === "folders") {
+        const l = await c.list({ read, folders: [...shown] });
+        lists.push(l);
+        for (const i of l.items) byId.set(i.id, i);
+      }
     const all2 = [...byId.values()];
-    // Entries of sessions deleted outside this daemon (CLI, file removed): no transcript and not live (session-settings.ts prune).
-    // An OpenCode entry stays unless this list asked OpenCode and it did not return the session.
-    saveSettings(() => settings.prune((id) => known.has(id) || sessions.has(id) || (OPENCODE_ID.test(id) && !(oc.ran && !oc.ids.has(id)))));
+    // Entries of sessions deleted outside this daemon (CLI, file removed): no stored data and not live (session-settings.ts prune).
+    // Each Engine keeps the entries of what it listed, or of what it did not ask about.
+    saveSettings(() => settings.prune((id) => sessions.has(id) || lists.some((l) => l.keep(id))));
     const topIds = new Set(all2.filter((s) => shown.has(trim(s.cwd))).map((s) => s.id));
     return {
-      engines: [
-        { engine: "claude", capabilities: ALL_CAPABILITIES, permissionModes: permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto("default") }) },
-        { engine: "opencode", capabilities: OPENCODE_CAPABILITIES, permissionModes: openCodeEngine.permissionModes({ allowBypass: opts.allowBypass }) },
-      ],
+      engines: catalogues.all.map((c) => c.entry()),
       projects: open,
       recentProjects: projects.recent(listed).filter((r) => !shown.has(r.cwd)),
       worktrees,
       // A worker of a listed coordinator shows under it, also when the user removed the worker's project.
       sessions: all2.filter((s) => topIds.has(s.id) || (s.coordinatorId && topIds.has(s.coordinatorId))).sort((a, b) => b.lastActivity - a.lastActivity),
-      permissionModes: permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto("default") }),
+      permissionModes: catalogues.byName(DEFAULT_ENGINE)?.entry().permissionModes ?? [],
     };
-  }
-
-  /** `permissions.defaultMode` of the Claude settings for `cwd`, else Settings `sessions.defaultMode`, when this daemon offers it for `model` (bypass needs the daemon flag, auto a model with support). */
-  const defaultModeFor = async (cwd: string, model = "default") => {
-    const mode = readDefaultMode(claudeDir, cwd, await localFiles(cwd)) ?? appSettings.get().sessions.defaultMode;
-    return permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto(model) }).find((m) => m === mode);
-  };
-
-  /** An OpenCode session rebuilt from its stored messages. Its folder: the one listed or created, else asked of OpenCode. */
-  async function restoreOpenCode(id: string): Promise<Session | undefined> {
-    const known = openCodeMeta.get(id);
-    // shortcut: a session of a folder not seen yet is found only when OpenCode answers `GET /session/{id}` without a directory (unverified against a real server).
-    const row = await openCode.request<OpenCodeSessionRow>(`/session/${id}`, { directory: known?.cwd, timeoutMs: 0 }).catch(() => undefined);
-    const cwd = row && allowed(known?.cwd ?? row.directory);
-    if (!row || !cwd || isRemoving(cwd)) return undefined;
-    const history = await loadOpenCodeHistory(openCode, id, cwd);
-    openCodeMeta.set(id, { cwd, title: row.title });
-    const saved = settings.get(id);
-    const permissionMode = OPENCODE_MODES.includes(saved?.permissionMode as never) ? (saved!.permissionMode as SessionSettings["permissionMode"]) : undefined;
-    const effort = EFFORTS.includes(saved?.effort as never) ? (saved!.effort as SessionSettings["effort"]) : undefined;
-    const model = isModel(saved?.model) ? saved.model : undefined;
-    return track(Session.restore(id, cwd, history as never, openCodeSessionOpts({ model, permissionMode, effort })));
   }
 
   /** Transcript restores run a few at a time: hundreds at once (a page reconnecting after a restart) starve the event loop for every other request. */
@@ -1684,44 +1456,15 @@ export function createDaemon(opts: {
     if (deleting.has(id)) return Promise.resolve(undefined);
     const live = sessions.get(id);
     if (live) return Promise.resolve(live);
-    // The ID becomes a transcript file name or a request path; only a UUID may reach the SDK, only `ses_…` OpenCode.
-    if (typeof id !== "string" || (!UUID.test(id) && !OPENCODE_ID.test(id))) return Promise.resolve(undefined);
+    // The ID becomes a transcript file name or a request path; only the shape of an Engine's own IDs may reach it.
+    const owner = catalogues.ownerOf(id);
+    if (!owner) return Promise.resolve(undefined);
     let p = restoring.get(id);
     // A foreground ask for a restore that waits in the queue moves it ahead of the background ones.
     if (p && !background) for (const q of restoreQueue) if (q.id === id) q.background = false;
-    if (!p && OPENCODE_ID.test(id)) {
-      p = restoreOpenCode(id)
-        .catch((err) => void console.error(`restoring session ${id} failed:`, err))
-        .finally(() => restoring.delete(id));
-      restoring.set(id, p);
-    }
     if (!p) {
-      p = restoreSlot(id, background, async () => {
-        const info = await history.getSessionInfo(id);
-        if (!info?.cwd || !allowed(info.cwd)) return undefined;
-        transcriptCwds.set(id, info.cwd);
-        hadTranscript.add(id);
-        // Before the read: a write during it changes the stamp, so the first subscriber syncs it.
-        stamps.set(id, statStamp(transcriptFile(projectsDir, info.cwd, id)));
-        const { main: messages, runs, entries } = await readTranscript(id, info.cwd);
-        await modelList().catch(() => {});
-        // Its worktree is being removed: no live session in a directory about to go.
-        if (isRemoving(info.cwd)) return undefined;
-        // The model row whose resolved ID the transcript last used ("default" first); the ID itself when none matches.
-        const used = transcriptModel(messages);
-        // No entry (sessions.json lost, a session of the terminal CLI): mode and effort the transcript last recorded.
-        const saved = settings.get(id) ?? { model: undefined, ...transcriptSettings(entries ?? []) };
-        const model = isModel(saved?.model) ? saved.model : used && ((await modelList().catch(() => [])).find((m) => m.resolvedModel === used)?.value ?? used);
-        // A mode the daemon does not enable now (bypass without CLAUDE_UI_ALLOW_BYPASS) falls back to the default.
-        const modes = permissionModesFor({ allowBypass: opts.allowBypass, supportsAuto: supportsAuto(model ?? "default") });
-        const permissionMode = modes.includes(saved.permissionMode as never) ? (saved.permissionMode as SessionSettings["permissionMode"]) : undefined;
-        const effort = EFFORTS.includes(saved.effort as never) ? (saved.effort as SessionSettings["effort"]) : undefined;
-        // Each run's messages name the Agent call that started it (parent_tool_use_id): they go right after that call's result, inside its turn.
-        // A run whose call was compacted away renders nowhere: only its edits are kept (for the changes tab). Every message read stays known,
-        // so the first sync does not log the pruned ones after all.
-        const read = [...messages, ...runs.flat()].map((m) => m.uuid);
-        return track(Session.restore(id, sessionCwd(info.cwd), interleaveRuns(messages, runs, { pruneOrphans: true }), sessionOpts({ model, permissionMode, effort }), read));
-      })
+      p = owner
+        .restore(id, background)
         .catch((err) => void console.error(`restoring session ${id} failed:`, err))
         .finally(() => restoring.delete(id));
       restoring.set(id, p);
@@ -1732,15 +1475,8 @@ export function createDaemon(opts: {
   /** Working directory and transcript of a listed session (live or inside the roots); undefined when unknown. */
   async function locate(id: string) {
     const live = sessions.get(id);
-    // OpenCode: the folder it was listed, created or opened in; its store is OpenCode's.
-    if (typeof id === "string" && OPENCODE_ID.test(id)) {
-      const cwd = live?.cwd ?? openCodeMeta.get(id)?.cwd;
-      return cwd && allowed(cwd) ? { cwd, live, transcript: false } : undefined;
-    }
-    if (!live && (typeof id !== "string" || !UUID.test(id))) return undefined;
-    const info = await history.getSessionInfo(id).catch(() => undefined);
-    const cwd = live?.cwd ?? (info?.cwd && allowed(info.cwd));
-    return cwd ? { cwd, live, transcript: !!info } : undefined;
+    const at = await catalogues.ownerOf(id, live)?.locate(id, live);
+    return at && { ...at, live };
   }
 
   /** A live session whose CLI reads the folder of `id` (itself or, after /clear, its parent's folder). */
@@ -1766,17 +1502,15 @@ export function createDaemon(opts: {
     touched.delete(id);
     try {
       await at.live?.close();
-      if (OPENCODE_ID.test(id)) await openCode.request(`/session/${id}`, { method: "DELETE", directory: at.cwd });
-      else if (at.transcript) await history.deleteSession(id, { dir: at.cwd });
+      await catalogues.ownerOf(id, at.live)?.delete(id, at);
     } catch (e) {
       return { code: "delete_failed", message: (e as Error).message };
     } finally {
       deleting.delete(id);
-      // A model refresh held back by this running OpenCode session no longer waits for it.
-      if (OPENCODE_ID.test(id)) void flushProviders();
+      // A refresh the Engine held back for this running session no longer waits for it.
+      catalogues.ownerOf(id, at.live)?.settled?.();
     }
     caches.delete(id);
-    openCodeMeta.delete(id);
     // The folder of a session whose CLI a /clear heir still uses stays with the heir.
     if (!folderInUse(id)) await uploads.remove(id).catch((e) => console.error(`session ${id}: removing its uploads failed:`, e));
     if (settings.get(id)) saveSettings(() => settings.delete([id]));
@@ -1810,7 +1544,7 @@ export function createDaemon(opts: {
     caches.delete(id);
     stamps.delete(id);
     transcriptCwds.delete(id);
-    hadTranscript.delete(id);
+    catalogues.ownerOf(id, s)?.forget?.(id);
     await s.close().catch((e) => console.error(`session ${id}: closing after its transcript was deleted failed:`, e));
     broadcast({ type: "sessions.changed", deleted: id });
     return true;
@@ -2128,7 +1862,8 @@ export function createDaemon(opts: {
   http.once("listening", () => void cleanupAsides());
   if (opts.warmUp) http.once("listening", () => void list().catch((e) => console.warn("warm-up list failed:", (e as Error).message)));
   /** This daemon has the session: live, or a transcript inside the roots. */
-  const isLocalSession = async (id: string) => sessions.has(id) || (UUID.test(id) && !!allowed((await history.getSessionInfo(id).catch(() => undefined))?.cwd));
+  // Local: live here, or stored here by the Engine the id's shape names (a Side holds the rest).
+  const isLocalSession = async (id: string) => sessions.has(id) || !!(await catalogues.ownerOf(id)?.isLocal(id));
 
   // Ping each socket every interval; one that did not pong since the previous tick is half-open (phone asleep, wifi gone, no FIN):
   // terminate it so its close handler runs (focused tab, subscriptions, watches), else its stale "focused" entry mutes push.
@@ -2406,6 +2141,9 @@ export function createDaemon(opts: {
       };
       const find = async (id: string, background = false) => (await findSession(id, background)) ?? void fail("unknown_session", `no session ${id}`);
 
+      // A request only one Engine answers (its provider login, its server restart).
+      const own = engineRequests.get(msg.type);
+      if (own) return own(msg, reply, fail);
       switch (msg.type) {
         case "session.create": {
           if (typeof msg.cwd === "string" && refused(msg.cwd)) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
@@ -2416,106 +2154,34 @@ export function createDaemon(opts: {
           const cwd = allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           if (isRemoving(cwd)) return fail("worktree_removing", "This worktree is being removed");
-          if (msg.engine === "opencode") {
-            // OpenCode's own permission config decides (GH-705); sessions.defaultMode is Claude's.
-            // The new-session tab's draft uploads are not claimed: OpenCode chooses the session id (docs/spec.md "OpenCode engine").
-            let s: Session | undefined;
-            try {
-              s = await createOpenCodeSession(cwd, { model: msg.model, permissionMode: "config" });
-            } catch (err) {
-              const e = openCodeFail(err);
-              return fail(e.code, e.message);
-            }
-            if (!s) return fail("worktree_removing", "This worktree is being removed");
-            rememberEngine("opencode");
-            return reply({ session: s.info() });
-          }
-          await modelList().catch(() => {});
-          // Before the removal check below: no await between that check and the new Session.
-          const permissionMode = await defaultModeFor(cwd, msg.model);
-          // A removal may have started during the await: no live session in a deleted directory.
-          if (isRemoving(cwd) || !existsSync(cwd)) return fail("worktree_removing", "This worktree is being removed");
-          // The draft token of the new-session tab's uploads: the session gets their id, and with it their folder (one claim per token).
-          const claimed = typeof msg.draft === "string" ? uploads.claim(msg.draft) : undefined;
-          if (msg.draft !== undefined && !claimed) console.log("session.create: draft uploads not claimed");
-          const s = track(new Session(cwd, sessionOpts({ model: msg.model, permissionMode }), claimed ? { id: claimed } : undefined));
-          addProject(cwd);
-          rememberEngine("claude");
-          return reply({ session: s.info() });
-        }
-        case "opencode.status":
-          return reply(await openCode.status());
-        case "opencode.restart":
-          if (openCodeHeld()) return fail("opencode_busy", OPENCODE_RESTART_BUSY);
-          await restartOpenCode();
-          broadcast({ type: "opencode.providersChanged" });
-          return reply({});
-        case "opencode.providers":
-        case "opencode.login":
-        case "opencode.loginFinish":
-        case "opencode.loginCancel":
-        case "opencode.logout": {
-          // Credentials pass straight to OpenCode: never logged, never in an error text.
-          const provider = "provider" in msg && typeof msg.provider === "string" ? msg.provider : "";
-          const field = (m: string) => fail("invalid_input", m);
-          let wait: AbortController | undefined;
-          const cleanWait = () => wait && oauthWaits.get(provider) === wait && oauthWaits.delete(provider);
+          const catalogue = catalogues.byName(msg.engine ?? DEFAULT_ENGINE);
+          if (!catalogue) return fail("bad_request", `no engine ${msg.engine}`);
+          let s: Session | undefined;
           try {
-            if (msg.type === "opencode.loginCancel") return (oauthWaits.get(provider)?.abort(), oauthWaits.delete(provider), reply({}));
-            // Registered before the slow list: a loginCancel in that window must reach this wait.
-            wait = msg.type === "opencode.loginFinish" ? new AbortController() : undefined;
-            if (wait) (oauthWaits.get(provider)?.abort(), oauthWaits.set(provider, wait));
-            const providers = await listProviders(openCode).catch((err) => (cleanWait(), Promise.reject(err)));
-            if (wait?.signal.aborted) return fail("cancelled", "Login cancelled");
-            if (msg.type === "opencode.providers") return reply({ providers });
-            if (msg.type === "opencode.logout") {
-              if (!providers.some((p) => p.id === provider)) return field("provider: Unknown provider");
-              await openCode.request(`/auth/${encodeURIComponent(provider)}`, { method: "DELETE" });
-              await refreshProviders();
-              return reply({ providers: await listProviders(openCode) });
-            }
-            const api = msg.type === "opencode.login" && providers.find((p) => p.id === provider)?.methods[msg.method as number]?.type === "api";
-            const c = checkLogin(msg, providers, api ? "api" : "oauth");
-            if ("error" in c) return (cleanWait(), field(c.error));
-            const base = `/provider/${encodeURIComponent(provider)}/oauth`;
-            if (msg.type === "opencode.login" && api) {
-              await openCode.request(`/auth/${encodeURIComponent(provider)}`, { method: "PUT", body: { type: "api", key: c.key, ...(c.inputs && Object.keys(c.inputs).length && { metadata: c.inputs }) } });
-              await refreshProviders();
-              return reply({ providers: await listProviders(openCode) });
-            }
-            if (msg.type === "opencode.login") {
-              oauthWaits.get(provider)?.abort();
-              const r = await openCode.request<{ url: string; method: "auto" | "code"; instructions?: string } | null>(`${base}/authorize`, { method: "POST", body: { method: msg.method, ...(c.inputs && { inputs: c.inputs }) } });
-              if (!r?.url) return fail("login_failed", "OpenCode gave no login page for this method.");
-              return reply({ url: r.url, mode: r.method, instructions: r.instructions ?? "" });
-            }
-            const ctl = wait!;
-            try {
-              await openCode.request(`${base}/callback`, { method: "POST", body: { method: msg.method, ...(typeof msg.code === "string" && msg.code && { code: msg.code }) }, timeoutMs: 15 * 60_000, signal: ctl.signal });
-            } catch (err) {
-              if (ctl.signal.aborted) return fail("cancelled", "Login cancelled");
-              throw err;
-            } finally {
-              if (oauthWaits.get(provider) === ctl) oauthWaits.delete(provider);
-            }
-            await refreshProviders();
-            return reply({ providers: await listProviders(openCode) });
+            // The new-session tab's draft uploads are claimed only by an Engine that lets us choose the session id (OpenCode chooses its own).
+            const permissionMode = await catalogue.startMode(cwd, msg.model);
+            s = await catalogue.create(cwd, { model: msg.model, permissionMode }, { draft: msg.draft });
           } catch (err) {
-            if (err instanceof OpenCodeError) return fail(err.code, err.message);
-            return fail("login_failed", loginError(err));
+            if (err instanceof EngineError) return fail(err.code, err.message);
+            throw err;
           }
+          // A removal may have started during the awaits: no live session in a deleted directory.
+          if (!s) return fail("worktree_removing", "This worktree is being removed");
+          rememberEngine(catalogue.engine.name);
+          return reply({ session: s.info() });
         }
         case "session.defaultMode": {
           const cwd = typeof msg.cwd === "string" && allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          await modelList().catch(() => {});
-          return reply({ mode: (await defaultModeFor(cwd)) ?? "default" });
+          return reply({ mode: (await catalogues.byName(DEFAULT_ENGINE)?.startMode(cwd)) ?? "default" });
         }
         case "session.commands": {
           const cwd = typeof msg.cwd === "string" && allowed(msg.cwd);
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           try {
-            return reply({ commands: await (msg.engine === "opencode" ? openCodeEngine.commands(cwd) : commandsOf(cwd)) });
+            const catalogue = catalogues.byName(msg.engine ?? DEFAULT_ENGINE);
+            if (!catalogue) return fail("bad_request", `no engine ${msg.engine}`);
+            return reply({ commands: await catalogue.commands(cwd) });
           } catch (e) {
             return fail("commands_failed", (e as Error).message);
           }
@@ -2525,7 +2191,9 @@ export function createDaemon(opts: {
           if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
           try {
             if (typeof msg.sessionId === "string") void (await find(msg.sessionId))?.refreshAgents();
-            return reply({ agents: msg.engine === "opencode" ? primaryAgents(await openCodeEngine.agents(cwd)).map(({ name, description }) => ({ name, ...(description && { description }) })) : [] });
+            const catalogue = catalogues.byName(msg.engine ?? DEFAULT_ENGINE);
+            if (!catalogue) return fail("bad_request", `no engine ${msg.engine}`);
+            return reply({ agents: await catalogue.agents(cwd) });
           } catch (e) {
             return fail("agents_failed", (e as Error).message);
           }
@@ -2727,7 +2395,7 @@ export function createDaemon(opts: {
         case "session.setEffort": {
           const s = await find(msg.sessionId);
           if (!s) return;
-          if (msg.type === "session.setPermissionMode" && !PERMISSION_MODES.includes(msg.mode) && !OPENCODE_MODES.includes(msg.mode)) return fail("bad_mode", `unknown permission mode ${msg.mode}`);
+          if (msg.type === "session.setPermissionMode" && !PERMISSION_MODES.includes(msg.mode) && !catalogues.all.some((c) => c.engine.capabilities.permissionModes.includes(msg.mode))) return fail("bad_mode", `unknown permission mode ${msg.mode}`);
           if (msg.type === "session.setEffort" && !EFFORTS.includes(msg.effort)) return fail("bad_effort", `unknown effort ${msg.effort}`);
           try {
             await (msg.type === "session.setPermissionMode" ? s.setPermissionMode(msg.mode) : s.setEffort(msg.effort));
@@ -2886,10 +2554,11 @@ export function createDaemon(opts: {
         }
         case "models.list": {
           try {
-            if (msg.engine !== "opencode") return reply({ models: await modelList() });
+            const catalogue = catalogues.byName(msg.engine ?? DEFAULT_ENGINE);
+            if (!catalogue) return fail("bad_request", `no engine ${msg.engine}`);
             const cwd = msg.cwd === undefined ? undefined : allowed(msg.cwd);
             if (msg.cwd !== undefined && !cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-            return reply({ models: await openCodeModelsRepaired(cwd) });
+            return reply({ models: await catalogue.models(cwd) });
           } catch (e) {
             return fail("models_failed", (e as Error).message);
           }
@@ -2991,10 +2660,10 @@ export function createDaemon(opts: {
             const picked = msg.patch?.claude?.account;
             if (picked !== undefined && picked !== "" && picked !== "cli" && !secrets.claudeAccounts().some((a) => a.id === picked)) return fail("bad_settings", "Claude account: unknown account");
             const before = appSettings.get().claude.account;
-            const openCodePath = appSettings.get().opencode.path;
+            const settingsBefore = appSettings.get();
             const settings = appSettings.set(msg.patch);
             if (msg.patch?.git?.commitMessageWarm !== undefined) (settings.git.commitMessageWarm ? warmCommit.prewarm() : warmCommit.stop());
-            if (settings.opencode.path !== openCodePath) void restartOpenCode().then(() => broadcast({ type: "opencode.providersChanged" }));
+            for (const c of catalogues.all) c.settingsChanged?.(settingsBefore, settings);
             if (settings.claude.account !== before) (setClaudeToken(accountToken()), claudeLoginChanged());
             const origin = jiraOrigin(settings.jira.url);
             const urlPatched = msg.patch?.jira?.url !== undefined;
@@ -3073,12 +2742,9 @@ export function createDaemon(opts: {
           const at = await locate(msg.sessionId);
           if (!at) return fail("unknown_session", `no session ${msg.sessionId}`);
           try {
-            if (OPENCODE_ID.test(msg.sessionId)) {
-              // Archive: `time.archived` set; 0 clears it (null is accepted but keeps it, verified on 1.18.35).
-              await openCode.request(`/session/${msg.sessionId}`, { method: "PATCH", directory: at.cwd, body: msg.type === "session.rename" ? { title } : { time: { archived: msg.archived ? Date.now() : 0 } } });
-              if (msg.type === "session.rename") openCodeMeta.set(msg.sessionId, { cwd: at.cwd, title });
-            } else if (msg.type === "session.rename") await history.renameSession(msg.sessionId, title, { dir: at.cwd });
-            else await history.tagSession(msg.sessionId, msg.archived ? ARCHIVED_TAG : null, { dir: at.cwd });
+            const owner = catalogues.ownerOf(msg.sessionId, at.live);
+            if (msg.type === "session.rename") await owner?.rename(msg.sessionId, at.cwd, title);
+            else await owner?.archive(msg.sessionId, at.cwd, msg.archived);
           } catch (e) {
             // A session with no prompt yet has no transcript to write to.
             return fail(`${msg.type.slice("session.".length)}_failed`, (e as Error).message);
@@ -3096,48 +2762,13 @@ export function createDaemon(opts: {
           if (!owner) return;
           const text = msg.text.trim();
           const title = text.split("\n")[0]!.trim().slice(0, 80);
-          if (OPENCODE_ID.test(owner.id)) {
-            let forkId: string | undefined;
-            try {
-              const at = { directory: owner.cwd };
-              const stored = await openCode.request<{ info: { id: string; role: string; time?: { completed?: number } } }[]>(`/session/${owner.id}/message`, at);
-              // After a rewind the cut messages stay stored until the next prompt: the fork ends before the cut.
-              const revert = (await openCode.request<{ revert?: { messageID: string } | null }>(`/session/${owner.id}`, at)).revert?.messageID;
-              const cut = revert ? stored.findIndex((m) => m.info.id === revert) : -1;
-              const kept = cut < 0 ? stored : stored.slice(0, cut);
-              if (!kept.length) return fail("aside_unavailable", "An aside needs a message in this session first");
-              // A running turn is cut off at its unfinished assistant message; a finished history is forked whole.
-              const messageID = cut < 0 ? stored.find((m) => m.info.role === "assistant" && !m.info.time?.completed)?.info.id : revert;
-              forkId = (await openCode.request<OpenCodeSessionRow>(`/session/${owner.id}/fork`, { ...at, method: "POST", body: { messageID } })).id;
-              openCodeMeta.set(forkId, { cwd: owner.cwd, title });
-              await openCode.request(`/session/${forkId}`, { ...at, method: "PATCH", body: { title } });
-              const oi = owner.info();
-              saveSettings(() => settings.set(forkId!, { ownerId: owner.id, readOnly: true, port: (http.address() as AddressInfo | null)?.port, model: oi.model, permissionMode: "default", effort: oi.effort }));
-              const s = await findSession(forkId);
-              if (!s) throw new Error("the fork could not be restored");
-              const from = s.prompt(text) ?? "";
-              return reply({ session: s.info(), title, from } satisfies AsideOpenResult);
-            } catch (e) {
-              if (forkId) {
-                const err = await deleteSessionById(forkId, true).catch(() => undefined);
-                if (err) saveSettings(() => settings.delete([forkId!]));
-              }
-              return fail("aside_failed", (e as Error).message);
-            }
-          }
-          let main: Awaited<ReturnType<typeof readTranscript>>["main"] = [];
-          try {
-            if (!owner.untitled()) main = (await readTranscript(owner.id, owner.cwd)).main;
-          } catch (e) {
-            return fail("aside_failed", `Could not read the session: ${(e as Error).message}`);
-          }
-          const at = asideForkPoint(main);
-          if (!at) return fail("aside_unavailable", "An aside needs a reply in this session first");
-          const dir = transcriptCwd(owner.id, owner.cwd);
+          const catalogue = catalogues.ownerOf(owner.id, owner);
+          if (!catalogue) return fail("aside_failed", `no engine for session ${owner.id}`);
           let id: string | undefined;
           try {
-            // The owner's transcript is only read: a running owner turn and an external turn are not touched.
-            id = (await history.forkSession!(owner.id, { dir, upToMessageId: at, title })).sessionId;
+            const fork = await catalogue.forkForAside(owner, title);
+            if ("unavailable" in fork) return fail("aside_unavailable", fork.unavailable);
+            id = fork.id;
             const oi = owner.info();
             // Right after the fork, no await between: a list scan reads the link after its transcript scan.
             saveSettings(() => settings.set(id!, { ownerId: owner.id, readOnly: true, port: (http.address() as AddressInfo | null)?.port, model: oi.model, permissionMode: "default", effort: oi.effort }));
@@ -3889,7 +3520,7 @@ export function createDaemon(opts: {
             local(msg, resolve).catch((err) => (console.error("request handler failed:", err), resolve({ type: "error", reqId: msg.reqId, code: "internal_error", message: "request failed" }))),
           ),
         isLocalSession,
-        localSessionIds: async () => new Set([...(await sessionIds()).filter((id) => UUID.test(id)), ...sessions.keys()]),
+        localSessionIds: async () => new Set([...(await sessionIds()), ...sessions.keys()]),
         sameHost: sameBrowser,
         media: sideMedia,
         mediaTimeoutMs: opts.sideCallTimeoutMs,
@@ -3945,7 +3576,7 @@ export function createDaemon(opts: {
       .catch((e) => console.error("uploads: sweep failed:", e));
   const firstSweep = sweepMs > 0 ? setTimeout(() => void sweepUploads(), opts.uploadSweepFirstMs ?? 60_000).unref() : undefined;
   const sweeper = sweepMs > 0 ? setInterval(() => void sweepUploads(), sweepMs).unref() : undefined;
-  http.on("close", () => (clearInterval(sleepTimer), backReminders?.stop(), opts.keepAwake?.close(), orchestration.shutdown(), [...mcpRoutes.keys()].forEach(dropMcp), void openCode.close(), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close(), warmCommit.stop()));
+  http.on("close", () => (clearInterval(sleepTimer), backReminders?.stop(), opts.keepAwake?.close(), orchestration.shutdown(), [...mcpRoutes.keys()].forEach(dropMcp), void Promise.all(catalogues.all.map((c) => c.close())), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close(), warmCommit.stop()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).
   return Object.assign(http, {
     accept,
@@ -3966,7 +3597,6 @@ export function createDaemon(opts: {
 
 const isSize = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 1 && (n as number) <= 1000;
 
-const isModel = (m: unknown): m is string => typeof m === "string" && m.trim() !== "";
 
 /**
  * The Origin must be the origin the browser used to reach this daemon (its Host header), and that host

@@ -23,6 +23,10 @@ export const PERMISSION_MODES: PermissionMode[] = ["default", "acceptEdits", "pl
 /** The agent runtimes a session can run on (ADR 0012); the engine of a session follows its id (UUID = claude, `ses_` = opencode). */
 export const ENGINES = ["claude", "opencode"] as const;
 export type Engine = (typeof ENGINES)[number];
+/** The Engine of a session or draft that names none (an older daemon, a Claude-only request). */
+export const DEFAULT_ENGINE: Engine = "claude";
+/** The Engine a session runs on; absent (an older daemon) = DEFAULT_ENGINE. */
+export const engineOf = (s: { engine?: Engine }): Engine => s.engine ?? DEFAULT_ENGINE;
 /** Oldest OpenCode this daemon works with: its API was checked against 1.18.34. Raise when a later feature needs newer endpoints. */
 export const OPENCODE_MIN = "1.18.0";
 /** What an Engine supports for its sessions (ADR 0012); web hides or disables a control by these, never by engine name. */
@@ -41,10 +45,16 @@ export type EngineCapabilities = {
   shell: boolean;
   /** Primary agents to choose from (OpenCode): the agent chooser; Shift+Tab cycles agents. Absent = false. */
   agents?: boolean;
+  /** The Engine's models come from providers the user connects in Settings: the model list is fetched per Side when a session shows, dropped on a provider change, and the picker offers Connect. Absent = false. */
+  providers?: boolean;
 };
 export const ALL_CAPABILITIES: EngineCapabilities = { permissionModes: PERMISSION_MODES, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: true, account: true, contextUsage: true, shell: true };
 /** The session's flags; absent (a daemon before Engines) = ALL_CAPABILITIES. */
-export const capabilitiesOf = (s: { capabilities?: EngineCapabilities }) => s.capabilities ?? ALL_CAPABILITIES;
+export const capabilitiesOf = (s: { capabilities?: EngineCapabilities; engine?: Engine }): EngineCapabilities =>
+  engineCapabilities({ engine: engineOf(s), capabilities: s.capabilities ?? ALL_CAPABILITIES });
+/** The flags of an `engines` row or a session. Wire compatibility: a daemon built before `providers` sends OpenCode without it, and OpenCode always had providers. */
+export const engineCapabilities = (e: { engine: Engine; capabilities: EngineCapabilities }): EngineCapabilities =>
+  e.engine === "opencode" && e.capabilities.providers === undefined ? { ...e.capabilities, providers: true } : e.capabilities;
 /** The modes offered now, of `modes` (the Engine's own): auto only when the model has `supportsAutoMode`, bypass only when the daemon config enables it. */
 export const permissionModesFor = ({ allowBypass, supportsAuto, modes = PERMISSION_MODES }: { allowBypass?: boolean; supportsAuto?: boolean; modes?: PermissionMode[] }) =>
   modes.filter((m) => (m === "bypassPermissions" ? allowBypass : m === "auto" ? supportsAuto : true));

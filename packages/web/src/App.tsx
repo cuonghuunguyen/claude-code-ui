@@ -53,7 +53,7 @@ import type {
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
 import { rawItems } from "./transfer.ts";
-import { ALL_CAPABILITIES, capabilitiesOf, ENGINES, LOCAL_SIDE, isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_KEEPWARM, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, SESSION_MODES, type AsideOpenResult, type FsReadResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, capabilitiesOf, DEFAULT_ENGINE, engineCapabilities, engineOf, ENGINES, LOCAL_SIDE, isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_KEEPWARM, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, SESSION_MODES, type AsideOpenResult, type FsReadResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -84,6 +84,7 @@ import { artifactTitle, inlineTaskResult, inlineTaskTool } from "./tools.ts";
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
 import { count, offer, promptBusy, streak, seen as recSeen, setRecommendationHost } from "./recommendations.ts";
+import { createModelCatalogue, type ModelSource } from "./model-catalogue.ts";
 import { GHOST, MODE_LABEL, ModePicker, modesOf, nextAgent, nextMode, PromptToolbar, ROW, type ModelFooterProps, type SendState } from "./toolbar.tsx";
 import { activeCommand, asideOf, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { checkError, nextUpdate, undismissUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
@@ -298,7 +299,6 @@ function usePageFocused() {
   return focused;
 }
 
-const NO_MODELS: ModelInfo[] = [];
 
 export function App() {
   const tr = useT();
@@ -338,7 +338,7 @@ export function App() {
   const [engines, setEngines] = useState<NonNullable<ListResult["engines"]>>([]);
   /** The engines of each side (its daemon may allow other modes): a folder of a side reads its entry, else `engines`. */
   const [sideEngines, setSideEngines] = useState<NonNullable<ListResult["sideEngines"]>>({});
-  const [lastEngine, setLastEngine] = useState<Engine>("claude");
+  const [lastEngine, setLastEngine] = useState<Engine>(DEFAULT_ENGINE);
   const [openingProject, setOpeningProject] = useState(false);
   // MCP servers dialog, on the project (and session) shown when it opened; `server`: opened on that server's detail (palette row).
   // Kept after closing, so the dialog stays mounted for its close and focus return.
@@ -501,39 +501,26 @@ export function App() {
       // Storage blocked: the width lasts until the page reloads.
     }
   }, [sidebarWidth]);
-  // Model lists per Engine (ADR 0012): Claude's comes with the connection, another Engine's when a session or draft of it shows.
-  // Keyed by engine; an OpenCode list of a folder on a side by `opencode@<side>` (that side's OpenCode has its own providers).
-  const [modelsBy, setModelsBy] = useState<Record<string, ModelInfo[] | undefined>>({});
-  const modelsRequested = useRef(new Set<string>());
-  // Why a list failed to load (GH-679), per list key, and a counter that makes the fetch effect run again for a Retry.
-  const [modelsErr, setModelsErr] = useState<Record<string, string>>({});
-  const [modelsRetry, setModelsRetry] = useState(0);
-  /** OpenCode read another provider set: every OpenCode model list is fetched again the next time it shows. */
-  const dropOpenCodeModels = () => {
-    setModelsBy((m) => Object.fromEntries(Object.entries(m).filter(([k]) => !k.startsWith("opencode"))));
-    for (const k of [...modelsRequested.current]) if (k.startsWith("opencode")) modelsRequested.current.delete(k);
-    setModelsErr((e) => Object.fromEntries(Object.entries(e).filter(([k]) => !k.startsWith("opencode"))));
-  };
-  const setModels = (list: ModelInfo[]) => setModelsBy((m) => ({ ...m, claude: list }));
-  const modelsKey = (engine: Engine, cwd?: string) => (engine !== "claude" && cwd && cwdSides[cwd] ? `${engine}@${cwdSides[cwd]}` : engine);
-  const modelsOf = (engine: Engine, cwd?: string) => modelsBy[modelsKey(engine, cwd)] ?? NO_MODELS;
-  /** The model picker's footer of an OpenCode list: a link to its providers, and the load error with Retry. Claude's has none. */
+  // Model lists per Engine (ADR 0012): see model-catalogue.ts. A list of a folder on a side is per side (that side's OpenCode has its own providers).
+  const catalogue = useMemo(() => createModelCatalogue({ fetch: (engine, cwd) => client.current!.request<ModelsResult>({ type: "models.list", engine, ...(cwd && { cwd }) }).then((r) => r.models) }), []);
+  // A state tick, not useSyncExternalStore: its sync-lane render would run effects (auto-close) ahead of the subscribe replies of the same connection.
+  const [, setCatalogueTick] = useState(0);
+  useEffect(() => catalogue.subscribe(() => setCatalogueTick((n) => n + 1)), [catalogue]);
+  const sourceOf = (engine: Engine, cwd?: string): ModelSource => ({ engine, capabilities: engineCapabilities({ engine, capabilities: enginesOf(cwd).find((e) => e.engine === engine)?.capabilities ?? ALL_CAPABILITIES }), side: cwd ? cwdSides[cwd] : undefined, cwd });
+  const modelsOf = (engine: Engine, cwd?: string) => catalogue.list(sourceOf(engine, cwd));
+  /** The model picker's footer of an Engine with providers: a link to its settings, and the load error with Retry. */
   const modelFooterProps = (engine: Engine, cwd?: string) => {
     const f = modelFooterOf(engine, cwd); // flat for the memo'd session pane (functions are stabilized, objects are not)
     return { modelsError: f?.error, onModelsRetry: f?.onRetry, onModelsConnect: f?.onConnect };
   };
   const modelFooterOf = (engine: Engine, cwd?: string): ModelFooterProps | undefined => {
-    if (engine === "claude") return undefined;
-    const key = modelsKey(engine, cwd);
-    return {
-      error: modelsErr[key],
-      onRetry: () => (setModelsErr(({ [key]: _, ...rest }) => rest), modelsRequested.current.delete(key), setModelsRetry((n) => n + 1)),
-      onConnect: () => openSettingsGroup("opencode"),
-    };
+    const src = sourceOf(engine, cwd);
+    if (!src.capabilities.providers) return undefined;
+    return { error: catalogue.error(src), onRetry: () => catalogue.retry(src), onConnect: () => openSettingsGroup(engine) };
   };
   /** The engines a new session in `cwd` offers: its side's, else the hub's. */
   const enginesOf = (cwd?: string) => (cwd && sideEngines[cwdSides[cwd] ?? ""]) || engines;
-  const models = modelsOf("claude");
+  const models = modelsOf(DEFAULT_ENGINE);
   // Replies to subscribe / create / setModel: the freshest SessionInfo, incl. model.
   const [infos, setInfos] = useState<Record<string, SessionInfo>>({});
   const infosRef = useRef(infos);
@@ -1462,8 +1449,8 @@ export function App() {
         planStatus.current = u?.status;
         setPlan(u);
       },
-      onOpenCodeProviders: dropOpenCodeModels,
-      onSettingsChanged: (m) => (setLastEngine(m.settings.sessions?.engine ?? "claude"), setSessionsMode(m.settings.sessions?.defaultMode), setAppEditors((es) => es && [...es.filter((x) => x.id !== "custom"), ...customEditor(m.settings.editor)]), setLabels(m.settings.labels), setBack(m.settings.back), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled), setVisualizeOn(m.settings.chat?.visualize === true), setClaudeAccount(m.settings.claude?.account ?? ""), setClaudeAccounts(m.claudeAccounts ?? [])),
+      onProvidersChanged: catalogue.providersChanged,
+      onSettingsChanged: (m) => (setLastEngine(m.settings.sessions?.engine ?? DEFAULT_ENGINE), setSessionsMode(m.settings.sessions?.defaultMode), setAppEditors((es) => es && [...es.filter((x) => x.id !== "custom"), ...customEditor(m.settings.editor)]), setLabels(m.settings.labels), setBack(m.settings.back), setApp(m.settings.app), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1), setWorkerNotices(m.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(m.settings.git?.ignoreSubmodules === true), setComputerAwake((c) => c && { ...c, on: m.settings.power?.keepAwake === true }), (recNow.current.desktopOn = onDaemonMachine() && m.settings.notifications?.desktop && !desktopForcedOff.current), setChromeOn(m.settings.chrome?.enabled), setVisualizeOn(m.settings.chat?.visualize === true), setClaudeAccount(m.settings.claude?.account ?? ""), setClaudeAccounts(m.claudeAccounts ?? [])),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
       onStale: (note) => staleDismissed.current !== note && setStale(note),
       // Not on the page's first connection: the offer comes from a reconnect or the next time the page shows.
@@ -1471,7 +1458,7 @@ export function App() {
       onConfigChanged: (m) => {
         if (m.kind === "addons") return setAddonsRev((n) => n + 1);
         // The Claude login or account changed: the daemon dropped its model list.
-        if (m.kind === "models") return void c.request<ModelsResult>({ type: "models.list" }).then((r) => setModels(r.models), () => {});
+        if (m.kind === "models") return void c.request<ModelsResult>({ type: "models.list" }).then((r) => catalogue.setDaemonList(r.models), () => {});
         setConfigChanged((c) => ({ ...c, [m.cwd]: (c[m.cwd] ?? 0) + 1 }));
         setReloadFailed((f) => nextReloadFailed(f, m.reloadFailed));
       },
@@ -1482,13 +1469,13 @@ export function App() {
         // The daemon sends its update state right after the connect; a restarted one has none.
         setUpdate(undefined);
         setStale(undefined);
-        modelsRequested.current.clear();
+        catalogue.reconnected();
         // Models first: the subscribe replays come before later replies, and the toolbar needs the model names and effort levels.
         c.request<ModelsResult>({ type: "models.list" }).then(
-          (r) => setModels(r.models),
+          (r) => catalogue.setDaemonList(r.models),
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
-        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLastEngine(r.settings.sessions?.engine ?? "claude"), setSessionsMode(r.settings.sessions?.defaultMode), setLabels(r.settings.labels), setBack(r.settings.back, true), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setVisualizeOn(r.settings.chat?.visualize === true), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
+        c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLastEngine(r.settings.sessions?.engine ?? DEFAULT_ENGINE), setSessionsMode(r.settings.sessions?.defaultMode), setLabels(r.settings.labels), setBack(r.settings.back, true), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setVisualizeOn(r.settings.chat?.visualize === true), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
         // View cache (GH-771): meta of another daemon stored: nothing of the cache applies, the page starts as without a cache. Without a hello (older daemon) nothing is known: keep.
         // An unknown stored meta (the load read timed out or failed) is read now; none stored (a first load) or unreadable: nothing to clear, only the meta is written.
         // Only the resync (list, subscribes, follows) waits for that check.
@@ -1865,7 +1852,7 @@ export function App() {
       const { session } = await client.current!.request<SetModelResult>(msg);
       setInfos((i) => ({ ...i, [session.id]: session }));
       // The daemon drops auto to ask when the new model has no auto support.
-      if (msg.type === "session.setModel" && before === "auto" && session.permissionMode !== "auto") setToast(autoUnavailable(modelsOf(session.engine ?? "claude", session.cwd), session.model));
+      if (msg.type === "session.setModel" && before === "auto" && session.permissionMode !== "auto") setToast(autoUnavailable(modelsOf(engineOf(session), session.cwd), session.model));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -2169,12 +2156,12 @@ export function App() {
                         place={worktreeName(s.cwd, worktrees)}
                         view={v}
                         pending={pend}
-                        models={modelsOf(s.engine ?? "claude", s.cwd)}
-                        {...modelFooterProps(s.engine ?? "claude", s.cwd)}
+                        models={modelsOf(engineOf(s), s.cwd)}
+                        {...modelFooterProps(engineOf(s), s.cwd)}
                         onModel={(model) => configure({ type: "session.setModel", sessionId: s.id, model })}
                         onMode={(mode) => configure({ type: "session.setPermissionMode", sessionId: s.id, mode })}
                         onAgent={(agent) => configure({ type: "session.setAgent", sessionId: s.id, agent })}
-                        onRetryAgents={() => void client.current!.request({ type: "session.agents", cwd: s.cwd, engine: "opencode", sessionId: s.id }).catch(() => {})}
+                        onRetryAgents={() => void client.current!.request({ type: "session.agents", cwd: s.cwd, engine: engineOf(s), sessionId: s.id }).catch(() => {})}
                         onEffort={(effort) => configure({ type: "session.setEffort", sessionId: s.id, effort })}
                         onUpload={upload(() => ({ sessionId: s.id }), s.cwd)}
                         onPrompt={(text, images) => {
@@ -3050,24 +3037,22 @@ export function App() {
   };
   const draftEngine = pick.engine ?? lastEngine;
   const engineEntry = enginesOf(draftProject).find((e) => e.engine === draftEngine);
-  // Claude: the start modes follow the model and the daemon config; another Engine: the modes it lists.
-  const modesFor = (engine: Engine, model: string) => enginesOf(draftProject).find((e) => e.engine === engine && engine !== "claude")?.permissionModes ?? permissionModesFor({ allowBypass: newModes.includes("bypassPermissions"), supportsAuto: models.some((m) => m.value === model && m.supportsAutoMode) });
+  // An Engine whose modes include auto (it depends on the model): the start modes follow the model and the daemon config; another: the modes it lists.
+  const modesFor = (engine: Engine, model: string) => {
+    const row = enginesOf(draftProject).find((e) => e.engine === engine);
+    const modes = row && engineCapabilities(row).permissionModes;
+    if (row && !modes!.includes("auto")) return row.permissionModes;
+    return permissionModesFor({ modes, allowBypass: newModes.includes("bypassPermissions"), supportsAuto: modelsOf(engine, draftProject).some((m) => m.value === model && m.supportsAutoMode) });
+  };
   const draftModes = modesFor(draftEngine, pick.model);
   // The model list of an Engine is fetched the first time a session or the draft of it shows (Claude's came with the connection).
-  const shownEngine: Engine | undefined = draftShown ? draftEngine : shown ? (shown.engine ?? "claude") : undefined;
+  const shownEngine: Engine | undefined = draftShown ? draftEngine : shown ? engineOf(shown) : undefined;
   const shownCaps = (draftShown ? engineEntry?.capabilities : shown ? capabilitiesOf(shown) : undefined) ?? ALL_CAPABILITIES;
   const shownCwd = draftShown ? draftProject : shown?.cwd;
-  const listKey = shownEngine && modelsKey(shownEngine, shownCwd);
+  const shownList = shownEngine ? modelsOf(shownEngine, shownCwd) : undefined;
   useEffect(() => {
-    if (!shownEngine || !listKey || shownEngine === "claude" || status !== "connected" || modelsRequested.current.has(listKey)) return;
-    modelsRequested.current.add(listKey);
-    // A folder of a side: `cwd` routes the request to that side's OpenCode (its own providers).
-    // The folder's own OpenCode instance lists its models (project providers), on this machine and on a side.
-    client.current!.request<ModelsResult>({ type: "models.list", engine: shownEngine, ...(shownCwd && { cwd: shownCwd }) }).then(
-      (r) => (setModelsBy((m) => ({ ...m, [listKey]: r.models })), setModelsErr(({ [listKey]: _, ...rest }) => rest)),
-      (e: Error) => (modelsRequested.current.delete(listKey), e.message !== "disconnected" && setModelsErr((m) => ({ ...m, [listKey]: e.message }))),
-    );
-  }, [listKey, status, modelsRetry, listKey && modelsBy[listKey] === undefined]); // an OpenCode login or logout drops the list: fetched again
+    if (shownEngine && status === "connected") catalogue.load(sourceOf(shownEngine, shownCwd));
+  }, [shownEngine, shownCwd, status, shownList]); // a provider change drops the list: fetched again
   // The settings default applies only where the draft's model offers it (auto needs support); else Ask.
   const draft: StartOptions = { ...pick, engine: draftEngine, mode: pick.mode ?? draftStartMode(draftModes, defaultMode) };
   // A model without auto support takes the draft out of auto mode, like the daemon does for a session.
@@ -3275,7 +3260,7 @@ export function App() {
       model: view?.model ?? shown.model,
       effort: view?.effort ?? shown.effort,
       mode: view?.permissionMode ?? shown.permissionMode,
-      modes: modesOf(shown.permissionModes, view?.model ?? shown.model, modelsOf(shown.engine ?? "claude", shown.cwd), capabilitiesOf(shown)),
+      modes: modesOf(shown.permissionModes, view?.model ?? shown.model, modelsOf(engineOf(shown), shown.cwd), capabilitiesOf(shown)),
       capabilities: capabilitiesOf(shown),
       running: view?.state === "running" || view?.state === "needs_input",
       prompts: timeline(view!).flatMap((i) => (i.kind === "part" && i.part.type === "user_text" && !(isCoordinator(shown.id) && noticeMarker(i.part.text)) ? [{ id: i.part.id, text: summarizePasted(i.part.text) }] : [])),
@@ -4158,7 +4143,7 @@ export function App() {
                   onDraft={changeDraft}
                   modes={draftModes}
                   caps={engineEntry?.capabilities}
-                  onOpenOpenCodeSettings={() => openSettingsGroup("opencode")}
+                  onOpenOpenCodeSettings={openSettingsGroup}
                   onOpenProject={() => setOpeningProject(true)}
                   onUpload={upload(() => uploadOwnerFor(unprompted.current, draftProject, draftUpload.current), draftProject, () => void (draftUpload.current = rotateDraftToken()))}
                   onSearch={search}
@@ -4556,7 +4541,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         /></OnFirstOpen>
       )}
-      <OnFirstOpen open={settingsOpen} fallback={<DialogFallback size="settings" />}><SettingsDialog onLogin={() => (setSettingsOpen(false), openLogin())} project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} onOpenCodeProviders={dropOpenCodeModels} /></OnFirstOpen>
+      <OnFirstOpen open={settingsOpen} fallback={<DialogFallback size="settings" />}><SettingsDialog onLogin={() => (setSettingsOpen(false), openLogin())} project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} onProvidersChanged={catalogue.providersChanged} /></OnFirstOpen>
       {(viewer || shown) && client.current && (
         <OnFirstOpen open={!!viewer} fallback={<DialogFallback size="large" />}><ViewerDialog
           target={viewer && !isFileTarget(viewer.target) ? viewer.target : undefined}
@@ -4962,7 +4947,7 @@ export function NewSession({
   /** Flags of the draft's Engine; none = all. */
   caps?: EngineCapabilities;
   /** The inline OpenCode error's button. */
-  onOpenOpenCodeSettings?: () => void;
+  onOpenOpenCodeSettings?: (engine: Engine) => void;
   /** The model picker's footer (OpenCode): link to its providers, and a failed list with Retry. */
   modelFooter?: ModelFooterProps;
   onOpenProject: () => void;
@@ -4986,14 +4971,15 @@ export function NewSession({
 }) {
   const tr = useT();
   const { model, mode, effort } = draft;
-  const engine = draft.engine ?? "claude";
+  const engine = draft.engine ?? DEFAULT_ENGINE;
   // A failed start of the OpenCode engine (missing, too old, failed to start) shows under the chips with the way to fix it.
-  const [engineError, setEngineError] = useState<string>();
+  // `engine`: the Engine of the failed start (the draft may be switched meanwhile); the settings button opens its group.
+  const [engineError, setEngineError] = useState<{ message: string; engine: Engine }>();
   const start = (c: string, first: FirstMessage) => {
     setEngineError(undefined);
     return onStart(c, { model, mode, effort, engine: draft.engine, ...(agent && { agent }) }, first).catch((e: RequestError) => {
       // Shown under the chips with the settings button: the prompt box keeps the draft and adds no "Prompt not sent" line.
-      if (e.code === "opencode_missing" || e.code === "opencode_old" || e.code === "opencode_failed") (setEngineError(e.message), (e as ShownError).shown = true);
+      if (e.code === "opencode_missing" || e.code === "opencode_old" || e.code === "opencode_failed") (setEngineError({ message: e.message, engine }), (e as ShownError).shown = true);
       throw e;
     });
   };
@@ -5150,9 +5136,9 @@ export function NewSession({
         )}
         {engineError && (
           <div role="alert" className="flex w-full flex-col items-center gap-1 text-center text-destructive text-sm" data-testid="engine-error">
-            <p>{engineError}</p>
+            <p>{engineError.message}</p>
             {onOpenOpenCodeSettings && (
-              <Button variant="secondary" size="sm" onClick={onOpenOpenCodeSettings} className="max-md:h-11" data-testid="engine-error-settings">
+              <Button variant="secondary" size="sm" onClick={() => onOpenOpenCodeSettings(engineError.engine)} className="max-md:h-11" data-testid="engine-error-settings">
                 {tr("app.main.openOpenCodeSettings")}
               </Button>
             )}
@@ -5802,7 +5788,7 @@ export function SessionPane({
               agents={<AgentsButton view={view} onOpen={onOpenRun} />}
               label={tr("app.prompt.label")}
               inputRef={prompt}
-              placeholder={phone ? (turnRunning ? tr("app.prompt.working") : tr("app.prompt.ask", { engine: ENGINE_NAME[session.engine ?? "claude"] })) : turnRunning ? (onQueue ? tr(sendModeSetting === "queue" || capabilitiesOf(session).steering === false ? "app.prompt.workingQueue" : "app.prompt.workingSteerQueue") : tr("app.prompt.workingSteer")) : tr("app.prompt.askFull", { engine: ENGINE_NAME[session.engine ?? "claude"] })}
+              placeholder={phone ? (turnRunning ? tr("app.prompt.working") : tr("app.prompt.ask", { engine: ENGINE_NAME[engineOf(session)] })) : turnRunning ? (onQueue ? tr(sendModeSetting === "queue" || capabilitiesOf(session).steering === false ? "app.prompt.workingQueue" : "app.prompt.workingSteerQueue") : tr("app.prompt.workingSteer")) : tr("app.prompt.askFull", { engine: ENGINE_NAME[engineOf(session)] })}
             />
           </>
         )}

@@ -60,7 +60,7 @@ describe("OpenCode inline task", () => {
       script: (_p, _b, emit) => queueMicrotask(() => (asst(emit), part(emit, text("prt_t", "found it")), part(emit, step("prt_s1", { reason: "stop" })), idle(emit))),
     });
     r.callRunning();
-    const res = await r.run.inlineTask!(spec({ tools: ["Grep", "Read"], mcp: ["playwright", "mcp__docs__search"] }), hooks());
+    const res = await r.run.inlineTask(spec({ tools: ["Grep", "Read"], mcp: ["playwright", "mcp__docs__search"] }), hooks());
     const create = r.sent("/session").find((c) => c.path === "/session")!;
     expect(create.body).toMatchObject({ parentID: "ses_parent", title: "Inline: find foo" });
     expect(create.body.permission.length).toBeGreaterThan(0);
@@ -79,7 +79,7 @@ describe("OpenCode inline task", () => {
     const modelOf = async (smallModel: string | undefined, s: Partial<InlineSpec>, openCodeModel?: string) => {
       const r = rig({ smallModel, script: finish });
       r.callRunning();
-      await r.run.inlineTask!(spec(s), { ...hooks(), ...(openCodeModel !== undefined && { openCodeModel }) });
+      await r.run.inlineTask(spec(s), { ...hooks(), ...(openCodeModel !== undefined && { settings: { openCodeModel } }) });
       return r.sent("/prompt_async")[0]!.body.model;
     };
     expect(await modelOf("acme/small", { model: "x/y" }, "h/m")).toEqual({ providerID: "x", modelID: "y" });
@@ -102,7 +102,7 @@ describe("OpenCode inline task", () => {
         }),
     });
     r.callRunning();
-    await r.run.inlineTask!(spec(), hooks());
+    await r.run.inlineTask(spec(), hooks());
     const steps = r.emitted.filter((p) => p.parentId === "call_1");
     expect(steps.map((p) => p.type)).toEqual(["tool_call", "tool_result", "assistant_text"]);
     expect(steps[0]).toMatchObject({ tool: "Grep", input: { pattern: "foo" } });
@@ -113,7 +113,7 @@ describe("OpenCode inline task", () => {
     const script = (_p: string, _b: unknown, emit: (p: Payload) => void) => queueMicrotask(() => (asst(emit), part(emit, toolPart("prt_g", "grep", {})), part(emit, text("prt_t", "ok")), idle(emit)));
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const r = rig({ script });
-    const none = r.run.inlineTask!(spec(), hooks());
+    const none = r.run.inlineTask(spec(), hooks());
     await vi.advanceTimersByTimeAsync(5000);
     expect(await none).toMatchObject({ status: "done", text: "ok" });
     expect(r.emitted.filter((p) => p.parentId)).toEqual([]);
@@ -121,8 +121,8 @@ describe("OpenCode inline task", () => {
     const r2 = rig({ script });
     r2.callRunning("old");
     r2.callRunning("new");
-    await r2.run.inlineTask!(spec(), hooks());
-    await r2.run.inlineTask!(spec(), hooks());
+    await r2.run.inlineTask(spec(), hooks());
+    await r2.run.inlineTask(spec(), hooks());
     expect(new Set(r2.emitted.filter((p) => p.parentId).map((p) => p.parentId))).toEqual(new Set(["new", "old"]));
   });
 
@@ -140,7 +140,7 @@ describe("OpenCode inline task", () => {
         }),
     });
     r.callRunning();
-    expect((await r.run.inlineTask!(spec({ tools: ["Edit", "Write"] }), hooks())).filesChanged).toEqual(["/p/a.ts", "/p/b.ts"]);
+    expect((await r.run.inlineTask(spec({ tools: ["Edit", "Write"] }), hooks())).filesChanged).toEqual(["/p/a.ts", "/p/b.ts"]);
   });
 
   it("text is the last assistant text, not the prompt echo", async () => {
@@ -155,7 +155,7 @@ describe("OpenCode inline task", () => {
         }),
     });
     r.callRunning();
-    expect((await r.run.inlineTask!(spec(), hooks())).text).toBe("the answer");
+    expect((await r.run.inlineTask(spec(), hooks())).text).toBe("the answer");
   });
 
   it("turn cap: at maxTurns steps that did not stop the model, aborts the child and returns a partial result", async () => {
@@ -163,7 +163,7 @@ describe("OpenCode inline task", () => {
       script: (_p, _b, emit) => queueMicrotask(() => (asst(emit), part(emit, text("prt_t", "partial")), part(emit, step("prt_s1")), part(emit, step("prt_s2")))),
     });
     r.callRunning();
-    const res = await r.run.inlineTask!(spec({ maxTurns: 2 }), hooks());
+    const res = await r.run.inlineTask(spec({ maxTurns: 2 }), hooks());
     expect(r.sent("/abort").map((c) => c.path)).toEqual(["/session/ses_child/abort"]);
     expect(res).toMatchObject({ status: "limit", limit: "turns", turns: 2, text: "partial" });
   });
@@ -171,14 +171,14 @@ describe("OpenCode inline task", () => {
   it("a final step that stopped the model at maxTurns is done, not a limit", async () => {
     const r = rig({ script: (_p, _b, emit) => queueMicrotask(() => (asst(emit), part(emit, text("prt_t", "all done")), part(emit, step("prt_s1")), part(emit, step("prt_s2", { reason: "stop" })), idle(emit))) });
     r.callRunning();
-    expect(await r.run.inlineTask!(spec({ maxTurns: 2 }), hooks())).toMatchObject({ status: "done", turns: 2 });
+    expect(await r.run.inlineTask(spec({ maxTurns: 2 }), hooks())).toMatchObject({ status: "done", turns: 2 });
     expect(r.sent("/abort")).toEqual([]);
   });
 
   it("token cap: output tokens over the cap abort the child with limit tokens", async () => {
     const r = rig({ script: (_p, _b, emit) => queueMicrotask(() => (asst(emit), part(emit, text("prt_t", "p")), part(emit, step("prt_s1", { tokens: { input: 1, output: 9000, reasoning: 8000, cache: { read: 0, write: 0 } } })))) });
     r.callRunning();
-    const res = await r.run.inlineTask!(spec(), hooks());
+    const res = await r.run.inlineTask(spec(), hooks());
     expect(r.sent("/abort")).toHaveLength(1);
     expect(res).toMatchObject({ status: "limit", limit: "tokens", tokens: { output: 17000 } });
   });
@@ -187,7 +187,7 @@ describe("OpenCode inline task", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const r = rig({ script: (_p, _b, emit) => queueMicrotask(() => (asst(emit), part(emit, text("prt_t", "so far")))) });
     r.callRunning();
-    const p = r.run.inlineTask!(spec(), hooks());
+    const p = r.run.inlineTask(spec(), hooks());
     await vi.advanceTimersByTimeAsync(600_000);
     expect(await p).toMatchObject({ status: "limit", limit: "time", text: "so far" });
     expect(r.sent("/abort")).toHaveLength(1);
@@ -197,7 +197,7 @@ describe("OpenCode inline task", () => {
     const r = rig({ script: (_p, _b, emit) => queueMicrotask(() => (asst(emit), part(emit, text("prt_t", "half")))) });
     r.callRunning();
     const ac = new AbortController();
-    const p = r.run.inlineTask!(spec(), hooks(ac.signal));
+    const p = r.run.inlineTask(spec(), hooks(ac.signal));
     await new Promise((x) => setTimeout(x, 20));
     ac.abort();
     expect(await p).toMatchObject({ status: "stopped", text: "half" });
@@ -207,7 +207,7 @@ describe("OpenCode inline task", () => {
   it("Stop from the card (stopSubagent) ends as stopped with the partial text, even when OpenCode answers the abort with an error and idle", async () => {
     const r = rig({ script: (_p, _b, emit) => queueMicrotask(() => (asst(emit), part(emit, text("prt_t", "half")))) });
     r.callRunning();
-    const p = r.run.inlineTask!(spec(), hooks());
+    const p = r.run.inlineTask(spec(), hooks());
     await new Promise((x) => setTimeout(x, 20));
     // OpenCode reports the abort as MessageAbortedError, then idle.
     const abortReply = () => queueMicrotask(() => (r.emit({ type: "session.error", properties: { sessionID: "ses_child", error: { name: "MessageAbortedError", data: { message: "aborted" } } } }), idle(r.emit)));
@@ -220,21 +220,21 @@ describe("OpenCode inline task", () => {
   it("after a finished run stopSubagent is false (no abort POSTed) and the child and message ids are released, and a finished call's claim is dropped", async () => {
     const r = rig({ script: (_p, _b, emit) => queueMicrotask(() => (asst(emit), part(emit, text("prt_t", "x")), part(emit, step("prt_s1", { reason: "stop" })), idle(emit))) });
     r.callRunning();
-    expect(await r.run.inlineTask!(spec(), hooks())).toMatchObject({ status: "done" });
+    expect(await r.run.inlineTask(spec(), hooks())).toMatchObject({ status: "done" });
     const aborts = r.sent("/abort").length;
     expect(await r.run.stopSubagent("call_1")).toBe(false);
     expect(r.sent("/abort")).toHaveLength(aborts);
     expect(r.run.owns!("ses_child")).toBe(false);
     r.emit({ type: "message.part.updated", properties: { part: { id: "prt_call_1", type: "tool", sessionID: "ses_parent", messageID: "msg_p", callID: "call_1", tool: TOOL, state: { status: "completed", input: INPUT, output: "x", time: { start: 1, end: 2 } } } } });
     expect((r.run as any).inlineClaimed.size).toBe(1); // the call still ran when the run ended
-    await r.run.inlineTask!(spec(), hooks());
+    await r.run.inlineTask(spec(), hooks());
     expect((r.run as any).inlineClaimed.size).toBe(0);
   });
 
   it("a session error of the child is status error with its text", async () => {
     const r = rig({ script: (_p, _b, emit) => queueMicrotask(() => emit({ type: "session.error", properties: { sessionID: "ses_child", error: { name: "APIError", data: { message: "boom" } } } })) });
     r.callRunning();
-    const res = await r.run.inlineTask!(spec(), hooks());
+    const res = await r.run.inlineTask(spec(), hooks());
     expect(res.status).toBe("error");
     expect(res.error).toContain("boom");
   });
@@ -247,14 +247,14 @@ describe("OpenCode inline task", () => {
       if (path.endsWith("/prompt_async")) throw new Error("down");
       return o?.method ? undefined : path === "/agent" ? [] : {};
     });
-    expect(await r.run.inlineTask!(spec(), hooks())).toMatchObject({ status: "error", error: expect.stringContaining("down") });
+    expect(await r.run.inlineTask(spec(), hooks())).toMatchObject({ status: "error", error: expect.stringContaining("down") });
   });
 
   it("text over 16,000 chars keeps the tail and sets truncated", async () => {
     const long = "a".repeat(10_000) + "b".repeat(10_000);
     const r = rig({ script: (_p, _b, emit) => queueMicrotask(() => (asst(emit), part(emit, text("prt_t", long)), idle(emit))) });
     r.callRunning();
-    const res = await r.run.inlineTask!(spec(), hooks());
+    const res = await r.run.inlineTask(spec(), hooks());
     expect(res.text).toHaveLength(16_000);
     expect(res.text.endsWith("b".repeat(100))).toBe(true);
     expect(res.truncated).toBe(true);
