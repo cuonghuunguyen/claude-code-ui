@@ -44,6 +44,17 @@ describe("keep awake setting", () => {
     expect(JSON.parse(localStorage.getItem("claude-ui.keepAwake")!)).toEqual({ on: true, onlyRunning: true });
     off();
   });
+
+  it("a change written by another page reaches the subscriber without a reload", () => {
+    const l = vi.fn();
+    const off = subscribeKeepAwake(l);
+    localStorage.setItem("claude-ui.keepAwake", JSON.stringify({ on: true, onlyRunning: false }));
+    window.dispatchEvent(new StorageEvent("storage", { key: "claude-ui.keepAwake" }));
+    expect(l).toHaveBeenCalledTimes(1);
+    window.dispatchEvent(new StorageEvent("storage", { key: "other" }));
+    expect(l).toHaveBeenCalledTimes(1);
+    off();
+  });
 });
 
 describe("anySessionRunning", () => {
