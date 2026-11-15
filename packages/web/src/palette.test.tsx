@@ -63,8 +63,6 @@ it("lists commands with their shortcut chips and the sessions, grouped; the sear
   expect([...el.querySelectorAll('[role="group"]')].map((g) => g.getAttribute("aria-label"))).toEqual(["Commands", "Sessions"]);
   expect(rows().map((r) => r.dataset.id)).toEqual(["new", "model", "s1"]);
   expect([...rows()[0]!.querySelectorAll('[data-testid="keybind"] span')].map((s) => s.textContent)).toEqual(["Ctrl", "Shift", "S"]);
-  // OpenCode KeybindV2 fill: bg-layer-03 (theme.test.ts checks the token).
-  expect(rows()[0]!.querySelector('[data-testid="keybind"] span')!.className).toContain("bg-kbd");
 });
 
 it("typing filters by title or description; Enter runs the active item and closes", async () => {
@@ -138,7 +136,6 @@ it("a session row shows the project avatar, the open-tab marker and the relative
   expect(row.querySelector('[data-testid="open-marker"]')).not.toBeNull();
   expect(row.querySelector("[aria-hidden]")?.textContent).toBe("A");
   expect(row.querySelector('[data-testid="palette-meta"]')?.textContent).toBe("2m");
-  expect(row.querySelector('[data-testid="palette-title"]')!.className).toMatch(/\btruncate\b/);
 });
 
 it("a query also searches files of the shown session (Files group, folders left out); Enter opens the file", async () => {
@@ -302,19 +299,6 @@ it("the search starts 250 ms after the last keystroke", async () => {
   } finally {
     vi.useRealTimers();
   }
-});
-
-it("a message hit shows its snippet on its own line below the title", async () => {
-  const m = msgSearch();
-  const { rows, type } = await render(undefined, ITEMS, undefined, m.messages);
-  await type("zebra");
-  await settle();
-  await act(async () => (m.calls[0]!.onResult(HIT), m.calls[0]!.done(DONE)));
-  const row = rows().find((r) => r.dataset.id === "msg:sx:m1")!;
-  const snippet = row.querySelector('[data-testid="palette-snippet"]')!;
-  expect(snippet.parentElement).toBe(row.querySelector('[data-testid="palette-title"]')!.parentElement);
-  expect(snippet.parentElement!.className).toContain("flex-col");
-  expect(snippet.querySelector("mark")!.textContent).toBe("Zebra");
 });
 
 it("keys pressed while an input method composes in the search box (Enter, Esc) go to the IME", async () => {

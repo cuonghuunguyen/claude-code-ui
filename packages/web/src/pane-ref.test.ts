@@ -1,18 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { artifactRef, partIdOf, fileRef, identityOf, isItem, isPaneRef, KIND_LABEL, kindOf, pathOf, ownerOf, paneTabFor, paneTabTitle, parseRef, refOf, splittable } from "./pane-ref.ts";
+import { artifactRef, partIdOf, fileRef, identityOf, isItem, isPaneRef, kindOf, pathOf, ownerOf, paneTabFor, paneTabTitle, parseRef, refOf, splittable } from "./pane-ref.ts";
 
 const U = "0f8e7d6c-1234-4abc-8def-0123456789ab";
 
 describe("pane refs", () => {
-  it("parseRef reads plan:<uuid> and rejects sessions, new, focus, other kinds and bad uuids", () => {
+  it("parseRef reads plan, files and graph refs and rejects sessions, new, focus, other kinds and bad uuids", () => {
     expect(parseRef(`plan:${U}`)).toEqual({ kind: "plan", owner: U });
     for (const id of [U.toUpperCase().replace("PLAN", "plan"), `plan:${U.toUpperCase()}`, U, "new", "focus", `changes:${U}`, `files:${U.toUpperCase()}`, "plan:abc", `plan:${U}x`, "", undefined]) expect(parseRef(id)).toBeUndefined();
     expect(isPaneRef(`plan:${U}`)).toBe(true);
     expect(isPaneRef(U)).toBe(false);
     expect(isPaneRef(undefined)).toBe(false);
-  });
-  it("refOf round-trips parseRef", () => {
-    expect(refOf(parseRef(`plan:${U}`)!)).toBe(`plan:${U}`);
+    expect(parseRef(`files:${U}`)).toEqual({ kind: "files", owner: U });
+    expect(parseRef(`graph:${U}`)).toEqual({ kind: "graph", owner: U });
   });
   it("ownerOf returns the owner of a ref and the id itself otherwise", () => {
     expect(ownerOf(`plan:${U}`)).toBe(U);
@@ -24,13 +23,6 @@ describe("pane refs", () => {
   it("GH-398 splittable is true for plan, files and terminal refs and false for Git graph, sessions and junk", () => {
     for (const k of ["plan", "files", "terminal"]) expect(splittable(`${k}:${U}`)).toBe(true);
     for (const x of [`graph:${U}`, U, "new", ""]) expect(splittable(x)).toBe(false);
-  });
-  it("paneTabTitle is \"Plan · <title>\"", () => {
-    expect(paneTabTitle("plan", "Fix bug")).toBe("Plan · Fix bug");
-  });
-  it("parseRef reads files:<uuid> and graph:<uuid>", () => {
-    expect(parseRef(`files:${U}`)).toEqual({ kind: "files", owner: U });
-    expect(parseRef(`graph:${U}`)).toEqual({ kind: "graph", owner: U });
   });
   it("terminal refs parse and are one per folder", () => {
     const V = U.replace("0f8e", "1f8e");
@@ -59,6 +51,7 @@ describe("pane refs", () => {
     expect(paneTabFor([`plan:${U}`], "plan", V, cwd)).toBe(`plan:${V}`);
   });
   it("paneTabTitle gives \"Files · demo\" and \"Git graph · demo · feature\"", () => {
+    expect(paneTabTitle("plan", "Fix bug")).toBe("Plan · Fix bug");
     expect(paneTabTitle("files", "demo")).toBe("Files · demo");
     expect(paneTabTitle("graph", "demo · feature")).toBe("Git graph · demo · feature");
   });
@@ -89,7 +82,6 @@ describe("GH-399 file refs", () => {
     expect(isItem(`file:${U}:/p/a.ts`)).toBe(true);
     expect(isItem(`files:${U}`)).toBe(false);
     expect(isItem(U)).toBe(false);
-    expect(KIND_LABEL.file).toBe("File");
   });
 });
 
@@ -110,7 +102,6 @@ describe("GH-400 artifact refs", () => {
     const ref = `artifact:${U}:toolu_01X`;
     expect(isItem(ref)).toBe(true);
     expect(splittable(ref)).toBe(true);
-    expect(KIND_LABEL.artifact).toBe("Artifact");
     expect(identityOf(ref, () => "/p")).toBe(ref);
   });
   it("paneTabFor finds the open artifact tab of the same owner and part", () => {

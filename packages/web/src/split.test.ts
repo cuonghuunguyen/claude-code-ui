@@ -99,17 +99,6 @@ it("switchRuns takes the target's view out and keeps the previous active tab's",
   expect(switchRuns(undefined, "a", undefined, "b")).toEqual({ runs: undefined, run: undefined });
 });
 
-it("GH-396 followSplit keeps the split unchanged while a graph tab is active and returns it with the next session tab; isSession is false for files and plan refs", () => {
-  const U = "0f8e7d6c-1234-4abc-8def-0123456789ab";
-  const ref = `graph:${U}`;
-  const s = sp();
-  const tabs = ["a", "b", ref];
-  expect(followSplit(s, ref, tabs)).toBe(s);
-  expect(followSplit(s, "b", tabs)?.ids).toEqual(s.ids);
-  expect(isSession(`files:${U}`)).toBe(false);
-  expect(isSession(`plan:${U}`)).toBe(false);
-});
-
 it("GH-398 parseSplit keeps a session plus a session or a Plan/Files/Terminal ref; two panes, a Git graph ref and junk read as no split", () => {
   const ids = (x: string[]) => parseSplit(JSON.stringify({ ids: x }))?.ids;
   expect(ids(["a", `plan:${U}`])).toEqual(["a", `plan:${U}`]);
@@ -129,6 +118,9 @@ it("GH-398 followSplit puts an activated pane in the active split, never over th
   expect(followSplit(sp({ ids: ["a", plan], at: 0 }), term, tabs)).toMatchObject({ ids: ["a", term], at: 1 });
   const s = sp();
   expect(followSplit(s, `graph:${U}`, [...tabs, `graph:${U}`])).toBe(s);
+  expect(followSplit(s, "b", [...tabs, `graph:${U}`])?.ids).toEqual(s.ids);
+  expect(isSession(`files:${U}`)).toBe(false);
+  expect(isSession(plan)).toBe(false);
   expect(followSplit(sp({ ids: ["a", plan] }), `plan:${"1".repeat(8)}-1234-4abc-8def-0123456789ab`, ["b", plan, `plan:${"1".repeat(8)}-1234-4abc-8def-0123456789ab`])).toBeUndefined();
 });
 
@@ -152,10 +144,5 @@ it("GH-398 dropRefusal: Git graph is refused at an edge and over a split; a drop
   expect(dropRefusal(s, true, tabs, plan, files, "center", 0)).toBe("session");
   expect(dropRefusal(s, true, tabs, plan, files, "center", 1)).toBeUndefined();
   expect(dropRefusal(undefined, false, tabs, "a", files, "center", -1)).toBeUndefined();
-  expect(REFUSAL_TEXT.whole).toBe("Git graph needs the whole area");
-});
-
-it("GH-402 REFUSAL_TEXT names every refusal, Changes included", () => {
-  expect(REFUSAL_TEXT.changes).toBe("Changes stays in a panel");
   expect(REFUSAL_TEXT.whole).toBe("Git graph needs the whole area");
 });

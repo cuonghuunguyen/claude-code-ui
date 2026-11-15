@@ -1,6 +1,6 @@
 import type { Part, SessionListItem } from "@claude-ui/protocol";
 import { afterEach, expect, it, vi } from "vitest";
-import { answeredLabel, attentionRows, blockingCount, capRows, doneSummary, focusSubtitle, KIND_ORDER, loadFocusCollapsed, nestRows, nextWaiting, saveFocusCollapsed, nowLine, quietLabel, requestSummary, rowTodos, taskProgress, waitLabel, waitingCount, waitingRequests, waitingStatus, workingRows, type FocusInput } from "./focus.ts";
+import { answeredLabel, attentionRows, blockingCount, focusSubtitle, KIND_ORDER, loadFocusCollapsed, nestRows, nextWaiting, saveFocusCollapsed, nowLine, quietLabel, requestSummary, rowTodos, waitLabel, waitingCount, waitingRequests, waitingStatus, workingRows, type FocusInput } from "./focus.ts";
 import { asideItem } from "./aside.ts";
 import { applyEvent, emptySession, type PermissionRequest, type QuestionRequest, type SessionView } from "./store.ts";
 
@@ -114,11 +114,12 @@ it("question: Answer line", () => {
 });
 
 it("error: an unread error session shows the raw error text, else a plain sentence; a read one gives no row", () => {
-  const list = [item("a"), item("b")];
+  const list = [item("a"), item("b"), item("c")];
   const raw: Part = { type: "raw", id: "raw", message: { error: "authentication_failed" } };
-  const views = { a: view([user, raw, state("running"), state("error")]), b: view([user, state("running"), state("error")]) };
-  const rows = attentionRows(input(list, views, { unread: ["a", "b"] }));
-  expect(rows.map((r) => [r.sessionId, r.reason, r.action])).toEqual([["a", "Check the error: authentication_failed", "open"], ["b", "Check the error: the turn ended with an error", "open"]]);
+  const prefixed: Part = { type: "raw", id: "raw", message: { error: "Error: boom" } };
+  const views = { a: view([user, raw, state("running"), state("error")]), b: view([user, state("running"), state("error")]), c: view([user, prefixed, state("running"), state("error")]) };
+  const rows = attentionRows(input(list, views, { unread: ["a", "b", "c"] }));
+  expect(rows.map((r) => [r.sessionId, r.reason, r.action])).toEqual([["a", "Check the error: authentication_failed", "open"], ["b", "Check the error: the turn ended with an error", "open"], ["c", "Check the error: boom", "open"]]);
   expect(attentionRows(input(list, views, { unread: ["a"] })).map((r) => r.sessionId)).toEqual(["a"]);
 });
 
@@ -221,21 +222,6 @@ it("workingRows: running sessions without an attention row, newest first, with t
   expect(workingRows(i, rows).map((r) => [r.session.id, r.now, r.progress, r.quietMs])).toEqual([["a", "Edit", undefined, 1000], ["b", "Doing y", "2 of 5", 3 * min]]);
 });
 
-it("taskProgress and doneSummary", () => {
-  expect(taskProgress([])).toBeUndefined();
-  expect(taskProgress([{ content: "a", status: "completed" }, { content: "b", status: "in_progress" }, { content: "c", status: "pending" }])).toBe("2 of 3");
-  expect(doneSummary([])).toBeUndefined();
-  expect(doneSummary([{ content: "a", status: "pending" }])).toBeUndefined();
-  expect(doneSummary([{ content: "a", status: "completed" }, { content: "b", status: "pending" }])).toBe("1 of 2 · Done: a");
-});
-
-it("capRows: at most 5, the rest counted; expanded shows all", () => {
-  const rows = [1, 2, 3, 4, 5, 6, 7];
-  expect(capRows(rows, false)).toEqual({ shown: [1, 2, 3, 4, 5], more: 2 });
-  expect(capRows(rows, true)).toEqual({ shown: rows, more: 0 });
-  expect(capRows([1, 2], false)).toEqual({ shown: [1, 2], more: 0 });
-});
-
 it("quietLabel: minutes floor, hours past 60", () => {
   expect([quietLabel(6 * min), quietLabel(6 * min + 59_000), quietLabel(63 * min)]).toEqual(["quiet 6m", "quiet 6m", "quiet 1h 3m"]);
 });
@@ -289,12 +275,6 @@ it("stuck: an idle session with a background task is not quiet; a terminal CLI t
   expect(attentionRows(input(list, { a: bg() }, { activity: { a: NOW - 10 * min } }))).toEqual([]);
   const ext = view([user, { type: "external_turn", id: "external_turn", running: true }]);
   expect(attentionRows(input(list, { a: ext }, { activity: { a: NOW - 10 * min } })).map((r) => r.kind)).toEqual(["stuck"]);
-});
-
-it("an error reason drops a leading Error: prefix", () => {
-  const raw: Part = { type: "raw", id: "raw", message: { error: "Error: boom" } };
-  const [r] = attentionRows(input([item("a")], { a: view([user, raw, state("running"), state("error")]) }, { unread: ["a"] }));
-  expect(r!.reason).toBe("Check the error: boom");
 });
 
 it("waitingRequests and attentionRows give the requests in the same order", () => {

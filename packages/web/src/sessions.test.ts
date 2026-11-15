@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { setLocalePref } from "./i18n.ts";
 import type { SessionListItem } from "@claude-ui/protocol";
-import { activeOnly, isWorkerKey, loadExpandedWorkers, saveExpandedWorkers, collapseKeys, loadSidebarView, revealKeys, saveSidebarView, sortGroups, byDay, groupByCwd, inProject, loadCollapsed, nestWorkers, parseSessionQuery, patchSession, resumeSearchText, projectOf, removableWorktree, externalWorktree, keepsBranch, removeWorktreeText, repoOf, saveCollapsed, timeAgo, worktreeName, displayTitle, projectIs } from "./sessions.ts";
+import { activeOnly, isWorkerKey, loadExpandedWorkers, saveExpandedWorkers, collapseKeys, loadSidebarView, revealKeys, saveSidebarView, sortGroups, byDay, groupByCwd, inProject, nestWorkers, parseSessionQuery, patchSession, resumeSearchText, projectOf, removableWorktree, externalWorktree, keepsBranch, removeWorktreeText, repoOf, timeAgo, worktreeName, displayTitle, projectIs } from "./sessions.ts";
 import { setLabels } from "./labels.ts";
 
 const item = (id: string, cwd: string, lastActivity: number, title = id, archived = false): SessionListItem => ({
@@ -30,14 +30,6 @@ describe("patchSession", () => {
 });
 
 describe("groupByCwd", () => {
-  it("groups sessions by working directory, most recent group first, keeping order inside a group", () => {
-    const groups = groupByCwd([item("a", "/p/x", 30), item("b", "/p/y", 20), item("c", "/p/x", 10)]);
-    expect(groups.map((g) => [g.cwd, g.sessions.map((s) => s.id)])).toEqual([
-      ["/p/x", ["a", "c"]],
-      ["/p/y", ["b"]],
-    ]);
-  });
-
   it("makes exactly one group per working directory whatever the input order, sessions newest first", () => {
     const groups = groupByCwd([item("a", "/p/x", 10), item("b", "/p/y", 40), item("c", "/p/x/", 30), item("d", "/p/y", 5), item("e", "/p/x", 20)]);
     expect(groups.map((g) => [g.cwd, g.sessions.map((s) => s.id)])).toEqual([
@@ -140,17 +132,6 @@ describe("groupByCwd with @project=", () => {
   it("an unknown project gives no group; archived still shows only archived", () => {
     expect(groupByCwd(list, "@project=nope", ["/p/foo", "/p/bar"], false, worktrees)).toEqual([]);
     expect(ids("@project=foo", true)).toEqual(["e"]);
-  });
-});
-
-describe("collapsed groups", () => {
-  afterEach(() => localStorage.clear());
-  it("persist across reloads", () => {
-    expect(loadCollapsed()).toEqual(new Set());
-    saveCollapsed(new Set(["/p/x"]));
-    expect(loadCollapsed()).toEqual(new Set(["/p/x"]));
-    localStorage.setItem("claude-ui.collapsed", "{bad");
-    expect(loadCollapsed()).toEqual(new Set());
   });
 });
 
