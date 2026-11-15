@@ -171,7 +171,6 @@ import { specOf, useKeymap } from "./keymap.ts";
 import { LEADER_MS, PREFIX_KEYS, leaderStep } from "./leader.ts";
 import { KeyTips } from "./key-tip.tsx";
 import { markKeyUsed, resetAllKeyTips } from "./key-tips.ts";
-import { loadClosed, popClosed, pushClosed, restoreClosed, restoreMany, saveClosed } from "./closed-tabs.ts";
 import { ShortcutsDialog } from "./shortcuts-dialog.tsx";
 import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
@@ -182,9 +181,9 @@ import { ENGINE_ICON, ENGINE_NAME, EngineTag } from "./engine-tag.tsx";
 import { BackButton, BackPanel, BackReminderCards, BriefRow } from "./back-panel.tsx";
 import { briefTag, foldBriefTurns, markFields, markOf, setBack, staleTurns, useBack } from "./back-marks.ts";
 import { SideBadge, SideLabel, SideState, sideLookup } from "./sides.tsx";
-import { dock, dockedIn, loadDocked, neighbourAfterDock, saveDocked, stripTabs, undock, useDocked } from "./docked-sessions.ts";
 import { applyListReply } from "./list-delta.ts";
-import { FOCUS_TAB, NEW_TAB, avatarColors, insertPaneTab, keysFinal as tabKeysFinal, closeMany, closeTab, closeTargets, otherGroupTargets, loadPinned, loadTabs, moveGroup, moveGroupTo, moveTabIn, openTab, projectName, replaceTab, runFromHash, runHash, savePinned, saveTabs, setPinned, staleTabs, tabFromHash, tabHash } from "./tabs.ts";
+import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeTargets, otherGroupTargets, projectName, runFromHash, staleTabs, tabFromHash } from "./tabs.ts";
+import { type WorkspaceEffect, type WorkspaceHost, createWorkspaceLayout, canSplit, dockedHere as dockedOf, loadWorkspace, placeRefused, reopenable, stripOf } from "./workspace-layout.ts";
 import { AgentLinksContext, AgentsButton, inRun, isRunning, NotPromptable, OpenRunContext, runOf, SubagentBar } from "./agents.tsx";
 import { loadTabCompact, loadTabGrouping, saveTabCompact, saveTabGrouping, tabGroup, type TabGrouping } from "./tab-grouping.ts";
 import { type Area, type DockArea, type DockSide, PANE_IDS, canMain, type PaneId, activePane, areaOf, flipSide, isAddonPane, loadLayout, loadPaneTabs, movePane, paneLabel, paneTabText, rememberPane, resetLayout, saveLayout, saveTerminalDock, setAddonPaneTitles, useLayout, useMinWidth, withPane, withPanes } from "./layout.ts";
@@ -196,7 +195,7 @@ import { type Drag, type DropCtx, type MainDrop, dockDrop, mainDrop } from "./pa
 import type { TabCommand } from "./tab-menu.ts";
 import { OpenExternalContext, canOpenSide, customEditor, externalHow, isExternalId, onDaemonMachine, type EditorInfo, type OpenExternal } from "./open-external-menu.ts";
 import { useSplitDrop } from "./split-drop.ts";
-import { SPLIT_MIN_H, SPLIT_MIN_W, switchRuns, type DropZone, type Split, type SplitDir, type SplitRefusal, dropRefusal, followSplit, isSession, REFUSAL_TEXT, splitContent, loadSplit, nextAfterClose, nextSplit, placeIn, ratioFor, saveSplit, splitTo } from "./split.ts";
+import { SPLIT_MIN_H, SPLIT_MIN_W, type DropZone, type Split, type SplitDir, type SplitRefusal, dropRefusal, isSession, REFUSAL_TEXT, splitContent, nextSplit, ratioFor } from "./split.ts";
 import { AvatarColors, IconButton, ProjectAvatar, QUIET_PRESSED, TAB_DRAG_TYPE, TabsBar, draggedTab, useGroupedTabs } from "./tabs-bar.tsx";
 import { ConfirmDialog, DeleteDialog, type SessionAction } from "./session-actions.tsx";
 import { anySessionRunning, useKeepAwake } from "./keep-awake.ts";
@@ -354,11 +353,6 @@ export function App() {
   const [shortcutsEdit, setShortcutsEdit] = useState<string>();
   // Shortcut labels and the shortcuts themselves follow the user's bindings.
   useKeymap();
-  // Closed session tabs (Reopen closed tab), per browser.
-  const [closedTabs, setClosedTabs] = useState(loadClosed);
-  useEffect(() => saveClosed(closedTabs), [closedTabs]);
-  const closedRef = useRef(closedTabs);
-  closedRef.current = closedTabs;
   // Prefix key: shows the second keys until one is pressed or the time is up.
   const [prefixOn, setPrefixOn] = useState(false);
   // New terminal shortcut: each bump adds a terminal to the shown terminal panel.
@@ -395,8 +389,26 @@ export function App() {
   // GH-133: prompts sent but not yet echoed by the daemon, by tab key (NEW_TAB while the first prompt creates the session).
   const [optimistic, setOptimistic] = useState<Record<string, Pending[]>>({});
   useEffect(() => setOptimistic((o) => pruneEchoed(o, views)), [views]);
-  // Active tab: a session id or NEW_TAB.
-  const [activeId, setActiveId] = useState(hashTab);
+  // Workspace layout (workspace-layout.ts): tabs, pins, split, Docked sessions, closed stack and the active tab with their rules. App dispatches intents and performs the effects;
+  // `lay` mirrors the store state for rendering (a plain setState, so a /clear heir tab renders in the batch of its infos), `ws.get()` is always the latest (event handlers, timers, closures of earlier renders).
+  const lg = useMinWidth(1024);
+  const wsHostFns = useRef({} as Pick<WorkspaceHost, "splitFits" | "groupOf" | "exists" | "live" | "grouped" | "perform">);
+  const [ws] = useState(() =>
+    createWorkspaceLayout(
+      { splitFits: (s) => wsHostFns.current.splitFits(s), groupOf: (id) => wsHostFns.current.groupOf(id), exists: (id) => wsHostFns.current.exists(id), live: (o) => wsHostFns.current.live(o), grouped: () => wsHostFns.current.grouped(), newKey: pendingKey, perform: (e) => wsHostFns.current.perform(e) },
+      loadWorkspace(location.hash, lg),
+    ),
+  );
+  const [lay, setLay] = useState(ws.get);
+  useLayoutEffect(() => {
+    const off = ws.onChange(() => setLay(ws.get()));
+    setLay(ws.get());
+    return off;
+  }, []);
+  // A change of the width re-runs the invariants (a narrow window widened over a docked active tab), before paint.
+  useLayoutEffect(() => void ws.dispatch({ type: "wide", on: lg }), [lg]);
+  useEffect(() => ws.watchDocked(), []);
+  const { tabs, pinned, active: activeId, run, split, docked, dockSel, dockRun, tabKeys, heirOf, closed: closedTabs } = lay;
   // GH-395 R8: a pane tab (`plan:<session>`) makes its owner the current session: docks, per-session pane history and the sidebar follow it.
   const paneRef = parseRef(activeId);
   const currentId = paneRef ? paneRef.owner : activeId;
@@ -404,12 +416,6 @@ export function App() {
   useEffect(() => {
     if (!optimistic[activeId ?? ""]?.length) cancelFlight();
   }, [activeId]);
-  // Subagent run shown in the active session tab (its subagent view; URL `#<session>/agent/<run>`), undefined = the session view.
-  const [run, setRun] = useState(() => runFromHash(location.hash));
-  const [tabs, setTabs] = useState(() => {
-    const h = hashTab();
-    return h && h !== FOCUS_TAB ? openTab(loadTabs(), h) : loadTabs();
-  });
   // The request the Focus page has selected (GH-159); the oldest waiting one while unset.
   const [focusSel, setFocusSel] = useState<string>();
   // When this browser first saw a request that came without the daemon's `at`.
@@ -481,11 +487,8 @@ export function App() {
   const [drawer, setDrawer] = useState(false);
   /** A `/resume` request for the sidebar search (SessionList `search`). */
   const [revealSeq, setRevealSeq] = useState(0);
-  // Pinned session tabs (GH-359), per browser; a pin ends with its tab.
-  const [pinned, setPinnedState] = useState(loadPinned);
+  // Pinned session tabs (GH-359), per browser; a pin ends with its tab (workspace layout).
   const pinnedSet = useMemo(() => new Set(pinned), [pinned]);
-  const pinnedRef = useRef(pinnedSet);
-  pinnedRef.current = pinnedSet;
   const [resumeSearch, setResumeSearch] = useState<{ text: string; seq: number }>();
   // Wide screens: the Home button shows or hides the sessions sidebar.
   const [sidebar, setSidebar] = useState(true);
@@ -538,10 +541,6 @@ export function App() {
   /** Open Aside popups (docs/spec.md "Aside"), the top one last; `asideFocused`: the one Esc applies to. */
   const [asides, setAsides] = useState<AsideState[]>([]);
   const [asideFocused, setAsideFocused] = useState<string>();
-  /** React key of a session tab: a /clear moves it to the session the tab follows to, so its prompt box (text, images, focus) stays mounted. */
-  const [tabKeys, setTabKeys] = useState<Record<string, string>>({});
-  /** A session a tab followed to after /clear, until its subscribe reply: the session it replaced. */
-  const [heirOf, setHeirOf] = useState<Record<string, string>>({});
   /** Titles from subscribe replies: a tab of a session not (yet) in the list, e.g. the page-load hash session. */
   const [titles, setTitles] = useState<Record<string, string>>({});
   const titlesRef = useRef(titles);
@@ -650,7 +649,6 @@ export function App() {
   }, [terminalHeight]);
   // GH-355: wide screens place each pane in the side or the bottom panel; narrow screens keep the pane switcher.
   const savedLayout = useLayout();
-  const lg = useMinWidth(1024);
   // Addon panes (GH-516): the enabled addons' pane views (without `phone: false` ones on a phone) join the layout in memory, in the side panel until the user moves one.
   const phoneNow = usePhone();
   const addonPanes = useMemo(() => paneIdsOf(enabledAddons(addons.addons), phoneNow), [addons.addons, phoneNow]);
@@ -658,36 +656,13 @@ export function App() {
   const layout = useMemo(() => withPanes(savedLayout, addonPanes), [savedLayout, addonPanes]);
   setAddonPaneTitles(paneTitlesOf(enabledAddons(addons.addons)));
   // GH-401: sessions shown in a dock. Their ids stay in `tabs`; every action on the tabs bar reads `strip` (wide: `tabs` without them), never `tabs`.
-  const docked = useDocked();
-  const strip = stripTabs(tabs, docked, lg);
-  /** GH-503: a group move computed on the visible strip, written back into the strip's slots: docked ids keep their positions and never join a group. */
-  const onStrip = (t: string[], f: (s: string[]) => string[]) => {
-    const m = f(stripTabs(t, dockedRef.current, lg));
-    let i = 0;
-    return t.map((x) => (lg && dockedRef.current[x] ? x : m[i++]!));
-  };
-  const stripRef = useRef(strip);
-  stripRef.current = strip;
-  const dockedRef = useRef(docked);
-  dockedRef.current = docked;
-  /** The docked session each dock area has selected (not stored: a reload shows the remembered pane again). */
-  const [dockSel, setDockSel] = useState<Partial<Record<DockArea, string>>>({});
-  /** The subagent run a docked session shows (the URL hash only follows the main area's session). */
-  const [dockRun, setDockRun] = useState<Record<string, string | undefined>>({});
-  // Split view (GH-356): two session tabs side by side or stacked; `activeId` stays the current session and the active split shows it.
-  const [splitRaw, setSplitRaw] = useState(loadSplit);
-  const split = followSplit(splitRaw, activeId, strip);
-  useEffect(() => {
-    if (split !== splitRaw) setSplitRaw(split);
-    saveSplit(split);
-  }, [split]);
+  const strip = stripOf(lay);
+  // Split view (GH-356): two session tabs side by side or stacked; `activeId` stays the current session and the active split shows it (`split` is already followed by the workspace layout).
   // The session area's size: two splits need room for both minimum sizes, else the active one shows alone (the split returns with the space).
   const [area, setArea] = useState<{ w: number; h: number }>();
   const splitFits = !split || !area || !area.w || (split.dir === "row" ? area.w >= 2 * SPLIT_MIN_W + 8 : area.h >= 2 * SPLIT_MIN_H + 8);
   /** Wide with a split, but no room for both: the active split shows alone, with a hint. */
   const splitCramped = lg && !!split && split.ids.includes(activeId!) && !splitFits;
-  const splitRef = useRef(split);
-  splitRef.current = split;
   /** Wide, roomy enough, a split exists and a session or a pane in it shows (the New session tab, Focus page and Git graph suspend it). Both splits are on screen: they count as shown. */
   const splitOn = lg && !!split && split.ids.includes(activeId!) && splitFits;
   // GH-401: the docked sessions that show (set by an effect below, once the docks' state is known) are on screen too: seen, with their Aside popups and notifications.
@@ -781,12 +756,6 @@ export function App() {
   const toggleScreen = () => (awake.toggle(), computerAwake?.supported && void setComputer(!awake.setting.on));
   const statusRef = useRef(status);
   statusRef.current = status;
-  const tabsRef = useRef(tabs);
-  tabsRef.current = tabs;
-  const activeRef = useRef(activeId);
-  activeRef.current = activeId;
-  const runRef = useRef(run);
-  runRef.current = run;
   const splitOnRef = useRef(false);
   splitOnRef.current = splitOn;
   const listRef = useRef(list);
@@ -805,7 +774,7 @@ export function App() {
       client: () => client.current,
       listed: (id) => listRef.current.find((s) => s.id === id),
       isLocal: (id) => (sideOfRef.current.sideOf(listRef.current.find((x) => x.id === id)?.cwd ?? infosRef.current[id]?.cwd ?? "") ?? LOCAL_SIDE) === LOCAL_SIDE,
-      shownAs: (id) => (hashId() === id ? "hash" : asidesRef.current.some((a) => a.id === id) ? "aside" : tabsRef.current.includes(id) ? "tab" : undefined),
+      shownAs: (id) => (hashId() === id ? "hash" : asidesRef.current.some((a) => a.id === id) ? "aside" : ws.get().tabs.includes(id) ? "tab" : undefined),
       hashId: () => hashId(),
       unread: (id) => unreadRef.current.has(id),
       pageVisible: () => document.visibilityState === "visible",
@@ -949,8 +918,8 @@ export function App() {
 
   /** Page load: reads the cache (at most 300 ms, shown tabs first); undefined when it holds nothing usable (the page starts as without a cache). */
   async function hydrateCache(): Promise<Hydrated | undefined> {
-    const sp = splitRef.current;
-    const owners = [activeRef.current, ...(sp?.ids ?? []), ...tabsRef.current, hashId()].filter((t): t is string => !!t && t !== NEW_TAB && t !== FOCUS_TAB).map(ownerOf);
+    const sp = ws.get().split;
+    const owners = [ws.get().active, ...(sp?.ids ?? []), ...ws.get().tabs, hashId()].filter((t): t is string => !!t && t !== NEW_TAB && t !== FOCUS_TAB).map(ownerOf);
     // A read over the cap is "unknown" (cachedMeta stays undefined, the hello reads the stored meta itself); its late result is drawn only while nothing newer is.
     const onLate = (late: Hydrated) => {
       if (newerThanCache.current || follows.hello()) return;
@@ -991,7 +960,7 @@ export function App() {
     newerThanCache.current = true;
     setInfos((i) => ({ ...i, [id]: r.session }));
     setFailedTabs((f) => (f.has(id) ? new Set([...f].filter((x) => x !== id)) : f));
-    setHeirOf((h) => (h[id] ? without(h, id) : h));
+    ws.dispatch({ type: "heirReplied", id });
     if (r.title) setTitles((t) => ({ ...t, [id]: cleanTitle(r.title) }));
   }
   /** One toast and one state update for a burst of failed subscribes (a stopped side fails every one of its sessions at once). */
@@ -1014,9 +983,7 @@ export function App() {
 
   /** The tab of session `from` shows session `to` instead, in its place; the active one opens it, its prompt box keeps the focus. */
   function follow(from: string, to: string) {
-    if (tabsRef.current.includes(from)) {
-      setTabKeys((k) => ({ ...k, [to]: k[from] ?? from, [from]: pendingKey() }));
-      setHeirOf((h) => ({ ...h, [to]: from }));
+    if (ws.get().tabs.includes(from)) {
       // The event handler is a closure of the first render: the latest infos come from the updater, the list from its ref.
       setInfos((i) => {
         const old = i[from] ?? listRef.current.find((x) => x.id === from);
@@ -1028,18 +995,11 @@ export function App() {
       setTitles((t) => (t[to] ? t : { ...t, [to]: "New session" }));
     }
     flushClearQueue(from, to);
-    // A pinned tab stays pinned on the session it goes on in.
-    setPinnedState((p) => (p.includes(from) && !p.includes(to) ? p.map((x) => (x === from ? to : x)) : p));
-    setTabs((t) => (t.includes(from) ? replaceTab(t, from, to) : t));
-    // A docked session goes on docked.
-    if (dockedRef.current[from]) {
-      saveDocked(dock(undock(dockedRef.current, from), to, dockedRef.current[from]!));
-      setDockSel((s) => Object.fromEntries(Object.entries(s).map(([a, v]) => [a, v === from ? to : v])));
-      setDockRun((r) => (from in r ? Object.fromEntries(Object.entries(r).map(([k, v]) => [k === from ? to : k, v])) : r));
-    }
-    if (hashId() !== from) return;
-    if (document.activeElement && document.activeElement === shownPrompt()) refocus.current = to;
-    open(to);
+    const shown = hashId() === from;
+    if (shown && document.activeElement && document.activeElement === shownPrompt()) refocus.current = to;
+    // The layout moves the tab key, pin, place, dock and split slot to `to`; the shown tab opens it.
+    if (shown) openUi(to);
+    ws.dispatch({ type: "heir", from, to });
   }
 
   // A /clear that ended without moving the tab (it failed, or was a no-op): the queued prompts go to the session they were typed in.
@@ -1097,21 +1057,12 @@ export function App() {
     follows.drop(sessionId, { unsubscribe: false });
     setOptimistic((o) => without(o, sessionId));
     setList((l) => l.filter((s) => s.id !== sessionId));
-    // Its pane tabs go with it (its file tabs go back to Files through the effect on `tabs`).
-    setTabs((t) => t.filter((id) => ownerOf(id) !== sessionId));
-    setHeirOf((h) => without(h, sessionId));
     forgetArtifactSelection(sessionId);
     delete clearQueue.current[sessionId];
-    setTabKeys((k) => without(k, sessionId));
-    const h = hashTab();
-    if (h && ownerOf(h) === sessionId) {
-      // Deleted like a closed tab: its neighbour becomes active.
-      const next = deleted ? closeMany(stripRef.current, stripRef.current.filter((t) => ownerOf(t) === sessionId), h).active : undefined;
-      if (next) return open(next);
-      setActiveId(undefined);
-      history.replaceState(null, "", location.pathname + location.search);
-      if (!deleted) setError(tr("app.main.sessionGone"));
-    }
+    // Its pane tabs go with it (its file tabs go back to Files through the effect on `tabs`); the shown session's neighbour becomes active when it was deleted.
+    const before = ws.get().active;
+    ws.dispatch({ type: "forget", id: sessionId, deleted });
+    if (deleted && ws.get().active && ws.get().active !== before) afterOpen(before);
   }
 
   /** /btw: the daemon forks `ownerId` into an Aside and sends the question there; the popup shows its timeline from that question. */
@@ -1152,82 +1103,62 @@ export function App() {
     open(a.ownerId);
   }
 
-  /** Opens or focuses a tab; `undefined` shows no tab. Only a session tab goes into the URL hash. */
-  function open(id: string | undefined, keepHash = false) {
-    setError(undefined);
-    // GH-401: a docked session shows in its dock; it never becomes the active tab, the hash or the current session.
-    if (id && lg && dockedRef.current[id]) {
-      setDrawer(false);
-      return selectDocked(id);
-    }
-    // A tab shown in the other split is revealed there (VS Code), with its subagent view.
-    const sp = splitRef.current;
-    if (id && sp && splitOnRef.current && id !== activeRef.current && sp.ids.includes(id)) {
-      setDrawer(false);
-      return focusSplit(id, keepHash);
-    }
-    setActiveId(id);
-    setDrawer(false);
-    if (!keepHash) setRun(undefined);
-    if (!id) return;
-    // The Focus page is no session: it has no tab in the list and nothing to subscribe to.
-    if (id === FOCUS_TAB) {
-      if (!keepHash) history.replaceState(null, "", tabHash(id));
-      if (activeId !== FOCUS_TAB) setFocusSel(undefined);
-      return;
-    }
-    const fresh = !tabsRef.current.includes(id);
-    setTabs((t) => openTab(t, id));
-    if (fresh) requestAnimationFrame(tabOpened);
-    if (!keepHash) history.replaceState(null, "", tabHash(id));
-    // A pane tab shows from its owner's view: follow the owner (no hold unless a session tab holds it).
-    if (isPaneRef(id)) return follows.ensure(ownerOf(id));
-    // A page-load link subscribed without adding its project: the first explicit open of that session adds it, view or not.
-    // A session the list only follows in the background is held now (a tab shows it).
-    const add = !follows.views()[id] || !listRef.current.some((s) => s.id === id);
-    if (id !== NEW_TAB) void follows.show(id, { addProject: add });
+  /** Performs an effect of the workspace layout (the store commits its state first, so this reads the new one through `ws.get()`). */
+  function performLayout(e: WorkspaceEffect) {
+    if (e.type === "show") void follows.show(e.id, e.explicit ? { addProject: !follows.views()[e.id] || !listRef.current.some((x) => x.id === e.id) } : undefined);
+    else if (e.type === "ensure") follows.ensure(e.id);
+    else if (e.type === "background") void follows.background(e.id);
+    else if (e.type === "drop") follows.drop(e.id);
+    else if (e.type === "url") e.push ? history.pushState(null, "", e.hash!) : history.replaceState(null, "", e.hash ?? location.pathname + location.search);
+    else if (e.type === "tabOpened") requestAnimationFrame(tabOpened);
+    else if (e.type === "revealDock") (e.area === "side" && setBottomMax(false), openArea(e.area));
+    else setError(tr("app.main.sessionGone"));
   }
 
-  /** Makes `t` the active tab of split `s` (already updated for it): the subagent view of each tab goes with it, the hash follows. Not `open()`: the tab is open already. */
-  function enter(s: Split, t: string, keepHash = false) {
-    const cur = activeRef.current;
-    const sw = cur === t ? { runs: s.runs, run: runRef.current } : switchRuns(s.runs, cur, runRef.current, t);
-    setSplitRaw({ ...s, runs: sw.runs });
+  /** The UI part of an open: the error line clears and the phone drawer closes (the Focus page starts without a selected request). */
+  function openUi(id: string | undefined) {
     setError(undefined);
-    setActiveId(t);
-    setRun(sw.run);
-    if (!keepHash) history.replaceState(null, "", sw.run ? runHash(t, sw.run) : tabHash(t));
+    setDrawer(false);
+    if (id === FOCUS_TAB && ws.get().active !== FOCUS_TAB) setFocusSel(undefined);
+  }
+  /** After a layout step that may have opened another tab (a close, an Undo, a dock): the same UI part as an open. */
+  function afterOpen(before: string | undefined) {
+    if (ws.get().active !== before) {
+      setError(undefined);
+      setDrawer(false);
+    }
+  }
+
+  /** Opens or focuses a tab; `undefined` shows no tab. Only a session tab goes into the URL hash. The layout rules (docks, split, hash, subscribe) are the workspace layout's. */
+  function open(id: string | undefined, keepHash = false) {
+    openUi(id);
+    ws.dispatch({ type: "open", id, fromUrl: keepHash });
   }
 
   /** Makes the split showing `id` the active one. */
-  function focusSplit(id: string, keepHash = false) {
-    const s = splitRef.current;
-    if (!s || !s.ids.includes(id) || id === activeRef.current) return;
-    enter({ ...s, at: s.ids.indexOf(id) }, id, keepHash);
+  function focusSplit(id: string) {
+    const before = ws.get().active;
+    ws.dispatch({ type: "focusSplit", id });
+    if (ws.get().active !== before) setError(undefined);
   }
 
   /** Split right / Split down: `t` goes to a new split in the direction, focus moves there. */
   function splitTab(t: string, dir: SplitDir, before = false) {
-    // A tab that a drop just opened (a moved pane, an undocked session) is in the strip only after the next render.
-    const r = splitTo(splitRef.current, stripRef.current.includes(t) ? stripRef.current : [...stripRef.current, t], activeRef.current, t, dir, before);
-    if (!r) return;
-    setDrawer(false);
-    enter(r.split, t);
+    if (!ws.dispatch({ type: "split", id: t, dir, before }).applied) return;
+    openUi(undefined);
     focusSplitContent(t);
   }
 
   /** A tab dropped on the middle of a split: it shows there (a tab shown in the other split swaps with it). */
   function showInSplit(t: string, i: number) {
-    const s = splitRef.current;
-    if (!s) return open(t);
-    enter(placeIn(s, t, i), t);
+    if (!ws.dispatch({ type: "placeInSplit", id: t, at: i }).applied) return setDrawer(false);
+    setError(undefined);
     focusSplitContent(t);
   }
 
   /** Join splits: one session shows again, the active one. */
   function joinSplits() {
-    saveSplit(undefined);
-    setSplitRaw(undefined);
+    ws.dispatch({ type: "joinSplits" });
   }
 
   /** Opens the subagent view of `id` in the active session tab, or its session view; a history entry each, so browser Back returns. */
@@ -1235,9 +1166,7 @@ export function App() {
     // A run that is only known from the agent map (its turn is not loaded): load back to its turn first, so its children are there.
     const v = follows.views()[sessionId];
     if (id && v && !v.parts.has(id) && partOf(v, id)) await follows.loadOlder(sessionId, { until: id });
-    if (lg && dockedRef.current[sessionId]) return setDockRun((r) => ({ ...r, [sessionId]: id }));
-    history.pushState(null, "", runHash(sessionId, id));
-    setRun(id);
+    ws.dispatch({ type: "showRun", session: sessionId, run: id });
   }
 
   // Browser Back / Forward between session and subagent views.
@@ -1245,39 +1174,33 @@ export function App() {
     const onPop = () => {
       const tab = hashTab();
       if (tab) {
-        open(tab, true);
+        openUi(tab);
         // A link to a session: it opens at the bottom, also when its tab is open and scrolled up (like a notification click).
         setScrollKeys((k) => ({ ...k, [tab]: (k[tab] ?? 0) + 1 }));
       }
-      setRun(runFromHash(location.hash));
+      ws.dispatch({ type: "url", tab, run: runFromHash(location.hash) });
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
   /** Closes the tab; the session stays in the sidebar. A live session is followed in the background only (its CLI closes after the idle time), any other is unsubscribed. */
-  // These read the latest tabs and active tab (refs): a close can run from a timer of an earlier render (a swipe's slide-out), after another close.
+  // The layout reads its own latest state: a close can run from a timer of an earlier render (a swipe's slide-out), after another close.
   function close(id: string): boolean | void {
     dockCtls.current.delete(id);
     if (kindOf(id) === "file") {
       if (!askDirtyFiles([id]).length) return false;
       if (editors.get().tabs[pathOf(id)!]?.item) editors.discard([pathOf(id)!]);
     }
-    // The next tab is a strip tab (GH-401: never a docked session); the stored list keeps the docked ones.
-    const r = closeTab(stripRef.current, id, activeRef.current);
-    // Closing the active split's tab: the next tab is one outside the splits, else the other split's tab (the split ends).
-    const sp = splitRef.current;
-    const next = sp && splitOnRef.current && id === activeRef.current ? nextAfterClose(stripRef.current, id, sp) : r.active;
-    const left = tabsRef.current.filter((t) => t !== id);
-    setTabs(left);
-    release(id, left);
-    activate(next);
+    const before = ws.get().active;
+    ws.dispatch({ type: "close", id });
+    afterOpen(before);
   }
 
   /** A close from the phone switcher (swipe or Delete on a row): the toast offers Undo for that exact tab; the New session tab has nothing to reopen. */
   function closeFromList(id: string) {
     const title = tabLabel(id);
-    const wasActive = activeRef.current === id;
+    const wasActive = ws.get().active === id;
     if (close(id) === false) return;
     if (id === NEW_TAB) return;
     setToast({
@@ -1286,53 +1209,22 @@ export function App() {
         label: tr("app.main.undo"),
         onClick: () => {
           if (!existsTab(id)) return;
-          const r = restoreClosed(closedRef.current, tabsRef.current, id);
-          setClosedTabs(r.stack);
-          setTabs(r.tabs);
-          // Back in place; it becomes the shown tab only if it was the one shown when swiped away.
-          if (wasActive) open(id);
-          // A tab that was not shown is held again like any open tab (the close left it followed in the background, or dropped).
-          else if (!isPaneRef(id)) void follows.show(id);
+          // Back in place; it becomes the shown tab only if it was the one shown when swiped away. A tab that was not shown is held again like any open tab.
+          if (wasActive) openUi(id);
+          ws.dispatch({ type: "restore", id, show: wasActive });
         },
       },
     });
   }
 
-  /** What closing a session tab leaves behind: its place on the closed stack, and its subscription (live: followed in the background; else dropped). */
-  // `left`: the tabs that stay open after this close (the ref is not updated before the commit).
-  function release(id: string, left: string[] = tabsRef.current.filter((t) => t !== id)) {
-    if (id === NEW_TAB) return;
-    setClosedTabs((c) => pushClosed(c, id, tabsRef.current.indexOf(id)));
-    const o = ownerOf(id);
-    const state = listRef.current.find((s) => s.id === o)?.state;
-    const live = !!state && state !== "closed" && state !== "error";
-    if (isPaneRef(id)) {
-      // A live owner stays followed by the list; a tab of the owner (or another pane tab) keeps its view.
-      if (!live && !left.some((t) => ownerOf(t) === o)) follows.drop(o);
-      return;
-    }
-    // A pane tab of this session stays: its view keeps following in the background.
-    live || left.some((t) => isPaneRef(t) && ownerOf(t) === id) ? void follows.background(id) : follows.drop(id);
-  }
-
-  /** The tab that took over after a close; none: the hash goes. */
-  function activate(next: string | undefined) {
-    // GH-401: no strip tab left but docked sessions stay: the New session tab shows, so the docks (which hang off a shown tab) stay on screen.
-    if (!next && lg && tabsRef.current.some((t) => dockedRef.current[t])) next = NEW_TAB;
-    if (next === activeRef.current) return;
-    open(next);
-    if (!next) history.replaceState(null, "", location.pathname + location.search);
-  }
-
-  /** Closes the tabs of a group in one step; each lands on the closed stack in strip order, so Reopen closed tab brings the last one back first. */
+  /** Closes the tabs of a group in one step; each lands on the closed stack in strip order, so Reopen closed tab brings the last one back first. Returns what closed, with the old indexes. */
   function closeGroup(ids: string[], asked = false) {
     if (!asked) ids = askDirtyFiles(ids);
     editors.discard(ids.flatMap((id) => (kindOf(id) === "file" && editors.get().tabs[pathOf(id)!]?.item ? [pathOf(id)!] : [])));
-    const r = closeMany(stripRef.current, ids, activeRef.current);
-    const left = tabsRef.current.filter((t) => !ids.includes(t));
-    setTabs(left);
-    for (const id of tabsRef.current.filter((t) => ids.includes(t))) release(id, left);
-    activate(r.active);
+    const before = ws.get().active;
+    const { closed } = ws.dispatch({ type: "closeMany", ids });
+    afterOpen(before);
+    return closed!;
   }
 
   /** File tabs (GH-399) with unsaved edits ask once for all of `ids`; Cancel keeps those tabs. Returns the ids that may close. */
@@ -1359,15 +1251,12 @@ export function App() {
 
   /** Close others / to the right / all / other groups (GH-359): no question (the sessions keep running), one toast with Undo for all of them. */
   function closeSeveral(ids: string[], message?: (n: number, title: string | undefined) => string, onUndo?: () => void) {
-    ids = askDirtyFiles(ids);
-    // Before closeGroup: release() reads the old tab list for each index.
-    const now = tabsRef.current;
-    const entries = ids.filter((id) => now.includes(id)).map((id) => ({ id, at: now.indexOf(id) }));
-    if (!entries.length) return;
-    const wasActive = activeRef.current;
-    const one = entries.length === 1 ? entries[0]!.id : undefined;
+    ids = askDirtyFiles(ids).filter((id) => ws.get().tabs.includes(id));
+    if (!ids.length) return;
+    const wasActive = ws.get().active;
+    const one = ids.length === 1 ? ids[0] : undefined;
     const title = one && (one === NEW_TAB ? tr("app.main.newSession") : tabLabel(one));
-    closeGroup(entries.map((e) => e.id), true);
+    const entries = closeGroup(ids, true);
     // A toast still showing with its Undo (an earlier cleanup close) is not replaced: one toast, Undo restores both sets.
     const prev = undoToast.current;
     const joined = prev && toastRef.current?.key === prev.key && toastRef.current.action ? prev.parts : [];
@@ -1380,27 +1269,14 @@ export function App() {
         onClick: () => {
           // A cleanup during the toast's exit must not join a set that is back already.
           if (undoToast.current?.parts === parts) undoToast.current = undefined;
-          // Latest set first, each on the list the previous step produced.
           // A layout change (Plan back in the main area) first, so the restored pane tabs find their home.
           for (const p of parts) p.onUndo?.();
-          let stack = closedRef.current;
-          let tabs = tabsRef.current;
-          const restored: string[] = [];
-          let shown: string | undefined;
-          for (const p of [...parts].reverse()) {
-            const r = restoreMany(stack, tabs, p.entries, existsTab);
-            stack = r.stack;
-            tabs = r.tabs;
-            restored.push(...r.restored);
-            if (p.wasActive && r.restored.includes(p.wasActive)) shown = p.wasActive;
-          }
-          setClosedTabs(stack);
-          setTabs(tabs);
-          for (const id of restored) if (id !== NEW_TAB && !isPaneRef(id) && id !== shown) void follows.show(id);
+          const before = ws.get().active;
+          // Latest set first, each on the list the previous step produced; the tab that was shown comes back shown, the others are held again like any open tab.
+          const { restored } = ws.dispatch({ type: "undoClose", parts: parts.map((p) => ({ entries: p.entries, wasActive: p.wasActive })) });
           // Undo counts as use: the restored tabs must not be auto-closed again at once.
-          setUsed((u) => stampUsed(u, restored, Date.now()));
-          // The tab that was shown comes back shown; the others are held again like any open tab.
-          if (shown) open(shown);
+          setUsed((u) => stampUsed(u, restored!, Date.now()));
+          afterOpen(before);
         },
       },
     });
@@ -1416,7 +1292,7 @@ export function App() {
     const shown = loadShownActivity();
     const shownAt = (id: string) => (shownActivityRef.current[id] ?? shown[id]) === undefined ? undefined : Math.max(shownActivityRef.current[id] ?? 0, shown[id] ?? 0);
     // GH-401: the strip only; a docked session is no target of Clean up tabs or the auto-close.
-    return stripRef.current.map((id) => {
+    return stripOf(ws.get()).map((id) => {
       if (id === NEW_TAB) return { id, unread: false, draft: drafts.has(NEW_TAB_DRAFT), listed: true, archived: false, worker: false, transcript: false, busy: false, lastUsed: usedAt(id) };
       // A pane tab: no state of its own, so "idle" and "finished" never close it; an archived or deleted owner and the unused rules do.
       if (isPaneRef(id)) {
@@ -1440,7 +1316,7 @@ export function App() {
       return { id, state: busyList ? item.state : (shownState(v) ?? item?.state), loading: !follows.listFresh() || (!!item && !failed && (stale || (!v && !closed))), unknown: failed || (!!item && (!!v || closed) && read === undefined), unread: unreadRef.current.has(id) || read === true, draft: drafts.has(id), listed: !!item, archived: !!item?.archived, worker: !!item?.coordinatorId, transcript: !!item?.transcript, busy: !!v?.queue?.items.length || v?.continueAt !== undefined, lastUsed: usedAt(id) };
     });
   }
-  const cleanupCtx = (): CleanupContext => ({ activeId: activeRef.current, shown: splitOnRef.current && splitRef.current ? new Set(splitRef.current.ids) : undefined, pinned: pinnedRef.current, listLoaded: listLoadedRef.current, now: Date.now() });
+  const cleanupCtx = (): CleanupContext => ({ activeId: ws.get().active, shown: splitOnRef.current && ws.get().split ? new Set(ws.get().split!.ids) : undefined, pinned: new Set(ws.get().pinned), listLoaded: listLoadedRef.current, now: Date.now() });
   /** Runs one cleanup rule over the strip, or over `scope` (Clean up group); safety is re-checked now, not taken from the menu's counts. */
   function cleanUp(rule: CleanupRule, scope?: string[]) {
     const ids = cleanupTargets(rule, tabFacts(), cleanupCtx(), scope && new Set(scope));
@@ -1454,8 +1330,8 @@ export function App() {
   function tabCommand(id: string, c: TabCommand) {
     const kind = c === "closeOthers" ? "others" : c === "closeRight" ? "right" : c === "closeAll" ? "all" : undefined;
     if (kind) {
-      const targets = closeTargets(stripRef.current, pinnedSet, id, kind);
-      const activeGone = !!activeRef.current && targets.includes(activeRef.current);
+      const targets = closeTargets(stripOf(ws.get()), pinnedSet, id, kind);
+      const activeGone = !!ws.get().active && targets.includes(ws.get().active!);
       closeSeveral(targets);
       // Close others keeps the clicked tab: it takes over (VS Code), not a pinned neighbour.
       if (kind === "others" && activeGone) open(id);
@@ -1477,10 +1353,7 @@ export function App() {
 
   /** Pin or unpin a session tab: it moves to the end of its group's pinned block, or right after the block. */
   function togglePin(id: string) {
-    if (id === NEW_TAB || id === FOCUS_TAB || !tabsRef.current.includes(id)) return;
-    const r = setPinned(tabsRef.current, pinned, id, !pinned.includes(id), groupOfTab);
-    setTabs(r.tabs);
-    setPinnedState(r.pinned);
+    ws.dispatch({ type: "pin", id, on: !ws.get().pinned.includes(id) });
   }
 
   /** GH-612: only for a browser on the daemon machine (the daemon refuses any other), and only against a daemon that lists editors (older ones lack the request). */
@@ -1497,7 +1370,7 @@ export function App() {
 
   /** Reveal in sidebar: shows the tab's session, shows the sidebar (the drawer below md), then the sidebar runs Select active session with focus. */
   function revealTab(id: string) {
-    if (id !== activeRef.current) open(id);
+    if (id !== ws.get().active) open(id);
     if (wide(768)) setSidebar(true);
     else setDrawer(true);
     setRevealSeq((n) => n + 1);
@@ -1509,7 +1382,7 @@ export function App() {
     const openTabsByUsed = () => {
       const stored = loadUsed();
       const at = (id: string) => Math.max(usedRef.current[id] ?? 0, stored[id] ?? 0);
-      return [...new Set(tabsRef.current.filter((t) => t !== NEW_TAB && t !== FOCUS_TAB).map(ownerOf))].sort((a, b) => at(b) - at(a));
+      return [...new Set(ws.get().tabs.filter((t) => t !== NEW_TAB && t !== FOCUS_TAB).map(ownerOf))].sort((a, b) => at(b) - at(a));
     };
     const s = createSaveScheduler({
       saveViews: (ids) => {
@@ -1712,22 +1585,6 @@ export function App() {
     saveShownActivity(next);
   }, [focused, shownKey]);
 
-  useEffect(() => saveTabs(tabs), [tabs]);
-  // GH-401: a docked entry whose tab is gone (closed, deleted, removed project) is forgotten.
-  // Only the sessions this window closed: the map is shared, another window's entry has no tab here.
-  const prevTabs = useRef(tabs);
-  useEffect(() => {
-    const gone = prevTabs.current.filter((t) => !tabs.includes(t));
-    prevTabs.current = tabs;
-    const n = gone.reduce(undock, loadDocked());
-    if (n !== loadDocked()) saveDocked(n);
-  }, [tabs]);
-  // GH-401: a docked session is never the active tab: one that is (a link to it on page load, a narrow window widened) shows in its dock and the main area takes its strip neighbour.
-  useEffect(() => {
-    if (!lg || !activeId || !docked[activeId] || !tabs.includes(activeId)) return;
-    selectDocked(activeId);
-    activate(strip[0]);
-  }, [lg, activeId, docked]);
   // Clean up tabs (GH-378): stamp the tab that was shown and the one that is shown now; a tab without a stamp starts now; closed tabs keep theirs for Undo and Reopen.
   const prevActive = useRef(activeId);
   useEffect(() => {
@@ -1741,16 +1598,10 @@ export function App() {
   }, [tabs, closedTabs]);
   useEffect(() => saveUsed(used), [used]);
   useEffect(() => {
-    const onVis = () => document.visibilityState === "visible" && setUsed((u) => stampUsed(u, [activeRef.current], Date.now()));
+    const onVis = () => document.visibilityState === "visible" && setUsed((u) => stampUsed(u, [ws.get().active], Date.now()));
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
   }, []);
-  useEffect(() => savePinned(pinned), [pinned]);
-  // A pin ends with its tab (Close tab, Delete, reopen and Undo bring a tab back unpinned).
-  useEffect(() => {
-    const kept = pinned.filter((id) => tabs.includes(id));
-    if (kept.length !== pinned.length) setPinnedState(kept);
-  }, [tabs, pinned]);
   useEffect(() => applyTheme(theme), [theme]);
 
   // GH-378: a view of another daemon run than the seen mark, and a tab of a session not loaded in this run (no view), also count output after the lastActivity this browser last showed.
@@ -1865,8 +1716,8 @@ export function App() {
         const { [NEW_TAB]: h, ...rest } = x;
         return { ...rest, [session.id]: h };
       });
-      setTabs((t) => replaceTab(t, NEW_TAB, session.id));
-      open(session.id);
+      openUi(session.id);
+      ws.dispatch({ type: "created", id: session.id });
     } catch (e) {
       setOptimistic((o) => dropPending(o, NEW_TAB, key));
       // The new-session card shows again after this render; its prompt box got the text back.
@@ -1896,8 +1747,8 @@ export function App() {
 
   function closeTabs(gone: Set<string>) {
     if (!gone.size) return;
-    setTabs((t) => t.filter((id) => !gone.has(ownerOf(id))));
-    if (gone.has(ownerOf(hashTab() ?? ""))) open(undefined), history.replaceState(null, "", location.pathname + location.search);
+    if (gone.has(ownerOf(hashTab() ?? ""))) openUi(undefined);
+    ws.dispatch({ type: "dropOwners", owners: [...gone] });
   }
 
   /** Removes the project from the list (files and transcripts stay) and closes its session tabs; with it the other added projects of its repository (one sidebar group). */
@@ -2141,7 +1992,7 @@ export function App() {
   // The stored list stays grouped by the Tab grouping setting (also once the session cwds arrive), so close, next/previous tab and moves all use the order the strip draws.
   // Regrouped only once every tab's key is final: on partial keys the unknown tabs gather in one group and the damaged order is stored (GH-196).
   const keysFinal = tabKeysFinal(tabs, listShown, (id) => !!sessionOf(id), failedTabs);
-  useGroupedTabs(tabs, setTabs, groupOfTab, keysFinal, pinnedSet);
+  useGroupedTabs(tabs, (t) => void ws.dispatch({ type: "reorder", tabs: t }), groupOfTab, keysFinal, pinnedSet);
   // Every owner of an open pane tab is followed (reload, a closed owner, Undo, Reopen); `follows.ensure` keeps it to one subscribe.
   const ownersKey = [...new Set(tabs.filter(isPaneRef).map(ownerOf))].sort().join();
   useEffect(() => {
@@ -2182,6 +2033,17 @@ export function App() {
   const tabLabel = (id: string) => (isPaneRef(id) ? paneTitle(id) : ownerTitle(id));
   /** A closed or Undo-restored tab can come back: its session is listed, and a pane tab's kind still has the main area as its home. */
   const existsTab = (id: string) => id === NEW_TAB || (listRef.current.some((s) => s.id === ownerOf(id)) && (!kindOf(id) || isItem(id) || areaOf(loadLayout(), kindOf(id) as PaneId) === "main"));
+  wsHostFns.current = {
+    splitFits: (sp) => !area || !area.w || (sp.dir === "row" ? area.w >= 2 * SPLIT_MIN_W + 8 : area.h >= 2 * SPLIT_MIN_H + 8),
+    groupOf: groupOfTab,
+    exists: existsTab,
+    live: (o) => {
+      const state = listRef.current.find((x) => x.id === o)?.state;
+      return !!state && state !== "closed" && state !== "error";
+    },
+    grouped: () => keysFinal,
+    perform: performLayout,
+  };
   // Auto-close idle tabs (GH-378): only while the page shows, connected, with the list and group keys final; the 60 s tick is cheap, autoCloseDue lets one run through per 15 minutes.
   const autoRan = useRef<number>(undefined);
   // Reassigned each render: the check reads the current tabs, titles and list, the effect below only sets the timer.
@@ -2216,15 +2078,15 @@ export function App() {
   const mainShown = !!shown || !!paneRef || loadingMain;
   // Drag a tab onto the session area (GH-356): an edge splits there, the middle of a split shows the tab in it.
   const splitDrop = useSplitDrop({
-    enabled: () => lg && splitContent(activeRef.current),
+    enabled: () => lg && splitContent(ws.get().active),
     dragged: () => (drag ? { pane: drag } : stripDrag && "docked" in stripDrag ? stripDrag : undefined),
-    refuse: (d, t) => ("tab" in d ? dropRefusal(splitRef.current, splitOnRef.current, stripRef.current, activeRef.current, d.tab, t.zone, t.over) : mainRefusal(d, t.zone, t.over)),
+    refuse: (d, t) => ("tab" in d ? dropRefusal(ws.get().split, splitOnRef.current, stripOf(ws.get()), ws.get().active, d.tab, t.zone, t.over) : mainRefusal(d, t.zone, t.over)),
     onDrop: (d, t) => {
       if (!("tab" in d)) return runMain(mainDrop(d, t.zone, dropCtx, t.over));
       const id = d.tab;
-      if (!stripRef.current.includes(id)) return;
+      if (!stripOf(ws.get()).includes(id)) return;
       if (t.zone !== "center") return splitTab(id, t.zone === "left" || t.zone === "right" ? "row" : "col", t.zone === "left" || t.zone === "top");
-      if (splitRef.current && splitOnRef.current && t.over >= 0) return showInSplit(id, t.over);
+      if (ws.get().split && splitOnRef.current && t.over >= 0) return showInSplit(id, t.over);
       open(id);
       focusSplitContent(id);
     },
@@ -2488,7 +2350,7 @@ export function App() {
   const selectable = (a: DockArea) => areaPanes(a).filter((p) => p !== "terminal" || termAvail);
   const activeOf = (a: DockArea) => activePane(selectable(a), hist, paneTabs[a]);
   /** GH-401: the sessions docked in `a`, in strip order (none below lg). */
-  const dockedHere = (a: DockArea) => (lg ? dockedIn(tabs, docked, a) : []);
+  const dockedHere = (a: DockArea) => dockedOf(lay, a);
   /** The docked session an area shows: its selected one, else the first while the area has no selectable pane. */
   const dockSelOf = (a: DockArea) => {
     const l = dockedHere(a);
@@ -2624,7 +2486,7 @@ export function App() {
   }, []);
   const tabOpened = () => {
     const n = recNow.current;
-    const tabs = tabsRef.current.filter((t) => t !== NEW_TAB);
+    const tabs = ws.get().tabs.filter((t) => t !== NEW_TAB);
     const el = document.querySelector<HTMLElement>('[data-testid="tab-strip"]');
     const projects = new Set(tabs.flatMap((t) => { const c = sessionOf(ownerOf(t))?.cwd; return c ? [tabGroup(c, "project", n.worktrees).key] : []; })).size;
     offer("compactTabs", { compact: n.compact, overflow: !!el && el.scrollWidth > el.clientWidth, projects }, () => (changeCompact(true), n.grouping === "none" && changeGrouping("project")))
@@ -2660,7 +2522,7 @@ export function App() {
   const leaveMain = (p: PaneId) => {
     if (areaOf(loadLayout(), p) !== "main") return;
     const prev = loadLayout();
-    closeSeveral(tabsRef.current.filter((t) => kindOf(t) === p), kindToast(p), () => saveLayout(prev));
+    closeSeveral(ws.get().tabs.filter((t) => kindOf(t) === p), kindToast(p), () => saveLayout(prev));
   };
   /** Moves `p` to `to`. Into the main area it returns the tab it opened (undefined: none could open, a toast says why). `focus` false: the caller focuses the tab's content. */
   const move = (p: PaneId, to: Area, before?: PaneId, focus = true): string | undefined => {
@@ -2690,35 +2552,22 @@ export function App() {
     focusTab.current = p;
     setMoving(true);
   };
-  /** Shows docked session `id` in its dock: the area opens (a maximized bottom panel restores) and its tab is selected. */
-  function selectDocked(id: string) {
-    const a = dockedRef.current[id]!;
-    setDockSel((s) => ({ ...s, [a]: id }));
-    if (a === "side") setBottomMax(false);
-    openArea(a);
-  }
   /** Docks session `id` (the strip tab menu, the palette, the other dock): the main area shows its strip neighbour, a split holding it ends. */
   function dockSession(id: string, area: DockArea) {
-    if (!lg || !tabsRef.current.includes(id)) return;
-    const inSplit = !!splitRef.current?.ids.includes(id);
-    const next = id === activeRef.current || inSplit ? neighbourAfterDock(tabsRef.current, dockedRef.current, id) : undefined;
-    if (inSplit) joinSplits();
+    if (!lg || !ws.get().tabs.includes(id)) return;
     flushDrafts();
-    saveDocked(dock(dockedRef.current, id, area));
-    dockedRef.current = dock(dockedRef.current, id, area);
-    selectDocked(id);
-    if (id === activeRef.current || inSplit) activate(next);
+    const before = ws.get().active;
+    ws.dispatch({ type: "dock", id, area });
+    afterOpen(before);
     focusDockedPrompt(id);
   }
   /** Back in the main area: a normal strip tab, shown. */
   function undockSession(id: string) {
     flushDrafts();
-    setDockRun((r) => without(r, id));
     setDockInsert((i) => without(i, id));
     dockCtls.current.delete(id);
-    saveDocked(undock(dockedRef.current, id));
-    dockedRef.current = undock(dockedRef.current, id);
-    open(id);
+    openUi(id);
+    ws.dispatch({ type: "undock", id });
     focusShownPrompt(id);
   }
   const focusDockedPrompt = (id: string) => {
@@ -2735,7 +2584,7 @@ export function App() {
       return { id, title: displayTitle(item?.title || titles[id] || "Untitled"), cwd: sessionOf(id)?.cwd, state: shownState(views[id]) ?? sessionOf(id)?.state, unread: unread.has(id) };
     }),
     activeSession: dockSelOf(a),
-    onSelectSession: (id: string) => (setDockSel((s) => ({ ...s, [a]: id })), focusDockedPrompt(id)),
+    onSelectSession: (id: string) => (ws.dispatch({ type: "pickDocked", area: a, id }), focusDockedPrompt(id)),
     onSessionCommand: (id: string, c: DockedCommand) => (c === "close" ? close(id) : c === "main" ? undockSession(id) : dockSession(id, c === "moveSide" ? "side" : "bottom")),
   });
   /** The docked sessions of an area, mounted for as long as the area is: each has its own timeline, prompt box and request panels (the Aside popup's path). */
@@ -2794,18 +2643,16 @@ export function App() {
   const resetPanes = () => {
     const prev = loadLayout();
     // File tabs have no kind home: Reset layout keeps them (GH-399).
-    const refs = tabsRef.current.filter((t) => isPaneRef(t) && !isItem(t));
+    const refs = ws.get().tabs.filter((t) => isPaneRef(t) && !isItem(t));
     // GH-401: docked sessions return to the strip; Undo docks them again.
-    const prevDocked = dockedRef.current;
-    const hadDocked = Object.keys(prevDocked).some((id) => tabsRef.current.includes(id));
+    const { prevDocked } = ws.dispatch({ type: "undockAll" });
+    const hadDocked = Object.keys(prevDocked!).some((id) => ws.get().tabs.includes(id));
     resetLayout();
-    saveDocked({});
-    setDockSel({});
     setPaneTabs({});
     const kinds = new Set(refs.map((r) => kindOf(r) as PaneId));
-    const undoAll = () => (saveLayout(prev), saveDocked(prevDocked));
+    const undoAll = () => (saveLayout(prev), ws.dispatch({ type: "setDocked", docked: prevDocked! }));
     if (refs.length) closeSeveral(refs, kinds.size === 1 ? kindToast([...kinds][0]!) : (n) => tr("app.main.closedPaneTabsMixed", { count: n }), undoAll);
-    else if (hadDocked) setToast({ message: tr("app.main.dockedBack"), action: { label: tr("app.main.undo"), onClick: () => saveDocked(prevDocked) } });
+    else if (hadDocked) setToast({ message: tr("app.main.dockedBack"), action: { label: tr("app.main.undo"), onClick: () => ws.dispatch({ type: "setDocked", docked: prevDocked! }) } });
   };
   // A moved pane's DOM moves with it: focus its tab in the new area once rendered, once (the menu that moved it returns no focus).
   const focusTab = useRef<PaneId>(undefined);
@@ -2845,7 +2692,7 @@ export function App() {
   }
   /** A pane tab click; on the terminal's tab, the selected one too, the shell takes the focus (docs/spec.md Terminal panel). */
   const selectPane = (p: Pane) => {
-    if (p !== "session" && areaOf(layout, p) !== "main") setDockSel((s) => ((s[areaOf(layout, p) as DockArea] ? { ...s, [areaOf(layout, p) as DockArea]: undefined } : s)));
+    if (p !== "session" && areaOf(layout, p) !== "main") ws.dispatch({ type: "pickDocked", area: areaOf(layout, p) as DockArea, id: undefined });
     if (p === "terminal") (askTerminal(), setTermFocusReq((n) => n + 1));
     setPane(p);
   };
@@ -2978,17 +2825,17 @@ export function App() {
   const openFileTab = (path: string, owner = paneOwner) => {
     const cwd = owner ? cwdOfOwner(owner) : undefined;
     if (!owner || !cwd || !inDir(path, cwd)) return;
-    const ref = paneTabFor(tabsRef.current, "file", owner, cwdOfOwner, path);
+    const ref = paneTabFor(ws.get().tabs, "file", owner, cwdOfOwner, path);
     // A file not loaded yet is read by its tab (a reload does the same). The item flag first: the Files editor parks its cursor and undo history before the tab mounts.
     editors.toItem(path);
     setFileDialog(undefined);
-    setTabs((t) => insertPaneTab(t, ref, groupOfTab));
-    open(ref);
+    openUi(ref);
+    ws.dispatch({ type: "openPane", ref });
     setFileFocus((f) => ({ ref, seq: (f?.seq ?? 0) + 1 }));
   };
   /** A Files open of a path that is a file tab: that tab takes the focus. */
   const focusFileTab = (path: string) => {
-    const ref = tabsRef.current.find((t) => pathOf(t) === path);
+    const ref = ws.get().tabs.find((t) => pathOf(t) === path);
     // No ref (its owner is gone): the file goes back to Files with its draft.
     if (!ref) return void editors.toFiles(path);
     setFileDialog(undefined);
@@ -3013,7 +2860,7 @@ export function App() {
   /** Opens or focuses the Files / Git graph tab of the folder of `sid` (default: the shown session, else the one shown last). */
   const showKind = (p: "files" | "graph", sid = paneOwner) => {
     if (!sid) return setToast(tr("app.main.openSessionToShow", { pane: paneLabel(p) }));
-    openPaneTab(paneTabFor(tabsRef.current, p, sid, cwdOfOwner));
+    openPaneTab(paneTabFor(ws.get().tabs, p, sid, cwdOfOwner));
   };
   /** The tab of a pane ref takes the focus (its strip button; on a phone its body). */
   const focusTabOf = (ref: string) => {
@@ -3027,8 +2874,8 @@ export function App() {
   };
   /** Opens (or focuses) a pane tab right of its owner's tab. */
   const openPaneTab = (ref: string, focus = true) => {
-    setTabs((t) => insertPaneTab(t, ref, groupOfTab));
-    open(ref);
+    openUi(ref);
+    ws.dispatch({ type: "openPane", ref });
     if (focus) focusTabOf(ref);
     return ref;
   };
@@ -3045,11 +2892,11 @@ export function App() {
     else if (spawn) setTermSpawn(ref);
     focusTerminal(ref);
     if (!lg) setPane("session");
-    setTabs((t) => insertPaneTab(t, ref, groupOfTab));
-    open(ref);
+    openUi(ref);
+    ws.dispatch({ type: "openPane", ref });
   };
   /** Ctrl+`, the terminal buttons, New terminal, the narrow switcher with home = main: the current session's project terminal tab. */
-  const showTerminal = (add = false) => (paneOwner ? loudTerminal(paneTabFor(tabsRef.current, "terminal", paneOwner, cwdOfOwner), { add }) : setToast(tr("app.main.openSessionToShow", { pane: paneLabel("terminal") })));
+  const showTerminal = (add = false) => (paneOwner ? loudTerminal(paneTabFor(ws.get().tabs, "terminal", paneOwner, cwdOfOwner), { add }) : setToast(tr("app.main.openSessionToShow", { pane: paneLabel("terminal") })));
   const showPlanRef = useRef(showPlan);
   showPlanRef.current = showPlan;
   const showPlanStable = useCallback(() => showPlanRef.current(), []);
@@ -3384,16 +3231,14 @@ export function App() {
   };
   /** Reopen closed tab (palette, tab menu): the newest closed session that still exists, back in its place. */
   const reopenClosed = () => {
-    const r = popClosed(closedTabs, existsTab, tabs);
-    setClosedTabs(r.rest);
-    if (!r.tab) return;
-    const { id, at } = r.tab;
-    setTabs((t) => (t.includes(id) ? t : [...t.slice(0, at), id, ...t.slice(at)]));
-    open(id);
+    const before = ws.get().active;
+    const { reopened: id } = ws.dispatch({ type: "reopen" });
+    if (!id) return;
+    afterOpen(before);
     if (isPaneRef(id)) focusTabOf(id);
     else focusShownPrompt(id);
   };
-  const reopen = popClosed(closedTabs, existsTab, tabs).tab;
+  const reopen = reopenable(lay, existsTab);
   const movingShells = useRef(new Set<string>());
   // Session commands follow the owner of the active pane only while its session is in the split.
   // The file the Files editor shows (not a file tab), inside the owner's folder: the palette's "Open in tab".
@@ -3417,8 +3262,8 @@ export function App() {
     activeId,
     panels: panelHost,
     dockSession: lg && shown && !paneRef && !draftShown ? (a) => dockSession(shown.id, a) : undefined,
-    splitRight: lg && !!splitTo(split, strip, activeId, activeId ?? "", "row") ? () => splitTab(activeId!, "row") : undefined,
-    splitDown: lg && !!splitTo(split, strip, activeId, activeId ?? "", "col") ? () => splitTab(activeId!, "col") : undefined,
+    splitRight: lg && canSplit(lay, activeId ?? "", "row") ? () => splitTab(activeId!, "row") : undefined,
+    splitDown: lg && canSplit(lay, activeId ?? "", "col") ? () => splitTab(activeId!, "col") : undefined,
     splitNext: splitShown ? () => { const t = nextSplit(split!, 1); focusSplit(t); focusSplitContent(t); } : undefined,
     splitPrev: splitShown ? () => { const t = nextSplit(split!, -1); focusSplit(t); focusSplitContent(t); } : undefined,
     splitPrompt: splitShown && isPaneRef(activeId) && split!.ids.some(isSession),
@@ -3727,8 +3572,8 @@ export function App() {
   /** GH-402: the tab `p` shows as in the main area once moved there, when it can open now (an owner shows, the plan exists); the conditions of `move`. */
   const mainTab = (p: PaneId): string | undefined => {
     const owner = currentId && isSession(currentId) ? currentId : undefined;
-    if (p === "files" || p === "graph" || p === "terminal") return paneOwner && (p !== "graph" || isGit) ? paneTabFor(tabsRef.current, p, paneOwner, cwdOfOwner) : undefined;
-    if (isAddonPane(p)) return paneOwner ? paneTabFor(tabsRef.current, p, paneOwner, cwdOfOwner) : undefined;
+    if (p === "files" || p === "graph" || p === "terminal") return paneOwner && (p !== "graph" || isGit) ? paneTabFor(ws.get().tabs, p, paneOwner, cwdOfOwner) : undefined;
+    if (isAddonPane(p)) return paneOwner ? paneTabFor(ws.get().tabs, p, paneOwner, cwdOfOwner) : undefined;
     if (p === "artifacts") return owner && views[owner] && sessionArtifacts(views[owner]!).length ? refOf({ kind: "artifacts", owner }) : undefined;
     return owner && views[owner] && latestPlan(views[owner]!) ? refOf({ kind: "plan", owner }) : undefined;
   };
@@ -3755,7 +3600,7 @@ export function App() {
   /** Executes a drop on the tab strip or the session area: only existing commands (Move to main area, Split right / down, Show in split). */
   function runMain(r: MainDrop | undefined) {
     if (!r || "refused" in r) return;
-    const shownSplit = (o?: number) => o !== undefined && !!splitRef.current && splitOnRef.current;
+    const shownSplit = (o?: number) => o !== undefined && !!ws.get().split && splitOnRef.current;
     if (r.do === "move" || r.do === "moveSplit") {
       // The split's content takes the focus, not the strip tab `move` would focus.
       const split = r.do === "moveSplit" || shownSplit(r.over);
@@ -3776,8 +3621,8 @@ export function App() {
     if ("refused" in r) return r.refused;
     const ref = r.do === "move" || r.do === "moveSplit" ? mainTab(r.p) : undefined;
     if (!ref) return undefined;
-    if (r.do === "moveSplit") return splitTo(splitRef.current, [...stripRef.current, ref], activeRef.current, ref, r.dir, r.before) ? undefined : "session";
-    return r.do === "move" && r.over !== undefined && splitRef.current && splitOnRef.current && !placeIn(splitRef.current, ref, r.over).ids.some(isSession) ? "session" : undefined;
+    if (r.do === "moveSplit") return canSplit(ws.get(), ref, r.dir, r.before, true) ? undefined : "session";
+    return r.do === "move" && r.over !== undefined && ws.get().split && splitOnRef.current && placeRefused(ws.get().split!, ref, r.over) ? "session" : undefined;
   }
   /** The tab strip takes dock tabs and docked session tabs that mean "main area". */
   const stripDropOf = () => (dragged && !("tab" in dragged) ? mainDrop(dragged, "strip", dropCtx) : undefined);
@@ -3907,9 +3752,9 @@ export function App() {
             onSwipeClose={closeFromList}
             grouping={grouping}
             compact={compact && grouping !== "none"}
-            onMove={(from, to) => setTabs((t) => moveTabIn(t, keysFinal ? groupOfTab : () => "", from, to, pinnedSet))}
-            onMoveGroup={(cwd, by) => setTabs((t) => onStrip(t, (s) => moveGroup(s, groupOfTab, cwd, by)))}
-            onMoveGroupTo={(from, to) => setTabs((t) => onStrip(t, (s) => moveGroupTo(s, groupOfTab, from, to)))}
+            onMove={(from, to) => void ws.dispatch({ type: "move", from, to })}
+            onMoveGroup={(cwd, by) => void ws.dispatch({ type: "moveGroup", key: cwd, by })}
+            onMoveGroupTo={(from, to) => void ws.dispatch({ type: "moveGroupTo", from, to })}
             onCloseGroup={requestCloseGroup}
             onCloseOtherGroups={(key) => closeSeveral(otherGroupTargets(strip, pinnedSet, groupOfTab, key))}
             onTabCommand={tabCommand}
@@ -3917,7 +3762,7 @@ export function App() {
             onCleanup={cleanUp}
             canReopen={!!reopen}
             pinned={pinnedSet}
-            canSplit={lg ? (id: string) => !!splitTo(split, strip, activeId, id, "row") : undefined}
+            canSplit={lg ? (id: string) => canSplit(lay, id, "row") : undefined}
             splitShown={splitShown ? { id: split!.ids[1 - split!.at]!, dir: split!.dir, n: 2 - split!.at } : splitCramped ? { id: split!.ids[1 - split!.at]!, dir: split!.dir, n: 2 - split!.at, hidden: true } : undefined}
             onNew={() => newSession()}
             home={sidebar}
@@ -4250,7 +4095,7 @@ export function App() {
                     {splitDrop.state.refused && REFUSAL_TEXT[splitDrop.state.refused]}
                   </div>
                 )}
-                {splitShown && <SplitResizer split={{ ...split!, ratio: drawnRatio }} onResize={(ratio) => setSplitRaw({ ...split!, ratio })} />}
+                {splitShown && <SplitResizer split={{ ...split!, ratio: drawnRatio }} onResize={(ratio) => void ws.dispatch({ type: "resizeSplit", ratio })} />}
               </div>
               {/* Aside popups (docs/spec.md "Aside"): hidden with their owner's tab, still running and subscribed. */}
               {asides.map((a, i) => {

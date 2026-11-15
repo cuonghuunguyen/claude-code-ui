@@ -63,6 +63,10 @@ _Avoid_: OpenCode daemon
 **Docked session**:
 A session tab shown in the side or bottom panel instead of the tabs bar (wide screens). It keeps its place in the stored tab list but is never the current session.
 
+**Workspace layout**:
+The tabs of this browser window with their order, pins, split, Docked sessions, closed-tab stack and active tab, and the rules between them (`workspace-layout.ts`).
+_Avoid_: layout alone (Layout = kind homes, `claude-ui.layout`)
+
 **Idle close**:
 The daemon ends the CLI process of an idle session no tab holds after a set time; the Session and its history stay and the next prompt resumes it.
 
