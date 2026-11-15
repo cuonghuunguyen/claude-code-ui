@@ -135,3 +135,7 @@ Feature: Addons (GH-516)
     Then the addon "example" is enabled
     And the Addons dialog shows the git source without "s3cretpw"
     And I capture "git url redacted row"
+    # The daemon serves every later scenario of the run: leave no addon theme in their theme lists.
+    When I uninstall the addon "example"
+    Then the addon "example" is not listed
+    And I capture "git addon uninstalled"

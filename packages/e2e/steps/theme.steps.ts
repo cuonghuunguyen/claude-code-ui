@@ -82,6 +82,12 @@ Then("the app card colour is {string}", async ({ page }, hex: string) => {
   await expect.poll(async () => long(await token(page, "--card"))).toBe(hex);
 });
 
+// The opened project shows a few seconds after its dialog closes (the session list reply); until then no terminal toggle exists and
+// Ctrl+` does nothing.
+Then("the terminal toggle is shown", async ({ page }) => {
+  await expect(page.locator('[data-testid="terminal-toggle"]:visible, [data-testid="terminal-toggle-titlebar"]:visible').first()).toBeVisible({ timeout: 30_000 });
+});
+
 Then("the terminal background is {string}", async ({ page }, hex: string) => {
   await expect.poll(() => page.locator(".xterm-scrollable-element").first().evaluate((e) => getComputedStyle(e).backgroundColor)).toBe(rgb(hex));
 });
