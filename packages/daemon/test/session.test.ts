@@ -611,7 +611,7 @@ describe("Session", () => {
   });
 
   describe.skipIf(!canSymlink)("Shared folders of a worker (GH-755)", () => {
-    it("a worker query gets the shared folder as a working directory, next to the upload folder; a user session does not", () => {
+    it("a worker query gets the shared folder as a working directory, next to the upload folder; a user session and a worker in a plain folder do not", () => {
       const { wt, shared } = sharedFixture();
       started({ query: fakeQuery as never, worker: () => true, uploadDir: () => "/up/x" }, wt);
       expect(calls.at(-1)!.additionalDirectories).toEqual(["/up/x", shared]);
@@ -621,23 +621,20 @@ describe("Session", () => {
       expect(calls.at(-1)!.additionalDirectories).toEqual(["/up/x"]);
       started({ query: fakeQuery as never }, wt);
       expect(calls.at(-1)!.additionalDirectories).toBeUndefined();
-    });
-    it("a worker in a plain folder gets no extra directory", () => {
       started({ query: fakeQuery as never, worker: () => true }, "/tmp");
       expect(calls.at(-1)!.additionalDirectories).toBeUndefined();
     });
   });
 
   describe("Inline visualizations (GH-690)", () => {
-    it("loads the plugin folder when the setting gives one", () => {
-      started({ query: fakeQuery as never, visualizePlugin: () => "/x/plugins/visualize" });
-      expect(calls.at(-1)!.plugins).toEqual([{ type: "local", path: "/x/plugins/visualize" }]);
-    });
-    it("no plugins when the setting is off or absent", () => {
-      started({ query: fakeQuery as never, visualizePlugin: () => undefined });
-      expect(calls.at(-1)!).not.toHaveProperty("plugins");
-      started({ query: fakeQuery as never });
-      expect(calls.at(-1)!).not.toHaveProperty("plugins");
+    it.each<[string, object, unknown]>([
+      ["loads the plugin folder when the setting gives one", { visualizePlugin: () => "/x/plugins/visualize" }, [{ type: "local", path: "/x/plugins/visualize" }]],
+      ["sets no plugins when the setting is off", { visualizePlugin: () => undefined }, undefined],
+      ["sets no plugins when the option is absent", {}, undefined],
+    ])("%s", (_name, opts, plugins) => {
+      started({ query: fakeQuery as never, ...opts });
+      if (plugins) expect(calls.at(-1)!.plugins).toEqual(plugins);
+      else expect(calls.at(-1)!).not.toHaveProperty("plugins");
     });
   });
 
