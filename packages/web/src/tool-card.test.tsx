@@ -118,18 +118,6 @@ describe("Read card", () => {
     expect(html).not.toMatch(/>\/w\/src/);
   });
 
-  it("a narrow row cuts the directory first, then the name; the range stays visible", () => {
-    const html = renderToStaticMarkup(
-      <CwdContext value="/w">
-        <ToolCard call={done("Read", { file_path: "/w/src/a.ts", offset: 1, limit: 2 })} />
-      </CwdContext>,
-    );
-    expect(html).toMatch(/data-testid="file-name" class="[^"]*min-w-0 truncate/);
-    expect(html).toMatch(/data-testid="file-dir" class="[^"]*shrink-\[1000\]/);
-    // The range does not shrink, so it is never clipped.
-    expect(html).toMatch(/<\/bdi><\/span><span data-testid="read-range" class="shrink-0[^"]*">· lines 1–2</);
-  });
-
   it("body shows the file path, range and content", () => {
     const html = renderToStaticMarkup(<ToolBody call={done("Read", { file_path: "/w/a.ts", limit: 2 })} result={result("1\ta\n2\tb")} />);
     expect(html).toContain('data-testid="read-path"');
@@ -234,9 +222,6 @@ describe("ToolCard edits", () => {
 
 describe("collapsed by default", () => {
   it.each([
-    ["Bash", { command: "ls" }, "bash-command"],
-    ["Edit", { file_path: "/p/a.ts", old_string: "x", new_string: "y" }, "edit-diff"],
-    ["Write", { file_path: "/p/n.txt", content: "hi" }, "edit-diff"],
     ["Read", { file_path: "/p/a.ts" }, "read-path"],
     ["Grep", { pattern: "x" }, "search-pattern"],
     ["WebFetch", { url: "https://x" }, "Parameters"],

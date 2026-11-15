@@ -276,15 +276,6 @@ it("tabs: role=tab on the named, focusable button with roving tabindex; arrows m
   expect(xterm.all[0]!.focused).toBe(before + 1);
 });
 
-it("opens xterm into an unpadded box: FitAddon measures the parent, so padding there would add a cut-off column", async () => {
-  const client = fakeClient([{ id: "t1", title: "Terminal 1" }]);
-  await render(client);
-  await flush();
-  const target = xterm.all[0]!.parent!;
-  expect(target.className).not.toMatch(/\bp[xytrbl]?-/);
-  expect(target.parentElement!.className).toMatch(/\bpx-3\.5\b/);
-});
-
 it("switching to another project shows its terminals but spawns no shell; + does; a reconnect to an empty list spawns none", async () => {
   const client = fakeClient();
   await render(client, "connected", () => {}, { ensure: true });

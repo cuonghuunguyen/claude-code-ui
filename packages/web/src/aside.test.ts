@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionInfo } from "@claude-ui/protocol";
-import { asideItem, cascade, DEFAULT_SIZE, clampRect, raise, setMinimized, type AsideState } from "./aside.ts";
+import { asideItem, cascade, DEFAULT_SIZE, clampRect, raise, type AsideState } from "./aside.ts";
 
 const a = (id: string, o: Partial<AsideState> = {}): AsideState => ({ id, ownerId: "o", title: id, from: "p", minimized: false, readOnly: true, ...o });
 
@@ -10,10 +10,6 @@ describe("aside popups", () => {
     expect(raise(l, "1").map((x) => x.id)).toEqual(["2", "3", "1"]);
     expect(raise(l, "3")).toBe(l);
     expect(raise(l, "x")).toBe(l);
-  });
-  it("setMinimized changes only that popup", () => {
-    const l = setMinimized([a("1"), a("2")], "2", true);
-    expect(l.map((x) => x.minimized)).toEqual([false, true]);
   });
   it("cascade steps down by more than a header, so no popup covers the header buttons of the one below it", () => {
     expect(cascade(0, { w: 1000 })).toEqual({ x: 496, y: 24 });

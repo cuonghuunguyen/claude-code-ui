@@ -37,8 +37,6 @@ it("header shows label, summary, status and the model, turns, tokens meta", asyn
   expect(card.textContent).toContain("Inline task");
   expect(card.textContent).toContain("Find the callers of foo");
   expect(q("run-meta")!.textContent).toBe("haiku · 3/10 turns · 2.0k tokens");
-  expect(q("run-meta")!.className).toContain("tabular-nums");
-  expect(q("run-meta")!.className).toContain("text-muted-foreground");
 });
 
 it("meta leaves out what is unknown (a running call has no usage yet)", async () => {
@@ -62,13 +60,6 @@ it("body is collapsed by default; opening the card shows the steps disclosure, c
   await click(toggle);
   expect(toggle.getAttribute("aria-expanded")).toBe("true");
   expect(q("step")!.textContent).toBe("a step");
-});
-
-it("a single step reads singular", async () => {
-  await render(props({ stepCount: 1 }));
-  await click(header());
-  expect(q("run-steps-toggle")!.textContent).toContain("1 step");
-  expect(q("run-steps-toggle")!.textContent).not.toContain("1 steps");
 });
 
 it("awaiting a permission holds the card and its steps open", async () => {

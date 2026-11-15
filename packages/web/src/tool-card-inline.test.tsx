@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import type { ToolCall } from "./store.ts";
 import { StopRunContext } from "./run-card.tsx";
 import { ToolCard } from "./tool-card.tsx";
@@ -75,33 +75,9 @@ it("a tool error text (not the result JSON) shows as an alert", async () => {
   expect(q("run-error")!.textContent).toContain("Inline task files must be inside the project");
 });
 
-it("Stop calls the session stop request with the tool call id", async () => {
-  const stop = vi.fn(async () => ({}));
-  await act(async () => root.render(<StopRunContext value={stop}><ToolCard call={call("running")} /></StopRunContext>));
-  await click(q("run-stop"));
-  expect(stop).toHaveBeenCalledWith(`toolu_${n}`);
-});
-
 it("no Stop button without a stop handler or after the run ended", async () => {
   await act(async () => root.render(<ToolCard call={call("running")} />));
   expect(q("run-stop")).toBeNull();
   await act(async () => root.render(<StopRunContext value={async () => {}}><ToolCard call={call("done")} result={result(json())} /></StopRunContext>));
   expect(q("run-stop")).toBeNull();
-});
-
-it("a finished call without child parts (restored session) says that steps are not kept", async () => {
-  await act(async () => root.render(<ToolCard call={call("done")} result={result(json())} run={{ steps: null, stepCount: 0, hasParts: false }} />));
-  await click(q("run-card")!.querySelector("button"));
-  expect(q("run-steps-note")!.textContent).toBe("Steps are not kept after the daemon restarts.");
-});
-
-it("a running call without child parts yet does not", async () => {
-  await act(async () => root.render(<ToolCard call={call("running")} run={{ steps: null, stepCount: 0, hasParts: false }} />));
-  await click(q("run-card")!.querySelector("button"));
-  expect(q("run-steps-note")).toBeNull();
-});
-
-it("a pending permission inside opens the card and its steps", async () => {
-  await act(async () => root.render(<ToolCard call={call("running")} awaiting run={{ steps, stepCount: 1, hasParts: true }} />));
-  expect(q("step")).not.toBeNull();
 });

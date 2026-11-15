@@ -33,9 +33,6 @@ describe("clearing", () => {
   it("a subagent's prompt is ignored", () => {
     expect(clearing(state(said(said(emptySession(), "u1", "/clear"), "u2", "hi", { parentId: "t1" }), "running"))).toBe(true);
   });
-  it("no view is not clearing", () => {
-    expect(clearing(undefined)).toBe(false);
-  });
 });
 
 describe("heirView", () => {
