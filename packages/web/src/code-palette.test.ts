@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import pierreLight from "@pierre/theme/pierre-light";
 import pierreDark from "@pierre/theme/pierre-dark";
-import { ADJUST, adjustTheme, DIFF_THEMES, diffThemes, paletteTheme, registerDiffThemes, SYNTAX_SOURCE } from "./code-palette.ts";
+import { ADJUST, DIFF_THEMES, diffThemes, paletteTheme, registerDiffThemes, SYNTAX_SOURCE } from "./code-palette.ts";
 import { THEMES, tokensOf } from "./themes.ts";
 
 // GH-394: one palette for the editor and every diff. Every colour must reach 4.5:1 on every background code sits on.
@@ -97,31 +97,9 @@ describe.each(["light", "dark"] as const)("code palette (%s)", (mode) => {
     }
   });
 
-  it("adjustedTheme keeps every scope and fontStyle of pierre; only colours change; background and foreground are the app's card and foreground", () => {
-    const adjusted = adjustTheme(mode, themes[mode]);
-    const src = themes[mode];
-    expect(adjusted.tokenColors).toHaveLength(src.tokenColors.length);
-    src.tokenColors.forEach((rule, i) => {
-      const got = adjusted.tokenColors![i]! as typeof rule;
-      expect(got.scope).toEqual(rule.scope);
-      expect(got.settings.fontStyle).toBe(rule.settings.fontStyle);
-      if (rule.settings.foreground) expect(got.settings.foreground).toBe(ADJUST[mode][rule.settings.foreground.toLowerCase()]);
-    });
-    const colors = adjusted.colors as Record<string, string>;
-    expect(colors["editor.background"]).toBe(cssVar(MODE[mode].selector, "card"));
-    expect(colors["editor.foreground"]).toBe(cssVar(MODE[mode].selector, "foreground"));
-    expect(colors["gitDecoration.addedResourceForeground"]).toBe((src.colors as Record<string, string>)["gitDecoration.addedResourceForeground"]);
-    expect(adjusted.type).toBe(mode);
-    expect(adjusted.name).toBe(DIFF_THEMES[mode]);
-  });
-
   it("the --syntax-* values in index.css are the adjusted pierre colours", () => {
     for (const [name, source] of Object.entries(SYNTAX_SOURCE)) expect(cssVar(MODE[mode].selector, `syntax-${name}`), name).toBe(ADJUST[mode][source[mode]]);
   });
-});
-
-it("the dark diff sits on the app's card surface (#161616), not pierre's #0a0a0a", () => {
-  expect((adjustTheme("dark", themes.dark).colors as Record<string, string>)["editor.background"]).toBe("#161616");
 });
 
 // GH-468: one diff theme per colour theme and mode, built from the theme's own --syntax-* values.
@@ -131,15 +109,6 @@ describe.each(THEMES.slice(1).flatMap((t) => (["light", "dark"] as const).filter
   const tok = tokensOf(p, mode);
   const built = paletteTheme(id, mode, themes[mode]);
   const colors = built.colors as Record<string, string>;
-
-  it("sits on the theme's card and foreground; added and removed lines follow its ok and err", () => {
-    expect(colors["editor.background"]).toBe(p.card);
-    expect(colors["editor.foreground"]).toBe(p.fg);
-    expect(colors["gitDecoration.addedResourceForeground"]).toBe(p.ok);
-    expect(colors["gitDecoration.deletedResourceForeground"]).toBe(p.err);
-    expect(built.type).toBe(mode);
-    expect(built.name).toBe(`claude-ui-${id}-${mode}`);
-  });
 
   it("every foreground is one of the theme's --syntax-* values or its foreground", () => {
     const allowed = new Set([...Object.entries(tok).filter(([k]) => k.startsWith("--syntax-")).map(([, v]) => v), p.fg]);

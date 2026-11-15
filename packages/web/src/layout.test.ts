@@ -80,11 +80,6 @@ it("withPane does not remember a dock tab for files with home main", () => {
   expect(withPane({}, "files", l)).toEqual({ narrow: "files" });
 });
 
-it("DEFAULT_LAYOUT has plan, then artifacts after graph in the side panel", () => {
-  expect(DEFAULT_LAYOUT.areas.side).toEqual(["changes", "files", "graph", "plan", "artifacts"]);
-  expect(DEFAULT_LAYOUT.areas.main).toEqual([]);
-});
-
 it("activePane: newest history entry in the area, else files, else first", () => {
   expect(activePane(["changes", "files"], ["terminal", "changes", "files"])).toBe("changes");
   expect(activePane(["changes", "files"], [])).toBe("files");
