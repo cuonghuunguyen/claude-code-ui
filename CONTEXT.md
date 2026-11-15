@@ -59,6 +59,9 @@ _Avoid_: provider (OpenCode's word for a model vendor), backend, agent
 **Engine catalogue**:
 The part of the Daemon that owns everything about one Engine's stored Sessions outside a live run: which Session IDs are the Engine's, listing, restoring, renaming, archiving, deleting, forking an Aside, slash commands, agents and models. One per Engine; the Daemon asks the catalogue that owns an ID and never tests for an Engine by name. The Engine (the live run) is reached through it.
 
+**Area**:
+A group of client message types whose handlers live in one daemon module (`packages/daemon/src/area-*.ts`) and reach the Daemon's state only through the Daemon context. Every dispatched type belongs to exactly one Area. _Avoid_: handler group, controller
+
 **OpenCode server**:
 The one `opencode serve` process a Daemon starts on the first OpenCode Session. It holds OpenCode Session history and provider credentials; the Daemon keeps neither.
 _Avoid_: OpenCode daemon
