@@ -259,6 +259,22 @@ describe("close then Undo", () => {
     expect(t.fake.subs()).toHaveLength(1);
   });
 
+  it("a background subscribe that fails after the Session was dropped does not bring the intent back", async () => {
+    const t = setup();
+    void t.follow.show("a");
+    await flush();
+    t.fake.subs()[0]!.ok();
+    await flush();
+    void t.follow.background("a");
+    await flush();
+    t.follow.drop("a");
+    t.fake.subs()[1]!.fail("boom");
+    await flush();
+    void t.follow.show("a");
+    await flush();
+    expect(t.fake.subs()).toHaveLength(3);
+  });
+
   it("a failed holding subscribe is asked again by the next show", async () => {
     const t = setup();
     void t.follow.show("a");

@@ -796,7 +796,6 @@ export function App() {
   /** Open Aside popups, for the closure-held reconnect resubscribe (an Aside nobody holds is deleted by the daemon's idle cleanup). */
   const asidesRef = useRef(asides);
   asidesRef.current = asides;
-  const isShown = (id: string) => tabsRef.current.includes(id) || hashId() === id || asidesRef.current.some((a) => a.id === id);
   const [olderLoading, setOlderLoading] = useState<Record<string, boolean>>({});
   /** The latest closures of what the follow module reports to (it is created once, with the first render's host). */
   const hostFns = useRef({} as Pick<FollowHost, "refreshList" | "readCached" | "replied" | "dropped" | "gone" | "failed" | "error">);

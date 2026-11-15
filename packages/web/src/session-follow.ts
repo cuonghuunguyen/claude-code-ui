@@ -248,6 +248,7 @@ export function createSessionFollow(host: FollowHost) {
     /** The Session has no view any more; `unsubscribe` also stops the daemon's events. */
     drop(id: string, { unsubscribe = true }: { unsubscribe?: boolean } = {}) {
       intent.delete(id);
+      intentToken.delete(id); // a subscribe still in flight must not bring the intent back when it fails
       requested.delete(id);
       fromCache.delete(id);
       if (id in views) {
