@@ -1,6 +1,7 @@
 // Area: git requests of the Changes tab, the Git log and the branch and tag dialogs (`git.*`).
 // Per-connection state: the running reword, signed tag and commit message generation; `close` aborts them.
 import { isAbsolute } from "node:path";
+import { MAX_FILE_BYTES, decodeText } from "./text-file.ts";
 import type { GitTypes } from "./areas.ts";
 import type { DaemonContext } from "./daemon-context.ts";
 import type { Area, Msg, Respond } from "./dispatch.ts";
@@ -9,20 +10,6 @@ import { gitBlame, gitDiff, gitFileAt, gitLog, gitOperationOf, gitRefs, gitShow,
 import { gitBranch, gitFetch, gitPull, gitPush, gitTagDelete, gitTagRemote } from "./git-remote.ts";
 import { generateCommitMessage, instructionFor, promptFor } from "./commit-message.ts";
 import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff, gitCommitFiles, gitCommitMenu, gitContinue, gitMergeRebase, gitReword, gitRollback, gitRollbackHunk, gitRollbackPreview, gitStash, gitStashList, gitStashPush, gitTag, gitTagCreate, gitTagSigning } from "./git-write.ts";
-
-/** Larger files are not opened in the editor. */
-export const MAX_FILE_BYTES = 2 * 1024 * 1024;
-/** UTF-8 text of a file's bytes; a UTF-16 BOM or NUL means binary-ish, invalid UTF-8 is refused (a lossy decode would be written back by a save). */
-export function decodeText(buf: Buffer): { content: string } | { code: "binary" | "not_utf8" } {
-  if ((buf[0] === 0xff && buf[1] === 0xfe) || (buf[0] === 0xfe && buf[1] === 0xff)) return { code: "not_utf8" };
-  if (buf.includes(0)) return { code: "binary" };
-  try {
-    // ignoreBOM keeps the BOM in the content.
-    return { content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buf) };
-  } catch {
-    return { code: "not_utf8" };
-  }
-}
 
 export type GitAreaContext = Pick<DaemonContext, "git" | "refused" | "statusOf" | "reposOf" | "lastOpen" | "localHistory" | "netSlot" | "appSettings" | "warmCommit"> & { opts: Pick<DaemonContext["opts"], "query"> };
 

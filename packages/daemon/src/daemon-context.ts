@@ -16,7 +16,19 @@ import type { testOutcome } from "./claude-test.ts";
 import type { GitRequestContext } from "./git-request.ts";
 import type { CreateWorktreeOptions, gitEscapes, gitStatus, limiter, listRepos } from "./git.ts";
 import type { createLocalHistory } from "./local-history.ts";
-import type { WorktreeRemoveResult } from "@claude-ui/protocol";
+import type { MediaReadResult, SlashCommand, WorktreeRemoveResult } from "@claude-ui/protocol";
+import type { ServerResponse } from "node:http";
+import type { createReplaceUndo } from "./replace.ts";
+import type { FsOpsContext } from "./fs-ops.ts";
+import type { createUploads } from "./uploads.ts";
+import type { createTerminals } from "./terminals.ts";
+import type { createConfig } from "./config.ts";
+import type { createPlugins } from "./plugins.ts";
+
+/** Piece of a media file: undefined when it can no longer be read (gone, outside the roots, side stopped). */
+export type MediaRead = (offset: number, length: number) => Promise<MediaReadResult | undefined>;
+/** fs.media capabilities: nonce -> a hub file (canonical path, streamed from disk) or bytes read in pieces (a file at a commit, a side's file), issuing connection, last use. */
+export type MediaEntry = { src: { kind: "file"; path: string } | { kind: "artifact"; named: string; path: string; page: string; confine: string[]; assets: Map<string, { named: string; path: string; type: string }> } | { kind: "bytes"; read: MediaRead; mime: string; name: string }; ws: Conn; used: number; live?: Set<ServerResponse> };
 
 export type DaemonContext = {
   // Roots and paths
@@ -26,6 +38,10 @@ export type DaemonContext = {
   inside(p: string): boolean;
   /** A path a request must not reach (UNC outside the roots). */
   refused(p: string): boolean;
+  /** The canonical roots. */
+  roots: string[];
+  /** A missing absolute path whose nearest existing ancestor is allowed: deleted inside the roots (outside them, existence stays hidden). */
+  missingInRoots(path: unknown): boolean;
   /** `~/.claude`, or the configured Claude config directory. */
   claudeDir: string;
   // Git and worktrees
@@ -46,6 +62,18 @@ export type DaemonContext = {
   /** A session or terminal may not start in a worktree being removed. */
   isRemoving(cwd: string): boolean;
   inDir(cwd: string, p: string): boolean;
+  // Files, terminals and configuration
+  /** Capabilities of fs.media: nonce -> source. */
+  media: Map<string, MediaEntry>;
+  fsOps: FsOpsContext;
+  replaceUndo: ReturnType<typeof createReplaceUndo>;
+  /** The upload folders; `fs.read` also reads a visualize file there. */
+  uploads: ReturnType<typeof createUploads>;
+  terminals: ReturnType<typeof createTerminals>;
+  config: ReturnType<typeof createConfig>;
+  plugins: ReturnType<typeof createPlugins>;
+  /** Slash commands per cwd; cleared when the configuration changes. */
+  commandCache: Map<string, { at: number; list: Promise<SlashCommand[]> }>;
   // Settings and accounts
   appSettings: ReturnType<typeof createSettings>;
   secrets: ReturnType<typeof createSecrets>;
@@ -75,5 +103,5 @@ export type DaemonContext = {
   /** Requests only one Engine answers (its provider login, its server restart), by message type. */
   engineRequests: ReadonlyMap<string, EngineRequest>;
   /** The options createDaemon was given that handlers read. */
-  opts: Pick<DaemonOptions, "keepAwake" | "push" | "shortcut" | "query">;
+  opts: Pick<DaemonOptions, "keepAwake" | "push" | "shortcut" | "query" | "openExternal" | "claudeBin">;
 };

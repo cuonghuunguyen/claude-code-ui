@@ -5,11 +5,17 @@ import { createEngineArea } from "./area-engine.ts";
 import { createGitArea } from "./area-git.ts";
 import { createWorktreeArea } from "./area-worktree.ts";
 import { createSettingsArea } from "./area-settings.ts";
+import { createFilesArea } from "./area-files.ts";
+import { createTerminalArea } from "./area-terminal.ts";
+import { createConfigArea } from "./area-config.ts";
 import type { DaemonContext } from "./daemon-context.ts";
 import { createDispatch, type ClientType, type Connection, type DispatchedType, type Handlers } from "./dispatch.ts";
 
 export type GitTypes = Extract<ClientType, `git.${string}`>;
 export type WorktreeTypes = Extract<ClientType, `worktree.${string}`>;
+export type FilesTypes = Exclude<Extract<ClientType, `fs.${string}`>, "fs.upload"> | Extract<ClientType, `history.${string}` | "media.read">;
+export type TerminalTypes = Extract<ClientType, `terminal.${string}`>;
+export type ConfigTypes = Extract<ClientType, `mcp.${string}` | `plugins.${string}` | `marketplace.${string}` | `skills.${string}`>;
 export type EngineTypes = Extract<ClientType, `opencode.${string}`>;
 export type SettingsTypes = "settings.get" | "settings.set" | "launcher.shortcut" | Extract<ClientType, `jira.${string}` | `claude.account.${string}` | `perf.${string}` | `push.${string}` | `addons.${string}` | `update.${string}`>;
 
@@ -19,9 +25,12 @@ export function connectAreas(ctx: DaemonContext, conn: Connection, fallback?: (m
   const settings = createSettingsArea(ctx, conn);
   const git = createGitArea(ctx);
   const worktree = createWorktreeArea(ctx);
+  const files = createFilesArea(ctx, conn);
+  const terminal = createTerminalArea(ctx, conn);
+  const config = createConfigArea(ctx);
   // Every dispatched type has a handler: a missing key is a typecheck error (relaxed to Partial until every area exists).
-  const handlers = { ...engine.handlers, ...settings.handlers, ...git.handlers, ...worktree.handlers } satisfies Partial<Handlers<DispatchedType>>;
+  const handlers = { ...engine.handlers, ...settings.handlers, ...git.handlers, ...worktree.handlers, ...files.handlers, ...terminal.handlers, ...config.handlers } satisfies Partial<Handlers<DispatchedType>>;
   void handlers;
-  return createDispatch([engine, settings, git, worktree], fallback);
+  return createDispatch([engine, settings, git, worktree, files, terminal, config], fallback);
 }
 export type { Handlers };

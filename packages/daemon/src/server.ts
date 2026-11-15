@@ -2,8 +2,8 @@
 import { planDirs } from "./plan-dirs.ts";
 import { DeniedRetryError } from "./denied-retry.ts";
 import { localSettingsFile, localSettingsFiles } from "./local-settings.ts";
-import { closeSync, createReadStream, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
-import { open, readFile, stat } from "node:fs/promises";
+import { closeSync, createReadStream, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unwatchFile, watchFile, writeFileSync, type Stats } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import { homedir, hostname as osHostname, tmpdir } from "node:os";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -12,31 +12,29 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { CHUNK_BYTES, DEFAULT_ENGINE, KNOWN_HASH_MAX, KNOWN_ID_MAX, KNOWN_MAX, createAdapter, editorLabel, parseEditorCommand, EFFORTS, ENGINES, type Engine as EngineName, type AsideOpenResult, type PromptResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MAX_TERMINAL_INPUT_BYTES, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_MARKS_MAX, BACK_TAG, type ClientMessage, type FsEntry, type FsGrepResult, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { DEFAULT_ENGINE, KNOWN_HASH_MAX, KNOWN_ID_MAX, KNOWN_MAX, createAdapter, editorLabel, EFFORTS, ENGINES, type Engine as EngineName, type AsideOpenResult, type PromptResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_SEARCH_CHARS, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_MARKS_MAX, BACK_TAG, type ClientMessage, type ListResult, type MediaReadResult, type ModelInfo, type RewindMode, type SessionIdsResult, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf, type ArtifactAsset } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
-import { createLocalHistory, HistoryError } from "./local-history.ts";
+import { createLocalHistory} from "./local-history.ts";
 import { createSleepWatch, SLEEP_CHECK_MS, SLEEP_KEEP_MS, type Slept } from "./sleep-watch.ts";
 import { asideDisallowed, portListening } from "./aside.ts";
-import { createReplaceUndo, replaceInFiles, ReplaceError, undoReplace } from "./replace.ts";
-import { clearSearchCache, searchFiles } from "./search.ts";
-import { findInFiles, GREP_LIMITS, GrepError, matcher, parseGlobs } from "./grep.ts";
+import { createReplaceUndo} from "./replace.ts";
+import { clearSearchCache} from "./search.ts";
 import { createReposCache } from "./repos-cache.ts";
 import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
-import { copyEntry, createEntry, deleteEntry, duplicateFile, readFileChunk, renameEntry, walkEntry, writeFileChunk, type FsOpsContext } from "./fs-ops.ts";
-import { openChecked, OPEN_READ, OPEN_WRITE, readAll, readdirChecked, real, sameFile, writeAll } from "./fd-check.ts";
-import { MEDIA_BLOB_CACHE_MAX, MEDIA_BLOB_MAX, MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
+import { type FsOpsContext } from "./fs-ops.ts";
+import { openChecked, OPEN_READ, real} from "./fd-check.ts";
+import { MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
 import { performance } from "node:perf_hooks";
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
 import { connectAreas } from "./areas.ts";
-import { MAX_FILE_BYTES, decodeText } from "./area-git.ts";
-import type { DaemonContext } from "./daemon-context.ts";
+import { WATCH_INTERVAL_MS } from "./area-files.ts";
+import type { DaemonContext, MediaEntry, MediaRead } from "./daemon-context.ts";
 import type { Connection } from "./dispatch.ts";
 import { createJira, JiraError, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
-import { GitRequestError, gitRequest, read as gitRead } from "./git-request.ts";
-import { createWorktree, gitBlobRead, gitBlobRef, gitDirsOf, gitEscapes, gitStatus, gitTopOf, limiter, listRepos, listWorktrees, removeWorktree, WorktreeError, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
+import { createWorktree, gitDirsOf, gitEscapes, gitStatus, gitTopOf, limiter, listRepos, listWorktrees, removeWorktree, WorktreeError, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
 import { createWarmCommitMessage } from "./commit-message.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
@@ -44,7 +42,6 @@ import { createCatalogues, EngineError, isModel, type CatalogueContext, type Cat
 import { ARCHIVED_TAG, createClaudeCatalogue, transcriptFile, type History } from "./claude-catalogue.ts";
 import { createOpenCodeCatalogue } from "./opencode-catalogue.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
-import { claudeBin } from "./claude-bin.ts";
 import { claudeEnv, setClaudeToken } from "./claude-env.ts";
 import { TEST_ARGS, TEST_TIMEOUT_MS, testOutcome } from "./claude-test.ts";
 import { createPlanTracker, RESET_GRACE_MS, usesOauthToken } from "./plan-usage.ts";
@@ -54,13 +51,13 @@ import { createBackReminders, TICK_MS as BACK_TICK_MS, type Due } from "./back-r
 import { CONTINUE_GAP_MS, CONTINUE_PROMPT, createAutoContinue } from "./auto-continue.ts";
 import { listModels, queuedQuery, Session, type SessionSettings, type Transcript } from "./session.ts";
 import { createTerminals } from "./terminals.ts";
-import { ConfigError, createConfig, runCli, timed, type CliRunner, type McpRequest, type SkillsRequest } from "./config.ts";
-import { createPlugins, redact, type PluginsRequest } from "./plugins.ts";
+import { ConfigError, createConfig, runCli, timed, type CliRunner} from "./config.ts";
+import { createPlugins, redact} from "./plugins.ts";
 import { addonAssetHeaders, addonHeaders, createAddons, type AddonsRequest } from "./addons.ts";
 import { searchTranscripts } from "./content-search.ts";
 import { cliTurnRunning, JsonlTail, parseJsonl, transcriptEnd, withoutForkPrefix } from "./transcript.ts";
 import type { KeepAwake } from "./keep-awake.ts";
-import { customCommand, EDITORS, findOnPath, isOpenWith, openCommand, type Launcher, type OpenCommand } from "./open-external.ts";
+import { EDITORS, type Launcher, type OpenCommand } from "./open-external.ts";
 import { createRouter, type Sides } from "./sides.ts";
 import { createFeeds } from "./feed.ts";
 import { createListVersions } from "./list-versions.ts";
@@ -76,7 +73,6 @@ import type { AddressInfo } from "node:net";
 import { serveAppIcon } from "./app-icon.ts";
 import { serveStatic } from "./static.ts";
 import { VISUALIZE_HEADERS, VISUALIZE_SHELL, visualizePluginDir } from "./visualize.ts";
-import { visualizeReadable } from "./visualize-write.ts";
 import { listSessionsOffThread, mapLimit, transcriptStamp } from "./session-scan.ts";
 
 /** The reply field with the folders of the session's plan files (a side's own reply carries its own). */
@@ -130,8 +126,6 @@ export const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 /** Transcript restores running at once. */
 const MAX_RESTORES = 2;
 
-// ponytail: stat polling, robust to atomic rename-writes and WSL; fs.watch per directory if many tabs make polling costly.
-const WATCH_INTERVAL_MS = 1000;
 /** Idle close of unheld sessions (docs/spec.md "Idle close"): the one place of the timeout and the scan interval. */
 export const IDLE_CLOSE_MS = 10 * 60_000;
 /** Orphaned upload folders are looked for this often (uploads.ts sweep). */
@@ -1583,10 +1577,7 @@ export function createDaemon(opts: {
       .map((p) => p.trim())
       .some((p) => p.startsWith(TOKEN_PROTOCOL_PREFIX) && isToken(p.slice(TOKEN_PROTOCOL_PREFIX.length)));
 
-  /** Piece of a media file: undefined when it can no longer be read (gone, outside the roots, side stopped). */
-  type MediaRead = (offset: number, length: number) => Promise<MediaReadResult | undefined>;
-  /** fs.media capabilities: nonce -> a hub file (canonical path, streamed from disk) or bytes read in pieces (a file at a commit, a side's file), issuing connection, last use. */
-  const media = new Map<string, { src: { kind: "file"; path: string } | { kind: "artifact"; named: string; path: string; page: string; confine: string[]; assets: Map<string, { named: string; path: string; type: string }> } | { kind: "bytes"; read: MediaRead; mime: string; name: string }; ws: Conn; used: number; live?: Set<ServerResponse> }>();
+  const media = new Map<string, MediaEntry>();
   const mediaHead = (type: string, name: string, size: number, start: number, end: number, ranged: boolean) => ({
     ...MEDIA_HEADERS,
     "content-type": type,
@@ -1922,6 +1913,8 @@ export function createDaemon(opts: {
     allowed,
     inside,
     refused,
+    roots,
+    missingInRoots,
     claudeDir,
     git: { allowed, inside, topOf: gitTopOf, markStale: markRepoStale },
     statusOf,
@@ -1952,6 +1945,14 @@ export function createDaemon(opts: {
     updater,
     focused,
     covered,
+    media,
+    fsOps,
+    replaceUndo,
+    uploads,
+    terminals,
+    config,
+    plugins,
+    commandCache,
     engineRequests,
     opts,
   };
@@ -1982,40 +1983,10 @@ export function createDaemon(opts: {
     /** This connection's session feeds: events go to the socket while its buffer allows, else from the log later (feed.ts). */
     const feeds = createFeeds(ws, (e) => send(ws, e));
     let subscribeOrder = 0;
-    // fs.watch: watched path as the client gave it → canonical path and its stat listener.
     // fs.media: key (canonical path, "blob\0cwd\0hash\0path", "<side>\0cwd\0hash\0path") -> nonce issued to this connection.
     const mediaNonces = new Map<string, string>();
-    /** Files at a commit that media.read read (a commit's file never changes): least recently used first, at most MEDIA_BLOB_CACHE_MAX bytes per connection. */
-    const blobs = new Map<string, Buffer>();
-    const blobCached = (key: string) => {
-      const b = blobs.get(key);
-      if (b) (blobs.delete(key), blobs.set(key, b));
-      return b;
-    };
-    const blobKeep = (key: string, buf: Buffer) => {
-      blobs.set(key, buf);
-      let total = 0;
-      blobs.forEach((b) => (total += b.length));
-      for (const [k, b] of blobs) {
-        if (total <= MEDIA_BLOB_CACHE_MAX || k === key) break;
-        blobs.delete(k);
-        total -= b.length;
-      }
-    };
     const nonceFor = (key: string) => mediaNonces.get(key) ?? (mediaNonces.set(key, randomBytes(16).toString("hex")), mediaNonces.get(key)!);
-    const watched = new Map<string, { real: string; listener: (curr: Stats, prev: Stats) => void }>();
-    // Attached terminals: ID → detach.
-    const attached = new Map<string, () => void>();
     let searching: AbortController | undefined;
-    /** The running `fs.grep` of this connection: stopped by a newer one and the close. */
-    let grepping: AbortController | undefined;
-    /** The running `fs.replace` dry run of this connection (a newer one and the close stop it), and whether an apply or undo is running. */
-    let replacing: AbortController | undefined;
-    let writingReplace = false;
-    const unwatchAll = () => {
-      watched.forEach((w) => unwatchFile(w.real, w.listener));
-      watched.clear();
-    };
     // Without a listener a socket error (e.g. a frame above maxPayload) is thrown and the daemon exits; ws closes the socket itself.
     ws.on("error", (err) => console.warn("ws:", err.message));
     ws.on("close", (code) => {
@@ -2023,13 +1994,8 @@ export function createDaemon(opts: {
       router?.close();
       connections.delete(ws);
       mediaNonces.forEach((n) => (media.get(n)?.live?.forEach((r) => r.destroy()), media.delete(n)));
-      blobs.clear();
       unsubscribes.forEach((u) => u());
-      unwatchAll();
-      attached.forEach((d) => d());
       searching?.abort();
-      grepping?.abort();
-      replacing?.abort();
       areas.close();
       focused.delete(ws);
       covered.delete(ws);
@@ -2055,51 +2021,6 @@ export function createDaemon(opts: {
       }
     };
     /** Handles a message in this daemon; its reply or error goes to `out`, events and streams to this connection. */
-    type MediaFail = { code: string; message: string; size?: number };
-    /** media.read and fs.media {hash}: a piece of a media file or of a file at a commit, with the roots and extension checks. */
-    const readMedia = async (m: { path: unknown; cwd?: unknown; hash?: unknown; exact?: unknown; offset: number; length: number }): Promise<MediaReadResult | MediaFail> => {
-      if (typeof m.path !== "string") return { code: "bad_request", message: "path must be a string" };
-      const path = m.path;
-      const mime = mediaType(path);
-      if (m.hash !== undefined) {
-        const o = await gitRequest(ctx.git, m, gitRead(async (cwd, inside) => {
-          if (!mime) throw new GitRequestError("unsupported_type", `not an image, video or audio file: ${path}`);
-          const key = `${cwd}\0${String(m.hash)}\0${path}`;
-          let buf = blobCached(key);
-          // Size only (the first read of every GET): git cat-file -s, no blob read.
-          if (!buf && m.length === 0) return { data: "", size: (await gitBlobRef(cwd, m.hash as string, path, inside, MEDIA_BLOB_MAX)).size, mtime: 0, mime };
-          if (!buf) {
-            buf = await gitBlobRead(await gitBlobRef(cwd, m.hash as string, path, inside, MEDIA_BLOB_MAX));
-            blobKeep(key, buf);
-          }
-          return { data: buf.subarray(m.offset, m.offset + m.length).toString("base64"), size: buf.length, mtime: 0, mime };
-        }));
-        return "error" in o ? o.error : (o.result as MediaReadResult);
-      }
-      const file = allowed(m.path);
-      if (!file) return missingInRoots(m.path) ? { code: "not_found", message: `no such file: ${m.path}` } : { code: "path_not_allowed", message: `outside the allowlisted roots: ${m.path}` };
-      const fileMime = mediaType(file);
-      if (!fileMime) return { code: "unsupported_type", message: `not an image, video or audio file: ${m.path}` };
-      let fh;
-      try {
-        // Same open as GET /media (no-follow, non-blocking: see the ponytail there).
-        fh = await open(file, OPEN_READ);
-      } catch (err) {
-        return { code: "fs_error", message: String(err) };
-      }
-      try {
-        if (!sameFile(fh.fd, file)) return { code: "path_not_allowed", message: `changed during the request: ${m.path}` };
-        const st = await fh.stat();
-        if (!st.isFile()) return { code: "not_a_file", message: `not a file: ${m.path}` };
-        const n = Math.max(0, Math.min(m.length, st.size - m.offset));
-        const buf = Buffer.alloc(n);
-        const got = n ? (await fh.read(buf, 0, n, m.offset)).bytesRead : 0;
-        return { data: buf.subarray(0, got).toString("base64"), size: st.size, mtime: st.mtimeMs, mime: fileMime };
-      } finally {
-        await fh.close();
-      }
-    };
-    const isPiece = (o: unknown, l: unknown) => Number.isSafeInteger(o) && (o as number) >= 0 && Number.isSafeInteger(l) && (l as number) >= 0 && (l as number) <= MEDIA_CHUNK;
     /** fs.media of a side's file or commit: the side checks it (media.read, length 0); the hub issues its own URL and reads the bytes from the side per GET. */
     const sideMedia = async (id: string, msg: Extract<ClientMessage, { type: "fs.media" }>, call: (m: ClientMessage) => Promise<ServerMessage>): Promise<ServerMessage> => {
       const args = { path: msg.path, ...(msg.hash !== undefined && { cwd: msg.cwd, hash: msg.hash, ...(msg.exact === true && { exact: true }) }) };
@@ -2122,36 +2043,6 @@ export function createDaemon(opts: {
     const legacy = async (msg: ClientMessage, out: (m: ServerMessage) => void) => {
       const reply = (result: unknown) => out({ type: "reply", reqId: msg.reqId, result });
       const fail = (code: string, message: string, size?: number) => out({ type: "error", reqId: msg.reqId, code, message, size });
-      /** An fs.read/fs.write failure: a path that changed during the request is refused; a directory is not a file. */
-      const fsFail = (err: unknown, path: string) => {
-        const code = (err as { code?: string }).code;
-        if (code === "ECHANGED") return fail("path_not_allowed", `changed during the request: ${path}`);
-        if (code === "EISDIR") return fail("not_a_file", `not a file: ${path}`);
-        return fail("fs_error", String(err));
-      };
-      /** fs.write and history.restore: the conflict check, the history entry of the content being replaced, then the write. */
-      const writeChecked = (file: string, path: string, content: string, baseMtime: number | undefined, reason: "save" | "restore" = "save") => {
-        let fd: number | undefined;
-        try {
-          fd = openChecked(file, OPEN_WRITE);
-          const st = fstatSync(fd);
-          if (!st.isFile()) return fail("not_a_file", `not a file: ${path}`);
-          if (baseMtime !== undefined && st.mtimeMs !== baseMtime) return fail("conflict", `changed on disk since it was read: ${path}`);
-          localHistory.before(file, reason);
-          const data = Buffer.from(content);
-          ftruncateSync(fd, 0);
-          writeAll(fd, data);
-          // Closed first: NTFS may set the write time when the handle closes, and the editor keeps this value as its next baseMtime.
-          closeSync(fd);
-          fd = undefined;
-          clearSearchCache();
-          return reply({ mtime: statSync(file).mtimeMs });
-        } catch (err) {
-          return fsFail(err, path);
-        } finally {
-          if (fd !== undefined) closeSync(fd);
-        }
-      };
       const find = async (id: string, background = false) => (await findSession(id, background)) ?? void fail("unknown_session", `no session ${id}`);
 
       switch (msg.type) {
@@ -2718,21 +2609,6 @@ export function createDaemon(opts: {
           const err = await orchestration.userOp(msg.type === "worker.close" ? "close" : "remove", msg.sessionId);
           return err ? fail(err.code, err.message) : reply({});
         }
-        case "fs.list": {
-          if (msg.path === undefined)
-            return reply({ entries: roots.map((r): FsEntry => ({ name: r, path: r, isDir: true })) });
-          const dir = allowed(msg.path);
-          if (!dir) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.path}`);
-          try {
-            const entries = readdirChecked(dir).map(
-              (e): FsEntry => ({ name: e.name, path: join(dir, e.name), isDir: e.isDirectory() }),
-            );
-            return reply({ entries: entries.sort((a, b) => a.name.localeCompare(b.name)) });
-          } catch (err) {
-            if ((err as NodeJS.ErrnoException).code === "ECHANGED") return fail("path_not_allowed", "changed during the request");
-            return fail("fs_error", String(err));
-          }
-        }
         case "session.rewindPreview":
         case "session.rewind": {
           const s = await find(msg.sessionId);
@@ -2743,83 +2619,6 @@ export function createDaemon(opts: {
             return reply(msg.type === "session.rewind" ? (await s.rewind(msg.userMessageId, msg.mode), {}) : await s.previewRewind(msg.userMessageId));
           } catch (err) {
             return fail("rewind_failed", (err as Error).message);
-          }
-        }
-        case "fs.search": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (typeof msg.query !== "string") return fail("bad_query", "query must be a string");
-          // A symlink pointing outside the roots is not offered: the SDK would read its target (like fs.read refuses it).
-          return reply({ paths: (await searchFiles(cwd, msg.query, 50, (await reposOf(cwd, lastOpen.get(cwd) ?? []).then((r) => r.repos, () => [])), inside)).filter((p) => allowed(join(cwd, p))) });
-        }
-        case "fs.grep": {
-          grepping?.abort();
-          grepping = undefined;
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          if (typeof msg.query !== "string" || (msg.globs !== undefined && typeof msg.globs !== "string") || [msg.regex, msg.includeIgnored].some((b) => b !== undefined && typeof b !== "boolean")) return fail("bad_query", "query and globs must be strings, regex and includeIgnored booleans");
-          if (!msg.query.trim()) return reply({ files: [], matches: 0, ms: 0, includeIgnored: false, git: false } satisfies FsGrepResult);
-          if (msg.query.length > MAX_SEARCH_CHARS) return fail("bad_query", `query longer than ${MAX_SEARCH_CHARS} characters`);
-          const globs = parseGlobs(msg.globs);
-          if (typeof globs === "string") return fail("bad_glob", globs);
-          const ctl = (grepping = new AbortController());
-          try {
-            const repos = await reposOf(cwd, lastOpen.get(cwd) ?? []).then((r) => r.repos, () => []);
-            const r = await findInFiles(cwd, { query: msg.query, regex: !!msg.regex, globs, includeIgnored: msg.includeIgnored }, { signal: ctl.signal, allowed: (p) => !!allowed(p), repoAllowed: inside, repos });
-            // No query text in the log (it may hold a secret).
-            console.log(`fs.grep: ${r.files.length} files, ${r.matches} matches, ${r.ms} ms${r.stopped ? `, stopped: ${r.stopped}` : ""}`);
-            return reply(r);
-          } catch (e) {
-            return fail(e instanceof GrepError ? e.code : "fs_error", (e as Error).message);
-          } finally {
-            if (grepping === ctl) grepping = undefined;
-          }
-        }
-        case "fs.replace":
-        case "fs.replaceUndo": {
-          const isUndo = msg.type === "fs.replaceUndo";
-          const dry = !isUndo && msg.dryRun === true;
-          if (dry) {
-            replacing?.abort();
-            replacing = undefined;
-          }
-          const cwd = allowed(msg.cwd);
-          if (!cwd) return fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
-          const strs = (v: unknown, max: number) => Array.isArray(v) && v.length <= max && v.every((x) => typeof x === "string");
-          if (isUndo) {
-            if (typeof msg.id !== "string" || msg.id.length > 100 || (msg.unsaved !== undefined && !strs(msg.unsaved, 200))) return fail("bad_request", "id must be a string and unsaved at most 200 strings");
-          } else {
-            if (typeof msg.query !== "string" || !msg.query.trim() || msg.query.length > MAX_SEARCH_CHARS) return fail("bad_request", `query must be a non-blank string of at most ${MAX_SEARCH_CHARS} characters`);
-            if (typeof msg.replace !== "string" || [msg.regex, msg.dryRun].some((b) => b !== undefined && typeof b !== "boolean")) return fail("bad_request", "replace must be a string, regex and dryRun booleans");
-            const files: unknown = msg.files;
-            const lineCount = Array.isArray(files) ? files.reduce((n: number, f: { lines?: unknown[] }) => n + (Array.isArray(f?.lines) ? f.lines.length : Infinity), 0) : Infinity;
-            if (!Array.isArray(files) || files.length < 1 || files.length > GREP_LIMITS.files || lineCount > GREP_LIMITS.matches)
-              return fail("bad_request", `files must list 1 to ${GREP_LIMITS.files} files and at most ${GREP_LIMITS.matches} lines`);
-            const okFile = (f: { path?: unknown; lines?: unknown; mtime?: unknown; size?: unknown }) =>
-              typeof f?.path === "string" && Array.isArray(f.lines) && f.lines.every((n) => Number.isSafeInteger(n) && (n as number) >= 1) && [f.mtime, f.size].every((v) => v === undefined || typeof v === "number");
-            if (!files.every(okFile)) return fail("bad_request", "each file needs a path, line numbers from 1, and numeric mtime and size");
-            try {
-              matcher(msg.query, !!msg.regex);
-            } catch (e) {
-              return fail("bad_regex", (e as Error).message);
-            }
-          }
-          if (!dry) {
-            if (writingReplace) return fail("busy", "Another replace or undo is running");
-            writingReplace = true;
-          }
-          const ctl = dry ? (replacing = new AbortController()) : undefined;
-          const o = { allowed, snapshot: (f: string, why: "replace" | "restore") => localHistory.before(f, why), undo: replaceUndo, afterWrite: clearSearchCache };
-          try {
-            const r = isUndo ? await undoReplace(cwd, msg.id, msg.unsaved ?? [], o) : await replaceInFiles(cwd, { query: msg.query, regex: !!msg.regex, replace: msg.replace, dryRun: dry, files: msg.files }, { ...o, signal: ctl?.signal });
-            // Counts only: the query and the replacement may hold a secret.
-            console.log(`${msg.type}${dry ? " (dry run)" : ""}: ${r.files.length} files listed, ${r.changedFiles} changed, ${r.changedLines} lines`);
-            return reply(r);
-          } catch (e) {
-            return fail(e instanceof ReplaceError ? e.code : "fs_error", (e as Error).message);
-          } finally {
-            if (!dry) writingReplace = false;
-            if (ctl && replacing === ctl) replacing = undefined;
           }
         }
         case "sessions.search": {
@@ -2847,288 +2646,6 @@ export function createDaemon(opts: {
           // No query text in the log (it may hold a secret).
           console.log(`sessions.search: ${done.scannedFiles} files, ${Math.round(done.scannedBytes / 1e6)} MB, ${done.ms} ms, first result ${done.firstMs ?? "-"} ms${done.stopped ? `, stopped: ${done.stopped}` : ""}`);
           return reply(done);
-        }
-        case "fs.read": {
-          // GH-807: a visualize file of a session's upload folder is readable without a root covering that folder.
-          const file = allowed(msg.path) ?? visualizeReadable(msg.path, uploads.parent);
-          // A missing file whose nearest existing ancestor is allowed (deleted after an Edit, also with its directory): the changes tab shows it deleted.
-          if (!file && missingInRoots(msg.path)) return fail("not_found", `no such file: ${msg.path}`);
-          if (!file) return fail("path_not_allowed", `outside the allowlisted roots: ${msg.path}`);
-          let fd: number | undefined;
-          try {
-            fd = openChecked(file, OPEN_READ);
-            const st = fstatSync(fd);
-            if (!st.isFile()) return fail("not_a_file", `not a file: ${msg.path}`);
-            if (st.size > MAX_FILE_BYTES) return fail("too_large", `larger than ${MAX_FILE_BYTES} bytes: ${msg.path}`, st.size);
-            const t = decodeText(readAll(fd, st.size));
-            if ("code" in t) return fail(t.code, `${t.code === "binary" ? "binary file" : "not UTF-8 text"}: ${msg.path}`, st.size);
-            const content = t.content;
-            return reply({ content, mtime: st.mtimeMs });
-          } catch (err) {
-            return fsFail(err, msg.path);
-          } finally {
-            if (fd !== undefined) closeSync(fd);
-          }
-        }
-        case "media.read": {
-          if (!isPiece(msg.offset, msg.length)) return fail("bad_request", `offset and length must be integers, length at most ${MEDIA_CHUNK}`);
-          const r = await readMedia(msg);
-          return "code" in r ? fail(r.code, r.message, r.size) : reply(r);
-        }
-        case "fs.media": {
-          if (msg.hash !== undefined) {
-            const r = await readMedia({ ...msg, offset: 0, length: 0 });
-            if ("code" in r) return fail(r.code, r.message, r.size);
-            const nonce = nonceFor(`blob\0${allowed(msg.cwd)}\0${msg.hash}\0${msg.path}`);
-            const args = { path: msg.path, cwd: msg.cwd, hash: msg.hash };
-            const read: MediaRead = (offset, length) => readMedia({ ...args, offset, length }).then((x) => ("code" in x ? undefined : x));
-            const name = msg.path.split(/[\\/]/).pop() ?? "";
-            media.set(nonce, { src: { kind: "bytes", read, mime: r.mime, name }, ws, used: Date.now() });
-            return reply({ url: `/media/${nonce}/${encodeURIComponent(name)}?v=${msg.hash}`, mime: r.mime, size: r.size, mtime: 0 });
-          }
-          const file = allowed(msg.path);
-          if (!file && missingInRoots(msg.path)) return fail("not_found", `no such file: ${msg.path}`);
-          if (!file) return fail("path_not_allowed", `outside the allowlisted roots: ${msg.path}`);
-          try {
-            const st = statSync(file);
-            if (!st.isFile()) return fail("not_a_file", `not a file: ${msg.path}`);
-            const mime = mediaType(file);
-            if (!mime) return fail("unsupported_type", `not an image, video or audio file: ${msg.path}`);
-            const nonce = nonceFor(file);
-            media.set(nonce, { src: { kind: "file", path: file }, ws, used: Date.now() });
-            return reply({ url: `/media/${nonce}/${encodeURIComponent(basename(file))}?v=${st.mtimeMs}`, mime, size: st.size, mtime: st.mtimeMs });
-          } catch (err) {
-            return fail("fs_error", String(err));
-          }
-        }
-        case "fs.openExternal": {
-          if (!opts.openExternal) return fail("unknown_type", "fs.openExternal is not available here");
-          if (!sameHost) return fail("not_local", "Open in an app only works from a browser on the daemon machine");
-          if (!isOpenWith(msg.with)) return fail("bad_request", `unknown with: ${String(msg.with)}`);
-          const root = allowed(msg.cwd);
-          if (!root) return fail("cwd_not_allowed", `outside the allowlisted roots: ${String(msg.cwd)}`);
-          const target = allowed(msg.path);
-          if (!target) return missingInRoots(msg.path) ? fail("not_found", `no such file: ${msg.path}`) : fail("path_not_allowed", `outside the allowlisted roots: ${String(msg.path)}`);
-          try {
-            const isDir = statSync(target).isDirectory();
-            if (msg.with === "default" && isDir) return fail("bad_request", "a folder has no default app");
-            if (msg.with === "custom") {
-              // From the hub's own settings, never from the message.
-              const argv = parseEditorCommand(appSettings.get().editor.command);
-              const env = process.env;
-              try {
-                await opts.openExternal.run(customCommand(argv, target, root, isDir, process.platform, (n) => findOnPath({ platform: process.platform, env, exists: existsSync }, n)));
-              } catch (err) {
-                return fail((err as { code?: string }).code === "editor_missing" ? "editor_missing" : "open_failed", (err as Error).message);
-              }
-              return reply({});
-            }
-            const launcher = msg.with === "reveal" || msg.with === "default" ? undefined : opts.openExternal.editors().get(msg.with);
-            if (msg.with !== "reveal" && msg.with !== "default" && !launcher) return fail("editor_missing", `${EDITORS[msg.with].label} is not installed`);
-            const wslPath = msg.with === "reveal" || msg.with === "default" ? await opts.openExternal.winPath?.(target) : undefined;
-            await opts.openExternal.run(openCommand(process.platform, msg.with, target, root, isDir, launcher, wslPath));
-            return reply({});
-          } catch (err) {
-            return fail("open_failed", (err as Error).message);
-          }
-        }
-        case "fs.write": {
-          // Existing files only: the editor edits what the tree shows.
-          const file = allowed(msg.path);
-          if (!file) return fail("path_not_allowed", `outside the allowlisted roots: ${msg.path}`);
-          if (typeof msg.content !== "string") return fail("bad_content", "content must be a string");
-          return writeChecked(file, msg.path, msg.content, msg.baseMtime);
-        }
-        case "history.list":
-        case "history.read":
-        case "history.restore":
-        case "history.rename":
-        case "history.delete":
-        case "history.create": {
-          try {
-            if (msg.type === "history.list") return reply({ entries: await localHistory.list(msg.path) });
-            if (msg.type === "history.create") return reply({ entry: await localHistory.create(msg.path, msg.label) });
-            if (typeof msg.id !== "string") return fail("bad_request", "id must be a string");
-            if (msg.type === "history.read") return reply({ content: await localHistory.read(msg.path, msg.id) });
-            if (msg.type === "history.rename") return await localHistory.rename(msg.path, msg.id, msg.label), reply({});
-            if (msg.type === "history.delete") return await localHistory.remove(msg.path, msg.id), reply({});
-            const content = await localHistory.read(msg.path, msg.id);
-            const file = allowed(msg.path)!;
-            // The conflict check comes first inside writeChecked; the current content is snapshotted there, with reason restore.
-            return writeChecked(file, msg.path, content, msg.baseMtime, "restore");
-          } catch (e) {
-            if (e instanceof HistoryError) return fail(e.code, e.message);
-            throw e;
-          }
-        }
-        case "fs.create": {
-          const r = createEntry(fsOps, msg.path, msg.dir === true);
-          if (!("code" in r)) clearSearchCache();
-          return "code" in r ? fail(r.code, r.message) : reply(r);
-        }
-        case "fs.rename": {
-          if (msg.dir !== undefined && typeof msg.dir !== "string") return fail("bad_request", "dir must be a string");
-          const r = await renameEntry(fsOps, msg.path, msg.name, msg.dir, msg.replace === true, (f) => localHistory.before(f, "paste"));
-          if (!("code" in r)) clearSearchCache();
-          return "code" in r ? fail(r.code, r.message) : reply(r);
-        }
-        case "fs.delete": {
-          const r = await deleteEntry(fsOps, msg.path, msg.dryRun === true);
-          if (!("code" in r)) clearSearchCache();
-          return "code" in r ? fail(r.code, r.message) : reply(r);
-        }
-        case "fs.walk": {
-          const r = await walkEntry(fsOps, msg.path);
-          return "code" in r ? fail(r.code, r.message) : reply(r);
-        }
-        case "fs.copy": {
-          const r = await copyEntry(fsOps, msg.from, msg.to);
-          if (!("code" in r)) clearSearchCache();
-          return "code" in r ? fail(r.code, r.message) : reply(r);
-        }
-        case "fs.readChunk": {
-          if (!Number.isSafeInteger(msg.offset) || msg.offset < 0 || !Number.isSafeInteger(msg.length) || msg.length < 1 || msg.length > CHUNK_BYTES) return fail("bad_request", "offset and length must be integers, length 1..CHUNK_BYTES");
-          const r = await readFileChunk(fsOps, msg.path, msg.offset, msg.length);
-          return "code" in r ? fail(r.code, r.message) : reply(r);
-        }
-        case "fs.writeChunk": {
-          if (!Number.isSafeInteger(msg.offset) || msg.offset < 0 || typeof msg.data !== "string" || msg.data.length > Math.ceil(CHUNK_BYTES / 3) * 4 + 4) return fail("bad_request", "offset must be an integer, data a base64 string of at most CHUNK_BYTES");
-          if (msg.mode !== undefined && !Number.isSafeInteger(msg.mode)) return fail("bad_request", "mode must be an integer");
-          const r = await writeFileChunk(fsOps, msg.path, msg.offset, Buffer.from(msg.data, "base64"), msg.mode);
-          if (!("code" in r) && msg.offset === 0) clearSearchCache();
-          return "code" in r ? fail(r.code, r.message) : reply(r);
-        }
-        case "fs.duplicate": {
-          const r = await duplicateFile(fsOps, msg.path);
-          if (!("code" in r)) clearSearchCache();
-          return "code" in r ? fail(r.code, r.message) : reply(r);
-        }
-        case "fs.watch": {
-          if (!Array.isArray(msg.paths)) return fail("bad_paths", "paths must be an array");
-          // Only the diff: re-arming a kept path would take a new stat baseline and drop a change made since the last poll.
-          for (const [path, w] of watched)
-            if (!msg.paths.includes(path)) {
-              unwatchFile(w.real, w.listener);
-              watched.delete(path);
-            }
-          for (const path of msg.paths) {
-            const canon = allowed(path);
-            if (!canon || watched.has(path)) continue;
-            // Parent folder dev/ino (not the file's: an atomic rename-write changes the file's inode).
-            const dir = dirname(canon);
-            let id;
-            try {
-              id = statSync(dir, { bigint: true });
-            } catch {
-              continue;
-            }
-            // GH-323: a link or swapped folder ends the watch, nothing is sent. A deleted file (real undefined) still reports.
-            const listener = (curr: Stats, prev: Stats) => {
-              const r = real(canon);
-              const now = statSync(dir, { bigint: true, throwIfNoEntry: false });
-              if ((r !== undefined && r !== canon) || !now || now.dev !== id.dev || now.ino !== id.ino) {
-                unwatchFile(canon, listener);
-                watched.delete(path);
-              } else if (curr.mtimeMs !== prev.mtimeMs) send(ws, { type: "fs.changed", path, mtime: curr.mtimeMs });
-            };
-            watchFile(canon, { interval: WATCH_INTERVAL_MS }, listener);
-            watched.set(path, { real: canon, listener });
-          }
-          return reply({ watching: [...watched.keys()] });
-        }
-        case "terminal.create": {
-          const cwd = allowed(msg.cwd);
-          if (!cwd || !statSync(cwd).isDirectory()) return fail("cwd_not_allowed", `not a directory inside the allowlisted roots: ${msg.cwd}`);
-          if (isRemoving(cwd)) return fail("worktree_removing", "This worktree is being removed");
-          if (!isSize(msg.cols) || !isSize(msg.rows)) return fail("bad_size", "cols and rows must be integers from 1 to 1000");
-          if (msg.login !== undefined && msg.login !== true) return fail("bad_request", "login must be true");
-          const full = terminals.limit(ws);
-          if (full) return fail("too_many_terminals", full);
-          try {
-            const login = msg.login && { file: opts.claudeBin ?? claudeBin(), args: ["auth", "login"], title: "Claude login", onExit: (code: number) => code === 0 && claudeLoginChanged() };
-            return reply({ terminal: terminals.create(cwd, msg.cols, msg.rows, ws, login || undefined) });
-          } catch (err) {
-            return fail("spawn_failed", String(err));
-          }
-        }
-        case "terminal.list": {
-          const cwd = allowed(msg.cwd);
-          return reply({ terminals: cwd ? terminals.list(cwd) : [] });
-        }
-        case "terminal.detach":
-          attached.get(msg.terminalId)?.();
-          attached.delete(msg.terminalId);
-          return reply({});
-        case "terminal.attach":
-        case "terminal.input":
-        case "terminal.resize":
-        case "terminal.close": {
-          const t = terminals.get(msg.terminalId);
-          if (!t) return fail("unknown_terminal", `no terminal ${msg.terminalId}`);
-          if (msg.type === "terminal.attach") {
-            const { buffer, detach } = terminals.attach(t, {
-              output: (data) => send(ws, { type: "terminal.output", terminalId: t.id, data }),
-              backlog: () => ws.bufferedAmount,
-              exit: (exitCode) => (attached.delete(t.id), send(ws, { type: "terminal.exit", terminalId: t.id, exitCode })),
-            });
-            attached.get(t.id)?.();
-            attached.set(t.id, detach);
-            return reply({ buffer });
-          }
-          if (msg.type === "terminal.input") {
-            if (typeof msg.data !== "string") return fail("bad_input", "data must be a string");
-            if (Buffer.byteLength(msg.data) > MAX_TERMINAL_INPUT_BYTES) return fail("too_large", `terminal input larger than ${MAX_TERMINAL_INPUT_BYTES} bytes`);
-            const err = terminals.write(t, msg.data);
-            if (err) return fail(err, { input_backlog: "the shell has not read the earlier input yet; send again later", unknown_terminal: "the terminal is closed", write_failed: "writing to the terminal failed" }[err]);
-          } else if (msg.type === "terminal.resize") {
-            if (!isSize(msg.cols) || !isSize(msg.rows)) return fail("bad_size", "cols and rows must be integers from 1 to 1000");
-            terminals.resize(t, msg.cols, msg.rows);
-          } else terminals.close(t);
-          return reply({});
-        }
-        case "mcp.list":
-        case "mcp.toggle":
-        case "mcp.reconnect":
-        case "mcp.authenticate":
-        case "mcp.oauthCallback":
-        case "mcp.clearAuth":
-        case "mcp.add":
-        case "mcp.remove":
-        case "plugins.list":
-        case "plugins.install":
-        case "plugins.uninstall":
-        case "plugins.setEnabled":
-        case "plugins.update":
-        case "plugins.reload":
-        case "plugins.restart":
-        case "marketplace.list":
-        case "marketplace.add":
-        case "marketplace.remove":
-        case "marketplace.update":
-        case "skills.list":
-        case "skills.setState": {
-          if (missingInRoots(msg.cwd))
-            return fail("bad_cwd", `Working directory not found: ${msg.cwd}. If this session's folder was deleted, re-open the project and try again.`);
-          const cwd = allowed(msg.cwd);
-          if (!cwd || !statSync(cwd).isDirectory()) return fail("cwd_not_allowed", `not a directory inside the allowlisted roots: ${msg.cwd}`);
-          if (!msg.type.startsWith("mcp.") && !msg.type.startsWith("skills."))
-            try {
-              const r = await plugins.handle(msg as PluginsRequest, cwd);
-              if (!msg.type.endsWith(".list")) commandCache.clear();
-              return reply(r);
-            } catch (e) {
-              return fail(e instanceof ConfigError ? e.code : "plugins_failed", (e as Error).message);
-            }
-          // The session's running query when it runs in that project; otherwise the project's config query.
-          const s = "sessionId" in msg && typeof msg.sessionId === "string" ? sessions.get(msg.sessionId) : undefined;
-          try {
-            const live = s?.cwd === cwd ? s.claudeQuery() : undefined;
-            const r = msg.type.startsWith("skills.") ? await config.skills(msg as SkillsRequest, cwd, live) : await config.mcp(msg as McpRequest, cwd, live);
-            if (msg.type === "skills.setState") commandCache.clear();
-            return reply(r);
-          } catch (e) {
-            return fail(e instanceof ConfigError ? e.code : msg.type.startsWith("skills.") ? "skills_failed" : "mcp_failed", (e as Error).message);
-          }
         }
         default:
           return fail("unknown_type", `unknown message type ${(msg as { type?: string }).type}`);
@@ -3228,7 +2745,6 @@ export function createDaemon(opts: {
 /** The options of `createDaemon` (the areas name the ones they read). */
 export type DaemonOptions = Parameters<typeof createDaemon>[0];
 
-const isSize = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 1 && (n as number) <= 1000;
 
 
 /**
