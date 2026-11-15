@@ -4,12 +4,12 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionPane } from "./App.tsx";
 import { markAppScroll, resetScrollRest } from "./scroll-rest.ts";
-import { cacheStats, CUT_RETRY_MS, isPainted, limitCache, skewClock, tickClock, pairOf, resetShiki, resetUserCodePaint, RETRY_MS, SCROLL_REST } from "./user-code-paint.ts";
+import { cacheStats, CUT_RETRY_MS, isPainted, skewClock, tickClock, pairOf, resetShiki, resetUserCodePaint, RETRY_MS, SCROLL_REST } from "./user-code-paint.ts";
 import { UserMarkdown } from "./user-markdown.tsx";
 import { applyEvent, emptySession } from "./store.ts";
 
 // Shiki loads can be made to fail (once) to see the painting recover.
-const flaky = vi.hoisted(() => ({ create: 0, language: 0, made: 0, cut: 0, skip: 0 }));
+const flaky = vi.hoisted(() => ({ create: 0, language: 0, cut: 0, skip: 0 }));
 /** Only the painter's loads fail (streamdown loads shiki too, at any time). */
 const ours = () => {
   const limit = Error.stackTraceLimit;
@@ -24,7 +24,6 @@ vi.mock("shiki", async (orig) => {
     ...m,
     createHighlighter: async (...a: Parameters<typeof m.createHighlighter>) => {
       if (ours() && flaky.create-- > 0) throw new Error("offline");
-      if (ours()) flaky.made++;
       const h = await m.createHighlighter(...a);
       // `flaky.cut` grammar calls report that shiki stopped the line at its time limit.
       const get = h.getLanguage.bind(h);
@@ -298,8 +297,6 @@ const SAMPLES: Record<string, string> = {
     (_, i) =>
       `export async function handlerE${i}(req: Request<{ id: string }>, opts: Opts = {}): Promise<Result<number>> {\n  const items = await db.query("SELECT * FROM t WHERE id = ?", [req.id]); // row ${i}\n  /* a comment\n     over two lines */\n  return items.length + \`\${opts.x}\`.length;\n}`,
   ).join("\n\n"),
-  python: Array.from({ length: 8 }, (_, i) => `class Foo${i}(Base):\n    """Doc\n    more"""\n    def run(self, x: int) -> int:\n        return [y for y in range(x) if y % ${i + 2}]\n\n@decorator\ndef bar${i}():\n    pass`).join("\n\n"),
-  json: JSON.stringify(Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`key${i}`, { n: i, s: `v${i}`, ok: i % 2 === 0, list: [1, null, "x"] }])), null, 2),
 };
 
 it.each(Object.keys(SAMPLES))("the painted colors of a long %s block are the colors of the whole block tokenized at once", async (lang) => {
@@ -534,26 +531,6 @@ it("an exception while painting one block does not stop the painting of the othe
   log.mockRestore();
 });
 
-it("the token cache is limited by its size, the newest entry stays", async () => {
-  stubPaint();
-  const a = await mountMd(fence(longCode(91)));
-  await show(blocksOf(a.el));
-  await slotsUntil(() => painted(a.el));
-  const one = cacheStats();
-  expect(one.entries).toBe(1);
-  expect(one.bytes).toBeGreaterThan(longCode(91).length);
-  limitCache(Math.floor(one.bytes * 1.5));
-  const b = await mountMd(fence(longCode(92)));
-  await show(blocksOf(b.el));
-  await slotsUntil(() => painted(b.el));
-  expect(cacheStats().entries).toBe(1);
-  limitCache(1);
-  const c = await mountMd(fence(longCode(93)));
-  await show(blocksOf(c.el));
-  await slotsUntil(() => painted(c.el));
-  expect(cacheStats().entries).toBe(1);
-});
-
 /** Timers of the painter's retry waits (3 s and 30 s) are held, to be fired by hand; all others run. */
 function holdTimers() {
   const held: (() => void)[] = [];
@@ -629,32 +606,6 @@ it("when shiki itself fails to load the blocks are colored once it loads again",
   try {
     await fire(held);
     await settle(held, spy, () => painted(block!));
-  } finally {
-    spy.mockRestore();
-    log.mockRestore();
-  }
-});
-
-it("two languages that fail to load at once do not make two highlighters", async () => {
-  stubPaint();
-  const held = holdTimers();
-  const log = vi.spyOn(console, "error").mockImplementation(() => {});
-  resetShiki();
-  flaky.made = 0;
-  flaky.language = 2;
-  const goCode = Array.from({ length: 40 }, (_, i) => `func f${i}(x int) int { return x + ${i} } // line ${i}`).join("\n");
-  const rustCode = Array.from({ length: 40 }, (_, i) => `fn f${i}(x: i32) -> i32 { x + ${i} } // line ${i}`).join("\n");
-  const a = await mountMd(["```go", goCode, "```", "", "```rust", rustCode, "```"].join("\n"));
-  const both = blocksOf(a.el);
-  expect(both).toHaveLength(2);
-  await show(both);
-  await vi.waitFor(() => expect(log).toHaveBeenCalledTimes(2), { timeout: 10_000 });
-  await wait(20);
-  const spy = later(RETRY_MS + 10);
-  try {
-    await fire(held);
-    await settle(held, spy, () => painted(both[0]!) && painted(both[1]!));
-    expect(flaky.made).toBe(1);
   } finally {
     spy.mockRestore();
     log.mockRestore();

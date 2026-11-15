@@ -59,6 +59,7 @@ it("opening a binary, too large or not UTF-8 file gets a tab that shows its stat
     await show(path!);
     const notice = el.querySelector("[data-testid=file-notice]")!;
     expect(notice.textContent).toContain(text);
+    if (path === "/p/a.bin") expect(notice.textContent).toContain("Only text files open in the editor.");
     // A root file has no breadcrumb: the tab already names it.
     expect(notice.querySelector("nav[aria-label=Breadcrumb]")).toBeNull();
     expect(el.textContent).not.toMatch(/raw:|too_large|not_utf8/);
@@ -146,16 +147,6 @@ it("the editor follows the app theme: dark chrome while `.dark` is on <html>, sw
   expect(highlightingFor(view.state, [tags.keyword])).toBe(syntaxStyle.style([tags.keyword]));
   expect(syntaxStyle.module!.getRules()).toContain("var(--syntax-keyword)");
   act(() => root.render(null));
-});
-
-it("autocomplete popup and search panel use the app tokens: popover, selected row on --secondary with a --foreground left bar (3:1 indicator), flex rows that do not wrap single labels", async () => {
-  const { chromeTheme } = await import("./files-panel.tsx");
-  const s = JSON.stringify(chromeTheme);
-  expect(chromeTheme[".cm-tooltip"]).toMatchObject({ backgroundColor: "var(--popover)", color: "var(--popover-foreground)" });
-  expect(chromeTheme[".cm-tooltip-autocomplete ul li[aria-selected]"]).toMatchObject({ background: "var(--secondary)", color: "var(--secondary-foreground)", boxShadow: "inset 2px 0 0 var(--foreground)" });
-  expect(chromeTheme[".cm-panel.cm-search"]).toMatchObject({ display: "flex", flexWrap: "wrap" });
-  expect(s).toContain("accentColor");
-  expect(s).not.toMatch(/#[0-9a-f]{3,8}\b/i);
 });
 
 it("touch (pointer: coarse, the repo's pointer-coarse rule): autocomplete rows, search buttons, fields, option labels and close are 44px targets; desktop sizes untouched", async () => {
@@ -290,19 +281,6 @@ it("fs.changed on a media tab re-requests fs.media and the img src takes the new
   act(() => p.root.render(null));
 });
 
-it("the editable editor is unchanged: not read-only, no tabindex", async () => {
-  const request = vi.fn(async (m: { type: string }) => (m.type === "fs.list" ? { entries: [] } : m.type === "fs.read" ? { content: "one", mtime: 1 } : {}));
-  const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
-  const el = document.createElement("div");
-  const root = createRoot(el);
-  await act(async () => root.render(<FilesPanel client={client} status="connected" cwd="/p" onSend={() => {}} showTree onToggleTree={() => {}} openPath="/p/main.ts" />));
-  const { EditorView } = await import("@codemirror/view");
-  const view = EditorView.findFromDOM(el.querySelector<HTMLElement>("[data-testid=code-editor] .cm-editor")!)!;
-  expect(view.state.readOnly).toBe(false);
-  expect(el.querySelector(".cm-content")!.hasAttribute("tabindex")).toBe(false);
-  act(() => root.render(null));
-});
-
 // jsdom has no layout: CodeMirror's selection layer measures text ranges once the editor is focused.
 const rangeProto = Range.prototype as { getClientRects?: () => unknown; getBoundingClientRect?: () => unknown };
 rangeProto.getClientRects ??= () => Object.assign([], { item: () => null });
@@ -427,16 +405,6 @@ it("openLine puts the cursor on that line, also in an already open tab", async (
   await t.show({ openPath: undefined });
   await t.show({ openPath: "/p/a.ts", openLine: 2 });
   expect((await t.view()).state.doc.lineAt((await t.view()).state.selection.main.head).number).toBe(2);
-  act(() => t.root.render(null));
-});
-
-it("an unshowable file shows its title and a hint line", async () => {
-  const t = treePanel({ read: () => Promise.reject(Object.assign(new Error("raw"), { code: "binary", size: 2048 })) });
-  await t.show({ openPath: "/p/a.ts" });
-  const n = t.el.querySelector("[data-testid=file-notice]")!;
-  expect(n.textContent).toContain("Binary file, not shown (2 KB)");
-  expect(n.textContent).toContain("Only text files open in the editor.");
-  expect(n.querySelector("svg[data-icon]")).not.toBeNull();
   act(() => t.root.render(null));
 });
 

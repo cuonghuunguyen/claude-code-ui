@@ -241,8 +241,6 @@ describe("dedupePasteTokens", () => {
   it("keeps the first token, inlines a copy in the middle and at the end", () => {
     expect(dedupePasteTokens(`${A} mid ${A} end`, pastes, 0)?.text).toBe(`${A} mid a\nb\nc\nd end`);
     expect(dedupePasteTokens(`${A}${A}`, pastes, 0)?.text).toBe(`${A}a\nb\nc\nd`);
-  });
-  it("handles several copies of two ids", () => {
     expect(dedupePasteTokens(`${A}${B}${A}${B}${A}`, pastes, 0)?.text).toBe(`${A}${B}a\nb\nc\ndx\nya\nb\nc\nd`);
   });
   it("leaves a token without an entry literal", () => {

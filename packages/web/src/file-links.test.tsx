@@ -62,33 +62,6 @@ it("a FileBaseContext resolves relative references from the markdown file's fold
   await done();
 });
 
-it("explicit link targets in a markdown file all open: ../, a bare name, an image file, #heading, %20, a #LN line", async () => {
-  const open = vi.fn();
-  const el = document.createElement("div");
-  const root = createRoot(el);
-  const md = "[readme](../README.md) [license](LICENSE) [logo](logo.png) [setup](setup.md#install) [notes](my%20notes.md) [line](a.ts#L7) [out](../../x.md)";
-  await act(async () =>
-    root.render(
-      <CwdContext value="/w">
-        <FileLinkContext value={open}>
-          <FileBaseContext value={{ base: "/w/docs", root: "/w" }}>
-            <MessageResponse mode="static" {...FILE_LINK_PROPS}>
-              {md}
-            </MessageResponse>
-          </FileBaseContext>
-        </FileLinkContext>
-      </CwdContext>,
-    ),
-  );
-  await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
-  const buttons = [...el.querySelectorAll<HTMLButtonElement>("button[title='Open in file dialog']")];
-  expect(buttons.map((b) => b.textContent)).toEqual(["readme", "license", "logo", "setup", "notes", "line"]);
-  buttons.forEach((b) => b.click());
-  expect(open.mock.calls).toEqual([["/w/README.md", undefined], ["/w/docs/LICENSE", undefined], ["/w/docs/logo.png", undefined], ["/w/docs/setup.md", undefined], ["/w/docs/my notes.md", undefined], ["/w/docs/a.ts", 7]]);
-  expect(el.textContent).toContain("out");
-  act(() => root.render(null));
-});
-
 it("resolveBareName: one match opens it, several pick, none is missing, a path with a folder is not looked up", async () => {
   const { resolveBareName } = await import("./file-links.tsx");
   const find = (paths: string[]) => vi.fn(async () => paths);

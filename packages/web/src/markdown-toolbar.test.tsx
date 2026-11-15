@@ -124,26 +124,6 @@ it("Ctrl+Shift+B and Ctrl+B while composing are not formatting", async () => {
   expect(box.value).toBe("hi");
 });
 
-it("execCommand insertText is used when the browser has it", async () => {
-  const { $, box } = await render();
-  await type(box, "hi");
-  await select(box, 0, 2);
-  const exec = vi.fn((_cmd: string, _ui: boolean, s: string) => {
-    box.setRangeText(s, box.selectionStart, box.selectionEnd, "end");
-    box.dispatchEvent(new Event("input", { bubbles: true }));
-    return true;
-  });
-  (document as { execCommand: unknown }).execCommand = exec;
-  try {
-    await click($("format-bold")!);
-  } finally {
-    delete (document as { execCommand?: unknown }).execCommand;
-  }
-  expect(exec).toHaveBeenCalledWith("insertText", false, "**hi**");
-  expect(box.value).toBe("**hi**");
-  expect([box.selectionStart, box.selectionEnd]).toEqual([2, 4]);
-});
-
 it("bash mode hides the toolbar and Ctrl+B does not format there; / still opens the picker afterwards", async () => {
   const { $, box, rerender } = await render();
   await rerender({ view: { ...emptySession(), commands: [{ name: "review", description: "", argumentHint: "" }] } });

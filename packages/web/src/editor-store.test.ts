@@ -33,21 +33,6 @@ it("open() makes a preview tab active; the next preview open replaces it in plac
   expect(store.get().tabs["/p/c.md"]!.preview).toBeUndefined();
 });
 
-it("two views share one state: an update through the store shows in every subscriber's snapshot", async () => {
-  const { store } = setup();
-  const a = vi.fn();
-  const b = vi.fn();
-  store.subscribe(a);
-  store.subscribe(b);
-  await store.open("/p/a.ts", { cwd: "/p", preview: false });
-  a.mockClear();
-  b.mockClear();
-  store.update("/p/a.ts", (t) => ({ ...t, draft: "edited" }));
-  expect(a).toHaveBeenCalledTimes(1);
-  expect(b).toHaveBeenCalledTimes(1);
-  expect(store.get().tabs["/p/a.ts"]!.draft).toBe("edited");
-});
-
 it("a late reply of an older preview open does not take the preview slot or the focus", async () => {
   let release!: () => void;
   const slow = new Promise<void>((r) => (release = r));

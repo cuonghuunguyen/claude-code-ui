@@ -140,22 +140,11 @@ it("a click inside the dialog keeps focus in the search box", async () => {
   expect(document.activeElement).toBe(input);
 });
 
-it("has no footer key-hint bar (OpenCode has none)", async () => {
-  const { el } = await render();
-  expect(el.textContent).not.toContain("navigate");
-});
-
-it("shows the error when the search fails", async () => {
-  const { el, type, onSearch } = await render();
-  onSearch.mockRejectedValueOnce(new Error("Not connected"));
-  await type("x");
-  expect(el.textContent).toContain("Not connected");
-});
-
 it("a failed search offers Retry, which searches again", async () => {
   const { el, type, onSearch, rows } = await render();
   onSearch.mockRejectedValueOnce(new Error("timed out"));
   await type("a");
+  expect(el.textContent).toContain("timed out");
   const retry = [...el.querySelectorAll("button")].find((b) => b.textContent === "Retry")!;
   await act(async () => retry.click());
   expect(onSearch).toHaveBeenLastCalledWith("a");
