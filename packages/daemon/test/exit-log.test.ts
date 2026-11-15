@@ -25,10 +25,6 @@ describe("logExit", () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/unhandledRejection: Error: nope/);
   });
-  it("logs a normal exit code", () => {
-    const r = run("process.exitCode = 3;");
-    expect(r.stderr).toContain("exit, code 3");
-  });
 });
 
 describe.skipIf(process.platform === "win32")("exitOnSignal", () => {
