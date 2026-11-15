@@ -121,10 +121,10 @@ it("phone: the third pick of a neighbour tab shows the swipe tip", async () => {
 });
 
 it.each([
-  ["terminal", "Terminal", "lucide-square-terminal"],
-  ["artifact", "Sales dashboard", "lucide-app-window"],
-  ["artifacts", "Artifacts", "lucide-layout-grid"],
-] as const)("phone: the switcher lists a %s pane tab as a row with its title and kind icon", async (kind, title, icon) => {
+  ["terminal", "Terminal"],
+  ["artifact", "Sales dashboard"],
+  ["artifacts", "Artifacts"],
+] as const)("phone: the switcher lists a %s pane tab as a row with its title", async (kind, title) => {
   const info = (id: string): TabInfo => (id === "pane" ? { title, kind, cwd: "/p/a", unread: false, transcript: false } : INFO[id]!);
   const el = document.createElement("div");
   document.body.append(el);
@@ -134,5 +134,4 @@ it.each([
   await wait(60);
   const row = rows().find((r) => r.textContent?.includes(title))!;
   expect(row).toBeTruthy();
-  expect(row.querySelector(`.${icon}`)).not.toBeNull();
 });

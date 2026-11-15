@@ -265,7 +265,6 @@ describe("removal", () => {
     const listed = await worktreeStatus(main, path, allowed);
     expect(listed).toMatchObject({ uncommitted: 0, ahead: 0, safety: "safe" });
     change(path);
-    markWorktreeStale(path);
     await expect(removeWorktree(main, path, allowed, { deleteBranch: true, expectSafe: true, expect: { uncommitted: 0, ahead: 0, ignored: 0 } })).rejects.toMatchObject({ code: "stale" });
     expect(statSync(path).isDirectory()).toBe(true);
     expect(existsSync(join(path, "a.txt"))).toBe(true);

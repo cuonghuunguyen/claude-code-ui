@@ -50,11 +50,7 @@ When("I open the provider row {string}", async ({ page }, name: string) => {
 });
 
 When("I pick the login method {string}", async ({ page }, label: string) => {
-  const form = t(page, "settings-opencode-connect-form");
-  const method = form.getByLabel(label, { exact: true });
-  // A provider with one login method shows its form without a method list.
-  await expect(method.or(t(page, "settings-opencode-key"))).toBeVisible();
-  if (await method.count()) await method.check();
+  await t(page, "settings-opencode-connect-form").getByLabel(label, { exact: true }).check();
 });
 
 When("I type the API key {string} and connect", async ({ page }, key: string) => {
