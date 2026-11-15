@@ -63,9 +63,16 @@ const orderedParts = (view: SessionView): Part[] => view.order.flatMap((id) => {
  * optimistic prompts (they are not part of the view).
  */
 export function serializeView(view: SessionView, info: SessionInfo, title: string, cap = MAX_SESSION_CHARS): string | undefined {
+  return serializeViewRecord(view, info, title, cap)?.json;
+}
+
+/** `serializeView` with the fact whether the record was cut to the cap (decided here, not read back from the text). */
+export function serializeViewRecord(view: SessionView, info: SessionInfo, title: string, cap = MAX_SESSION_CHARS): { json: string; trimmed: boolean } | undefined {
   if (view.stale) return undefined;
   const full = JSON.stringify(toRecord(view, info, title, orderedParts(view)));
-  return full.length <= cap ? full : trimToCap(view, info, title, cap);
+  if (full.length <= cap) return { json: full, trimmed: false };
+  const json = trimToCap(view, info, title, cap);
+  return json === undefined ? undefined : { json, trimmed: true };
 }
 
 /**
@@ -228,8 +235,13 @@ export type ViewCacheOptions = { factory?: IDBFactory; now?: () => number; setTi
 export type SaveOptions = { openTabsByUsed?: string[]; listedIds?: string[] };
 
 export type ViewCache = {
-  /** One read of meta, list, viewMeta, then viewData of `tabIds`; empty on any failure, on timeout (late result dropped), on token or schema mismatch (cache cleared). */
-  hydrate(o: { tokenHash: string; tabIds: string[]; timeoutMs?: number }): Promise<Hydrated>;
+  /**
+   * One read of meta, list, viewMeta, then viewData of `tabIds`; empty on any failure, on timeout, on token or schema mismatch (cache cleared). A read that finishes after
+   * the timeout is passed to `onLate` (the caller decides whether it is still of use); a timeout means "unknown", not "nothing stored".
+   */
+  hydrate(o: { tokenHash: string; tabIds: string[]; timeoutMs?: number; onLate?: (h: Hydrated) => void }): Promise<Hydrated>;
+  /** The stored meta alone (undefined: none stored, or the cache is unavailable). */
+  readMeta(): Promise<CacheMeta | undefined>;
   readView(id: string): Promise<CachedView | undefined>;
   /** Puts every cacheable entry (committed at once), then evicts in a second transaction (age, caps; the not listed rule only when `listedIds` is given). */
   saveViews(entries: SaveEntry[], o?: SaveOptions): Promise<void>;
@@ -351,7 +363,7 @@ export function createViewCache(opt: ViewCacheOptions = {}): ViewCache {
     get available() {
       return !unavailable;
     },
-    async hydrate({ tokenHash: hash, tabIds, timeoutMs = HYDRATE_MS }) {
+    async hydrate({ tokenHash: hash, tabIds, timeoutMs = HYDRATE_MS, onLate }) {
       const empty: Hydrated = { views: new Map() };
       let late = false;
       const work = guard<Hydrated>(empty, async (db) => {
@@ -361,7 +373,6 @@ export function createViewCache(opt: ViewCacheOptions = {}): ViewCache {
           reqP(tx.objectStore(LIST).get("list")) as Promise<CachedList | undefined>,
           reqP(tx.objectStore(VIEW_META).getAll()) as Promise<ViewMeta[]>,
         ]);
-        if (late) return empty;
         if (!meta) return empty;
         if (meta.schema !== SCHEMA || meta.tokenHash !== hash) {
           await clearAll(db);
@@ -370,7 +381,6 @@ export function createViewCache(opt: ViewCacheOptions = {}): ViewCache {
         const have = new Set(metas.map((m) => m.id));
         const views = new Map<string, CachedView>();
         const rows = await Promise.all(tabIds.filter((id) => have.has(id)).map(async (id) => [id, (await reqP(tx.objectStore(VIEW_DATA).get(id))) as { json: string } | undefined] as const));
-        if (late) return empty;
         for (const [id, row] of rows) {
           const v = row && reviveView(row.json);
           if (v) views.set(id, v);
@@ -384,10 +394,12 @@ export function createViewCache(opt: ViewCacheOptions = {}): ViewCache {
           resolve(empty);
         }, timeoutMs);
       });
+      void work.then((h) => late && h.meta && onLate?.(h));
       const result = await Promise.race([work, timeout]);
       cancel?.();
       return result;
     },
+    readMeta: () => guard<CacheMeta | undefined>(undefined, async (db) => (await reqP(db.transaction(META, "readonly").objectStore(META).get("meta"))) as CacheMeta | undefined),
     readView: (id) =>
       guard<CachedView | undefined>(undefined, async (db) => {
         const row = (await reqP(db.transaction(VIEW_DATA, "readonly").objectStore(VIEW_DATA).get(id))) as { json: string } | undefined;
@@ -397,8 +409,8 @@ export function createViewCache(opt: ViewCacheOptions = {}): ViewCache {
       guard<void>(undefined, async (db) => {
         const t = now();
         const rows = entries.flatMap((e) => {
-          const json = serializeView(e.view, e.info, e.title);
-          return json === undefined ? [] : [{ id: e.id, json, meta: { id: e.id, savedAt: t, chars: json.length, trimmed: json.includes('"trimmed":true') } satisfies ViewMeta }];
+          const rec = serializeViewRecord(e.view, e.info, e.title);
+          return rec === undefined ? [] : [{ id: e.id, json: rec.json, meta: { id: e.id, savedAt: t, chars: rec.json.length, trimmed: rec.trimmed } satisfies ViewMeta }];
         });
         await putNow(db, [VIEW_META, VIEW_DATA], (tx) => {
           for (const r of rows) {

@@ -394,6 +394,8 @@ export function App() {
   const fromCache = useRef(new Set<string>());
   const cacheGate = useRef<Promise<unknown>>(Promise.resolve());
   const savedSeq = useRef(new Map<string, number>());
+  /** Something newer than the cache was applied (a daemon hello, a real list, a subscribe reply): a cache read that finishes late is dropped. */
+  const newerThanCache = useRef(false);
   /** The `daemon_hello` of the current connection (undefined: none yet, or an older daemon). */
   const helloRef = useRef<DaemonHello>(undefined);
   const saver = useRef<ReturnType<typeof createSaveScheduler>>(undefined);
@@ -870,9 +872,12 @@ export function App() {
   function applyList(reply: ListResult, sessions: ListResult["sessions"], gen?: number) {
     const { projects, recentProjects = [], permissionModes, engines: listedEngines, sideEngines: listedSideEngines, sides, docker, ssh, cwdSides = {}, worktrees = {} } = reply;
     if (gen !== undefined) {
+      newerThanCache.current = true;
       // A project removed here or by another client: its session tabs close (they would show a session no longer listed).
+      // The page-load hash session is kept on the first list (as before the cache): its own subscribe forgets it when unknown, and addProject may add its project.
       const listed = new Set(sessions.map((s) => s.id));
-      closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd))).map((s) => s.id)));
+      const first = restored.current !== undefined;
+      closeTabs(new Set(listRef.current.filter((s) => !listed.has(s.id) && !projects.includes(projectCwd(s.cwd)) && !(first && s.id === hashId())).map((s) => s.id)));
     }
     setList(sessions.map((s) => ({ ...s, title: cleanTitle(s.title) })));
     if (gen !== undefined && gen === connGen.current) listFresh.current = true;
@@ -964,9 +969,20 @@ export function App() {
   async function hydrateCache(): Promise<Hydrated | undefined> {
     const sp = splitRef.current;
     const owners = [activeRef.current, ...(sp?.ids ?? []), ...tabsRef.current, hashId()].filter((t): t is string => !!t && t !== NEW_TAB && t !== FOCUS_TAB).map(ownerOf);
-    const h = await cache!.hydrate({ tokenHash: tokenHash(storedToken() ?? ""), tabIds: [...new Set(owners)] });
+    // A read over the cap is "unknown" (cachedMeta stays undefined, the hello reads the stored meta itself); its late result is drawn only while nothing newer is.
+    const onLate = (late: Hydrated) => {
+      if (newerThanCache.current || helloRef.current) return;
+      cachedMeta.current ??= late.meta;
+      flushSync(() => applyHydrated(late));
+    };
+    const h = await cache!.hydrate({ tokenHash: tokenHash(storedToken() ?? ""), tabIds: [...new Set(owners)], onLate });
     cachedMeta.current = h.meta;
     return h.meta ? h : undefined;
+  }
+
+  /** The stored meta for the daemon check at the hello; at most 1 s (a stuck database counts as nothing stored: no clear, the resync goes on). */
+  function readMetaCapped(): Promise<CacheMeta | undefined> {
+    return Promise.race([cacheGate.current.then(() => cache!.readMeta()), new Promise<undefined>((r) => setTimeout(r, 1000))]).catch(() => undefined);
   }
 
   /** Draws the cached list and the open tabs' views. */
@@ -1049,6 +1065,7 @@ export function App() {
         for (const k of runRequested.current) if (k.startsWith(`${sessionId}:`)) runRequested.current.delete(k);
       }
       fromCache.current.delete(sessionId);
+      newerThanCache.current = true;
       setViews((v) => ({ ...v, [sessionId]: merged ?? (withSubscribe(v[sessionId] ?? emptySession(), r) as SessionView) }));
       setInfos((i) => ({ ...i, [sessionId]: r.session }));
       setFailedTabs((f) => (f.has(sessionId) ? new Set([...f].filter((x) => x !== sessionId)) : f));
@@ -1787,23 +1804,35 @@ export function App() {
         connGen.current++;
         listFresh.current = false;
         helloRef.current = hello;
-        // View cache (GH-771): written for another daemon (or for none we know): nothing of it applies, the page starts as without a cache. Without a hello (older daemon) nothing is known: keep.
+        // View cache (GH-771): meta of another daemon stored: nothing of the cache applies, the page starts as without a cache. Without a hello (older daemon) nothing is known: keep.
+        // An unknown stored meta (the load read timed out or failed) is read now; none stored (a first load) or unreadable: nothing to clear, only the meta is written.
         if (hello && cache) {
-          const other = cachedMeta.current?.daemonId !== hello.daemonId;
-          cachedMeta.current = { schema: 1, daemonId: hello.daemonId, tokenHash: tokenHash(storedToken() ?? "") };
-          const meta = { daemonId: hello.daemonId, tokenHash: cachedMeta.current.tokenHash };
-          if (other) {
-            cacheGate.current = cache.clear().then(() => cache.writeMeta(meta));
-            fromCache.current.clear();
-            savedSeq.current.clear();
-            viewsRef.current = {};
-            setViews({});
-            setInfos({});
-            setTitles({});
-            // The cached list's version names a list of another daemon: ask for the whole one.
-            listVersion.current = listRows.current = undefined;
-          } else void cacheGate.current.then(() => cache.writeMeta(meta));
+          newerThanCache.current = true;
+          const gen = connGen.current;
+          const tokHash = tokenHash(storedToken() ?? "");
+          const meta = { daemonId: hello.daemonId, tokenHash: tokHash };
+          const known = cachedMeta.current;
+          cachedMeta.current = { schema: 1, ...meta };
+          const stored = known ? Promise.resolve(known) : readMetaCapped();
+          void stored.then((m) => {
+            if (gen !== connGen.current) return;
+            if (m && m.daemonId !== hello.daemonId) {
+              cacheGate.current = cache.clear().then(() => cache.writeMeta(meta));
+              fromCache.current.clear();
+              savedSeq.current.clear();
+              viewsRef.current = {};
+              setViews({});
+              setInfos({});
+              setTitles({});
+              // The cached list's version names a list of another daemon: ask for the whole one.
+              listVersion.current = listRows.current = undefined;
+            } else void cacheGate.current.then(() => cache.writeMeta(meta));
+            resume();
+          });
+          return;
         }
+        resume();
+        function resume() {
         if (connGen.current > 1 && wasHidden.current) (awaitReplay.current = true, (wasHidden.current = false), clearTimeout(windowTimer.current), (windowTimer.current = setTimeout(() => (awaitReplay.current = false), 3000)));
         // The daemon sends its update state right after the connect; a restarted one has none.
         setUpdate(undefined);
@@ -1856,6 +1885,7 @@ export function App() {
           setPushOn(!!sub);
           if (sub) sendSubscription(c, sub).catch(() => {});
         });
+        }
       },
       onStatus: setStatus,
     });

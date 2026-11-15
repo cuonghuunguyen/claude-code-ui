@@ -10,6 +10,7 @@ import {
   MAX_AGE_MS,
   reviveView,
   serializeView,
+  serializeViewRecord,
   tokenHash,
   trimToCap,
   type Timer,
@@ -423,5 +424,14 @@ describe("failure rule: unavailable cache, nothing thrown, no console", () => {
     await mine.destroy();
     expect((await factory.databases()).map((d) => d.name)).not.toContain(DB_NAME);
     expect(other.available).toBe(false);
+  });
+});
+
+describe("serializeViewRecord", () => {
+  it("trimmed is the fact of the cut, not a search in the text", () => {
+    const text: Part = { type: "assistant_text", id: "a1", text: 'tool output {"trimmed":true}', streaming: false };
+    const r = serializeViewRecord(view([text]), info("s"), "T")!;
+    expect(r.json).toContain("trimmed");
+    expect(r.trimmed).toBe(false);
   });
 });

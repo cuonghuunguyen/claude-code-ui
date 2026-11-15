@@ -2,7 +2,7 @@
 
 A reload re-downloads the list and every open session over a slow phone link. The browser keeps the last session list, session infos, titles and views in IndexedDB (`claude-ui-cache`) and draws them before the socket opens; after connect each view resumes against the daemon, which sends only what changed. The cache never decides anything: the daemon's answer replaces or confirms every cached view, a cache that cannot be read means a start as without one, and no feature depends on its content.
 
-Decision to confirm: this stores session content (prompts, answers, tool output, file contents seen in tool results) on the device, in the browser profile, unencrypted. The plan recorded the project owner as having delegated this decision; the owner has not yet confirmed it. The cache is dropped when the daemon identity or the token changes, on unpair, and by the caps below (4 M characters per session, 40 M and 60 sessions in total, 14 days).
+Decision (accepted by the owner in the ticket: same exposure as the laptop): this stores session content (prompts, answers, tool output, file contents seen in tool results) on the device, in the browser profile, unencrypted. The cache is dropped when the daemon identity or the token changes, on unpair, and by the caps below (4 M characters per session, 40 M and 60 sessions in total, 14 days).
 
 ## Considered options
 
@@ -13,7 +13,7 @@ Decision to confirm: this stores session content (prompts, answers, tool output,
 
 ## Consequences
 
-- The cache is optional: no IndexedDB, private mode, quota error, an open blocked over 3 s, or a read over 300 ms means a start as today. It fails silently and never writes to the console (it would feed the browser logs).
+- The cache is optional: no IndexedDB, private mode, quota error, an open blocked over 3 s, or a read over 300 ms means a start as today. A read over 300 ms is "unknown", never "another daemon": the hello reads the stored meta itself and clears only when one is stored and differs; the late read is drawn only while nothing newer was applied. It fails silently and never writes to the console (it would feed the browser logs).
 - Cached content can be stale: a session deleted while the page was closed shows until the first list reply; after a daemon restart the footers of cached turns disappear when the resync lands (parity with a fresh load).
 - Side sessions upload hashes on the first subscribe after a reload (the hub's hello has no side epochs).
 - Two pages of one origin saving one session: the last write wins, each record is consistent.
