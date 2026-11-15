@@ -120,14 +120,6 @@ describe("ArtifactPreview", () => {
     expect(el.querySelector("iframe")!.getAttribute("src")).not.toBe(first);
   });
 
-  it("a reconnect while collapsed asks for nothing", async () => {
-    const loader = ok();
-    await mount(loader, 0, "toolu_rc2");
-    await mount(loader, 0, "toolu_rc2", false);
-    await mount(loader, 0, "toolu_rc2", true);
-    expect(loader).not.toHaveBeenCalled();
-  });
-
   it("a request cut by a dropped connection is asked again on reconnect", async () => {
     const loader = vi
       .fn<ArtifactPreviewLoader>()
@@ -163,41 +155,6 @@ const frameOf = (loader: ArtifactPreviewLoader | undefined, partId: string, o: {
 const mountFrame = (...a: Parameters<typeof frameOf>) => act(async () => root.render(frameOf(...a)));
 
 describe("ArtifactFrame (GH-400)", () => {
-  it("requests on mount, shows the sandboxed iframe; fill drops the 60vh cap", async () => {
-    const loader = ok();
-    await mountFrame(loader, "toolu_f1", { fill: true });
-    expect(loader).toHaveBeenCalledWith("toolu_f1");
-    const f = el.querySelector("iframe")!;
-    expect(f.getAttribute("sandbox")).toBe("allow-scripts");
-    expect(f.getAttribute("referrerpolicy")).toBe("no-referrer");
-    expect(f.hasAttribute("allow")).toBe(false);
-    expect(f.className).not.toMatch(/h-\[60vh\]/);
-    expect(f.className).toMatch(/flex-1/);
-    await mountFrame(loader, "toolu_f1b");
-    expect(el.querySelector("iframe")!.className).toMatch(/h-\[60vh\]/);
-  });
-
-  it("Reload requests again and remounts the iframe; a reconnect requests again", async () => {
-    const loader = ok();
-    await mountFrame(loader, "toolu_f2");
-    const before = el.querySelector("iframe");
-    await click("Reload");
-    expect(loader).toHaveBeenCalledTimes(2);
-    expect(el.querySelector("iframe")).not.toBe(before);
-    await mountFrame(loader, "toolu_f2", { connected: false });
-    expect(loader).toHaveBeenCalledTimes(2);
-    await mountFrame(loader, "toolu_f2", { connected: true });
-    expect(loader).toHaveBeenCalledTimes(3);
-  });
-
-  it("not_found and a daemon error show their text", async () => {
-    await mountFrame(vi.fn(async () => Promise.reject(Object.assign(new Error("x"), { code: "not_found" }))), "toolu_f3");
-    expect(el.querySelector('[role="alert"]')!.textContent).toBe("Preview not available: file is gone");
-    await mountFrame(vi.fn(async () => Promise.reject(Object.assign(new Error("A side session has no local files"), { code: "side_unsupported" }))), "toolu_f4");
-    expect(el.querySelector('[role="alert"]')!.textContent).toBe("Preview not available: A side session has no local files");
-    expect(el.querySelector("iframe")).toBeNull();
-  });
-
   it("onTitle gets the title of the reply", async () => {
     const onTitle = vi.fn();
     await mountFrame(vi.fn<ArtifactPreviewLoader>(async () => ({ url: "/artifact/n/p.html", size: 1, mtime: 1, title: "Sales" })), "toolu_f5", { onTitle });

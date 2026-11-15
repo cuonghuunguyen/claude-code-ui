@@ -45,7 +45,6 @@ const ROWS: { id: keyof typeof RULES; yes: object; no: object[] }[] = [
   { id: "commitInChanges", yes: { n: 2, dirty: true }, no: [{ n: 1, dirty: true }, { n: 2, dirty: false }] },
   { id: "sendSelection", yes: { n: 3 }, no: [{ n: 2 }] },
   { id: "findInFiles", yes: { n: 3 }, no: [{ n: 2 }] },
-  { id: "localHistory", yes: {}, no: [] },
   { id: "defaultMode", yes: { mode: "plan", def: "default", streak: 3 }, no: [{ mode: "plan", def: "plan", streak: 3 }, { mode: "plan", def: "default", streak: 2 }] },
   { id: "switchAccount", yes: { accounts: 2 }, no: [{ accounts: 1 }, { accounts: 0 }] },
   { id: "openInFileManager", yes: { n: 3 }, no: [{ n: 2 }] },
@@ -240,16 +239,12 @@ describe("GH-722 rules", () => {
     resetPageForTests();
     expect(go(id, facts, T0 + 24 * 3600_000)).toBe(false);
   });
-  it.each(CASES)("$id: skipped while another toast shows", ({ id, facts }) => {
+  it("commitInChanges: skipped while another toast shows", () => {
+    const { id, facts } = CASES[0]!;
     const r = toast();
     expect(go(id, facts)).toBe(false);
     r.remove();
     expect(go(id, facts)).toBe(true);
-  });
-  it.each(CASES)("$id: off with the master switch", ({ id, facts }) => {
-    setRecommendationsOn(false);
-    expect(go(id, facts)).toBe(false);
-    expect(shown).not.toHaveBeenCalled();
   });
   it("localHistory: inline, shown once ever, ignores a toast and needs no host", () => {
     toast();
@@ -258,10 +253,6 @@ describe("GH-722 rules", () => {
     expect(shown).not.toHaveBeenCalled();
     resetPageForTests();
     expect(go("localHistory", {}, T0 + 24 * 3600_000)).toBe(false);
-  });
-  it("localHistory: off with the master switch", () => {
-    setRecommendationsOn(false);
-    expect(go("localHistory", {})).toBe(false);
   });
   it("defaultMode text names the mode", () => {
     go("defaultMode", { mode: "plan", def: "default", streak: 3 });

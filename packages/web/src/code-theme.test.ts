@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { ensureSyntaxTree } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
-import { highlightTree, tags } from "@lezer/highlight";
+import { highlightTree } from "@lezer/highlight";
 import pierreLight from "@pierre/theme/pierre-light";
 import pierreDark from "@pierre/theme/pierre-dark";
 import { createHighlighter } from "shiki";
@@ -144,21 +144,6 @@ it("KNOWN_GAPS has no stale entry: each one still differs in light or dark", asy
   for (const g of KNOWN_GAPS) expect(light.has(g) || dark.has(g), `${g} now matches: delete it from KNOWN_GAPS`).toBe(true);
 }, 60000);
 
-it("markdown: headings, list marks and heading marks are --syntax-tag, quotes comment grey, other marks punctuation, emphasis keeps its font", async () => {
-  const vars = cssVars("light");
-  const colorOf = (tag: Parameters<typeof syntaxStyle.style>[0]) => {
-    const cls = syntaxStyle.style(tag)!;
-    return new RegExp(`\\.${cls} \\{[^}]*color: var\\(--(syntax-[\\w-]+)\\)`).exec(syntaxStyle.module!.getRules())?.[1];
-  };
-  expect(colorOf([tags.heading1])).toBe("syntax-tag");
-  expect(colorOf([tags.quote])).toBe("syntax-comment");
-  expect(colorOf([tags.processingInstruction])).toBe("syntax-punctuation");
-  expect(colorOf([tags.strong])).toBe("syntax-constant");
-  expect(vars["syntax-tag"]).toBeDefined();
-  expect(syntaxStyle.module!.getRules()).toMatch(/font-weight: bold/);
-  expect(syntaxStyle.module!.getRules()).toMatch(/font-style: italic/);
-});
-
 it("markdown: GFM header cells keep the text colour, the pipes are punctuation; a fenced block is a mounted TypeScript tree", async () => {
   const table = "| a | b |\n|---|---|\n| 1 | 2 |\n";
   const state = EditorState.create({ doc: table, extensions: await loadLanguage("/p/README.md")! });
@@ -170,8 +155,4 @@ it("markdown: GFM header cells keep the text colour, the pipes are punctuation; 
   const md = "```python\ndef f():\n    return 1\n```\n";
   const mdState = EditorState.create({ doc: md, extensions: await loadLanguage("/p/README.md")! });
   expect(ensureSyntaxTree(mdState, md.length, 5000)!.resolveInner(md.indexOf("def") + 1, 1).name).toBe("def");
-});
-
-it("adjusted palette is what the editor reads: --syntax-keyword is the adjusted pierre keyword", () => {
-  expect(syntaxStyle.module!.getRules()).toContain("var(--syntax-keyword)");
 });

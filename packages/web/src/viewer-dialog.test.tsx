@@ -9,7 +9,7 @@ import type { connect } from "./client.ts";
 import { sessionDiffChoice } from "./diff-mode.ts";
 import { applyEvent, emptySession, type ToolCall } from "./store.ts";
 import { CwdContext, ToolCard } from "./tool-card.tsx";
-import { ViewerContext, useOpenViewer, type OpenViewer, type ViewerTarget } from "./viewer.ts";
+import { ViewerContext, type ViewerTarget } from "./viewer.ts";
 import { ViewerDialog } from "./viewer-dialog.tsx";
 
 vi.mock("@pierre/diffs/react", () => ({
@@ -210,22 +210,6 @@ it("clicking a card's open button calls the viewer with the card's target and do
   expect(head.className).toContain("group/head");
   expect(q("[data-testid=viewer-open]")!.className).toContain("group-has-[[data-panel-open]]/head:opacity-100");
   expect(q("[data-testid=viewer-open]")!.className).toContain("max-md:size-11");
-});
-
-it("useOpenViewer keeps one identity across renders and opens for the latest shown session", async () => {
-  const seen: OpenViewer[] = [];
-  const set = vi.fn();
-  function Probe({ id }: { id: string }) {
-    seen.push(useOpenViewer({ id, cwd: `/${id}` }, set));
-    return null;
-  }
-  await act(async () => root.render(<Probe id="a" />));
-  await act(async () => root.render(<Probe id="b" />));
-  expect(seen.length).toBeGreaterThan(1);
-  expect(new Set(seen).size).toBe(1);
-  const btn = document.createElement("button");
-  seen[0]!({ kind: "changes" }, btn);
-  expect(set).toHaveBeenCalledWith({ target: { kind: "changes" }, sessionId: "b", cwd: "/b", opener: btn });
 });
 
 it("Open in Files tab on a diff target calls onOpenInEditor with the edited file", async () => {

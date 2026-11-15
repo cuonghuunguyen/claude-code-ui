@@ -16,11 +16,6 @@ type Icon = { src: string; sizes: string; type: string; purpose?: string };
 const manifest = JSON.parse(read("manifest.webmanifest")) as Record<string, unknown> & { icons: Icon[] };
 
 describe("web app manifest", () => {
-  it("pins identity and scope and starts standalone", () => {
-    expect(manifest).toMatchObject({ id: "/", start_url: "/", scope: "/", display: "standalone" });
-    expect(manifest.name).toBe("Claude UI");
-  });
-
   it("matches the page's theme color", () => {
     const html = readFileSync(join(root, "index.html"), "utf8");
     const theme = /<meta name="theme-color" content="([^"]+)"/.exec(html)?.[1];

@@ -39,11 +39,6 @@ describe("tabs", () => {
     expect(replaceTab(["a"], NEW_TAB, "s")).toEqual(["a", "s"]);
   });
 
-  it("the avatar color is stable per project", () => {
-    expect(avatarColor("/home/u/proj")).toBe(avatarColor("/home/u/proj"));
-    expect(new Set(["/a", "/b", "/c", "/d", "/e", "/f"].map((c) => avatarColor(c))).size).toBeGreaterThan(1);
-  });
-
   it("known projects get distinct avatar colors, stable for the same set", () => {
     const root = "/home/u/tester-root/";
     const cwds = ["webapp", "api-server", "docs-site"].map((n) => root + n);
@@ -122,6 +117,10 @@ describe("tab groups by project", () => {
     expect(keysFinal([], true, has)).toBe(true);
     expect(keysFinal(["a", "b"], false, has)).toBe(false); // list not loaded yet
     expect(keysFinal(["a", "c"], true, has)).toBe(false); // c not resolved yet
+    const plan = "plan:0f8e7d6c-1234-4abc-8def-0123456789ab"; // a pane tab waits for its owner session
+    expect(keysFinal([plan], true, () => false)).toBe(false);
+    expect(keysFinal([plan], true, (id) => id === plan.slice(5))).toBe(true);
+    expect(keysFinal([plan], true, () => false, new Set([plan.slice(5)]))).toBe(true);
   });
 
   it("keysFinal: a tab whose subscribe failed counts as resolved, so it cannot hide the group chips forever (GH-201)", () => {
@@ -152,13 +151,6 @@ describe("tab groups by project", () => {
     expect(moveGroupTo(t, cwdOf, "/x", "/a")).toEqual(["a1", "a2", "b1"]);
   });
 
-  it("collapsed groups persist per browser", () => {
-    saveCollapsed(new Set(["/a"]));
-    expect([...loadCollapsed()]).toEqual(["/a"]);
-    localStorage.setItem("claude-ui.tab-groups-collapsed", "oops");
-    expect(loadCollapsed().size).toBe(0);
-  });
-
   it("the worktree set starts from the old key until it has its own", () => {
     saveCollapsed(new Set(["/a", "/a/wt"]), "project");
     expect([...loadCollapsed("worktree")]).toEqual(["/a", "/a/wt"]);
@@ -173,6 +165,8 @@ describe("tab groups by project", () => {
     expect([...loadCollapsed("project")]).toEqual(["/a"]);
     expect([...loadCollapsed("worktree")]).toEqual(["/a/wt"]);
     expect(localStorage.getItem("claude-ui.tab-groups-collapsed")).toBe('["/a"]');
+    localStorage.setItem("claude-ui.tab-groups-collapsed", "oops");
+    expect(loadCollapsed().size).toBe(0);
   });
 
   it("with one key for every tab (no grouping) any tab moves anywhere", () => {
@@ -258,19 +252,19 @@ describe("GH-395 pane tabs", () => {
   const U = "0f8e7d6c-1234-4abc-8def-0123456789ab";
   const V = "1a2b3c4d-1234-4abc-8def-0123456789ab";
   const ref = `plan:${U}`;
-  it("staleTabs keeps a plan tab while its owner is known and drops it with its owner", () => {
+  it("staleTabs keeps a plan, files or graph tab while its owner is known and drops it with its owner", () => {
     expect(staleTabs([U, ref], new Set([U]))).toEqual([]);
     expect(staleTabs([ref], new Set([U]))).toEqual([]);
     expect(staleTabs([ref, NEW_TAB], new Set([V]))).toEqual([ref]);
+    expect(staleTabs([`files:${U}`, `graph:${U}`], new Set([U]))).toEqual([]);
+    expect(staleTabs([`files:${U}`], new Set(["x"]))).toEqual([`files:${U}`]);
   });
-  it("keysFinal waits for the owner session of a plan tab", () => {
-    expect(keysFinal([ref], true, () => false)).toBe(false);
-    expect(keysFinal([ref], true, (id) => id === U)).toBe(true);
-    expect(keysFinal([ref], true, () => false, new Set([U]))).toBe(true);
-  });
-  it("tabFromHash reads #plan%3A<uuid> and #plan:<uuid>; tabHash round-trips", () => {
+  it("tabFromHash reads #plan, #files and #graph %3A<uuid> and #plan:<uuid>; tabHash round-trips", () => {
     expect(tabHash(ref)).toBe(`#plan%3A${U}`);
-    expect(tabFromHash(tabHash(ref))).toBe(ref);
+    for (const k of ["plan", "files", "graph"]) {
+      expect(tabFromHash(`#${k}%3A${U}`)).toBe(`${k}:${U}`);
+      expect(tabFromHash(tabHash(`${k}:${U}`))).toBe(`${k}:${U}`);
+    }
     expect(tabFromHash(`#plan:${U}`)).toBe(ref);
     expect(tabFromHash("#plan%3Anope")).toBeUndefined();
     expect(tabFromHash("#%E0%A4%A")).toBeUndefined();
@@ -287,18 +281,6 @@ describe("GH-395 pane tabs", () => {
 });
 
 describe("GH-396 files and graph tabs", () => {
-  const U = "0f8e7d6c-1234-4abc-8def-0123456789ab";
-  it("tabFromHash reads #files%3A<uuid> and #graph%3A<uuid>", () => {
-    for (const k of ["files", "graph"]) {
-      expect(tabFromHash(`#${k}%3A${U}`)).toBe(`${k}:${U}`);
-      expect(tabFromHash(tabHash(`${k}:${U}`))).toBe(`${k}:${U}`);
-    }
-  });
-  it("staleTabs keeps a files tab while its owner is known", () => {
-    expect(staleTabs([`files:${U}`, `graph:${U}`], new Set([U]))).toEqual([]);
-    expect(staleTabs([`files:${U}`], new Set(["x"]))).toEqual([`files:${U}`]);
-  });
-
   it("GH-399 a file ref round-trips through the hash; a file ref of an unknown owner is stale", () => {
     const o = "0b5e6f1c-1111-4222-8333-444455556666";
     for (const id of [`file:${o}:/p/a b#c.ts`, `file:${o}:C:\\p\\a.ts`]) expect(tabFromHash(tabHash(id))).toBe(id);

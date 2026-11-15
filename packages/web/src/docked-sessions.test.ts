@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it } from "vitest";
-import { dock, dockedIn, neighbourAfterDock, loadDocked, parseDocked, saveDocked, stripTabs, undock } from "./docked-sessions.ts";
+import { neighbourAfterDock, loadDocked, parseDocked, saveDocked, stripTabs } from "./docked-sessions.ts";
 
 const A = "aaaaaaaa-2222-3333-4444-555555555555";
 const B = "bbbbbbbb-2222-3333-4444-555555555555";
@@ -12,27 +12,11 @@ it("parseDocked: junk, arrays, bad keys and bad areas read as empty; a valid map
   expect(parseDocked(JSON.stringify({ [A]: "side", [B]: "bottom", x: "side", [C]: "top" }))).toEqual({ [A]: "side", [B]: "bottom" });
 });
 
-it("dock / undock: set, move to the other area, no-op returns the same object", () => {
-  const d = dock({}, A, "side");
-  expect(d).toEqual({ [A]: "side" });
-  expect(dock(d, A, "side")).toBe(d);
-  expect(dock(d, A, "bottom")).toEqual({ [A]: "bottom" });
-  expect(undock(d, A)).toEqual({});
-  expect(undock(d, B)).toBe(d);
-});
-
 it("stripTabs: wide removes docked ids, narrow returns the list itself, ids absent from the list are ignored", () => {
   const tabs = [A, B, C];
   expect(stripTabs(tabs, { [B]: "side", "dddddddd-2222-3333-4444-555555555555": "bottom" }, true)).toEqual([A, C]);
   expect(stripTabs(tabs, { [B]: "side" }, false)).toBe(tabs);
   expect(stripTabs(tabs, {}, true)).toBe(tabs);
-});
-
-it("dockedIn: strip order, per area", () => {
-  const d = { [C]: "side", [A]: "side", [B]: "bottom" } as const;
-  expect(dockedIn([A, B, C], d, "side")).toEqual([A, C]);
-  expect(dockedIn([A, B, C], d, "bottom")).toEqual([B]);
-  expect(dockedIn([A], { [B]: "side" }, "side")).toEqual([]);
 });
 
 it("saveDocked / loadDocked: stored per browser, the same object while the stored string is equal; empty removes the key", () => {

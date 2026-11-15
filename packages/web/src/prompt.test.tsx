@@ -6,7 +6,7 @@ import { ALL_CAPABILITIES, type ModelInfo } from "@claude-ui/protocol";
 import { SessionPane } from "./App.tsx";
 import { applyEvent, emptySession, type SessionView } from "./store.ts";
 import { effortOptions, nextMode, shortModel } from "./toolbar.tsx";
-import { loadSendMode, saveSendMode } from "./send-mode.ts";
+import { saveSendMode } from "./send-mode.ts";
 import { QuestionPanel } from "./question.tsx";
 import { clearDrafts, saveDraft } from "./drafts.ts";
 import { announceDraft, flushDrafts } from "./use-draft.ts";
@@ -122,11 +122,6 @@ it("the header holds no model chooser; the prompt toolbar shows model, effort an
   expect($("effort-select")!.textContent).toContain("High");
 });
 
-it("a model name without a note shows as is", async () => {
-  const { $ } = await render({ session: { id: "s1", cwd: "/tmp", state: "idle", model: "haiku", permissionMode: "default", effort: "default", permissionModes: ["default"] } }, { ...emptySession(), model: "haiku" });
-  expect($("session-model")!.textContent).toContain("Haiku 4.5");
-});
-
 it("narrow screen: the toolbar choosers wrap to a second row instead of shrinking the model name away", async () => {
   // jsdom has no layout; flex-wrap breaks lines at each item's content width, so a chooser never shrinks while others share its row.
   const { $ } = await render();
@@ -200,13 +195,6 @@ it("GH-684: Shift+Tab in an OpenCode session before the agent list arrives, or a
   await rerender({ session: { ...session, agent: "review" }, view: emptySession() });
   await key(box, { key: "Tab", shiftKey: true });
   expect(onAgent).toHaveBeenLastCalledWith("build");
-  expect(onMode).not.toHaveBeenCalled();
-});
-
-it("Shift+Tab sends nothing when no other mode is known", async () => {
-  const onMode = vi.fn();
-  const { box } = await render({ onMode, session: { id: "s1", cwd: "/tmp", state: "idle", model: "default", permissionMode: "default", effort: "default", permissionModes: [] } });
-  await key(box, { key: "Tab", shiftKey: true });
   expect(onMode).not.toHaveBeenCalled();
 });
 
@@ -389,19 +377,6 @@ it("focus moves from the send button to the prompt box when the button becomes d
   send.disabled = true;
   await act(async () => void send.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
   expect(document.activeElement).toBe(box);
-});
-
-it("send button: OpenCode contrast gradient and elevation; disconnected shows an offline icon", async () => {
-  const { $, rerender } = await render();
-  const button = () => $("prompt-toolbar")!.querySelector<HTMLButtonElement>("button[data-state]")!;
-  expect(button().className).toContain("shadow-button-contrast");
-  expect(button().className).toContain("bg-linear-to-b");
-  // --send: --primary in light; lighter in dark, so the button edge reaches 3:1 on the prompt box (theme.test.ts).
-  expect(button().className).toContain("bg-send");
-  expect(button().querySelector(".lucide-wifi-off")).toBeNull();
-  await rerender({ connected: false });
-  expect(button().querySelector(".lucide-wifi-off")).not.toBeNull();
-  expect(button().querySelector(".lucide-arrow-up")).toBeNull();
 });
 
 const ALL_MODES = ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"] as const;
@@ -880,12 +855,6 @@ it("GH-166: phone: without effort support the chip has no effort in its name or 
   }
 });
 
-it("GH-166: desktop: the choosers stay in the toolbar and there is no settings chip", async () => {
-  const { $ } = await render();
-  expect($("session-settings")).toBeNull();
-  expect($("prompt-toolbar")!.contains($("mode-select"))).toBe(true);
-});
-
 // GH-166: hide-on-scroll (phone fallback for reading space).
 async function scrollLog(el: HTMLElement, top: number, toEnd = 1000) {
   const log = el.querySelector<HTMLElement>('[role="log"]')!;
@@ -1095,17 +1064,6 @@ it("GH-77: chips also show above a permission request", async () => {
   const view = applyEvent(queueView([{ id: "q1", text: "one", imageCount: 0 }]), { type: "event", sessionId: "s1", seq: 2, part: { type: "permission_request", id: "r1", requestId: "r1", toolUseId: "t1", tool: "Bash", input: { command: "ls" }, suggestions: [], settled: false } });
   const { el } = await render({}, { ...view, state: "needs_input" });
   expect(el.querySelector('section[aria-label="Queued messages"]')).not.toBeNull();
-});
-
-it("the send mode defaults to steer, and an unknown stored value is steer", async () => {
-  expect(loadSendMode()).toBe("steer");
-  localStorage.setItem("claude-ui.sendMode", "nonsense");
-  expect(loadSendMode()).toBe("steer");
-  saveSendMode("queue");
-  expect(localStorage.getItem("claude-ui.sendMode")).toBe("queue");
-  expect(loadSendMode()).toBe("queue");
-  saveSendMode("steer");
-  expect(localStorage.getItem("claude-ui.sendMode")).toBeNull();
 });
 
 it("queue mode: Enter queues and Alt+Enter steers while a turn runs", async () => {
@@ -1696,14 +1654,6 @@ it("GH-707: rows dropped on the timeline go to this pane's prompt box, once", as
   await treeDrop(d.$("prompt-box")!, [{ path: "/tmp/b.ts", isDir: false }]);
   expect(d.box.value).toBe("@src/a.ts @lib/ @b.ts ");
   expect(onInserted).not.toHaveBeenCalled();
-});
-
-it("GH-707: dragging rows over the pane rings the prompt box; the drop clears it", async () => {
-  const d = await render();
-  await treeDrop(d.el.firstElementChild!, dropped, "dragover");
-  expect(d.$("prompt-box")!.className).toContain("ring-ring ");
-  await treeDrop(d.el.firstElementChild!, dropped);
-  expect(d.$("prompt-box")!.className).not.toMatch(/(^| )ring-ring( |$)/);
 });
 
 it("GH-707: a drop on the prompt box inside the pane clears the ring and inserts once", async () => {

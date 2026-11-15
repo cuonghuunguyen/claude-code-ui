@@ -40,7 +40,7 @@ function mount(opts: { checked?: string[]; base?: string; reply?: unknown; gener
   const root = createRoot(el);
   const render = (checked: string[]) => act(() => root.render(<CommitBox client={client} cwd="/p" rows={rows} checked={new Set(checked)} onChecked={onChecked} project="/proj" base={opts.base ?? "b".repeat(40)} onCommitted={onCommitted} />));
   render(opts.checked ?? []);
-  return { sent, onChecked, onCommitted, render, unmount: () => act(() => root.unmount()) };
+  return { sent, onChecked, onCommitted, render };
 }
 const type = async (text: string) => {
   const ta = byId("commit-message") as HTMLTextAreaElement;
@@ -139,14 +139,6 @@ it("Commit and Push sends push and opens the existing push dialog with the comma
   expect(remoteOpOf("/p").result?.text).toBe("Committed abcdef1. No remote");
 });
 
-it("Ctrl+Enter in the message commits", async () => {
-  const m = mount({ checked: ["/p/a.txt"] });
-  await type("k");
-  await act(async () => void byId("commit-message").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true })));
-  await flush();
-  expect(m.sent.at(-1)).toMatchObject({ type: "git.commitFiles" });
-});
-
 const defer = () => {
   let resolve!: (v: unknown) => void;
   let reject!: (e: unknown) => void;
@@ -203,15 +195,6 @@ it("a failed generation shows an alert and keeps the typed text; a cancelled rep
   await flush();
   expect(document.querySelector('[role="alert"]')).toBeNull();
   expect(generate().getAttribute("aria-label")).toBe("Generate commit message");
-});
-
-it("unmounting during a generation sends a cancel", async () => {
-  const d = defer();
-  const m = mount({ checked: ["/p/a.txt"], generate: () => d.promise });
-  await act(async () => generate().click());
-  expect(m.sent.filter((x) => x.type === "git.commitMessageCancel")).toHaveLength(0);
-  await m.unmount();
-  expect(m.sent.filter((x) => x.type === "git.commitMessageCancel")).toHaveLength(1);
 });
 
 it("Mod+Enter commits, Alt+M toggles Amend", async () => {

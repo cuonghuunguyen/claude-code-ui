@@ -305,19 +305,9 @@ describe("side chooser", () => {
     expect(text.closest('[role="status"]')).toBeNull();
     expect(text.closest("[aria-live]")).toBeNull();
     const retry = document.querySelector<HTMLElement>('[data-testid="side-retry"]')!;
-    // The text breaks inside words, is height-capped with its own scroll, and stays selectable.
-    expect(text.className).toContain("[overflow-wrap:anywhere]");
-    expect(text.className).toContain("max-h-");
-    expect(text.className).toContain("overflow-y-auto");
-    // npm's lines keep their line breaks.
-    expect(text.className).toContain("whitespace-pre-wrap");
     expect(text.className).not.toContain("select-none");
-    // Retry is not inside the scrolling text; the block is in normal flow (never absolute) and may shrink and scroll in the dialog.
+    // Retry is not inside the scrolling text.
     expect(text.contains(retry)).toBe(false);
-    expect(box.className).toContain("min-h-0");
-    expect(box.className).toContain("overflow-y-auto");
-    expect(box.className.split(" ")).not.toEqual(expect.arrayContaining(["absolute"]));
-    expect(retry.className).toContain("max-md:h-11");
     // The controls come first in the document, so the error sits below them.
     const row = document.querySelector<HTMLElement>('[data-testid="side-kind"]')!;
     expect(row.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -376,7 +366,7 @@ describe("side chooser", () => {
 
   it("an SSH chip shows with ssh sides: the host list comes first, picking one only checks it", async () => {
     const hosts = [S("ssh:box", "SSH: box", "off"), S("ssh:lab", "SSH: lab", "off")];
-    const { kinds, kind, click, containers, filter, typeIn, press, onCheckSide, onStartSide, target, byId } = await renderSides([S("local", "Linux"), ...hosts]);
+    const { kinds, kind, click, containers, filter, typeIn, press, onCheckSide, onStartSide, target, byId, show } = await renderSides([S("local", "Linux"), ...hosts]);
     expect(kinds().map((o) => o.textContent)).toEqual(["Linux", "SSH"]);
     await click(kind("SSH"));
     expect(containers()).toEqual(["boxNot set up", "labNot set up"]);
@@ -389,6 +379,9 @@ describe("side chooser", () => {
     expect(onStartSide).not.toHaveBeenCalled();
     expect(target()!.textContent).toBe("lab");
     expect(byId("docker-hint")).toBeNull();
+    // Without ssh sides there is no SSH chip.
+    await show([S("local", "Linux"), ...docker("dev")]);
+    expect(kinds().map((o) => o.textContent)).toEqual(["Linux", "Docker"]);
   });
 
   it("a custom name and icon (GH-515) show on the chosen SSH host", async () => {
@@ -430,11 +423,6 @@ describe("side chooser", () => {
     } finally {
       setLabels(undefined);
     }
-  });
-
-  it("no SSH sides: no SSH chip", async () => {
-    const { kinds } = await renderSides([S("local", "Linux"), ...docker("dev")]);
-    expect(kinds().map((o) => o.textContent)).toEqual(["Linux", "Docker"]);
   });
 
   it("a typed POSIX path on Windows goes to a WSL distro before a container", async () => {

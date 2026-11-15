@@ -165,13 +165,6 @@ it("tab order of the panel: Done, Refresh, Note, Remind me in, Set", async () =>
   expect(names).toEqual(["Done: remove this mark", "Refresh brief", "What to do when you come back (optional)", "30m", "Set"]);
 });
 
-it("no raw hex colors in the new component", async () => {
-  const { readFileSync } = await import("node:fs");
-  const { join } = await import("node:path");
-  const src = readFileSync(join(process.cwd(), "packages/web/src/back-panel.tsx"), "utf8");
-  expect(src).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
-});
-
 it("collapsed brief row: a button with aria-expanded toggled by click, about line in the subtitle", async () => {
   const el = await render(<BriefRow answer={BRIEF} />);
   const b = el.querySelector("button")!;

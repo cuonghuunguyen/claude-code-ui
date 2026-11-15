@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Paged session timeline (GH-137): paged subscribe, older pages on reaching the top, the fresh snapshot when the cursor is gone.
+// Paged session timeline (GH-137): paged subscribe, older pages on reaching the top (the fresh snapshot after a stale cursor: session-follow.test.ts).
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -77,40 +77,6 @@ it("opening a session subscribes paged and renders the last page; reaching the t
   expect(messages()).toEqual(["prompt u1", "prompt u2", "prompt u3"]);
   // The start of the session is loaded: no further page is requested.
   expect(sent.filter((m) => m.type === "session.page")).toHaveLength(1);
-});
-
-it("unknown_cursor from session.page resubscribes from scratch (a fresh snapshot, no from)", async () => {
-  const page = replies["session.page"]!;
-  // The cursor is gone once; the fresh snapshot's cursor is good.
-  replies["session.page"] = (m) => {
-    replies["session.page"] = page;
-    return Promise.reject(Object.assign(new Error("no part u3"), { code: "unknown_cursor" }));
-  };
-  await mount();
-  const subs = sent.filter((m) => m.type === "session.subscribe");
-  expect(subs.length).toBeGreaterThanOrEqual(2);
-  expect(subs[1]).toMatchObject({ sinceSeq: 0, paged: true });
-  expect(subs[1]).not.toHaveProperty("from");
-});
-
-it("a page error that is not a cursor error is shown once and the same cursor is not retried on every render", async () => {
-  replies["session.page"] = () => Promise.reject(Object.assign(new Error("boom"), { code: "internal_error" }));
-  await mount();
-  for (let i = 0; i < 4; i++) await act(async () => {});
-  expect(sent.filter((m) => m.type === "session.page")).toHaveLength(1);
-  expect(document.body.textContent).toContain("boom");
-});
-
-it("stale_epoch from session.page resubscribes with the oldest loaded turn (from), not from scratch", async () => {
-  const page = replies["session.page"]!;
-  replies["session.page"] = () => {
-    replies["session.page"] = page;
-    return Promise.reject(Object.assign(new Error("restarted"), { code: "stale_epoch" }));
-  };
-  await mount();
-  const subs = sent.filter((m) => m.type === "session.subscribe");
-  // The resubscribe after the stale reply holds a view: it continues from its seq and names the oldest loaded turn.
-  expect(subs.at(-1)).toMatchObject({ paged: true, from: "u3", sinceSeq: 100 });
 });
 
 const run: Part = { type: "subagent", id: "ar", toolUseId: "ar", description: "Old run", status: "done", startedAt: 1, endedAt: 2 };

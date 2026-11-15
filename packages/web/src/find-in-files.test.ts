@@ -2,7 +2,7 @@
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import type { FsGrepResult } from "@claude-ui/protocol";
-import { FIND_HISTORY_KEY, fileCheckState, loadFindHistory, loadReplaceOpen, replaceRequestFiles, saveReplaceOpen, skippedRows, splitUnsaved, lineSegments, matchRows, pushFindHistory, saveFindHistory, selectionQuery, setEditorOf } from "./find-in-files.ts";
+import { FIND_HISTORY_KEY, fileCheckState, loadFindHistory, loadReplaceOpen, replaceRequestFiles, saveReplaceOpen, skippedRows, lineSegments, matchRows, pushFindHistory, saveFindHistory, selectionQuery, setEditorOf } from "./find-in-files.ts";
 
 afterEach(() => {
   localStorage.clear();
@@ -100,10 +100,6 @@ describe("replace request", () => {
     expect(fileCheckState(a, new Set(["a.ts:2"]), new Set(["a.ts:5"]))).toBe("none");
     expect(fileCheckState(a, new Set(), new Set(["a.ts:5"]))).toBe("all");
     expect(fileCheckState(a, new Set(), new Set(["a.ts:2", "a.ts:5"]))).toBe("none");
-  });
-  it("splits off the files with unsaved edits", () => {
-    const files = [{ path: "a.ts", lines: [1] }, { path: "b.ts", lines: [2] }];
-    expect(splitUnsaved(files, (p) => p === "b.ts")).toEqual({ send: [files[0]], unsaved: ["b.ts"] });
   });
   it("summary rows: daemon skips then unsaved", () => {
     expect(skippedRows({ files: [{ path: "c", skipped: "changed" }], changedFiles: 0, changedLines: 0 }, ["d"])).toEqual([{ path: "c", reason: "changed" }, { path: "d", reason: "unsaved" }]);

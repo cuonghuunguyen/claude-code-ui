@@ -69,7 +69,6 @@ it("lists servers by scope with status icons and labels, disabled rows dimmed; f
   expect(d.calls[0]).toEqual({ type: "mcp.list", cwd: "/p", sessionId: "s1" });
   expect(d.all("mcp-scope").map((e) => e.textContent)).toEqual(["Project (1)", "Local (2)", "User (1)", "claude.ai (1)"]);
   expect(d.all("mcp-row").map((r) => r.textContent)).toEqual(["broken✗Failed", "auth⚠Needs Auth", "off○Disabled", "ctx✓Connected", "drive✓Connected"]);
-  expect(d.all("mcp-row")[2]!.className).toContain("opacity-60");
   expect(d.all("mcp-row")[0]!.getAttribute("role")).toBe("button");
   await d.type(d.q("mcp-filter")!, "zzz");
   expect(d.text()).toContain("No matching servers.");

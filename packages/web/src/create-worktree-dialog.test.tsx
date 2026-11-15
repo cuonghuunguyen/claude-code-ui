@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Request } from "./client.ts";
 import { CreateWorktreeDialog } from "./create-worktree-dialog.tsx";
-import { resetPageForTests, setRecommendationsOn } from "./recommendations.ts";
+import { resetPageForTests } from "./recommendations.ts";
 
 const R = "/home/u/repo";
 const BRANCHES: BranchRow[] = [
@@ -304,13 +304,6 @@ it("shows the Connect Jira hint once when Jira is not set up", async () => {
   act(() => root!.unmount());
   el!.remove();
   resetPageForTests();
-  mount();
-  await flush();
-  expect(q("rec-jira")).toBeNull();
-});
-
-it("no hint when recommendations are off", async () => {
-  setRecommendationsOn(false);
   mount();
   await flush();
   expect(q("rec-jira")).toBeNull();

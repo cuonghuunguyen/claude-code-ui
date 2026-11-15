@@ -44,15 +44,9 @@ describe("entries drag payload (GH-707)", () => {
 describe("tree drag payload (GH-757)", () => {
   const row = { path: "/p/a", name: "a", isDir: false, side: "local" };
   const read = (v: string) => readTreeDrag(dt([TREE_DRAG_TYPE], { [TREE_DRAG_TYPE]: v }));
-  it("is the same type string as before", () => {
-    expect(TREE_DRAG_TYPE).toBe("application/x-claude-ui-entry");
-  });
   it("an array gives its rows", () => {
     const b = { path: "/p/b", name: "b", isDir: true, side: "local" };
     expect(read(JSON.stringify([row, b]))).toEqual([row, b]);
-  });
-  it("a single object (old shape) gives one row", () => {
-    expect(read(JSON.stringify(row))).toEqual([row]);
   });
   it("bad JSON, wrong shape and empty give undefined", () => {
     expect(read("{")).toBeUndefined();

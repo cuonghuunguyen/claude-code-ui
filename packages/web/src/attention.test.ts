@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { expect, it } from "vitest";
-import { announcement, faviconHref, setAppleTitle, setAppleTouchIcon, setFavicon } from "./attention.ts";
+import { announcement, faviconHref, setAppleTouchIcon } from "./attention.ts";
 import { tabTitle } from "./unread.ts";
 
 it("the title carries the number of sessions that need input, none at 0", () => {
@@ -22,14 +22,6 @@ it("announces a full phrase, and nothing for a page that never had anything wait
   expect(announcement(1, true)).toBe("1 session needs input");
   expect(announcement(0, true)).toBe("No session needs input");
   expect(announcement(0, false)).toBe("");
-});
-
-it("setFavicon changes the page icon link", () => {
-  document.head.innerHTML = '<link rel="icon" href="/icon.svg" />';
-  setFavicon(faviconHref(1));
-  expect(document.querySelector("link[rel=icon]")!.getAttribute("href")).toMatch(/^data:image\/svg\+xml,/);
-  setFavicon(faviconHref(0));
-  expect(document.querySelector("link[rel=icon]")!.getAttribute("href")).toBe("/icon.svg");
 });
 
 const svgOf = (href: string) => decodeURIComponent(href.replace("data:image/svg+xml,", ""));
@@ -63,10 +55,4 @@ it("setAppleTouchIcon points at /app-icon for a custom icon and back at the buil
   expect(document.querySelector("link[rel=apple-touch-icon]")!.getAttribute("href")).toBe("/app-icon");
   setAppleTouchIcon("");
   expect(document.querySelector("link[rel=apple-touch-icon]")!.getAttribute("href")).toBe("/apple-touch-icon.png");
-});
-
-it("setAppleTitle sets the home screen name", () => {
-  document.head.innerHTML = '<meta name="apple-mobile-web-app-title" content="Claude UI" />';
-  setAppleTitle("Work");
-  expect(document.querySelector('meta[name="apple-mobile-web-app-title"]')!.getAttribute("content")).toBe("Work");
 });

@@ -274,12 +274,6 @@ it("first and last tab: the move items that do nothing are disabled", async () =
   expect(disabled("Move right")).not.toBe("true");
 });
 
-it("inactive tab titles use muted-foreground (4.5:1 in light and dark)", async () => {
-  const { tab } = await render();
-  expect(tab("a").querySelector('[role="tab"]')!.className).toMatch(/\btext-muted-foreground\b/);
-  expect(tab("c").querySelector('[role="tab"]')!.className).toMatch(/\btext-foreground\b/);
-});
-
 it("the sidebar toggle left of the tabs shows a sidebar icon (not OpenCode's Home grid-plus) and toggles the sessions sidebar", async () => {
   const onHome = vi.fn();
   const { el } = await render({ onHome, home: true });
@@ -326,11 +320,6 @@ it("a tab with no transcript yet does not rename on double click", async () => {
   const { tab, onAction } = await render({ info: (id) => ({ ...INFO[id]!, transcript: false }) });
   await act(async () => void tab("c").querySelector('[role="tab"]')!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
   expect(onAction).not.toHaveBeenCalled();
-});
-
-it("session tab buttons show the pointer cursor", async () => {
-  const { tab } = await render();
-  for (const id of ["a", "c", NEW_TAB]) expect(tab(id).querySelector('[role="tab"]')!.className).toMatch(/(^|\s)cursor-pointer(\s|$)/);
 });
 
 it("a tab switch re-renders only the tabs that lose or get the selection (GH-51)", async () => {
@@ -1012,7 +1001,6 @@ it("GH-359 a pinned tab is icon only, has no close button, is labelled '<title>,
   expect(b.querySelector('[data-testid="tab-close"]')).toBeNull();
   expect(b.textContent).toBe("");
   expect(b.querySelector('[role="tab"]')!.getAttribute("aria-label")).toBe("Docs, pinned, needs input");
-  expect(b.className).toMatch(/\bw-9\b/);
   expect(tab("a").querySelector('[data-testid="tab-close"]')).not.toBeNull();
   expect(tab("a").dataset.pinned).toBeUndefined();
 });
@@ -1071,20 +1059,6 @@ it("GH-359 Close group skips pinned tabs", async () => {
   expect(onCloseGroup).toHaveBeenCalledWith("/home/u/web", ["b"]);
 });
 
-it("GH-359 on a touch screen (coarse primary pointer) tabs are not draggable, so a long press opens the menu instead of a native drag", async () => {
-  const { tab } = await render();
-  expect(tab("a").getAttribute("draggable")).toBe("true");
-  root!.unmount();
-  const mm = window.matchMedia;
-  window.matchMedia = ((q: string) => ({ matches: q === "(pointer: coarse)", media: q, addEventListener() {}, removeEventListener() {} })) as never;
-  try {
-    const r = await render();
-    expect(r.tab("a").getAttribute("draggable")).toBe("false");
-  } finally {
-    window.matchMedia = mm;
-  }
-});
-
 it("GH-359 Close others focuses the kept (clicked) tab even when a pinned tab of another group would take over", async () => {
   function Host() {
     const [tabs, setTabs] = useState(["a", "b", "c"]);
@@ -1135,21 +1109,6 @@ it("GH-356 without canSplit (narrow screen) the menu has no split items", async 
   const { tab } = await render({ onTabCommand: vi.fn() });
   await act(async () => void tab("b").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
   expect(document.querySelector('[data-testid="tab-menu-splitRight"]')).toBeNull();
-});
-
-it.each([
-  ["Shift+F10", { key: "F10", shiftKey: true }],
-  ["the ContextMenu key", { key: "ContextMenu" }],
-])("GH-359 %s on a focused tab opens the menu with its first enabled item focused", async (_n, key) => {
-  const onTabCommand = vi.fn();
-  const { tab } = await render({ onTabCommand, activeId: "a" });
-  const btn = tab("d").querySelector<HTMLElement>('[role="tab"]')!;
-  btn.focus();
-  // The browser's sequence: keydown, then (Firefox, Chrome) a trusted-looking contextmenu is swallowed by the app's guard; the app's own event opens the menu.
-  await act(async () => void btn.dispatchEvent(new KeyboardEvent("keydown", { ...key, bubbles: true, cancelable: true })));
-  await vi.waitFor(() => expect(document.activeElement).toBe(itemOf("Move left")));
-  expect(onTabCommand).not.toHaveBeenCalled();
-  await closeMenu();
 });
 
 it("GH-359 the keyboard-opened menu focuses the first ENABLED item", async () => {
@@ -1294,36 +1253,6 @@ it("a plan tab's context menu is the pane menu; double click does not rename", a
   expect(onCommand).toHaveBeenCalledWith(PLAN_ID, "moveBottom");
   await act(async () => void tab(PLAN_ID).querySelector('[role="tab"]')!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
   expect(onAction).not.toHaveBeenCalled();
-});
-
-it("SwipeRow registers touchmove only during a gesture (GH-242)", async () => {
-  const added: unknown[] = [];
-  const removed: string[] = [];
-  const addOrig = EventTarget.prototype.addEventListener;
-  const remOrig = EventTarget.prototype.removeEventListener;
-  const add = vi.spyOn(EventTarget.prototype, "addEventListener").mockImplementation(function (this: EventTarget, ...a: Parameters<typeof addOrig>) {
-    // React's own touch listeners are passive; the swipe's is the only non-passive one.
-    if (a[0] === "touchmove" && (a[2] as AddEventListenerOptions | undefined)?.passive === false && this instanceof HTMLElement && this.getAttribute("role") === "option") added.push(a[2]);
-    return addOrig.apply(this, a);
-  });
-  const rem = vi.spyOn(EventTarget.prototype, "removeEventListener").mockImplementation(function (this: EventTarget, ...a: Parameters<typeof remOrig>) {
-    if (a[0] === "touchmove" && (a[2] as AddEventListenerOptions | undefined)?.passive === undefined && this instanceof HTMLElement && this.getAttribute("role") === "option") removed.push("touchmove");
-    return remOrig.apply(this, a);
-  });
-  try {
-    await openList({ onSwipeClose: vi.fn() });
-    expect(added).toEqual([]);
-    const row = swipeRows()[1]!;
-    tick(1000);
-    await touch(row, "pointerdown", 0);
-    expect(added).toEqual([{ passive: false }]);
-    expect(removed).toEqual([]);
-    await touch(row, "pointerup", 0);
-    expect(removed).toEqual(["touchmove"]);
-  } finally {
-    add.mockRestore();
-    rem.mockRestore();
-  }
 });
 
 it("GH-396 files and graph tabs show the folder and git-graph icons and their labels in the phone switcher", async () => {

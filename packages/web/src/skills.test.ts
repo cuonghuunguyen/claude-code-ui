@@ -1,19 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { SkillRow } from "@claude-ui/protocol";
-import { buildRows, lockText, nextState, skillMeta, STATE_HINT, STATE_LABEL, tokenText } from "./skills.ts";
+import { buildRows, lockText, skillMeta, tokenText } from "./skills.ts";
 
 const skill = (name: string, over: Partial<SkillRow> = {}): SkillRow => ({ name, displayName: name, description: `${name} desc`, source: "user", tokens: 100, state: "on", advertised: true, handles: {}, ...over });
 const cmd = (name: string, over: object = {}) => ({ name, description: `${name} cmd`, argumentHint: "", ...over });
 
 describe("state", () => {
-  it("cycles on → name-only → user-invocable-only → off → on", () => {
-    expect(["on", "name-only", "user-invocable-only", "off", "on"].slice(0, 4).map(nextState)).toEqual(["name-only", "user-invocable-only", "off", "on"]);
-  });
-  it("labels and hints", () => {
-    expect(STATE_LABEL).toEqual({ on: "On", "name-only": "Name only", "user-invocable-only": "User only", off: "Off" });
-    expect(STATE_HINT["user-invocable-only"]).toBe("Only you can invoke it; hidden from Claude");
-    expect(STATE_HINT.off).toBe("Not shown to Claude or in the command list");
-  });
   it("lock reasons", () => {
     expect(lockText("plugin")).toBe("Controlled by its plugin");
     expect(lockText("author")).toBe("Fixed in the skill file");

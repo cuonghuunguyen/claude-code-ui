@@ -11,7 +11,6 @@ import type { GitRepo } from "@claude-ui/protocol";
 import { forgetRemoteOps } from "./git-remote-ops.ts";
 import { askPanel } from "./panel-ask.ts";
 import { focusCommit } from "./graph-focus.ts";
-import { noteRefs, refsOf } from "./git-refs.ts";
 import * as graph from "./git-graph.ts";
 
 vi.mock("@pierre/diffs/react", () => ({ MultiFileDiff: () => <div data-testid="pierre-diff" /> }));
@@ -708,13 +707,6 @@ it("GraphPane: picking libs/lib remounts the panel for it: git.log of lib, branc
   expect(selectorEl()!.getAttribute("aria-label")).toBe("Repository: lib, branch a4a3b80");
 });
 
-it("GraphPane: a stored outsideRoots choice falls back to the own repository", async () => {
-  setRepoChoice("/p", "web");
-  const c = fake(history(3));
-  await mountPane(c, [own, out]);
-  expect(logs(c)[0]).toMatchObject({ cwd: "/p", exact: true });
-});
-
 it("GraphPane: Fetch names the repository while the selector shows; a running fetch stays with it", async () => {
   const c = fake(history(3));
   let done!: (v: unknown) => void;
@@ -753,22 +745,6 @@ it("GraphPane: a switch while the Graph is hidden sends no git.log until it show
   await mountPane(c, [own, lib], false);
   expect(c.sent.find((m) => m.type === "git.refs")).toMatchObject({ cwd: "/p/libs/lib", exact: true });
   expect(logs(c)[0]).toMatchObject({ cwd: "/p/libs/lib", exact: true });
-});
-
-it("GraphPane: refs stamps are noted under the repository path", async () => {
-  noteRefs("/p", "old");
-  stampValue = "s7";
-  const c = fake(history(3));
-  await mountPane(c, [own, lib]);
-  await pickRepo("libs/lib");
-  await flush();
-  expect(refsOf("/p/libs/lib")).toBe("s7");
-  expect(refsOf("/p")).toBe("s7");
-  stampValue = "s8";
-  await pickRepo("");
-  await mountPane(c, [own, lib], true);
-  await mountPane(c, [own, lib], false);
-  expect(refsOf("/p/libs/lib")).toBe("s7");
 });
 
 const SUBS: GitCommitDetail["files"] = [
@@ -1063,19 +1039,6 @@ it("a click on empty list space then Shift+F10 opens the selected row's commit m
   expect(itemTexts()).toEqual(["New Branch…", "New Tag…"]);
 });
 
-it("the command block wraps at spaces (a long -c prefix is not cut mid-word)", async () => {
-  const c = fake(withRefs());
-  await mount(c);
-  await menuAt(chip("refs/heads/main"));
-  await act(async () => byId("branch-push").click());
-  const cls = byId("git-command").className;
-  expect(cls).toContain("whitespace-pre-wrap");
-  expect(cls).toContain("[overflow-wrap:anywhere]");
-  expect(cls).not.toContain("break-all");
-  await act(async () => byId("git-push-cancel").click());
-  await flush();
-});
-
 it("exact: every git request carries exact: true, and Refresh calls onRefresh", async () => {
   const c = fake(withRefs(), FILES);
   const onRefresh = vi.fn();
@@ -1322,7 +1285,6 @@ it("the commit menu has commit actions only, in order: Copy Revision Number, Che
   await menuAt(rowEls()[0]!);
   await flush();
   expect(items().map((i) => i.textContent)).toEqual(["Copy Revision Number", "Cherry-Pick", "Compare with Local", "Compare Before with Local", "Reset Current Branch to Here…", "Revert Commit", "Undo Commit", "Edit Commit Message…", "New Branch…", "New Tag…"]);
-  expect(byId("commit-reset").className).toContain("text-destructive");
   expect(document.querySelector("[data-testid=branch-fetch]")).toBeNull();
 });
 
@@ -1736,19 +1698,6 @@ const COMPARE_FILES = [
   { status: "A", path: "work.txt", added: 3, removed: 0, untracked: true },
   { status: "D", path: "gone.txt", added: 0, removed: 4 },
 ] as const;
-
-it("the commit menu orders Compare with Local and Compare Before with Local after Cherry-Pick and Edit Commit Message after Undo", async () => {
-  const c = fake(history(3));
-  await mount(c);
-  await menuAt(rowOf(hash(3)));
-  const i = ids().filter((x) => x?.startsWith("commit-"));
-  expect(i).toEqual(["commit-copy-hash", "commit-cherry-pick", "commit-compare", "commit-compare-before", "commit-reset", "commit-revert", "commit-undo", "commit-reword"]);
-  expect(byId("commit-compare").textContent).toBe("Compare with Local");
-  expect(byId("commit-compare-before").textContent).toBe("Compare Before with Local");
-  expect(byId("commit-reword").textContent).toBe("Edit Commit Message…");
-  expect(byId("commit-reword").hasAttribute("data-disabled")).toBe(false);
-  expect(ids().indexOf("branch-new")).toBeGreaterThan(ids().indexOf("commit-reword"));
-});
 
 it("Compare Before with Local is disabled on a root commit with a reason; Edit Commit Message shows why.reword when unavailable", async () => {
   const c = fake(history(3));

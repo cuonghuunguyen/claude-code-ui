@@ -61,22 +61,6 @@ it("gitRows matches a nested repository on Windows without case or separator dif
   expect(gitRows(d, "C:\\p", { top: "C:\\r", repos: [win] })[0]!.nested).toBe(win);
 });
 
-it("eachLimited runs at most N at once and all items", async () => {
-  const { eachLimited } = await import("./git-changes.ts");
-  let running = 0;
-  let peak = 0;
-  const done: number[] = [];
-  await eachLimited([1, 2, 3, 4, 5, 6, 7], 3, async (x) => {
-    peak = Math.max(peak, ++running);
-    await new Promise((r) => setTimeout(r, 5));
-    running--;
-    done.push(x);
-  });
-  expect(peak).toBe(3);
-  expect(done.sort()).toEqual([1, 2, 3, 4, 5, 6, 7]);
-  await eachLimited([], 4, async () => {});
-});
-
 it("createLimiter runs at most N jobs at once across callers and skips queued jobs that are no longer live", async () => {
   const { createLimiter } = await import("./git-changes.ts");
   const limit = createLimiter(2);

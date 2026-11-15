@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { McpServerInfo } from "@claude-ui/protocol";
-import { actionsFor, buildAdd, canRemove, errorLine, groupServers, paletteOrder, safeAuthUrl, scopeLabel, statusIcon, statusLabel, type AddForm } from "./mcp.ts";
+import { actionsFor, buildAdd, canRemove, errorLine, groupServers, paletteOrder, safeAuthUrl, scopeLabel, type AddForm } from "./mcp.ts";
 
 const s = (name: string, status: string, scope?: string, type = "stdio", extra: Partial<McpServerInfo> = {}): McpServerInfo => ({ name, status, scope, config: { type }, ...extra });
 
@@ -22,10 +22,6 @@ describe("MCP servers dialog logic", () => {
     ]);
     expect(groupServers(servers, "A").map(([g, l]) => [g, l.map((x) => x.name)])).toEqual([["user", ["a"]]]);
     expect(groupServers(servers, "nothing")).toEqual([]);
-  });
-
-  it("labels each status with an icon and text", () => {
-    expect(["connected", "failed", "needs-auth", "pending", "disabled", "odd"].map((x) => `${statusIcon(x)} ${statusLabel(x)}`)).toEqual(["✓ Connected", "✗ Failed", "⚠ Needs Auth", "◐ Connecting…", "○ Disabled", "? odd"]);
   });
 
   it("offers the actions the status allows", () => {

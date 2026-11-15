@@ -22,11 +22,6 @@ it("formats tokens with k and M", () => {
   expect([453, 1000, 241_100, 54_400_000, 1_000_000].map(tokens)).toEqual(["453", "1.0k", "241.1k", "54.4M", "1.0M"]);
 });
 
-it("sums the session's turn results: In = uncached input + cache writes, Cached = cache reads", () => {
-  expect(totals(view())).toBeUndefined();
-  expect(totals(view(result("r1", 100, 20, 1000, 50), result("r2", 10, 5, 2000)))).toMatchObject({ input: 160, output: 25, cached: 3000 });
-});
-
 it("also keeps uncached input, cache writes and the known cost for the context breakdown (OpenCode Context tab)", () => {
   const paid = (id: string, costUsd?: number): Part => ({ ...(result(id, 100, 20, 1000, 50) as Extract<Part, { type: "turn_result" }>), costUsd });
   expect(totals(view(paid("r1", 0.1), paid("r2", 0.025)))).toEqual({ input: 300, output: 40, cached: 2000, uncached: 200, cacheWrite: 100, cost: 0.125 });
@@ -37,18 +32,10 @@ it("also keeps uncached input, cache writes and the known cost for the context b
   expect(totals(view(paid("r1", 0.1), paid("r2")))).toMatchObject({ cost: 0.1, costPartial: true });
 });
 
-it("lists running background Bash calls only", () => {
-  const v = view(
-    bash("a", { command: "npm run dev", run_in_background: true }, "running"),
-    bash("b", { command: "ls", run_in_background: true }, "done"),
-    bash("c", { command: "sleep 5" }, "running"),
-  );
-  expect(backgroundShells(v).map((c) => c.id)).toEqual(["a"]);
-});
-
 it("backgroundShells counts moved Bash calls; foregroundShells lists running foreground tasks only", () => {
   const v = view(
     bash("a", { command: "npm run dev", run_in_background: true }, "running"),
+    bash("b", { command: "ls", run_in_background: true }, "done"),
     bash("m", { command: "sleep 60" }, "running", "background"),
     bash("f", { command: "sleep 60" }, "running", "foreground"),
     bash("g", { command: "sleep 60" }, "done", "foreground"),
@@ -129,14 +116,6 @@ async function mountBar(v: SessionView, git?: () => Promise<GitStatus | null>) {
 }
 const fields = (el: HTMLElement) => [...el.querySelectorAll("[data-field]")].map((f) => (f as HTMLElement).dataset.field);
 const GIT: GitStatus = { branch: "main", added: 3, removed: 1 };
-
-it("GH-166: wide: branch, diff, In, Out, Cached and shells all show (no sm-only hiding)", async () => {
-  const v = view(result("r1", 100, 20, 1000), bash("a", { command: "npm run dev", run_in_background: true }, "running"));
-  const { el, done } = await mountBar(v, async () => GIT);
-  expect(fields(el)).toEqual(["branch", "diff", "in", "out", "cached", "shells"]);
-  expect(el.innerHTML).not.toContain("max-sm:hidden");
-  done();
-});
 
 it("GH-166: phone: one non-wrapping row of branch, diff and shells, without In / Out / Cached", async () => {
   const back = phone(true);

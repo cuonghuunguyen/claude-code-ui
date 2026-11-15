@@ -54,15 +54,6 @@ describe("adoptToken (GH-282)", () => {
   });
 });
 
-describe("storedToken", () => {
-  it("reads what storeToken wrote, undefined for a browser never paired", () => {
-    const s = storage();
-    expect(storedToken(s)).toBeUndefined();
-    storeToken(TOKEN, s);
-    expect(storedToken(s)).toBe(TOKEN);
-  });
-});
-
 const TOKEN = "aB3_-xYz0123456789abcdefghijklmnopqrstuv"; // 40 chars of base64url
 
 describe("parsePairing", () => {

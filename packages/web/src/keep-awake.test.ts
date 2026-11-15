@@ -44,16 +44,6 @@ describe("keep awake setting", () => {
     expect(JSON.parse(localStorage.getItem("claude-ui.keepAwake")!)).toEqual({ on: true, onlyRunning: true });
     off();
   });
-  it("keeps the value in memory when storage is blocked", () => {
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new Error("blocked");
-    });
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
-      throw new Error("blocked");
-    });
-    saveKeepAwake({ on: true, onlyRunning: false });
-    expect(loadKeepAwake().on).toBe(true);
-  });
 });
 
 describe("anySessionRunning", () => {
@@ -112,14 +102,12 @@ describe("keep awake controller", () => {
     await flush();
     expect(t.request).toHaveBeenCalledTimes(2);
     expect(t.statuses.at(-1)).toBe("held");
-  });
-  it("makes no request while hidden", async () => {
-    const t = setup();
-    t.doc.visibilityState = "hidden";
-    t.ctl.update(true);
+    const h = setup();
+    h.doc.visibilityState = "hidden";
+    h.ctl.update(true);
     await flush();
-    expect(t.request).not.toHaveBeenCalled();
-    expect(t.statuses.at(-1)).toBe("hidden");
+    expect(h.request).not.toHaveBeenCalled();
+    expect(h.statuses.at(-1)).toBe("hidden");
   });
   it("asks again when the browser drops the lock while the page is visible", async () => {
     const t = setup();

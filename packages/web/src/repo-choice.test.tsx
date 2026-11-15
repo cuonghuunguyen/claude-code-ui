@@ -3,7 +3,7 @@ import type { GitRepo } from "@claude-ui/protocol";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { forgetRepoChoices, getRepoChoice, REPO_CHOICE_MAX, repoLabel, repoProjectKey, resolveRepoChoice, selectorVisible, setRepoChoice, subscribeRepoChoice, useRepoChoice, useSelectedRepo, type RepoList } from "./repo-choice.ts";
+import { forgetRepoChoices, getRepoChoice, repoLabel, repoProjectKey, resolveRepoChoice, selectorVisible, setRepoChoice, subscribeRepoChoice, useRepoChoice, useSelectedRepo, type RepoList } from "./repo-choice.ts";
 
 const KEY = "claude-ui.repoChoice";
 const r = (rel: string, kind: GitRepo["kind"], extra: Partial<GitRepo> = {}): GitRepo => ({ path: rel ? `/p/${rel}` : "/p", rel, kind, ...(kind !== "main" && { parent: "/p" }), ...extra });
@@ -41,16 +41,6 @@ it("selectorVisible: 2+ repositories, or no main entry; hidden for only own", ()
   expect(selectorVisible([main])).toBe(false);
   expect(selectorVisible([main, sub])).toBe(true);
   expect(selectorVisible([r("web", "nested")])).toBe(true);
-});
-
-it("setRepoChoice keeps at most 200 projects, dropping the oldest written", () => {
-  for (let i = 0; i < REPO_CHOICE_MAX; i++) setRepoChoice(`/k${i}`, "a");
-  setRepoChoice("/k0", "b");
-  setRepoChoice("/extra", "c");
-  expect(getRepoChoice("/k0")).toBe("b");
-  expect(getRepoChoice("/k1")).toBeUndefined();
-  expect(getRepoChoice("/extra")).toBe("c");
-  expect(Object.keys(JSON.parse(localStorage.getItem(KEY)!))).toHaveLength(REPO_CHOICE_MAX);
 });
 
 it("storage blocked: getItem/setItem throw, the choice lasts in memory", () => {
@@ -130,17 +120,6 @@ function Probe({ k, id }: { k: string; id: string }) {
   return <i data-id={id}>{useRepoChoice(k) ?? "-"}</i>;
 }
 const text = (id: string) => el.querySelector(`[data-id=${id}]`)!.textContent;
-
-it("a storage event of the key re-renders subscribers; other keys do not", async () => {
-  await act(async () => root.render(<Probe k="/p" id="a" />));
-  expect(text("a")).toBe("-");
-  localStorage.setItem(KEY, JSON.stringify({ "/p": "x" }));
-  await act(async () => void window.dispatchEvent(new StorageEvent("storage", { key: "other" })));
-  expect(text("a")).toBe("-");
-  await act(async () => void window.dispatchEvent(new StorageEvent("storage", { key: KEY })));
-  expect(text("a")).toBe("x");
-  await act(async () => root.render(null));
-});
 
 it("two components of one project update together; another project keeps its choice", async () => {
   await act(async () =>

@@ -201,20 +201,17 @@ it("sessions newest first: the 5 most recent show at an empty query, the rest on
   expect(rows[0]).toMatchObject({ cwd: "/w/api", description: "api", meta: "1m ago" });
 });
 
-it("lists MCP servers in the Customize group while a project is shown", () => {
-  expect(appCommands(ctx()).find((i) => i.id === "mcp.open")).toBeUndefined();
-  const openMcp = vi.fn();
-  const item = run(ctx({ openMcp }), "mcp.open");
-  expect(item).toMatchObject({ group: "Customize", title: "MCP servers", description: "Configure Model Context Protocol servers" });
-  expect(openMcp).toHaveBeenCalled();
-});
-
-it("lists Slash commands in the Customize group while a project is shown", () => {
-  expect(appCommands(ctx()).find((i) => i.id === "skills.open")).toBeUndefined();
-  const openSkills = vi.fn();
-  const item = run(ctx({ openSkills }), "skills.open");
-  expect(item).toMatchObject({ group: "Customize", title: "Slash commands", description: "Browse slash commands" });
-  expect(openSkills).toHaveBeenCalled();
+it.each([
+  ["mcp.open", "openMcp", "MCP servers"],
+  ["skills.open", "openSkills", "Slash commands"],
+  ["addons.open", "openAddons", "Manage addons"],
+  ["plugins.open", "openPlugins", "Manage plugins"],
+] as const)("%s is listed only with its callback, in the Customize group, and runs it", (id, callback, title) => {
+  expect(appCommands(ctx()).find((i) => i.id === id)).toBeUndefined();
+  const open = vi.fn();
+  const item = run(ctx({ [callback]: open }), id);
+  expect(item).toMatchObject({ group: "Customize", title });
+  expect(open).toHaveBeenCalled();
 });
 
 it("lists Background shells while a session shows", () => {
@@ -223,20 +220,6 @@ it("lists Background shells while a session shows", () => {
   const item = run(ctx({ openShells }), "shells.open");
   expect(item).toMatchObject({ title: "Background shells" });
   expect(openShells).toHaveBeenCalled();
-});
-
-it("lists Manage addons in the Customize group", () => {
-  const openAddons = vi.fn();
-  expect(run(ctx({ openAddons }), "addons.open")).toMatchObject({ group: "Customize", title: "Manage addons" });
-  expect(openAddons).toHaveBeenCalled();
-});
-
-it("lists Manage plugins in the Customize group while a project is shown", () => {
-  expect(appCommands(ctx()).find((i) => i.id === "plugins.open")).toBeUndefined();
-  const openPlugins = vi.fn();
-  const item = run(ctx({ openPlugins }), "plugins.open");
-  expect(item).toMatchObject({ group: "Customize", title: "Manage plugins", description: "Install, enable, or disable plugins" });
-  expect(openPlugins).toHaveBeenCalled();
 });
 
 it("Open settings is a palette command and Ctrl+, runs it, with or without a session", () => {

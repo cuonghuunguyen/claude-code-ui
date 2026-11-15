@@ -195,7 +195,3 @@ it("GH-722: the 1.3.0 git, file and account commands show Not set", () => {
   expect(q("shortcut-row-git.rollback")!.textContent).toContain("Not set");
   expect(q("shortcut-row-account.switch")!.textContent).toContain("Not set");
 });
-
-it("unbound commands show Not set", () => {
-  expect(q("shortcut-row-guide.start")!.textContent).toContain("Not set");
-});

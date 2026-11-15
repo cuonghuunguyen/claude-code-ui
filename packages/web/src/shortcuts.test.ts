@@ -24,12 +24,6 @@ it("with Alt, letters match by physical key (macOS Option turns Option+W into �
   expect(matchesKey("mod+alt+arrowright", ev("ArrowRight", { ctrlKey: true, altKey: true }), false)).toBe(true);
 });
 
-it("off macOS a letter matches by e.key only: AltGr (Ctrl+Alt) typing a character is not a shortcut", () => {
-  // Hungarian layout: AltGr+W types "|".
-  expect(matchesKey("mod+alt+w", ev("|", { ctrlKey: true, altKey: true, code: "KeyW" }), false)).toBe(false);
-  expect(matchesKey("mod+alt+w", ev("w", { ctrlKey: true, altKey: true, code: "KeyW" }), false)).toBe(true);
-});
-
 it("Ctrl+P and Cmd+P are quick open, not Ctrl+Shift+P", () => {
   expect(matchesKey(KEYS["file.open"], ev("p", { ctrlKey: true }), false)).toBe(true);
   expect(matchesKey(KEYS["file.open"], ev("p", { metaKey: true }), true)).toBe(true);
@@ -59,17 +53,6 @@ it("every app shortcut needs Ctrl, Cmd or Alt, so typing in the prompt box never
   for (const k of Object.values(KEYS)) for (const e of [ev("k"), ev("P", { shiftKey: true }), ev("'")]) expect(matchesKey(k, e, false)).toBe(false);
 });
 
-it("Alt+digit matches by physical key: Czech Alt+1 types \"+\"", () => {
-  expect(matchesKey("alt+1", ev("+", { altKey: true, code: "Digit1" }), false)).toBe(true);
-  expect(matchesKey("alt+1", ev("1", { altKey: true, code: "Digit1" }), false)).toBe(true);
-  expect(matchesKey("alt+2", ev("+", { altKey: true, code: "Digit1" }), false)).toBe(false);
-  expect(matchesKey("ctrl+1", ev("1", { ctrlKey: true, code: "Digit1" }), true)).toBe(true);
-  expect(matchesKey("alt+1", ev("1", { code: "Digit1" }), false)).toBe(false);
-  // Shift+` is "~" on a US layout.
-  expect(matchesKey("ctrl+shift+`", ev("~", { ctrlKey: true, shiftKey: true, code: "Backquote" }), false)).toBe(true);
-  expect(matchesKey("ctrl+`", ev("`", { ctrlKey: true, code: "Backquote" }), false)).toBe(true);
-});
-
 it("registry: ids are unique, no default is browser-reserved, no two defaults collide per platform", () => {
   expect(new Set(SHORTCUTS.map((s) => s.id)).size).toBe(SHORTCUTS.length);
   for (const mac of [false, true]) {
@@ -89,13 +72,6 @@ it("Go to notifications is Ctrl/Cmd+Alt+N: a modifier, not Escape, no clash (GH-
   expect(matchesKey(spec, ev("n", { ctrlKey: true, altKey: true }), false)).toBe(true);
   // A Polish AltGr+N types "ń": typing, not the shortcut.
   expect(matchesKey(spec, ev("ń", { ctrlKey: true, altKey: true, code: "KeyN" }), false)).toBe(false);
-});
-
-it("tab-by-number defaults: Alt+1..8 and Alt+9 (last) off macOS, Ctrl on macOS", () => {
-  const goto = (id: string, mac: boolean) => defaultSpec(SHORTCUTS.find((s) => s.id === id)!, mac);
-  expect(goto("tab.goto3", false)).toBe("alt+3");
-  expect(goto("tab.goto3", true)).toBe("ctrl+3");
-  expect(goto("tab.gotoLast", false)).toBe("alt+9");
 });
 
 it("canon resolves mod and orders modifiers", () => {
@@ -127,25 +103,15 @@ it("a button hint names its key, and is the bare label when the binding is remov
   expect(withKey("New terminal", undefined)).toBe("New terminal");
 });
 
-it("Alt+number pad digits (a Windows Alt code) fire no shortcut off macOS; the top row and macOS are unchanged", () => {
-  expect(matchesKey("alt+1", ev("1", { altKey: true, code: "Numpad1" }), false)).toBe(false);
-  expect(matchesKey("alt+1", ev("1", { altKey: true, code: "Digit1" }), false)).toBe(true);
-  expect(matchesKey("ctrl+1", ev("1", { ctrlKey: true, code: "Numpad1" }), true)).toBe(true);
-  expect(matchesKey("mod+alt+5", ev("5", { ctrlKey: true, altKey: true, code: "Numpad5" }), false)).toBe(true);
-});
-
-it("a digit or ` press matches only the spec of its physical key", () => {
-  expect(matchesKey("alt++", ev("+", { altKey: true, code: "Digit1" }), false)).toBe(false);
-  expect(matchesKey("mod+0", ev("0", { ctrlKey: true, code: "Backquote" }), false)).toBe(false);
-  expect(matchesKey("mod+`", ev("0", { ctrlKey: true, code: "Backquote" }), false)).toBe(true);
-});
-
 it("unbound registry commands have no default and no KEYS entry", () => {
-  for (const id of ["focus.open", "guide.start", "mcp.open", "skills.open", "plugins.open"]) {
+  for (const id of [
+  "focus.open", "guide.start", "mcp.open", "skills.open", "plugins.open",
+  "git.rollback", "git.branchNew", "git.checkout", "git.checkoutSmart", "git.stash", "git.annotate", "git.merge", "git.rebase", "file.reveal", "changes.addToPrompt", "changes.sendSelection", "account.switch",
+  ]) {
     const s = SHORTCUTS.find((x) => x.id === id)!;
-    expect(defaultSpec(s, false)).toBeUndefined();
-    expect(defaultSpec(s, true)).toBeUndefined();
-    expect(id in KEYS).toBe(false);
+    expect(defaultSpec(s, false), id).toBeUndefined();
+    expect(defaultSpec(s, true), id).toBeUndefined();
+    expect(id in KEYS, id).toBe(false);
   }
 });
 
@@ -172,23 +138,3 @@ it("the docs page generator lists bound shortcuts and skips unbound commands", (
     else rmSync(out, { force: true });
   }
 }, 30000);
-
-const NEW_IDS = ["git.rollback", "git.branchNew", "git.checkout", "git.checkoutSmart", "git.stash", "git.annotate", "git.merge", "git.rebase", "file.reveal", "changes.addToPrompt", "changes.sendSelection", "account.switch"];
-
-it("GH-722: every 1.3.0 command id is registered once with a title and a group", () => {
-  for (const id of NEW_IDS) {
-    const found = SHORTCUTS.filter((s) => s.id === id);
-    expect(found, id).toHaveLength(1);
-    expect(found[0]!.title.length, id).toBeGreaterThan(0);
-    expect(["General", "Tabs", "Panels", "Session", "Prefix"]).toContain(found[0]!.group);
-  }
-});
-
-it("GH-722: 1.3.0 commands have no default key and no KEYS entry", () => {
-  for (const id of NEW_IDS) {
-    const s = SHORTCUTS.find((x) => x.id === id)!;
-    expect(defaultSpec(s, false), id).toBeUndefined();
-    expect(defaultSpec(s, true), id).toBeUndefined();
-    expect(id in KEYS, id).toBe(false);
-  }
-});

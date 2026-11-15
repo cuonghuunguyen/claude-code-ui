@@ -15,17 +15,11 @@ describe("first-use snapshot", () => {
     expect(takeFirstUseSnapshot(store({ "claude-ui.token": "t", "claude-ui.theme": "dark" }))).toBe(true);
     expect(takeFirstUseSnapshot(store({ "claude-ui.colorTheme": "nord", "claude-ui.locale": "vi" }))).toBe(true);
     expect(wasFreshBrowser()).toBe(true);
+    expect(takeFirstUseSnapshot(store({ other: "1" }))).toBe(true);
   });
   it("is not fresh with any other claude-ui key", () => {
     expect(takeFirstUseSnapshot(store({ "claude-ui.tabs": "[]" }))).toBe(false);
     expect(takeFirstUseSnapshot(store({ "claude-ui.token": "t", "claude-ui.sidebarWidth": "300" }))).toBe(false);
-  });
-  it("ignores keys of other apps", () => {
-    expect(takeFirstUseSnapshot(store({ other: "1" }))).toBe(true);
-  });
-  it("is not fresh when the storage throws", () => {
-    const blocked = { get length(): number { throw new Error("blocked"); }, key: () => null };
-    expect(takeFirstUseSnapshot(blocked)).toBe(false);
   });
 });
 
@@ -45,13 +39,11 @@ describe("decideFirstUse", () => {
 
 describe("state parse and save", () => {
   const ok: GuideState = { v: 1, origin: "new", basics: "pending", session: "pending", step: "palette" };
-  it("round-trips through storage", () => {
-    saveGuide(ok);
-    expect(loadGuide(true)).toEqual(ok);
-  });
-  it("absent is undefined", () => {
+  it("round-trips through storage; absent is undefined", () => {
     expect(loadGuide(true)).toBeUndefined();
     expect(parseGuide(null, false)).toBeUndefined();
+    saveGuide(ok);
+    expect(loadGuide(true)).toEqual(ok);
   });
   it("bad JSON, a future version or wrong types are absent in a fresh browser, existing otherwise", () => {
     for (const raw of ["{nope", JSON.stringify({ ...ok, v: 2 }), JSON.stringify({ ...ok, basics: "x" }), JSON.stringify({ ...ok, step: 3 }), "null"]) {

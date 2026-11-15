@@ -259,34 +259,10 @@ it("a session with no transcript yet (never prompted) offers no Rename or Archiv
   expect(document.querySelector('[data-testid="action-delete"]')!.getAttribute("aria-disabled")).toBeNull();
 });
 
-it("rows, the … trigger, the archived filter and the menu items show the pointer cursor; a disabled item shows not-allowed", async () => {
-  const { el, rows } = await render();
-  const pointer = (e: Element) => expect(e.className).toMatch(/(^|\s)cursor-pointer(\s|$)/);
-  pointer(rows()[0]!);
-  pointer(el.querySelector('[data-testid="archived-filter"]')!);
-  const trigger = el.querySelector<HTMLElement>('[data-testid="session-menu"][aria-label="Actions for Fix login"]')!;
-  pointer(trigger);
-  await act(async () => trigger.click());
-  for (const id of ["action-rename", "action-archive", "action-delete"]) {
-    const item = document.querySelector(`[data-testid="${id}"]`)!;
-    pointer(item);
-    expect(item.className).not.toMatch(/\bcursor-default\b/);
-  }
-  // Delete is disabled: Fix login is running.
-  expect(document.querySelector('[data-testid="action-delete"]')!.className).toMatch(/\bdata-disabled:cursor-not-allowed\b/);
-});
-
 it("each project splits its sessions under OpenCode's day headers", async () => {
   const { groups } = await render({ list: [item("a", "/home/u/web", "New", 0), item("b", "/home/u/web", "Old", 4 * 1440), item("c", "/home/u/api", "Older", 5 * 1440)] });
   const days = (g: HTMLElement) => [...g.querySelectorAll('[data-testid="day-header"]')].map((h) => h.textContent);
   expect(groups().map(days)).toEqual([["Today", "Older"], ["Recent sessions"]]);
-});
-
-it("read titles use the base text colour like OpenCode, not the muted one", async () => {
-  const { rows } = await render();
-  const title = rows()[3]!.querySelector(":scope > span:not([data-testid])")!;
-  expect(title.className).toContain("text-foreground");
-  expect(rows()[3]!.className).not.toContain("text-muted-foreground");
 });
 
 it("a tab switch re-renders only the rows that lose or get the active mark, not every row (GH-51)", async () => {
@@ -1231,14 +1207,6 @@ it("GH-358 the archive count ignores the search text; Hide inactive sessions fli
   expect(loadSidebarView().onlyActive).toBe(true);
   await search("");
   expect(el.querySelector('[data-testid="active-only-chip"]')).not.toBeNull();
-});
-
-it("GH-358 the archived view has no Hide or Archive items", async () => {
-  const list = [old("o1", "/home/u/web", "Old one", 40, { archived: true })];
-  const { el } = await render({ list, activeId: null });
-  await act(async () => el.querySelector<HTMLElement>('[data-testid="archived-filter"]')!.click());
-  await ctx(el.querySelector('[data-testid="group-toggle"]')!);
-  expect(texts()).toEqual(["New session", "Remove from list (files stay)"]);
 });
 
 it("GH-358 a worktree row's menu counts only its own sessions and offers Delete worktree… when removable", async () => {

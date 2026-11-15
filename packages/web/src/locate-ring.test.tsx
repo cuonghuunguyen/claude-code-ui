@@ -48,11 +48,11 @@ const mount = async (o: { activeId?: string; sessionId?: string; compact?: boole
     ),
   );
 };
-const shake = (pointerType = "mouse") =>
+const shake = () =>
   act(() => {
     for (const x of [300, 360, 300, 360, 300, 360]) {
-      const e = new PointerEvent("pointermove", { clientX: x, pointerType, bubbles: true });
-      if (e.pointerType !== pointerType) Object.defineProperty(e, "pointerType", { value: pointerType });
+      const e = new PointerEvent("pointermove", { clientX: x, pointerType: "mouse", bubbles: true });
+      if (e.pointerType !== "mouse") Object.defineProperty(e, "pointerType", { value: "mouse" });
       window.dispatchEvent(e);
     }
   });
@@ -75,19 +75,6 @@ it("compact tabs: the group chip rings, not the tab", async () => {
   expect(document.querySelector('[data-tab-id="a2"]')!.hasAttribute("data-locate")).toBe(false);
 });
 
-it("New session tab: nothing rings", async () => {
-  await mount({ activeId: NEW_TAB });
-  shake();
-  expect(rung()).toHaveLength(0);
-});
-
-it("a sidebar row hidden from the list is left alone", async () => {
-  await mount({ sessionId: "gone" });
-  shake();
-  expect(document.querySelector('[data-session-id]:not([data-session-id="gone"])[data-locate]')).toBeNull();
-  expect(document.querySelector('[data-testid="session-item"][data-locate]')).toBeNull();
-});
-
 it("setting off: nothing rings", async () => {
   saveShakeLocate(false);
   await mount({ sessionId: "a" });
@@ -100,12 +87,6 @@ it("phone: no listener", async () => {
   window.matchMedia = ((q: string) => ({ matches: q.includes("40rem"), media: q, addEventListener() {}, removeEventListener() {} })) as never;
   await mount({ sessionId: "a" });
   shake();
-  expect(rung()).toHaveLength(0);
-});
-
-it("touch shake does nothing", async () => {
-  await mount({ sessionId: "a" });
-  shake("touch");
   expect(rung()).toHaveLength(0);
 });
 

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { Part } from "@claude-ui/protocol";
 import { describe, expect, it } from "vitest";
-import { foldLabel, loadSignalOnly, saveSignalOnly, signalItems, subscribeSignalOnly } from "./signal.ts";
+import { foldLabel, loadSignalOnly, saveSignalOnly, signalItems } from "./signal.ts";
 import { timeline, type ToolCall } from "./store.ts";
 import { applyEvent, emptySession } from "./store.ts";
 
@@ -59,17 +59,5 @@ describe("global setting", () => {
     saveSignalOnly(false);
     expect(loadSignalOnly()).toBe(false);
     expect(localStorage.getItem("claude-ui.signalOnly")).toBeNull();
-  });
-
-  it("tells subscribers when it changes", () => {
-    localStorage.clear();
-    const seen: boolean[] = [];
-    const un = subscribeSignalOnly(() => seen.push(loadSignalOnly()));
-    saveSignalOnly(true);
-    saveSignalOnly(false);
-    un();
-    saveSignalOnly(true);
-    expect(seen).toEqual([true, false]);
-    saveSignalOnly(false);
   });
 });

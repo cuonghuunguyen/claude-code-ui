@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addLog, logAllowed, LOG_RATE, pruneLog, loadAddonLog, readAddonLog, saveAddonLog, LOG_MAX, rendererFor, addonCommandOf, bandsOf, commandRows, clampHeight, gate, paneIdsOf, paneTitlesOf, addonViewOf, type AddonInfo } from "./addons.ts";
+import { addLog, logAllowed, LOG_RATE, pruneLog, loadAddonLog, readAddonLog, saveAddonLog, LOG_MAX, rendererFor, addonCommandOf, bandsOf, commandRows, clampHeight, gate, paneIdsOf, type AddonInfo } from "./addons.ts";
 
 const EVERY = ["session.read", "prompt.insert", "ui.status", "ui.toast", "ui.pane", "ui.band", "ui.command"];
 const addon = (views: NonNullable<AddonInfo["manifest"]>["views"]): AddonInfo =>
@@ -7,11 +7,13 @@ const addon = (views: NonNullable<AddonInfo["manifest"]>["views"]): AddonInfo =>
 
 describe("gate", () => {
   it("allows ui.ready without capabilities", () => expect(gate("ui.ready", [])).toEqual({ ok: true }));
-  it("allows session.read only with session.read", () => {
+  it("a gated call needs its capability", () => {
     expect(gate("session.read", ["session.read"])).toEqual({ ok: true });
     expect(gate("session.read", ["ui.toast"])).toMatchObject({ ok: false, code: "refused" });
+    expect(gate("prompt.insert", ["ui.toast"])).toMatchObject({ ok: false, code: "refused", message: "prompt.insert needs capability prompt.insert" });
+    expect(gate("log", ["log"])).toEqual({ ok: true });
+    expect(gate("log", EVERY)).toMatchObject({ ok: false, code: "refused", message: "log needs capability log" });
   });
-  it("refuses prompt.insert without prompt.insert", () => expect(gate("prompt.insert", ["ui.toast"])).toMatchObject({ ok: false, code: "refused", message: "prompt.insert needs capability prompt.insert" }));
   it("refuses prompt.submit even with every capability", () => expect(gate("prompt.submit", EVERY)).toMatchObject({ ok: false }));
   it("refuses an unknown type, also one named like an Object prototype key", () => {
     for (const t of ["fs.read", "", "constructor", "__proto__", "toString"]) expect(gate(t, EVERY), t).toMatchObject({ ok: false, code: "unknown" });
@@ -27,12 +29,6 @@ describe("addon panes", () => {
   it("paneIdsOf skips band views and hides phone:false views on phone", () => {
     expect(paneIdsOf([a], false)).toEqual(["addon:example:stats", "addon:example:wide"]);
     expect(paneIdsOf([a], true)).toEqual(["addon:example:wide"]);
-  });
-  it("titles and view lookup", () => {
-    expect(paneTitlesOf([a]).get("addon:example:stats")).toBe("Stats");
-    expect(addonViewOf([a], "addon:example:wide")?.view.entry).toBe("wide.html");
-    expect(addonViewOf([a], "addon:example:info")).toBeUndefined();
-    expect(addonViewOf([a], "addon:other:wide")).toBeUndefined();
   });
 });
 
@@ -58,8 +54,6 @@ describe("commands", () => {
   it("commandRows drops a row that clashes with a session command or alias", () => {
     const rows = commandRows([a], [{ name: "x", description: "", argumentHint: "", aliases: ["example:cmd"] }]);
     expect(rows.map((r) => r.name)).toEqual(["example:plain"]);
-  });
-  it("commandRows drops a row that clashes with a dialog command or /btw", () => {
     // A dialog name has no ':' so only the CLI plugin form can clash; the filter still covers the dialog names.
     const mk = (name: string) => ({ ...a, name, manifest: { ...a.manifest!, commands: [{ name: "y", description: "d" }] } }) as AddonInfo;
     expect(commandRows([mk("x")], [{ name: "x:y", description: "", argumentHint: "" }])).toEqual([]);
@@ -69,9 +63,6 @@ describe("commands", () => {
     const rows = commandRows([a], []);
     expect(addonCommandOf("/example:cmd release notes ", rows)).toEqual({ addon: "example", name: "cmd", args: "release notes" });
     expect(addonCommandOf("/example:plain", rows)).toEqual({ addon: "example", name: "plain", args: "" });
-  });
-  it("addonCommandOf ignores a command not in rows", () => {
-    const rows = commandRows([a], []);
     expect(addonCommandOf("/example:other", rows)).toBeUndefined();
     expect(addonCommandOf("hello /example:cmd", rows)).toBeUndefined();
   });
@@ -83,9 +74,9 @@ describe("rendererFor", () => {
     expect(rendererFor({ addons: [claim("a"), claim("b", "enabled", [{ tool: "T", entry: "t.html" }])], picks: {} }, "fence:example")).toMatchObject({ addon: { name: "a" }, entry: "a.html" });
     expect(rendererFor({ addons: [claim("b", "enabled", [{ tool: "T", entry: "t.html" }])], picks: {} }, "tool:T")?.entry).toBe("t.html");
     expect(rendererFor({ addons: [claim("a")], picks: {} }, "fence:other")).toBeUndefined();
+    expect(rendererFor({ addons: [claim("a"), claim("b")], picks: { "fence:example": "b" } }, "fence:example")?.addon.name).toBe("b");
+    expect(rendererFor({ addons: [claim("b"), claim("a")], picks: {} }, "fence:example")?.addon.name).toBe("a");
   });
-  it("uses the pick between two", () => expect(rendererFor({ addons: [claim("a"), claim("b")], picks: { "fence:example": "b" } }, "fence:example")?.addon.name).toBe("b"));
-  it("without a pick takes the first name", () => expect(rendererFor({ addons: [claim("b"), claim("a")], picks: {} }, "fence:example")?.addon.name).toBe("a"));
   it("ignores a disabled addon, and a pick of one", () => {
     expect(rendererFor({ addons: [claim("a", "disabled"), claim("b")], picks: { "fence:example": "a" } }, "fence:example")?.addon.name).toBe("b");
     expect(rendererFor({ addons: [claim("a", "needs_approval")], picks: {} }, "fence:example")).toBeUndefined();
@@ -93,10 +84,6 @@ describe("rendererFor", () => {
 });
 
 describe("addon log", () => {
-  it("gate: log needs the log capability", () => {
-    expect(gate("log", ["log"])).toEqual({ ok: true });
-    expect(gate("log", EVERY)).toMatchObject({ ok: false, code: "refused", message: "log needs capability log" });
-  });
   it("addLog keeps the last LOG_MAX entries per addon and leaves the input alone", () => {
     let log = new Map();
     for (let i = 0; i < LOG_MAX + 5; i++) log = addLog(log, "a", { at: i, level: "info", text: String(i) });

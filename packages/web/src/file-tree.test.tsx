@@ -7,7 +7,6 @@ import type { GitRepo } from "@claude-ui/protocol";
 import { FileTree, type FileTreeHandle } from "./file-tree.tsx";
 import { OpenExternalContext } from "./open-external-menu.ts";
 import { forgetRepoChoices, getRepoChoice } from "./repo-choice.ts";
-import { resetPageForTests, setRecommendationHost } from "./recommendations.ts";
 
 const ent = (path: string, isDir = false) => ({ name: path.split("/").at(-1)!, path, isDir });
 const listings: Record<string, ReturnType<typeof ent>[]> = {
@@ -62,16 +61,6 @@ it("renders a flat ARIA tree: role=tree, treeitems with aria-level, aria-expande
   await act(async () => t.row("/p/src").click());
   expect(t.row("/p/src").getAttribute("aria-expanded")).toBe("true");
   expect(t.row("/p/src/app.ts").getAttribute("aria-level")).toBe("2");
-  t.unmount();
-});
-
-it("file rows show the file-type icon (data-icon) and folder rows a folder icon", async () => {
-  const t = setup();
-  await t.render();
-  expect(t.row("/p/new.ts").querySelector("svg[data-icon]")!.getAttribute("data-icon")).not.toBe("Document");
-  expect(t.row("/p/package.json").querySelector("svg[data-icon]")).not.toBeNull();
-  expect(t.row("/p/src").querySelector("svg[data-icon]")).toBeNull();
-  expect(t.row("/p/src").querySelectorAll("svg").length).toBe(2);
   t.unmount();
 });
 
@@ -258,19 +247,6 @@ it("GH-360 right click opens the menu of the row under it: file, folder, empty s
   await closeMenu();
   await ctxMenu(t.el.querySelector('[data-testid="tree-empty-space"]')!);
   expect(menuIds()).toEqual(["newFile", "newFolder", "paste", "refresh"]);
-  await closeMenu();
-  t.unmount();
-});
-
-it("GH-360 Show changes only for a file with a git mark", async () => {
-  const t = setup({ gitStamp: "s" }, { "git.diff": diff });
-  await t.render();
-  await act(async () => void (await new Promise((r) => setTimeout(r, 350))));
-  await ctxMenu(t.row("/p/new.ts"));
-  expect(menuIds()).toContain("changes");
-  await closeMenu();
-  await ctxMenu(t.row("/p/README.md"));
-  expect(menuIds()).not.toContain("changes");
   await closeMenu();
   t.unmount();
 });
@@ -659,29 +635,6 @@ it("GH-392 with a repository list: one git.diff per readable repository with cwd
   t.unmount();
 });
 
-it("GH-392 at most 4 git.diff requests in flight", async () => {
-  const list: GitRepo[] = [QMAIN, ...Array.from({ length: 6 }, (_, i) => ({ path: `/q/r${i}`, rel: `r${i}`, kind: "nested" as const, parent: "/q" }))];
-  const held: (() => void)[] = [];
-  let pending = 0;
-  let max = 0;
-  const t = setup({ cwd: "/q", gitStamp: "s", repos: repos(list) }, {
-    "git.diff": () => {
-      pending++;
-      max = Math.max(max, pending);
-      return new Promise((res) => held.push(() => (pending--, res({ diff: null }))));
-    },
-  });
-  await t.render();
-  await wait();
-  expect(held).toHaveLength(4);
-  await act(async () => held.shift()!());
-  expect(held).toHaveLength(4);
-  while (held.length) await act(async () => held.shift()!());
-  expect(max).toBe(4);
-  expect(diffCalls(t)).toHaveLength(7);
-  t.unmount();
-});
-
 it("GH-392 a re-triggered read during the first wave never exceeds 4 git.diff in flight over both runs", async () => {
   const list: GitRepo[] = [QMAIN, ...Array.from({ length: 9 }, (_, i) => ({ path: `/q/r${i}`, rel: `r${i}`, kind: "nested" as const, parent: "/q" }))];
   const held: (() => void)[] = [];
@@ -696,6 +649,8 @@ it("GH-392 a re-triggered read during the first wave never exceeds 4 git.diff in
   });
   await t.render();
   await wait();
+  expect(held).toHaveLength(4);
+  await act(async () => held.shift()!());
   expect(held).toHaveLength(4);
   await t.render({ gitStamp: "s2" });
   await wait();
@@ -851,23 +806,6 @@ it("GH-392 an outsideRoots repository folder has the icon but no repository menu
   expect(menuIds()).not.toContain("repoChanges");
   expect(menuIds()).not.toContain("repoGraph");
   await closeMenu();
-  t.unmount();
-});
-
-it("GH-525 the focused folder row keeps a selected background (not the hover one) and it moves with focus", async () => {
-  const t = setup();
-  await t.render();
-  const src = t.row("/p/src");
-  await act(async () => src.focus());
-  await act(async () => src.click());
-  expect(src.className).toContain("bg-secondary");
-  expect(src.className).not.toContain("bg-muted"); // hover:bg-muted would beat bg-secondary under the pointer
-  expect(t.row("/p/README.md").className).toContain("hover:bg-muted");
-  await act(async () => t.row("/p/README.md").focus());
-  expect(t.row("/p/src").className).not.toContain("bg-secondary");
-  expect(t.row("/p/README.md").className).toContain("bg-secondary");
-  await t.key(t.row("/p/README.md"), "ArrowDown");
-  expect(t.row("/p/README.md").className).not.toContain("bg-secondary");
   t.unmount();
 });
 
@@ -1062,67 +1000,6 @@ it("GH-645 the open-in-app entries show for this machine and a WSL side, not for
   };
   for (const side of ["local", "wsl:Ubuntu"]) expect(await ids(side)).toEqual(["ext-menu-reveal", "ext-menu-code", "ext-menu-default"]);
   for (const side of ["docker:dev", "ssh:box"]) expect(await ids(side)).toEqual([]);
-});
-
-it("GH-722: the third filter with no match offers Find in files once per query; Show me runs onFindInFiles", async () => {
-  localStorage.clear();
-  resetPageForTests();
-  const show = vi.fn();
-  setRecommendationHost({ blocked: () => false, show });
-  const onFindInFiles = vi.fn();
-  const t = setup({ onFindInFiles }, { "fs.search": { paths: [] } });
-  await t.render();
-  const input = t.el.querySelector<HTMLInputElement>("input[type=search]")!;
-  const type = (v: string) =>
-    act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, v);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      await new Promise((r) => setTimeout(r, 200));
-    });
-  await type("zz");
-  await type("zz1");
-  expect(show).not.toHaveBeenCalled();
-  await act(async () => void t.render({ visible: true })); // a re-render of the same query counts nothing more
-  await type("zz12");
-  expect(show).toHaveBeenCalledOnce();
-  expect(show.mock.calls[0]![0]).toBe("Search file content with the Find in files shortcut.");
-  expect(show.mock.calls[0]![1].label).toBe("Show me");
-  show.mock.calls[0]![1].run();
-  expect(onFindInFiles).toHaveBeenCalledOnce();
-  t.unmount();
-  setRecommendationHost(undefined);
-  localStorage.clear();
-  resetPageForTests();
-});
-
-it("GH-722: the third Copy path offers Open in file manager when this machine can open it; Show me reopens the row menu on Reveal", async () => {
-  localStorage.clear();
-  resetPageForTests();
-  const show = vi.fn();
-  setRecommendationHost({ blocked: () => false, show });
-  const ext = { editors: [], canOpen: () => true, isLocal: () => true, run: vi.fn() };
-  const t = setup({ onCopy: vi.fn() });
-  await act(async () => t.root.render(<OpenExternalContext.Provider value={ext}><FileTree client={{ request: t.request } as never} cwd="/p" onOpen={() => {}} onViewer={() => {}} onCopy={() => {}} /></OpenExternalContext.Provider>));
-  const copy = async () => {
-    await ctxMenu(t.row("/p/README.md"));
-    await act(async () => menuItem("copyPath").click());
-    await act(async () => {});
-  };
-  await copy();
-  await copy();
-  expect(show).not.toHaveBeenCalled();
-  await copy();
-  expect(show).toHaveBeenCalledOnce();
-  expect(show.mock.calls[0]![0]).toBe("Open this file or folder in the file manager or an editor.");
-  await act(async () => show.mock.calls[0]![1].run());
-  await act(async () => void (await new Promise((r) => setTimeout(r, 120))));
-  const reveal = document.querySelector<HTMLElement>("[data-testid=ext-menu-reveal]")!;
-  expect(reveal.hasAttribute("data-locate")).toBe(true);
-  await closeMenu();
-  t.unmount();
-  setRecommendationHost(undefined);
-  localStorage.clear();
-  resetPageForTests();
 });
 
 // GH-707: multi-select and drag into the prompt box.

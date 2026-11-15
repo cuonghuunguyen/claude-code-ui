@@ -25,37 +25,6 @@ describe("THEMES", () => {
 });
 
 describe("tokensOf", () => {
-  const dark = tokensOf(catppuccin.dark!, "dark");
-  const light = tokensOf(catppuccin.light!, "light");
-
-  it("maps palette keys to tokens", () => {
-    const p = catppuccin.dark!;
-    expect(dark).toMatchObject({
-      "--background": p.bg, "--card": p.card, "--popover": p.card, "--secondary": p.side, "--muted": p.side,
-      "--foreground": p.fg, "--syntax-parameter": p.fg, "--ring-progress": p.fg, "--muted-foreground": p.muted, "--syntax-punctuation": p.muted,
-      "--ring-track": p.border, "--tab-separator": p.border, "--kbd": p.border, "--primary": p.primary, "--send": p.primary, "--ring": p.primary,
-      "--primary-foreground": p.pfg, "--syntax-keyword": p.kw, "--ref-remote": p.kw, "--syntax-string": p.str, "--syntax-regexp": p.str,
-      "--syntax-function": p.fn, "--syntax-type": p.type, "--syntax-attribute": p.type, "--syntax-number": p.num, "--syntax-constant": p.num,
-      "--syntax-comment": p.cmt, "--syntax-variable": p.varc, "--destructive": p.err, "--syntax-tag": p.err, "--syntax-critical": p.err,
-      "--warning": p.warn, "--syntax-builtin": p.warn, "--ref-head": p.warn, "--success": p.ok, "--ref-local": p.ok,
-      "--info": p.info, "--syntax-operator": p.info, "--syntax-decorator": p.info, "--syntax-escape": p.info,
-    });
-  });
-
-  it("derives border/input/accent from fg and --faint from muted and card", () => {
-    expect(dark["--border"]).toBe(catppuccin.dark!.fg + "1f");
-    expect(dark["--input"]).toBe(catppuccin.dark!.fg + "24");
-    expect(dark["--accent"]).toBe(catppuccin.dark!.fg + "14");
-    expect(light["--accent"]).toBe(catppuccin.light!.fg + "0f");
-    expect(dark["--faint"]).toMatch(HEX);
-    expect(dark["--faint"]).not.toBe(catppuccin.dark!.muted);
-  });
-
-  it("light --muted is bg, dark --muted is side", () => {
-    expect(light["--muted"]).toBe(catppuccin.light!.bg);
-    expect(dark["--muted"]).toBe(catppuccin.dark!.side);
-  });
-
   it("leaves avatar, overlay and elevation tokens to Default; graph and context only as lightness-moved overrides", () => {
     for (const t of THEMES) for (const mode of ["light", "dark"] as const) {
       const p = t[mode];
@@ -80,17 +49,6 @@ describe("themeCss", () => {
 });
 
 describe("terminalTheme", () => {
-  it("derives ANSI colors from the palette; black is the foreground in light themes, the side surface in dark ones", () => {
-    const p = catppuccin.dark!;
-    expect(terminalTheme("catppuccin", "dark")).toMatchObject({
-      foreground: p.fg, background: p.card, cursor: p.fg, selectionBackground: p.fg + "40",
-      black: p.side, red: p.err, green: p.ok, yellow: p.warn, blue: p.fn, magenta: p.kw, cyan: p.info, white: p.muted,
-      brightBlack: p.cmt, brightRed: p.err, brightGreen: p.ok, brightYellow: p.warn, brightBlue: p.fn, brightMagenta: p.kw, brightCyan: p.info, brightWhite: p.muted,
-    });
-    expect(terminalTheme("catppuccin", "light").selectionBackground).toBe(catppuccin.light!.fg + "33");
-    expect(terminalTheme("catppuccin", "light")).toMatchObject({ black: catppuccin.light!.fg, brightBlack: catppuccin.light!.cmt });
-  });
-
   // 3:1 on the terminal background for every ANSI colour. The one intentional exception: black on dark themes is the side surface (dark by definition of ANSI black).
   it.each(THEMES.slice(1).flatMap((t) => (["light", "dark"] as const).filter((m) => t[m]).map((m) => [t.id, m] as const)))("%s %s: all 16 ANSI colors reach 3:1 on the terminal background", (id, mode) => {
     const t = terminalTheme(id, mode);

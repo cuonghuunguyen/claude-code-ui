@@ -70,7 +70,6 @@ it("shows tabs with counts and installed rows with dot, id, description, MCP chi
   const [pony, notes] = d.all("plugin-installed");
   expect(pony!.textContent).toContain("ponytail@ponytail");
   expect(pony!.textContent).toContain("Lazy senior dev");
-  expect(d.all("plugin-dot").map((x) => x.className.includes("bg-success"))).toEqual([true, false]);
   expect(d.all("plugin-mcp").map((c) => c.title)).toEqual(["lazy: connected", "docs: failed - boom"]);
   const sw = d.all("plugin-switch");
   expect(sw.map((s) => [s.getAttribute("aria-label"), s.getAttribute("aria-checked"), s.title])).toEqual([

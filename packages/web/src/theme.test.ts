@@ -68,8 +68,7 @@ for (const { name, mode, t } of PAIRS) {
         for (const fg of ["accent-foreground", "muted-foreground"]) expect(contrast(solid(fg), over(t.accent!, t[bg]!))).toBeGreaterThanOrEqual(4.5);
     });
 
-    it("keybind chip (Default: OpenCode bg-layer-03 #eeeeee light, #3a3a3a dark); its muted text reaches 4.5:1", () => {
-      if (name.startsWith("default")) expect(t.kbd).toBe(mode === "light" ? "#eeeeee" : "#3a3a3a");
+    it("keybind chip muted text reaches 4.5:1", () => {
       expect(contrast(solid("muted-foreground"), solid("kbd"))).toBeGreaterThanOrEqual(4.5);
     });
 

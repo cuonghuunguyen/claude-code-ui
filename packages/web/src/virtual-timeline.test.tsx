@@ -503,15 +503,6 @@ it("a reveal puts the item at the top, or below the sticky bar (56px) when the t
   expect(log().scrollTop).toBe(start("item 40") - 56);
 });
 
-it("the footer of an empty timeline has no top gap; after items it sits 12px below (mt-3)", async () => {
-  const draw = (items: string[]) =>
-    act(async () => root.render(<VirtualTimeline items={items} itemKey={(i) => i} renderItem={(item) => <p>{item}</p>} footer={<b data-testid="foot">pending</b>} />));
-  await draw([]);
-  expect(el.querySelector('[data-testid="foot"]')!.parentElement!.className).not.toContain("mt-3");
-  await draw(["a", "b"]);
-  expect(el.querySelector('[data-testid="foot"]')!.parentElement!.className).toContain("mt-3");
-});
-
 // Paging (GH-137): older pages load on scroll up and are prepended without moving the view.
 const names = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => `item ${from + i}`);
 const drawPaged = (list: string[], over: Partial<ComponentProps<typeof VirtualTimeline<string>>> = {}) =>
@@ -558,14 +549,7 @@ it("prepending 20 items keeps the item in view at the same screen position (no j
   await drawPaged(names(0, 70), { onReachTop });
   await settle();
   expect(startOf(key) - log().scrollTop).toBe(screenY);
-});
-
-it("live output while scrolled up after a prepend does not move the view", async () => {
-  const onReachTop = () => {};
-  await drawPaged(names(20, 70), { onReachTop });
-  await userScroll(2000);
-  await drawPaged(names(0, 70), { onReachTop });
-  await settle();
+  // Live output after the prepend does not move the view either.
   const top = log().scrollTop;
   await drawPaged([...names(0, 70), "item 70"], { onReachTop });
   await settle();

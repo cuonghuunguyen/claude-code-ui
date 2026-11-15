@@ -333,12 +333,6 @@ it("error, quiet, finished and limit rows have one action button beside the row,
   expect(cancelContinue).toHaveBeenCalledWith("l");
 });
 
-it("a working row of an idle session with a background task shows k of n", async () => {
-  const s: State = { list: [item("a", { state: "idle", lastActivity: NOW })], views: { a: view([...done, todo(["Plan", "completed"], ["Build", "in_progress"]), { type: "session_state", id: "st", state: "idle", working: true } as Part]) } };
-  await render(s);
-  expect(el.querySelector('[data-testid="focus-running-row"] [data-testid="focus-progress"]')!.textContent).toBe("2 of 2");
-});
-
 it("the detail pane shows the last todo list of a finished (idle) session and the live one of a quiet running session", async () => {
   const fin = finish("ok", [todo(["Plan", "completed"], ["Ship", "completed"])]);
   await render({ list: [item("f", { state: "idle", lastActivity: NOW })], views: { f: fin }, unread: ["f"] });
@@ -369,7 +363,6 @@ it("a worker's row nests under its coordinator's parent row; a closed worker's r
   expect(group()!.textContent).toContain("Permission");
   expect(toggle().getAttribute("aria-expanded")).toBe("true");
   expect(toggle().className).toContain("max-md:min-h-11");
-  expect(el.querySelector('[data-testid="focus-workers"]')!.className).toContain("pl-");
 });
 
 it("collapsing the group hides the worker rows, is kept in this browser and restored on remount", async () => {

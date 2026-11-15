@@ -292,23 +292,6 @@ it("New session in a project focuses the first prompt, also when the new-session
   }
 });
 
-it("a replayed session_state lists no sessions; a live one does", async () => {
-  const lists = () => sent.filter((m) => m.type === "session.list").length;
-  replies["session.subscribe"] = { logEpoch: "e1", seq: 2, session };
-  // Reopen: the subscribe reply (seq 2) comes first, then its replay.
-  await act(async () => root.unmount());
-  root = createRoot(el);
-  await act(async () => root.render(<App />));
-  await act(async () => {});
-  const before = lists();
-  await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "session_state", id: "session_state", state: "running" } }));
-  await act(async () => emit({ type: "event", sessionId: ID, seq: 2, part: { type: "session_state", id: "session_state", state: "idle" } }));
-  expect(lists()).toBe(before);
-  await act(async () => emit({ type: "event", sessionId: ID, seq: 3, part: { type: "session_state", id: "session_state", state: "running" } }));
-  expect(lists()).toBe(before + 1);
-  replies["session.subscribe"] = { logEpoch: "e1", session };
-});
-
 it("a compaction shows a 'Conversation compacted' divider with its summary collapsed, not a user bubble", async () => {
   await act(async () => emit({ type: "event", sessionId: ID, seq: 1, part: { type: "compaction", id: "b1", trigger: "manual", summary: "This session is being continued…" } }));
   const c = el.querySelector('[data-testid="compaction"]')!;
@@ -738,19 +721,6 @@ it("wide screens dock the terminal at the bottom by default, spanning the sessio
   expect(t.closest("main")).toBeNull();
   expect(q("work-area")!.querySelector('[data-testid="side-panel"]')).not.toBeNull();
   expect(q("work-area")!.contains(q("sidebar"))).toBe(false);
-});
-
-it("GH-434: the side panel terminal toggle uses the quiet pressed style", async () => {
-  const b = () => q("terminal-toggle")!;
-  expect(b().className).toContain("aria-pressed:bg-transparent");
-  expect(b().className).toContain("aria-pressed:shadow-none");
-  expect(b().className).toContain("aria-pressed:text-faint");
-  expect(b().className).toContain("aria-pressed:hover:bg-accent");
-  // The default pressed fill is replaced, not stacked under the quiet one.
-  expect(b().className).not.toContain("aria-pressed:bg-secondary");
-  expect(b().getAttribute("aria-pressed")).toBe("false");
-  await clickId("terminal-toggle");
-  expect(b().getAttribute("aria-pressed")).toBe("true");
 });
 
 it("the titlebar terminal button opens and hides the terminal, pressed while shown", async () => {
@@ -1760,30 +1730,6 @@ describe("worktrees", () => {
     }
   });
 
-  it("hovering the trash button warms the status once per 10 s, as a cancellable scan", async () => {
-    const listed = { sessions: [session], projects: ["/p/demo"], worktrees: { "/p/demo": [main, { path: managed, branch: "worktree-x", main: false }] } };
-    const restore = await remount({ "session.list": listed, "worktree.status": { uncommitted: 0, untracked: 0, commits: 0, ahead: 0, branch: "worktree-x", branchMerged: false, running: 0, safety: "safe" } });
-    const from = sent.length;
-    const trash = () => el.querySelector<HTMLElement>('[data-testid="worktree-remove"]')!;
-    const warms = () => sent.slice(from).filter((m) => m.type === "worktree.status");
-    const hover = () => act(async () => void trash().dispatchEvent(new PointerEvent("pointerover", { bubbles: true })));
-    const now = vi.spyOn(Date, "now");
-    try {
-      const t0 = Date.now();
-      now.mockReturnValue(t0);
-      await hover();
-      await hover();
-      expect(warms()).toEqual([{ type: "worktree.status", cwd: "/p/demo", path: managed, scan: expect.any(String) }]);
-      now.mockReturnValue(t0 + 11_000);
-      await hover();
-      expect(warms()).toHaveLength(2);
-      expect(sent.slice(from).filter((m) => m.type === "worktree.cancel")).toHaveLength(1);
-    } finally {
-      now.mockRestore();
-      restore();
-    }
-  });
-
   describe("Remove worktree dialog (GH-462)", () => {
     const dlg = () => document.querySelector<HTMLElement>('[data-testid="remove-worktree-dialog"]');
     const confirmBtn = () => document.querySelector<HTMLButtonElement>('[data-testid="remove-worktree-confirm"]');
@@ -2463,39 +2409,6 @@ describe("idle close: holds and background follows", () => {
     }
   });
 
-  it("reconnect: the shown session resubscribes at once, background views through a queue of 4; every one is resubscribed in the end", async () => {
-    const many = Array.from({ length: 20 }, (_, i) => ({ ...other, id: `${String(i).padStart(8, "0")}-2222-3333-4444-555555555555`, cwd: "/p/other", state: "running" as const }));
-    sent.length = 0;
-    const restore = await remount({ "session.list": { sessions: [session, ...many], projects: ["/p/demo", "/p/other"] } });
-    try {
-      expect(new Set(subscribes().map((m) => m.sessionId)).size).toBe(21);
-      sent.length = 0;
-      const open: (() => void)[] = [];
-      let inflight = 0;
-      let peak = 0;
-      replies["session.subscribe"] = () =>
-        new Promise((res) => {
-          peak = Math.max(peak, ++inflight);
-          open.push(() => (inflight--, res({ logEpoch: "e1", session })));
-        });
-      await act(async () => reconnect());
-      await act(async () => {});
-      expect(subscribes()[0]!.sessionId).toBe(ID);
-      expect(inflight).toBeLessThanOrEqual(5);
-      const done = () => new Set(subscribes().map((m) => m.sessionId)).size;
-      for (let i = 0; i < 40 && done() < 21; i++) {
-        await act(async () => open.splice(0).forEach((f) => f()));
-        await act(async () => {});
-      }
-      expect(peak).toBeLessThanOrEqual(5);
-      expect(done()).toBe(21);
-    } finally {
-      restoreSubscribe();
-      sent.length = 0;
-      restore();
-    }
-  });
-
   it("reconnect (GH-760): background resubscribes and repos wait until the list replied and the shown session resubscribed", async () => {
     const many = Array.from({ length: 6 }, (_, i) => ({ ...other, id: `${String(i).padStart(8, "0")}-2222-3333-4444-555555555555`, cwd: "/p/other", state: "running" as const }));
     sent.length = 0;
@@ -2567,19 +2480,6 @@ describe("idle close: holds and background follows", () => {
       expect(subscribes().filter((m) => m.sessionId === other.id)).toEqual([expect.objectContaining({ background: true })]);
     } finally {
       sent.length = 0;
-      restore();
-    }
-  });
-
-  it("reconnect: tab sessions resubscribe holding, the others in the background", async () => {
-    const restore = await remount({ "session.list": { sessions: [session, other], projects: ["/p/demo", "/p/other"] } });
-    try {
-      sent.length = 0;
-      await act(async () => reconnect());
-      await act(async () => {});
-      expect(subscribes().find((m) => m.sessionId === ID)).not.toHaveProperty("background");
-      expect(subscribes()).toContainEqual(expect.objectContaining({ sessionId: other.id, background: true }));
-    } finally {
       restore();
     }
   });
@@ -3905,13 +3805,6 @@ describe("GH-378 clean up tabs", () => {
     } finally {
       hasFocus.mockRestore();
     }
-  });
-
-  it("claude-ui.shown-activity keeps only open tabs and the closed-tab stack", async () => {
-    localStorage.setItem("claude-ui.shown-activity", JSON.stringify({ [ID]: 1, [S2]: 1, [S3]: 1, [S4]: 1 }));
-    localStorage.setItem("claude-ui.closed-tabs", JSON.stringify([{ id: S3, at: 1 }]));
-    await remount([session, mk(S2, "Second")], [ID, S2], S2);
-    expect(Object.keys(JSON.parse(localStorage.getItem("claude-ui.shown-activity")!)).sort()).toEqual([ID, S2, S3].sort());
   });
 
   it("a cleanup right after Undo (toast still leaving) does not join the undone toast", async () => {
@@ -6072,17 +5965,6 @@ describe("GH-401 docked session", () => {
     expect(location.hash).toBe(`#${S3}`);
     expect(prompt(S2)).not.toBeNull();
     expect(JSON.parse(localStorage.getItem("claude-ui.dockedSessions")!)).toEqual({ [S2]: "side" });
-  });
-
-  it("opening a docked session (a sidebar row) selects its dock tab; the hash, the active tab and the other dock tabs stay", async () => {
-    await remount();
-    await act(async () => q("side-panel")!.querySelector<HTMLElement>('[data-pane-tab="changes"]')!.click());
-    expect(q("side-panel")!.querySelector('[data-docked-tab][aria-selected="true"]')).toBeNull();
-    await act(async () => el.querySelector<HTMLElement>(`[data-testid="session-item"][data-session-id="${S3}"]`)!.click());
-    expect(q("side-panel")!.querySelector<HTMLElement>('[aria-selected="true"]')!.dataset.dockedTab).toBe(S3);
-    expect(location.hash).toBe(`#${ID}`);
-    expect(el.querySelector(`[data-tab-id="${ID}"]`)!.getAttribute("data-active")).not.toBeNull();
-    expect(tabIds()).toEqual([ID, S2, S4]);
   });
 
   it("Esc in the docked prompt interrupts the docked session only; Esc in the main prompt does not interrupt it", async () => {

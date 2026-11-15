@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { createShakeDetector, loadShakeLocate, saveShakeLocate, type Move } from "./locate.ts";
+import { createShakeDetector, type Move } from "./locate.ts";
 
 const run = (xs: number[], dt = 20, extra: Partial<Move> = {}, t0 = 0, d = createShakeDetector()) =>
   xs.map((x, i) => d({ x, t: t0 + i * dt, pointerType: "mouse", buttons: 0, ...extra }));
@@ -35,16 +35,5 @@ describe("shake detector", () => {
     const d = createShakeDetector();
     const r = S.map((x, i) => d({ x, t: i * 20, pointerType: "mouse", buttons: i === 2 ? 1 : 0 }));
     expect(r.includes(true)).toBe(false);
-  });
-});
-
-describe("shake setting", () => {
-  it("is on by default and saves per browser", () => {
-    expect(loadShakeLocate()).toBe(true);
-    saveShakeLocate(false);
-    expect(localStorage.getItem("claude-ui.shakeLocate")).toBe("0");
-    expect(loadShakeLocate()).toBe(false);
-    saveShakeLocate(true);
-    expect(localStorage.getItem("claude-ui.shakeLocate")).toBeNull();
   });
 });

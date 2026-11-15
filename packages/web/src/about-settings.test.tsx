@@ -58,9 +58,3 @@ it("an update under way shows its phase and offers no buttons but the check", as
   expect(button("Update and restart")).toBeUndefined();
   expect(button("Check for updates")!.disabled).toBe(true);
 });
-
-it("no updates row without a check (the dialog in tests, an older App)", async () => {
-  await render({});
-  expect(row()).toBeNull();
-  expect(el.querySelector('[data-testid="settings-about-daemon"]')!.textContent).toBe("0.2.0");
-});

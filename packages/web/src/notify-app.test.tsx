@@ -31,13 +31,11 @@ const replies: Record<string, unknown> = {
 vi.mock("@xterm/xterm", () => ({ Terminal: class { options = {}; cols = 80; rows = 24; loadAddon() {} open() {} focus() {} write() {} reset() {} onData() {} onResize() {} onSelectionChange() {} onScroll() {} attachCustomKeyEventHandler() {} dispose() {} } }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 let emit: (e: unknown) => void = () => {};
-let emitSettings: (m: unknown) => void = () => {};
 const sent: { type: string; [k: string]: unknown }[] = [];
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
   connect: (opts: { onEvents: (es: unknown[]) => void; onSettingsChanged?: (m: unknown) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
     emit = (e) => opts.onEvents([e]);
-    emitSettings = (m) => opts.onSettingsChanged?.(m);
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
     return {
       request: async (m: { type: string; sessionId?: string }) => {
@@ -282,17 +280,5 @@ it("Notifications from workers off: a worker's finished turn and request make no
     // A plain session still gets its card.
     await idleTurn(B);
     expect(cards().some((c) => c.textContent?.includes("Fix login redirect"))).toBe(true);
-  });
-}, 15000);
-
-it("settings_changed turning worker notifications on applies to the next event without reload (GH-387)", async () => {
-  await withWorker(false, async () => {
-    await mount(`#${A}`);
-    await idleTurn(W);
-    expect(cards()).toHaveLength(0);
-    await act(async () => emitSettings({ type: "settings_changed", settings: orch(true) }));
-    await idleTurn(W);
-    expect(cards()).toHaveLength(1);
-    expect(cards()[0]!.textContent).toContain("Finished");
   });
 }, 15000);

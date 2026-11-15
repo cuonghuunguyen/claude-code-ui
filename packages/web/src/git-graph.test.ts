@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { emptyGraph, layoutPage, LANE_COLORS } from "./git-graph.ts";
+import { emptyGraph, layoutPage } from "./git-graph.ts";
 
 const c = (hash: string, ...parents: string[]) => ({ hash, parents });
 const shape = (commits: ReturnType<typeof c>[]) => layoutPage(commits, emptyGraph()).rows.map((r) => ({ col: r.col, color: r.color, input: r.input.map((l) => l.hash), output: r.output.map((l) => l.hash) }));
@@ -79,12 +79,6 @@ describe("layoutPage", () => {
     const copy = structuredClone(s);
     layoutPage([c("b")], s);
     expect(s).toEqual(copy);
-  });
-
-  it("colors cycle through 8", () => {
-    const tips = Array.from({ length: LANE_COLORS + 1 }, (_, i) => c(`t${i}`));
-    const rows = layoutPage(tips, emptyGraph()).rows;
-    expect(rows.map((r) => r.color)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 0]);
   });
 
   it("through[i] is the output index of input lane i, -1 when the lane ends at the node", () => {

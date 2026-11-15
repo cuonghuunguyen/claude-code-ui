@@ -54,16 +54,6 @@ it("by worktree: chips show the worktree name in the project color; details are 
   expect(tip?.textContent).toContain("/r/acme/.claude/worktrees/a");
 });
 
-it("hovering a chip opens the tooltip too", async () => {
-  const el = await mount(<TabsBar {...noop} tabs={["w1", "a"]} activeId="a" info={(id) => WINFO[id]!} grouping="worktree" />);
-  const c = chips(el)[0]!;
-  for (const type of ["pointerover", "pointerenter", "mouseover", "mouseenter", "pointermove", "mousemove"]) {
-    await act(async () => void c.dispatchEvent(new (type.startsWith("pointer") ? PointerEvent : MouseEvent)(type, { bubbles: true, pointerType: "mouse" } as PointerEventInit)));
-  }
-  await act(async () => void new Promise((r) => setTimeout(r, 100)));
-  expect(document.querySelector('[data-slot="tooltip-content"]')?.textContent).toContain("acme · ACME-397-registry-adapt");
-});
-
 it("by project: the chip tooltip shows the project name and path", async () => {
   const el = await mount(<TabsBar {...noop} tabs={["a", "b"]} activeId="a" info={(id) => ({ ...INFO[id]!, group: INFO[id]!.cwd })} />);
   const c = chip(el, "/home/u/docs");

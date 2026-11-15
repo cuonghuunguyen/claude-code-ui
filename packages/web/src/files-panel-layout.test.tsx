@@ -4,7 +4,7 @@ import { act, useState, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { connect } from "./client.ts";
-import { FilesPanel, chromeTheme } from "./files-panel.tsx";
+import { FilesPanel } from "./files-panel.tsx";
 
 const ent = (path: string, isDir = false) => ({ name: path.split("/").at(-1)!, path, isDir });
 const files: Record<string, string> = { "/p/sub/c.ts": "see", "/p/a.ts": "one\ntwo", "/p/b.ts": "bee", "/o/out.ts": "outside" };
@@ -262,16 +262,4 @@ it("tab bar: a file icon, the active tab on bg-secondary, a close button of 44px
   expect(close.className).toContain("pointer-coarse:size-11");
   expect(tab.querySelector("button")!.className).toContain("max-md:min-h-11");
   expect(tab.querySelector("button")!.className).toContain("max-md:min-w-11");
-});
-
-it("editor chrome follows the diff: no gutter rule, muted numbers from the diff's formula, 20px lines, 3ch number column", () => {
-  const gutters = chromeTheme[".cm-gutters"];
-  expect(gutters.borderRight).toBe("none");
-  expect(gutters.backgroundColor).toBe("var(--card)");
-  expect(gutters.color).toBe("color-mix(in lab, var(--foreground) 65%, var(--card))");
-  expect(chromeTheme[".cm-scroller"]).toMatchObject({ fontFamily: "var(--font-mono, monospace)", lineHeight: "20px" });
-  expect(chromeTheme[".cm-lineNumbers .cm-gutterElement"]).toMatchObject({ padding: "0 1ch", minWidth: "3ch" });
-  expect(chromeTheme[".cm-content"]).toMatchObject({ padding: "8px 0" });
-  // Below lg the editor stays 16px / 24px (iOS zooms into smaller focused text).
-  expect(chromeTheme["@media (width < 64rem)"]).toMatchObject({ ".cm-scroller": { lineHeight: "24px" } });
 });

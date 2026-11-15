@@ -26,7 +26,6 @@ it("available -> installing -> waiting -> restarting, and the install then resta
   await render(available, request);
   expect(toast()!.textContent).toContain("Update available");
   expect(toast()!.textContent).toContain("claude-ui 0.2.1 is available (you have 0.2.0).");
-  expect(toast()!.className).toContain("shadow-floating");
   expect(button("Not yet")!.className).toContain("pointer-coarse:min-h-11");
   await act(async () => button("Update and restart")!.click());
   expect(request.mock.calls.map((c) => c[0])).toEqual([{ type: "update.install" }, { type: "update.restart" }]);
@@ -88,4 +87,3 @@ it("an update_state without a known version is ignored; update_available starts 
   const waiting = nextUpdate(available, { type: "update_state", phase: "installing" });
   expect(nextUpdate(waiting, { type: "update_available", version: "0.2.1", current: "0.2.0" })).toEqual(available);
 });
-

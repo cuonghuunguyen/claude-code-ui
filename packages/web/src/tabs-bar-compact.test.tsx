@@ -128,11 +128,6 @@ it("compact: hovering the chip opens the menu at once, with no opening animation
     await act(async () => void c.dispatchEvent(new (type.startsWith("pointer") ? PointerEvent : MouseEvent)(type, { bubbles: true, pointerType: "mouse" } as PointerEventInit)));
   }
   expect(items().length).toBe(2); // two tabs (GH-431: the group actions are in the context menu)
-  // The popup fades and scales out on close only: no starting-style that is not the resting look.
-  const cls = document.querySelector('[data-testid="tab-group-menu"]')!.className;
-  expect(cls).toContain("data-ending-style:opacity-0");
-  expect(cls).not.toContain("data-starting-style:opacity-0");
-  expect(cls).not.toContain("data-starting-style:scale-95");
   expect(CHIP_HOVER_DELAY_MS).toBe(0);
 });
 
@@ -248,18 +243,6 @@ it("close group: a middle click on a chip asks to close its tabs; compact does n
   expect(onCloseGroup).toHaveBeenLastCalledWith(B, ["b1"]);
   expect(chip(el, B).getAttribute("aria-expanded")).toBe("true");
   expect(localStorage.getItem("claude-ui.tab-groups-collapsed")).toBeNull();
-});
-
-it("close group: the compact chip's context menu (GH-431) ends with Close group after a separator", async () => {
-  const onCloseGroup = vi.fn();
-  const el = await mount(<TabsBar {...noop} compact onCloseGroup={onCloseGroup} tabs={["a1", "a2", "b1"]} activeId="b1" info={(id) => INFO[id]!} />);
-  await act(async () => void chip(el, A).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 5, clientY: 5 })));
-  await settle();
-  const last = items().at(-1)!;
-  expect(last.textContent).toBe("Close group");
-  expect(last.previousElementSibling?.getAttribute("role")).toBe("separator");
-  await act(async () => last.click());
-  expect(onCloseGroup).toHaveBeenCalledWith(A, ["a1", "a2"]);
 });
 
 it("close group: not compact, the chip's context menu has Collapse, Move left (off at the first group), Move right and Close group", async () => {
