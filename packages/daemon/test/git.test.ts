@@ -2000,6 +2000,14 @@ describe("submodule rows", { timeout: 90_000 }, () => {
     expect(d.files).toContainEqual(row);
   });
 
+  it("a submodule with only uncommitted edits is not listed in gitDiff or counted by gitStatus", async () => {
+    const r = subRepo();
+    put(r.inner, "a.txt", "edited\n");
+    put(r.inner, "untracked.txt", "u\n");
+    expect((await gitDiff(r.dir, { base: "head", allowed: all }))!.files.map((f) => f.path)).not.toContain("libs/lib");
+    expect(await gitStatus(r.dir, { allowed: all })).toMatchObject({ added: 0, removed: 0, files: 0 });
+  });
+
   it("gitShow lists a gitlink of a commit with from and to, no counts", async () => {
     const r = subRepo();
     sh(r.inner, "checkout", "-q", r.c2);
