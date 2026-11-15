@@ -12,6 +12,15 @@ Default five labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for
 
 Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
 
+## Testing policy
+
+Risk-based; full policy and critical journey list in `docs/testing.md`.
+
+- Commit a test only if it is user-visible, a regression test of a fixed bug, or a package contract. Delete exploratory branch tests before commit.
+- Search for an existing test of the behaviour first; extend it.
+- E2E only for the critical journeys in `docs/testing.md`.
+- PR description states the risk each new test covers.
+
 ## Talking to the user about tickets and PRs
 
 The user does not read ticket or PR numbers. Name every ticket and PR by its title or a short description of it (`Inline session`, `Graph tags + signing`). Never use a number as the reference (`#455`, `GH-455`, `PR #751`, `stacked on #745`), not even in parentheses. Exception: a command the user must run, or a link, may contain the number. Applies to chat, tables, lists and status reports. Prompts sent to workers may still use numbers.

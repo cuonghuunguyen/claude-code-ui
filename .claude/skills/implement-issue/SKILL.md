@@ -61,6 +61,11 @@ Also plan first when the issue changes the protocol or part model, or `docs/spec
   with `// @vitest-environment jsdom` + `createRoot` + `act` (see `tool-expand.test.tsx`,
   `changes-panel.test.tsx`); adapter changes in `packages/protocol/test/adapter.test.ts`
   against recorded fixtures.
+- Testing policy (`docs/testing.md`, binding): search existing tests for the behaviour and
+  extend them before adding one. Branch tests while building are fine; before commit delete
+  every test that is not user-visible, a regression test of the fixed bug, or a package
+  contract. Bug fix: one regression test at the lowest layer that reproduces it. `notes.md`
+  and the PR description list the risk each new test covers.
 - Reuse existing helpers (`diffStats`, `InputDiff`, `DIFF_OPTIONS`, `Button`, theme tokens)
   before writing new ones.
 - UI: OpenCode tokens and anatomy; ui-ux-pro-max Quick Reference §1-§3 must hold (contrast,
@@ -122,6 +127,12 @@ Scripted: each visible acceptance criterion is a Cucumber scenario in `packages/
 run against a real daemon and real Claude (Commands › e2e). The run starts its own daemon on
 `E2E_PORT` with `XDG_CONFIG_HOME=<run>/ui-config` and the API key variables unset, stops it by
 PID, and fails if anything of the run landed in the real config dir.
+
+Committed scenarios cover only the critical journeys in `docs/testing.md`. This overrides the
+orchestration plugin's "scripted: scenarios committed": a criterion outside those journeys is
+still proven by a scenario run with screenshots, but that scenario (and any step added only for
+it) is deleted before commit; `notes.md` keeps its name and evidence. A criterion inside a
+journey extends that journey's existing scenario before adding a new one.
 
 1. Write or extend the `.feature` scenario for each visible acceptance criterion. Reuse steps
    (`npm run e2e:steps`); add a step only when none fits. Assert structure (reply shown, card
