@@ -20,6 +20,9 @@ The agent reads these rules (the same text is its guidance):
 > - is one small step (one read, one edit);
 > - feeds a next step that needs the raw output;
 > - edits files the main thread also edits;
+> - needs an unbiased view (review): a fork inherits your assumptions;
+> - needs a specialized agent type or a worktree;
+> - needs little of a large conversation (a fork copies all of it);
 > - fits a short, self-contained brief: use a fresh subagent and set `model` explicitly (cheaper).
 
 The agent decides when to fork. There is no automatic fork when the context grows past a limit.

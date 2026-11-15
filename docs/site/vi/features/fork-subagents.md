@@ -20,9 +20,12 @@ Agent đọc các quy tắc sau (cùng một văn bản với hướng dẫn c�
 > - is one small step (one read, one edit);
 > - feeds a next step that needs the raw output;
 > - edits files the main thread also edits;
+> - needs an unbiased view (review): a fork inherits your assumptions;
+> - needs a specialized agent type or a worktree;
+> - needs little of a large conversation (a fork copies all of it);
 > - fits a short, self-contained brief: use a fresh subagent and set `model` explicitly (cheaper).
 
-Tóm tắt: fork khi cần đọc, tìm kiếm hoặc xem log nhiều mà chỉ cần kết luận; việc độc lập với bước kế tiếp; việc cần quyết định và kiến thức về tệp của cuộc trò chuyện; hoặc dự kiến hơn khoảng 5 lần đọc tệp hay đầu ra lớn. Không fork khi việc chỉ là một bước nhỏ; bước kế tiếp cần đầu ra thô; việc sửa tệp mà luồng chính cũng sửa; hoặc một bản mô tả ngắn, tự đủ là được (dùng subagent mới và đặt `model` rõ ràng, rẻ hơn).
+Tóm tắt: fork khi cần đọc, tìm kiếm hoặc xem log nhiều mà chỉ cần kết luận; việc độc lập với bước kế tiếp; việc cần quyết định và kiến thức về tệp của cuộc trò chuyện; hoặc dự kiến hơn khoảng 5 lần đọc tệp hay đầu ra lớn. Không fork khi việc chỉ là một bước nhỏ; bước kế tiếp cần đầu ra thô; việc sửa tệp mà luồng chính cũng sửa; cần góc nhìn độc lập (review, kết luận nghiệm thu) vì fork kế thừa giả định của cuộc trò chuyện; cần loại agent chuyên biệt hoặc worktree riêng; chỉ cần một phần nhỏ của cuộc trò chuyện đã lớn, vì fork mang theo toàn bộ; hoặc một bản mô tả ngắn, tự đủ là được (dùng subagent mới và đặt `model` rõ ràng, rẻ hơn).
 
 Agent tự quyết định khi nào fork. Không có fork tự động khi ngữ cảnh vượt một ngưỡng.
 
