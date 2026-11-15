@@ -96,7 +96,8 @@ describe("view cache in the app (GH-771)", () => {
     expect(el.textContent).toContain("cached answer");
     expect(el.textContent).toContain("cached prompt");
     expect(el.querySelector('[data-testid="tab-strip"] [data-testid="tab"]')?.textContent).toContain("Demo");
-    expect(sent).toEqual([]);
+    // The git panel of the cached view may ask for its status; nothing of the resync (list, subscribe) goes out before the hello.
+    expect(sent.filter((m) => m.type !== "git.status")).toEqual([]);
   });
 
   it("the cached view is in the DOM before any socket event can run (a fast open must not batch into the first cached render)", async () => {

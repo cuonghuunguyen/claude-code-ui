@@ -1819,6 +1819,7 @@ export function App() {
           (e: Error) => e.message !== "disconnected" && setError(`models: ${e.message}`),
         );
         c.request<SettingsResult>({ type: "settings.get" }).then((r) => (setLastEngine(r.settings.sessions?.engine ?? "claude"), setSessionsMode(r.settings.sessions?.defaultMode), setLabels(r.settings.labels), setBack(r.settings.back, true), setApp(r.settings.app), (desktopForcedOff.current = !!r.daemon?.desktopForcedOff), (recNow.current.desktopOn = onDaemonMachine() && r.settings.notifications?.desktop && !desktopForcedOff.current), setWorkerNotices(r.settings.orchestration.workerNotifications !== false), setIgnoreSubmodules(r.settings.git?.ignoreSubmodules === true), setComputerAwake(r.settings.power && r.daemon?.keepAwake ? { on: r.settings.power.keepAwake, supported: r.daemon.keepAwake.supported } : undefined), setChromeOn(r.settings.chrome?.enabled), setVisualizeOn(r.settings.chat?.visualize === true), setClaudeAccount(r.settings.claude?.account ?? ""), setClaudeAccounts(r.claudeAccounts ?? []), setClaudeEnvToken(!!r.daemon?.claudeEnvToken), setAppEditors(r.daemon?.editors))).catch(() => {});
+        setSynced(false); // the resync below may wait for the daemon check: repos must not load meanwhile
         // View cache (GH-771): meta of another daemon stored: nothing of the cache applies, the page starts as without a cache. Without a hello (older daemon) nothing is known: keep.
         // An unknown stored meta (the load read timed out or failed) is read now; none stored (a first load) or unreadable: nothing to clear, only the meta is written.
         // Only the resync (list, subscribes, follows) waits for that check.
@@ -1835,6 +1836,7 @@ export function App() {
               cacheGate.current = cache.clear().then(() => cache.writeMeta(meta));
               fromCache.current.clear();
               savedSeq.current.clear();
+              requested.current.clear(); // a follow that drew a view of the other daemon must be asked again
               viewsRef.current = {};
               setViews({});
               setInfos({});

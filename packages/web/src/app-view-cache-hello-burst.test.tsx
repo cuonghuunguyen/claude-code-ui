@@ -90,7 +90,7 @@ beforeEach(() => {
 afterEach(() => (act(() => root.unmount()), el.remove(), window.dispatchEvent(new Event("pagehide")), localStorage.clear()));
 
 // the daemon sends daemon_hello, then update/stale messages in the same burst (server.ts connect).
-// resume() now runs in a promise callback after onOpen, so its setStale(undefined)/setUpdate(undefined) wipes what those later messages set.
+// resume() runs in a promise callback after onOpen: it must not reset update/stale (those resets stay synchronous in onOpen), or it would wipe what those later messages set.
 describe("hello burst", () => {
   it("cache meta known: a daemon_stale note right after the hello stays shown", async () => {
     await seed();
