@@ -272,19 +272,6 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     expect(reason.message).toBe("Branch worktree-dup already exists");
   });
 
-  it.skipIf(process.platform === "win32")("refuses when .claude or .claude/worktrees links outside the repository", async () => {
-    const { main, opts } = plain();
-    const outside = tmp();
-    symlinkSync(outside, join(main, ".claude"));
-    expect(await code(createWorktree(main, { ...opts, name: "x" }))).toBe("cwd_not_allowed");
-    expect(existsSync(join(outside, "worktrees"))).toBe(false);
-    rmSync(join(main, ".claude"));
-    mkdirSync(join(main, ".claude"));
-    symlinkSync(outside, join(main, ".claude", "worktrees"));
-    expect(await code(createWorktree(main, { ...opts, name: "x" }))).toBe("cwd_not_allowed");
-    expect(existsSync(join(outside, "x"))).toBe(false);
-  });
-
   it("refuses a repository or a new path the allowed predicate rejects", async () => {
     const { main, opts } = plain();
     expect(await code(createWorktree(main, { ...opts, allowed: () => false, name: "x" }))).toBe("cwd_not_allowed");
@@ -943,16 +930,21 @@ describe("createWorktree / removeWorktree / worktreeStatus", () => {
     expect(existsSync(join(dir, "gitdir", ".claude"))).toBe(false);
   });
 
-  it.skipIf(process.platform === "win32")("refuses .claude or .claude/worktrees that are links, also to a folder inside the repository", async () => {
+  it.skipIf(process.platform === "win32").each([
+    ["outside the repository", (_main: string) => tmp()],
+    ["inside the repository", (main: string) => join(main, "src")],
+  ])("refuses .claude or .claude/worktrees that are links to a folder %s", async (_where, targetOf) => {
     const { main, opts } = plain();
     mkdirSync(join(main, "src"));
-    symlinkSync(join(main, "src"), join(main, ".claude"));
+    const target = targetOf(main);
+    symlinkSync(target, join(main, ".claude"));
     expect(await code(createWorktree(main, { ...opts, name: "x" }))).toBe("cwd_not_allowed");
-    expect(existsSync(join(main, "src", "worktrees"))).toBe(false);
+    expect(existsSync(join(target, "worktrees"))).toBe(false);
     rmSync(join(main, ".claude"));
     mkdirSync(join(main, ".claude"));
-    symlinkSync(join(main, "src"), join(main, ".claude", "worktrees"));
+    symlinkSync(target, join(main, ".claude", "worktrees"));
     expect(await code(createWorktree(main, { ...opts, name: "x" }))).toBe("cwd_not_allowed");
+    expect(existsSync(join(target, "x"))).toBe(false);
     // A plain linked worktree inside the repository is removable (the links are not the worktree's own path).
     const via = join(main, "src", "y");
     run(main, "worktree", "add", "-q", "-b", "y", via);
@@ -1695,7 +1687,7 @@ describe("gitDiff", { timeout: 90_000 }, () => {
     }
     {
       expect((await gitDiff(r.dir, { base: "branch", ref: "refs/heads/main", allowed: all }))!.ref).toBe("refs/heads/main");
-      for (const ref of ["main", "refs/tags/v1", "refs/heads/nope"]) expect(await code(gitDiff(r.dir, { base: "branch", ref, allowed: all }))).toBe("bad_request");
+      for (const ref of ["main", "refs/tags/v1", "refs/heads/nope", "--output=x"]) expect(await code(gitDiff(r.dir, { base: "branch", ref, allowed: all }))).toBe("bad_request");
       expect(await code(gitDiff(r.dir, { base: "branch", ref: 5 as never, allowed: all }))).toBe("bad_request");
     }
     {
@@ -1718,11 +1710,6 @@ describe("gitDiff", { timeout: 90_000 }, () => {
   it("gitDiff refuses a repository outside the allowed roots with cwd_not_allowed", async () => {
     const r = diffRepo();
     expect(await code(gitDiff(r.dir, { base: "head", allowed: () => false }))).toBe("cwd_not_allowed");
-  });
-
-  it("gitDiff refuses the option-like ref --output=x with bad_request", async () => {
-    const r = diffRepo();
-    expect(await code(gitDiff(r.dir, { base: "branch", ref: "--output=x", allowed: all }))).toBe("bad_request");
   });
 
   it("head before the first commit: no base, staged and untracked files are A", async () => {

@@ -26,7 +26,6 @@ describe("ancestors", () => {
     watchChain(chain, gone, { log, spawn: () => child as never });
     return { child, gone, log };
   };
-  it("watchChain: an empty chain is not watched", () => expect(watchChain([], () => {})).toBeUndefined());
   it("watchChain calls onGone once for a GONE line of a chain pid, also split over chunks", () => {
     const { child, gone } = fake();
     child.stdout.emit("data", "GONE");

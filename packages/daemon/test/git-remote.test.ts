@@ -85,15 +85,17 @@ describe("gitFetch", () => {
     await expect(gitFetch(a, { allowed: () => false })).rejects.toMatchObject({ code: "cwd_not_allowed" });
   });
 
-  it("shows git's message for a failure, without credentials in the URL", async () => {
+  it.each([
+    ["https://user:secret@127.0.0.1:9/x.git", ["secret", "user:"]],
+    ["git://bob:pw9x@127.0.0.1:9/x.git", ["bob", "pw9x"]],
+  ])("shows git's message for a failure, without credentials in the URL %#", async (url, secrets) => {
     const { a, inside } = remoteRepo();
     run(a, "remote", "remove", "origin");
-    run(a, "remote", "add", "bad", "https://user:secret@127.0.0.1:9/x.git");
+    run(a, "remote", "add", "bad", url);
     const e = await gitFetch(a, { allowed: inside }).then(() => undefined, (x: Error & { code?: string }) => x);
     expect(e).toMatchObject({ code: "git_failed" });
     expect(e!.message).toContain("127.0.0.1");
-    expect(e!.message).not.toContain("secret");
-    expect(e!.message).not.toContain("user:");
+    for (const secret of secrets) expect(e!.message).not.toContain(secret);
   });
 
   it("refuses a remote that is a folder outside the roots before git runs", async () => {
@@ -335,14 +337,6 @@ describe("redactUrls", () => {
     expect(redactUrls("fatal: 'bob:p'w@host.example:9' failed")).not.toMatch(/bob|p'w/);
     expect(redactUrls("bob:p/w@host.example:o/r.git")).toBe("bob@host.example:o/r.git");
     expect(redactUrls("From git@host.example:o/r.git")).toBe("From git@host.example:o/r.git");
-  });
-  it("the thrown message of a failing fetch has no userinfo", async () => {
-    const { a, inside } = remoteRepo();
-    run(a, "remote", "remove", "origin");
-    run(a, "remote", "add", "bad", "git://bob:pw9x@127.0.0.1:9/x.git");
-    const e = await gitFetch(a, { allowed: inside }).then(() => undefined, (x: Error) => x);
-    expect(e).toBeDefined();
-    expect(e!.message).not.toMatch(/bob|pw9x/);
   });
 });
 
