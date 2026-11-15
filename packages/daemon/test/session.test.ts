@@ -469,6 +469,26 @@ describe("Session", () => {
     expect(permissionResults.at(-1)).toMatchObject({ behavior: "deny", message: "Request cancelled" });
   });
 
+  it("a Write of <upload folder>/visualize/<name>.html runs without a card (GH-807); a Write elsewhere still asks", async () => {
+    const up = realpathSync(mkdtempSync(join(tmpdir(), "vis-up-")));
+    try {
+      const s = new Session("/tmp", { query: permissionQuery as never, uploadDir: () => up });
+      const events: Event[] = [];
+      s.subscribe(0, (e) => events.push(e));
+      const results = permissionResults.length;
+      const input = { file_path: join(up, "visualize", "chart.html"), content: "<b>x</b>" };
+      s.prompt(JSON.stringify({ tool: "Write", input }));
+      await until(events, () => permissionResults.length > results);
+      expect(permissionResults.at(-1)).toEqual({ behavior: "allow", updatedInput: input });
+      expect(events.some((e) => e.part.type === "permission_request")).toBe(false);
+      s.prompt(JSON.stringify({ tool: "Write", input: { file_path: join(up, "chart.html"), content: "x" } }));
+      await until(events, (e) => e.part.type === "permission_request");
+      expect(permissionResults.length).toBe(results + 1);
+    } finally {
+      rmSync(up, { recursive: true, force: true });
+    }
+  });
+
   it("session-scoped grants are re-applied when the query resumes; saved rules are not", async () => {
     const s = new Session("/tmp", { query: permissionQuery as never, uploadDir: () => "/tmp/up" });
     const events: Event[] = [];
