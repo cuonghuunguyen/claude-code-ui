@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { HARDEN, rewordAmendArgv, rewordArgv, rewordRebaseArgv, tagCreateArgv, tagDeleteArgv, tagDeleteRemoteArgv } from "../src/git-argv.ts";
+import { HARDEN, rewordRebaseArgv, tagCreateArgv, tagDeleteRemoteArgv } from "../src/git-argv.ts";
 
 const hash = "a".repeat(40);
 
@@ -19,16 +19,8 @@ it("tagCreateArgv: sign true signs (-s, the message defaults to the name), sign 
   expect(tagCreateArgv("v1", hash, "release one", undefined)).toEqual(["tag", "-a", "-m", "release one", "v1", hash]);
 });
 
-it("tagDeleteArgv", () => {
-  expect(tagDeleteArgv("v1")).toEqual(["tag", "-d", "v1"]);
-});
-
 it("tagDeleteRemoteArgv: hardened push with a lease on the shown hash", () => {
   expect(tagDeleteRemoteArgv("origin", "v1", hash)).toEqual([...HARDEN, "push", "--no-recurse-submodules", `--force-with-lease=refs/tags/v1:${hash}`, "origin", "--delete", "refs/tags/v1"]);
-});
-
-it("rewordAmendArgv: message only, empty commit allowed", () => {
-  expect(rewordAmendArgv("new")).toEqual(["commit", "--amend", "--only", "--allow-empty", "-m", "new"]);
 });
 
 it("rewordRebaseArgv: amend! commit, then autosquash rebase onto the parent or --root", () => {
@@ -36,9 +28,4 @@ it("rewordRebaseArgv: amend! commit, then autosquash rebase onto the parent or -
   expect(commit).toEqual(["commit", "--only", "--allow-empty", "--no-verify", "-m", `amend! ${hash}\n\nnew\n\nbody`]);
   expect(rebase).toEqual(["-c", "sequence.editor=:", "rebase", "-i", "--autosquash", "--autostash", "b".repeat(40)]);
   expect(rewordRebaseArgv(hash, "new")[1]!.at(-1)).toBe("--root");
-});
-
-it("rewordArgv: one command for amend, two for rebase", () => {
-  expect(rewordArgv("amend", hash, "m")).toEqual([rewordAmendArgv("m")]);
-  expect(rewordArgv("rebase", hash, "m", "c".repeat(40))).toEqual(rewordRebaseArgv(hash, "m", "c".repeat(40)));
 });

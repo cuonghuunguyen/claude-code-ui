@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alwaysRule, alwaysRuleString, ruleString } from "../src/always-rule.ts";
+import { alwaysRule, ruleString } from "../src/always-rule.ts";
 
 describe("ruleString", () => {
   it("escapes parentheses and backslashes in the content", () => {
@@ -52,12 +52,5 @@ describe("alwaysRule", () => {
   it("Agent, Task and Monitor are agent, other tools are tool", () => {
     for (const t of ["Agent", "Task", "Monitor"]) expect(alwaysRule(t, {})).toEqual({ unavailable: "agent" });
     expect(alwaysRule("Skill", { skill: "x" })).toEqual({ unavailable: "tool" });
-  });
-});
-
-describe("alwaysRuleString", () => {
-  it("renders the rule, escaped", () => {
-    expect(alwaysRuleString("Bash", { command: "echo (x)" })).toBe("Bash(echo \\(x\\))");
-    expect(alwaysRuleString("Agent", {})).toBeUndefined();
   });
 });
