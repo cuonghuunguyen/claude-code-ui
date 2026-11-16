@@ -365,7 +365,7 @@ export function createDaemon(opts: {
     allowBypass: opts.allowBypass,
     onFileEdit: (path: string, original: string) => localHistory.before(path, "agent", original),
     // `live` of the session list changed (CLI started or dropped).
-    onLiveChange: (id) => {
+    onLiveChange: (id: string) => {
       broadcast({ type: "sessions.changed" });
       orchestration.liveChanged(id);
     },
