@@ -47,51 +47,44 @@ describe("notifier (same rules as Orca)", () => {
   const question = (extra: object = {}) =>
     ev({ type: "question", id: "q", requestId: "q", toolUseId: "t", settled: false, questions: [{ question: "Delete?", header: "D", options: [], multiSelect: false }] as never, ...extra });
 
-  it("an escalated request pushes at once with the reason, past the 5 s gap", () => {
+  it("an escalated request (a worker's) pushes at once, past the 5 s gap", () => {
     n.observe(state("running"));
     n.observe(question());
     n.observe(state("needs_input"));
-    n.observe(question({ escalated: true, reason: "scope" }));
-    expect(pushed.map((p) => p.body)).toEqual(["Needs input · Delete?", "Needs input · Escalated by coordinator: scope · Delete?"]);
-  });
-
-  it("the escalation push cuts a long reason so the question stays visible", () => {
-    n.observe(state("running"));
-    n.observe(question({ escalated: true, reason: "r".repeat(1000) }));
-    n.observe(state("needs_input"));
-    expect(pushed[0]!.body).toMatch(/^Needs input · Escalated by coordinator: r{199}… · Delete\?$/);
+    n.observe(question({ escalated: true }));
+    expect(pushed.map((p) => p.body)).toEqual(["Needs input · Delete?", "Needs input · Delete?"]);
   });
 
   it("an escalated push is suppressed only by a focused tab of that session", () => {
     n.observe(state("running"));
     n.observe(question());
     watched.add("other");
-    n.observe(question({ escalated: true, reason: "scope" }));
+    n.observe(question({ escalated: true }));
     expect(pushed).toHaveLength(1);
     watched.clear();
     watched.add("s1");
-    n.observe(question({ escalated: true, reason: "scope" }));
+    n.observe(question({ escalated: true }));
     expect(pushed).toHaveLength(1);
   });
 
   it("a settled escalated request replaces its notification at once, silently, also while its tab is focused", () => {
     n.observe(state("running"));
-    n.observe(question({ escalated: true, reason: "scope" }));
+    n.observe(question({ escalated: true }));
     expect(pushed).toHaveLength(1);
     expect(replaced).toEqual([]);
     watched.add("s1");
-    n.observe(question({ escalated: true, reason: "scope", settled: true }));
+    n.observe(question({ escalated: true, settled: true }));
     expect(replaced).toHaveLength(1);
     expect(replaced[0]!.sessionId).toBe("s1");
     expect(replaced[0]!.body).toMatch(/^No longer needs input · /);
     // The same request settling again (a repeated event) replaces nothing more.
-    n.observe(question({ escalated: true, reason: "scope", settled: true }));
+    n.observe(question({ escalated: true, settled: true }));
     expect(replaced).toHaveLength(1);
   });
 
   it("a settled escalated permission request names its decision", () => {
     n.observe(state("running"));
-    n.observe(ev({ type: "permission_request", id: "r1", requestId: "r1", toolUseId: "t1", tool: "Bash", input: { command: "npm view react" }, suggestions: [], settled: false, escalated: true, reason: "net" }));
+    n.observe(ev({ type: "permission_request", id: "r1", requestId: "r1", toolUseId: "t1", tool: "Bash", input: { command: "npm view react" }, suggestions: [], settled: false, escalated: true }));
     n.observe(ev({ type: "permission_request", id: "r1", requestId: "r1", toolUseId: "t1", tool: "Bash", input: { command: "npm view react" }, suggestions: [], settled: true, escalated: true, decision: "deny" }));
     expect(replaced.map((r) => r.body)).toEqual(["No longer needs input · deny · Bash: npm view react"]);
   });
@@ -278,21 +271,20 @@ describe("notifier: workers of one coordinator blocked on the same request (GH-1
     expect(pushed.at(-1)!.replace).toBeUndefined();
   });
 
-  it("a lone grouped worker whose Needs input was shown: its escalation pushes the reason with sound, same tag", () => {
+  it("a lone grouped worker whose Needs input was shown: its escalation pushes with sound, same tag", () => {
     block("w1");
-    n.observe(ev(read("/main/.claude/skills/implement-issue/SKILL.md", "r-w1", { escalated: true, reason: "blocked" }), "w1"));
+    n.observe(ev(read("/main/.claude/skills/implement-issue/SKILL.md", "r-w1", { escalated: true }), "w1"));
     expect(pushed).toHaveLength(2);
-    expect(pushed[1]).toMatchObject({ tag: pushed[0]!.tag, body: expect.stringContaining("Escalated by coordinator: blocked") });
+    expect(pushed[1]).toMatchObject({ tag: pushed[0]!.tag, body: expect.stringMatching(/^Needs input · /) });
     expect(pushed[1]!.silent).toBeUndefined();
     expect(pushed[1]!.replace).toBeUndefined();
   });
 
-  it("an escalated request of a grouped worker pushes its reason with sound, keeps the group tag and replaces on settle", () => {
+  it("an escalated request of a grouped worker pushes with sound, keeps the group tag and replaces on settle", () => {
     block("w1");
     block("w2");
-    n.observe(ev(read("/main/.claude/skills/implement-issue/SKILL.md", "r-w2", { escalated: true, reason: "blocked" }), "w2"));
-    expect(pushed.at(-1)!.body).toContain("Escalated by coordinator: blocked");
-    expect(pushed.at(-1)!.body).toMatch(/^2 workers need input · Escalated by coordinator: blocked · /);
+    n.observe(ev(read("/main/.claude/skills/implement-issue/SKILL.md", "r-w2", { escalated: true }), "w2"));
+    expect(pushed.at(-1)!.body).toMatch(/^2 workers need input · /);
     expect(pushed.at(-1)!.silent).toBeUndefined();
     unblock("w2");
     unblock("w1");
@@ -535,17 +527,17 @@ describe("notifier: worker notifications off (GH-387)", () => {
     expect(pushed).toEqual([]);
   });
 
-  it("one quiet worker and one escalated worker on the same request: the escalation pushes with sound and its reason, the settle replaces only that, nothing for the quiet one", () => {
+  it("one quiet worker and one escalated worker on the same request: the escalation pushes with sound, the settle replaces only that, nothing for the quiet one", () => {
     for (const sid of ["w", "w2"]) {
       n.observe(state("running", sid));
       n.observe(ev(read(`r-${sid}`), sid));
       n.observe(state("needs_input", sid));
     }
     expect(pushed).toEqual([]);
-    n.observe(ev(read("r-w2", { escalated: true, reason: "outside the worktree" }), "w2"));
+    n.observe(ev(read("r-w2", { escalated: true }), "w2"));
     expect(pushed).toHaveLength(1);
     expect(pushed[0]).toMatchObject({ sessionId: "w2" });
-    expect(pushed[0]!.body).toContain("Escalated by coordinator: outside the worktree");
+    expect(pushed[0]!.body).toMatch(/^Needs input · /);
     expect(pushed[0]!.silent).toBeUndefined();
     expect(pushed[0]!.replace).toBeUndefined();
     pushed.length = 0;

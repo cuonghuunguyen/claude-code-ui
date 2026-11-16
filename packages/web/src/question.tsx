@@ -1,7 +1,7 @@
 // Question panel (replaces the prompt box) and its timeline marker (docs/spec.md "Questions").
 import { useState, type FormEvent, type ReactNode } from "react";
 import type { Question } from "@claude-ui/protocol";
-import { CircleCheckIcon, CircleHelpIcon, CircleIcon, CircleXIcon, TriangleAlertIcon } from "lucide-react";
+import { CircleCheckIcon, CircleHelpIcon, CircleIcon, CircleXIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { useT } from "./i18n.ts";
@@ -54,14 +54,6 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
     <form onSubmit={submit} className={`${DOCK} max-h-[60dvh]`} data-testid="question-panel" aria-label={t("session.question.label")}>
       {/* The scroller is a div: a fieldset does not scroll reliably everywhere. The tray below stays in view. */}
       <div className="min-h-0 overflow-y-auto overscroll-contain">
-      {part.escalated && (
-        <p className="flex items-start gap-2 px-3 pt-3 text-xs" data-testid="question-escalated">
-          <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
-          <span className="min-w-0 break-words">
-            <span className="font-medium">{t("session.permission.escalated")}</span> {part.reason}
-          </span>
-        </p>
-      )}
       <VisualizeAnswerContext value={fillOther}>
       <fieldset key={q.question} className="flex flex-col gap-2 p-3" aria-labelledby={`${part.id}-q${page}`}>
         <p className="flex items-center gap-2 text-muted-foreground text-xs">
@@ -161,7 +153,7 @@ export function QuestionMarker({ part }: { part: QuestionRequest }) {
   return (
     <div className="flex min-w-0 items-center gap-2 text-muted-foreground text-xs" data-testid="question-marker" data-settled={part.settled}>
       <Icon className={`size-4 shrink-0 ${className}`} />
-      <span className="shrink-0">{part.settled && part.answers && part.by === "coordinator" ? t("session.question.markerCoordinator") : t("session.question.marker")}</span>
+      <span className="shrink-0">{t("session.question.marker")}</span>
       <span className="min-w-0 truncate">{label}</span>
     </div>
   );

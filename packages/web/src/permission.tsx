@@ -113,11 +113,6 @@ export function PermissionPanel({ part, onRespond, mode, onStop, tier }: { part:
             {t("session.permission.highTier")}
           </p>
         )}
-        {part.escalated && (
-          <p className="text-xs break-words" data-testid="permission-escalated">
-            <span className="font-medium">{t("session.permission.escalated")}</span> {part.reason}
-          </p>
-        )}
         {plan !== undefined ? (
           <div className="max-h-80 overflow-auto rounded-md bg-muted p-3" data-testid="plan">
             <MessageResponse>{plan}</MessageResponse>

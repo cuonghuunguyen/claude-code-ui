@@ -497,15 +497,6 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
     return [next];
   }
 
-  /** A coordinator settled the call's permission request (Orchestration); later updates keep the mark. */
-  function byCoordinator(toolUseId: string, decision: "allow" | "deny", reason: string): Part[] {
-    const call = calls.get(toolUseId);
-    if (call?.type !== "tool_call") return [];
-    const next = { ...call, coordinator: { decision, reason } };
-    calls.set(toolUseId, next);
-    return [next];
-  }
-
   /** Calls still pending or running. */
   function openCalls(): Call[] {
     return [...calls.values()].filter((c) => !ENDED.has(c.status));
@@ -533,5 +524,5 @@ export function createAdapter(opts: { resumed?: boolean } = {}) {
   const outputFile = (toolUseId: string) => outputs.get(toolUseId);
 
   /** deny: marks a tool call denied now; its later tool_result keeps status denied. */
-  return { allowRetry, deniedCall, byCoordinator, convert, commands, deny, edit, endCalls, openCalls, outputFile, taskCall };
+  return { allowRetry, deniedCall, convert, commands, deny, edit, endCalls, openCalls, outputFile, taskCall };
 }

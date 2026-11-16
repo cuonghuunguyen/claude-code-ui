@@ -8,7 +8,7 @@ Một phiên (**coordinator**) có thể khởi động và điều khiển các
 2. Bắt đầu một phiên mới (hoặc gửi prompt tiếp theo trong phiên đang có; cài đặt áp dụng ở lần khởi động tiếp theo của phiên).
 3. Yêu cầu nó dùng worker, ví dụ: "Chia việc này thành hai tác vụ và khởi động một worker cho mỗi tác vụ trong worktree riêng."
 4. Worker hiện trong thanh bên dưới coordinator của chúng, như các phiên bình thường mà bạn có thể mở. Worker của một worker hiện dưới cùng coordinator, đặt tên `parent › child`.
-5. Câu hỏi và yêu cầu quyền mà worker chuyển cho bạn hiện như mọi yêu cầu khác, và trên [trang Focus](/vi/features/focus).
+5. Yêu cầu quyền và câu hỏi của worker đến thẳng bạn, không qua coordinator. Chúng hiện như mọi yêu cầu khác, và trên [trang Focus](/vi/features/focus). Coordinator thấy worker đang chờ bạn qua `worker_list`, nhưng không trả lời được.
 
 ## Cài đặt {#settings}
 
@@ -23,8 +23,7 @@ Một phiên (**coordinator**) có thể khởi động và điều khiển các
 | **Cảnh báo treo sau (phút)** | Báo cho coordinator khi một worker đang chạy không gửi gì trong khoảng thời gian này (0 đến 240, mặc định 20; 0 = tắt). |
 | **Giữ cache của coordinator ấm (phút)** | Khi coordinator (phiên đã khởi động worker, không bao giờ là phiên thường) đang chờ worker, subagent hoặc lệnh nền đang chạy, đánh thức nó bằng một tin một dòng sau khoảng thời gian này kể từ lượt cuối, để cache prompt không nguội và không bị ghi lại với giá đầy đủ khi sự kiện worker kế tiếp đến (0 đến 59, mặc định 55; 0 = tắt). Đặt thấp hơn tuổi thọ cache: 55 cho cache 1 giờ, 4 cho cache 5 phút. Tin này hiện thành một dòng thông báo nhỏ. |
 | **Chế độ worker** | [Chế độ quyền](/vi/features/permissions) của worker mới khi coordinator không chọn. Mặc định: chế độ của chính coordinator (bypass thành auto). |
-| **Thông báo từ worker** | Tắt thì worker hoàn tất, cần phản hồi hoặc lỗi sẽ không gửi thông báo push, desktop hay trong ứng dụng. Coordinator của nó vẫn nhận được tin. Yêu cầu mà coordinator chuyển tiếp cho bạn vẫn thông báo cho bạn. |
-| **Coordinator được trả lời yêu cầu quyền** | Cho phép coordinator cho phép hoặc từ chối, một lần, các yêu cầu rủi ro thấp của worker: đọc và sửa trong thư mục của worker, đọc tài liệu agent của kho mã, git chỉ đọc. Mọi thứ khác chờ bạn. |
+| **Thông báo từ worker** | Tắt thì worker hoàn tất hoặc lỗi sẽ không gửi thông báo push, desktop hay trong ứng dụng. Coordinator của nó vẫn nhận được tin. Yêu cầu quyền hoặc câu hỏi của worker luôn thông báo cho bạn. |
 
 ## Cây worker và plugin orchestration {#worker-trees-and-the-orchestration-plugin}
 
@@ -48,12 +47,9 @@ Hoặc dùng hộp thoại Plugin. Reviewer cần skill `pr-review`; nghiệm th
 | --- | --- |
 | `worker_start` | Khởi động worker trong một thư mục hoặc trong worktree git mới, với prompt đầu tiên, tùy chọn theo loại agent |
 | `worker_send` | Gửi tin nhắn cho worker (điều khiển lượt đang chạy) |
-| `worker_wait` | Chờ sự kiện của worker: câu hỏi, quyền, bị từ chối, kết thúc lượt, lỗi, treo |
+| `worker_wait` | Chờ sự kiện của worker: bị từ chối, kết thúc lượt, lỗi, treo |
 | `worker_read` | Đọc dòng thời gian gần đây của worker (đường dẫn như `implementer/reviewer` đọc worker bên dưới bạn). `part` và `offset` đọc trọn một câu trả lời dài, từng trang |
-| `worker_list` | Liệt kê worker và trạng thái của chúng (`tree` liệt kê mọi worker bên dưới bạn) |
-| `worker_answer` | Trả lời câu hỏi thực tế đơn giản của worker |
-| `worker_permission` | Cho phép một lần hoặc từ chối yêu cầu quyền mức thấp của worker |
-| `worker_escalate` | Chuyển câu hỏi hoặc yêu cầu của worker cho bạn |
+| `worker_list` | Liệt kê worker và trạng thái của chúng, kèm việc worker đang chờ bạn trả lời (`tree` liệt kê mọi worker bên dưới bạn) |
 | `worker_stop` | Ngắt lượt đang chạy của worker |
 | `worker_close` | Đóng tiến trình Claude của worker (phiên vẫn còn) |
 | `worker_remove` | Xóa vĩnh viễn phiên của worker đã xong |

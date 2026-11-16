@@ -29,16 +29,6 @@ describe("ToolCard", () => {
     expect(renderToStaticMarkup(<ToolCard call={{ ...call("running"), editedByUser: true }} />)).toContain("edited by you");
   });
 
-  it("header says when the coordinator approved or denied the call; the body shows its reason as text", () => {
-    const by = (decision: "allow" | "deny", reason: string) => ({ ...call("denied"), coordinator: { decision, reason } });
-    expect(renderToStaticMarkup(<ToolCard call={call("done")} />)).not.toContain("by coordinator");
-    expect(renderToStaticMarkup(<ToolCard call={by("allow", "fine")} />)).toContain("Bash · Approved by coordinator");
-    // Held open (awaiting) so the body renders.
-    const html = renderToStaticMarkup(<ToolCard call={by("deny", "<b>x</b> **no**")} awaiting />);
-    expect(html).toContain("Bash · Denied by coordinator");
-    expect(html).toMatch(/data-testid="coordinator-decision"[^>]*><span class="font-medium">Denied by coordinator:<\/span> &lt;b&gt;x&lt;\/b&gt; \*\*no\*\*<\/p>/);
-  });
-
   it.each([
     ["pending", "Pending"],
     ["done", "Completed"],

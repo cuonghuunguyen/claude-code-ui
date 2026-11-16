@@ -767,7 +767,6 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
         ],
       },
       { key: "workerNotifications", kind: "switch" },
-      { key: "coordinatorPermissions", kind: "switch" },
     ],
   },
   {

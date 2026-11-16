@@ -22,8 +22,8 @@ State these when they bite.
 6. **Every command is a high-tier permission.** Only the user approves those. A worker in
    `default` mode (a model without auto support, or a coordinator that is not in auto) asks
    for each one. Watch `modeNote` in every `worker_start` result.
-7. **Escalated means gone from your view.** After `worker_escalate` you get no events for that
-   request and cannot stop the worker while it waits. Tell the user what is waiting on them.
+7. **A worker's request is not yours.** A question or permission request of a worker goes to the user and
+   raises no event for you. `worker_list` shows it as `waitingForUser`. Tell the user what is waiting on them.
 8. **The worktree outlives the worker, the branch outlives the worktree.** `worker_close`
    removes neither. Removing a worktree in the web app deletes only `worktree-*` branches, so
    ticket branches stay until someone deletes them.

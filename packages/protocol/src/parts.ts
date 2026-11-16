@@ -72,16 +72,15 @@ export type Part = { parentId?: string } & (
   | { type: "thinking"; id: string; text: string; streaming: boolean }
   /**
    * `id` = `toolUseId`; re-emitted on every status change. `editedByUser`: `input` is the user's edit of Claude's input, accepted in the permission panel.
-   * `coordinator`: a coordinator settled this call's permission request (Orchestration); `reason` is its text.
    * `shell` (Bash calls only; GH-440): "foreground" = the CLI registered the call's task in the foreground (task_started
    * is_backgrounded false), so Run in background applies while it runs; "background" = it runs as a background shell
    * (run_in_background, or moved there: task_updated is_backgrounded, a transcript's "manually backgrounded" result).
    * `startedAt`/`endedAt`: a Bash call the CLI ran as a task (shell set): its task registration (a restored moved shell: its placeholder result) and its end, daemon clock. `endedAt` alone on a done Artifact call (GH-176): its publish time (the result's transcript timestamp; absent without one).
    * `exitCode`: from the end notification's summary ("... exit code N"); none when killed or unknown.
    * `denial` (GH-711): the auto mode classifier denied this main-thread call (`reason` e.g. "[Git Destructive]"); `allowed`: Allow and retry
-   * was used for it (daemon-emitted, in memory only: not restored); `rule` (GH-756): the allow rule Always allow would save (absent when no rule fits); `always`: Always allow saved it for that scope (memory only, with `allowed`). Absent for calls denied by the user, a coordinator, a rule, a mode or inside a subagent.
+   * was used for it (daemon-emitted, in memory only: not restored); `rule` (GH-756): the allow rule Always allow would save (absent when no rule fits); `always`: Always allow saved it for that scope (memory only, with `allowed`). Absent for calls denied by the user, a rule, a mode or inside a subagent.
    */
-  | { type: "tool_call"; id: string; toolUseId: string; tool: string; input: unknown; status: ToolStatus; editedByUser?: boolean; coordinator?: { decision: "allow" | "deny"; reason: string }; denial?: { by: "classifier"; reason?: string; rule?: string; allowed?: true; always?: "session" | "local" }; shell?: "foreground" | "background"; startedAt?: number; endedAt?: number; exitCode?: number }
+  | { type: "tool_call"; id: string; toolUseId: string; tool: string; input: unknown; status: ToolStatus; editedByUser?: boolean; denial?: { by: "classifier"; reason?: string; rule?: string; allowed?: true; always?: "session" | "local" }; shell?: "foreground" | "background"; startedAt?: number; endedAt?: number; exitCode?: number }
   /**
    * `id` = `<toolUseId>:result`. `original`: the file before this call, on the first Edit/Write of a path in a live
    * query (null = the call created it); absent in a restored transcript, which does not keep it.
@@ -112,17 +111,15 @@ export type Part = { parentId?: string } & (
       suggestions: PermissionUpdate[];
       settled: boolean;
       decision?: PermissionDecision;
-      /** Feedback sent to Claude with a "deny" decision; with `by` "coordinator": the coordinator's reason (allow or deny). */
+      /** Feedback sent to Claude with a "deny" decision. */
       message?: string;
       /** Accepted with the user's edit: `input` is then the applied input. */
       editedByUser?: boolean;
-      /** Orchestration (docs/spec.md): `by` "coordinator" when a coordinator settled it, absent = the user. `escalated`: a coordinator handed it to the user with `reason`; only the user answers it then. */
-      by?: "coordinator";
+      /** Orchestration (docs/spec.md): the daemon marks a worker's request when it arrives; it goes to the user, the coordinator gets no event. */
       escalated?: boolean;
-      reason?: string;
       /** When the daemon asked (ms, its clock): the Focus page's wait time. Absent in a restored or older log. */
       at?: number;
-      /** "low" when the request is low tier (risk-tier.ts: only then may a coordinator answer it). Absent = high, or not read yet: Focus offers no Always allow. Sent as a second event of this part once read. */
+      /** "low" when the request is low tier (risk-tier.ts). Absent = high, or not read yet: Focus offers no Always allow. Sent as a second event of this part once read. */
       tier?: "low";
     }
   /**
@@ -138,9 +135,7 @@ export type Part = { parentId?: string } & (
       settled: boolean;
       answers?: Record<string, string>;
       /** Same as on `permission_request`. */
-      by?: "coordinator";
       escalated?: boolean;
-      reason?: string;
       /** Same as on `permission_request`. */
       at?: number;
     }

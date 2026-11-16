@@ -493,7 +493,6 @@ export default {
   "app.focus.answer": "Trả lời: {question}",
   "app.focus.decide": "Quyết định: {summary}",
   "app.focus.allowOrDeny": "Cho phép hoặc từ chối {summary}",
-  "app.focus.coordinator": "Điều phối: {reason}",
   "app.focus.reviewResult": "Xem lại kết quả",
   "app.focus.checkError": "Kiểm tra lỗi: {error}",
   "app.focus.limitContinues": "Chờ giới hạn mức dùng được đặt lại: tiếp tục lúc {time}",

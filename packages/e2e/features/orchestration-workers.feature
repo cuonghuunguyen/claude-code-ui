@@ -17,7 +17,7 @@ Feature: Orchestration workers: targets, worker trees and closing finished worke
     Then a worker session runs in the main checkout of the scratch project
     And I capture "worker in main checkout"
     When I open Focus
-    And I select the question request in Focus
+    And I select the escalated request in Focus
     Then the Focus detail has a Question card
     When I answer the question with its first option
     And I click the first session tab

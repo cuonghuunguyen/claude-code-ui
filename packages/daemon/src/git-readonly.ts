@@ -1,4 +1,4 @@
-// Whether a Bash tool call is only read-only git (docs/spec.md "Permission tiers"): the one Bash shape a coordinator may settle.
+// Whether a Bash tool call is only read-only git (docs/spec.md "Permission tiers"): the one Bash shape that is `low` in a worker.
 // An allowlist grammar: one fixed program (git), no quoting, no expansion, no redirection, exact option names. Any doubt = false.
 import { execFile, execFileSync } from "node:child_process";
 import { lstatSync, readdirSync, realpathSync, type Dirent } from "node:fs";

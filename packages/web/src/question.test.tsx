@@ -86,25 +86,6 @@ describe("QuestionPanel on a phone", () => {
   });
 });
 
-describe("escalation and attribution", () => {
-  it("an escalated question shows the coordinator's reason as text, escaped", () => {
-    const html = renderToStaticMarkup(<QuestionPanel part={request({ escalated: true, reason: "Scope: <b>x</b>" })} onAnswer={() => {}} />);
-    expect(html).toContain("Escalated by coordinator:");
-    expect(html).toContain("Scope: &lt;b&gt;x&lt;/b&gt;");
-    expect(html.indexOf("question-escalated")).toBeLessThan(html.indexOf("<fieldset"));
-    expect(renderToStaticMarkup(<QuestionPanel part={request()} onAnswer={() => {}} />)).not.toContain("question-escalated");
-  });
-
-  it("the marker says Answered by coordinator as text for a coordinator's answer, nothing extra for the user's", () => {
-    const answers = { "Which package manager?": "pnpm", "Which features?": "bun" };
-    const by = renderToStaticMarkup(<QuestionMarker part={request({ settled: true, answers, by: "coordinator" })} />);
-    expect(by).toContain("Answered by coordinator");
-    expect(by).toContain("Manager: pnpm");
-    expect(renderToStaticMarkup(<QuestionMarker part={request({ settled: true, answers })} />)).not.toContain("coordinator");
-    expect(renderToStaticMarkup(<QuestionMarker part={request({ by: "coordinator" })} />)).not.toContain("Answered by");
-  });
-});
-
 describe("QuestionMarker", () => {
   it.each([
     [request(), "Waiting for an answer"],

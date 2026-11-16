@@ -123,7 +123,6 @@ function PlainToolCard({ call, result, awaiting, plan }: { call: ToolCall; resul
   const canAlways = canAllow && !!alwaysAllow && !autoDenied?.allowed;
   const [always, setAlways] = useState<{ open: boolean; pending?: "session" | "local"; error?: string }>({ open: false });
   const busy = (!!allowing && !allowing.error) || !!always.pending;
-  const decided = call.coordinator && (call.coordinator.decision === "allow" ? t("session.toolCard.approvedByCoordinator") : t("session.toolCard.deniedByCoordinator"));
   const header = (
     <ToolHeader
       className={target || canBackground || canAllow ? "min-w-0 flex-1" : undefined}
@@ -132,7 +131,7 @@ function PlainToolCard({ call, result, awaiting, plan }: { call: ToolCall; resul
       state={awaiting ? "approval-requested" : STATE[call.status]}
       statusLabel={awaiting ? undefined : label(call.status)}
       // Next to the tool name, which is never truncated like the summary.
-      title={call.editedByUser ? t("session.toolCard.editedByYou", { tool: call.tool }) : decided ? t("session.toolCard.titleDecided", { tool: call.tool, decision: decided }) : undefined}
+      title={call.editedByUser ? t("session.toolCard.editedByYou", { tool: call.tool }) : undefined}
       summary={path ? <FileSummary path={path} range={range} /> : todos.length ? todoSummary(todos) : artifact ? artifactSummary(call.tool, call.input) : terminal ? terminalSummary(terminal, call.input, result?.output) : toolSummary(call.input)}
       tooltip={path || undefined}
       meta={
@@ -223,12 +222,6 @@ function PlainToolCard({ call, result, awaiting, plan }: { call: ToolCall; resul
         </p>
       )}
       <ToolContent>
-        {decided && (
-          // Orchestration: the coordinator's reason, as plain text (worker-influenced, never markdown).
-          <p data-testid="coordinator-decision" className="px-3 pt-2 text-xs text-muted-foreground">
-            <span className="font-medium">{decided}:</span> {call.coordinator!.reason}
-          </p>
-        )}
         <ToolBody call={call} result={result} plan={plan} />
       </ToolContent>
     </Tool>

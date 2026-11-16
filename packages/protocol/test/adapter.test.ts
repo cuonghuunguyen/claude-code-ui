@@ -868,16 +868,6 @@ describe("adapter on nested subagent runs", () => {
   });
 });
 
-describe("adapter byCoordinator", () => {
-  it("marks the call and the mark survives later status updates", () => {
-    const a = createAdapter();
-    a.convert({ type: "assistant", parent_tool_use_id: null, message: { id: "m1", content: [{ type: "tool_use", id: "t1", name: "Edit", input: { file_path: "a" } }] } } as never);
-    expect(a.byCoordinator("t1", "deny", "no")).toEqual([expect.objectContaining({ id: "t1", status: "running", coordinator: { decision: "deny", reason: "no" } })]);
-    expect(a.deny("t1")).toEqual([expect.objectContaining({ status: "denied", coordinator: { decision: "deny", reason: "no" } })]);
-    expect(a.byCoordinator("nope", "allow", "r")).toEqual([]);
-  });
-});
-
 describe("ExitPlanMode with an empty input (Claude Code 2.1.294: the plan is in a plan file)", () => {
   it("planOfCall reads the plan from the newest plan-file Write before the call; the file wins over an own plan, which counts without a plan-file Write; no source gives undefined", async () => {
     const { planOfCall } = await import("../src/index.ts");

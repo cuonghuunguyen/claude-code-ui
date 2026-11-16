@@ -8,13 +8,13 @@ const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, reposito
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, launcher: DEFAULTS.launcher, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, launcher: DEFAULTS.launcher, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
   const f = file();
   createSettings({ file: f }).set({ orchestration: { enabled: true, workerCap: 7 } });
-  expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 7, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true });
+  expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 7, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true });
 });
 
 it("a patch keeps another daemon's change to a different field", () => {
@@ -37,21 +37,25 @@ it("a corrupt file gives the defaults and is logged once", () => {
   log.mockRestore();
 });
 
-it("an invalid hand-edited field falls back to its default, the valid ones stay; a stored coordinatorPermissions keeps its value; a stored invalid workerMode falls back to coordinator", () => {
+it("an invalid hand-edited field falls back to its default, the valid ones stay; a stored removed coordinatorPermissions is dropped; a stored invalid workerMode falls back to coordinator", () => {
   {
     const f = file();
-    writeFileSync(f, JSON.stringify({ orchestration: { enabled: true, workerCap: 99, coordinatorPermissions: "yes" } }));
-    expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true });
+    writeFileSync(f, JSON.stringify({ orchestration: { enabled: true, workerCap: 99 } }));
+    expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true });
   }
   {
     const f = file();
     writeFileSync(f, JSON.stringify({ orchestration: { coordinatorPermissions: true } }));
-    expect(createSettings({ file: f }).get().orchestration.coordinatorPermissions).toBe(true);
+    expect(createSettings({ file: f }).get().orchestration).not.toHaveProperty("coordinatorPermissions");
+    // A patch from an older hub or web bundle still carries the removed key: accepted, never stored.
+    const s = createSettings({ file: f });
+    expect(() => s.set({ orchestration: { enabled: true, coordinatorPermissions: true } as never })).not.toThrow();
+    expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { enabled: true } });
   }
   {
     const f = file();
     writeFileSync(f, JSON.stringify({ orchestration: { enabled: true, workerMode: "bypassPermissions" } }));
-    expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true });
+    expect(createSettings({ file: f }).get().orchestration).toEqual({ enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true });
   }
 });
 
@@ -93,7 +97,7 @@ it("an old file with coordinatorAnswersPermissions: true (saved before the field
   const f = file();
   writeFileSync(f, JSON.stringify({ orchestration: { enabled: true, workerCap: 4, coordinatorAnswersPermissions: true } }));
   const s = createSettings({ file: f });
-  expect(s.get().orchestration).toEqual({ enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications: true, closeFinished: true });
+  expect(s.get().orchestration).toEqual({ enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true });
   // The stored default workerCap goes too: it follows a later default change.
   s.set({ orchestration: { enabled: true } });
   expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { enabled: true } });
@@ -114,12 +118,12 @@ it("workerMode defaults to coordinator, accepts the five values, refuses others 
 it("the file keeps only fields that differ from their default", () => {
   const f = file();
   const s = createSettings({ file: f });
-  s.set({ orchestration: { enabled: true, workerCap: 4, coordinatorPermissions: false } });
+  s.set({ orchestration: { enabled: true, workerCap: 4, closeFinished: true } });
   expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { enabled: true } });
-  s.set({ orchestration: { coordinatorPermissions: true } });
-  expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { enabled: true, coordinatorPermissions: true } });
+  s.set({ orchestration: { stallMinutes: 5 } });
+  expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { enabled: true, stallMinutes: 5 } });
   s.set({ orchestration: { enabled: false } });
-  expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { coordinatorPermissions: true } });
+  expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: { stallMinutes: 5 } });
 });
 
 it("focus.nextForYou defaults off, is saved when on, refuses a non-boolean; usageLimit.autoContinue defaults on, off is stored and read back, on is not stored, refuses a non-boolean", () => {

@@ -133,7 +133,7 @@ export type AttentionRow = {
   since: number;
   /** Line 2, verb-first. */
   reason: string;
-  /** Line 3, optional: the coordinator's reason (escalated) or the task summary (finished). */
+  /** Line 3, optional: the task summary (finished). */
   detail?: string;
   request?: PermissionRequest | QuestionRequest;
   /** Finished rows: "Next for you", the predicted next prompt of the session. */
@@ -218,7 +218,7 @@ const rowOfRequest = (w: Waiting, cwd: string): AttentionRow => {
   const escalated = !!part.escalated;
   const kind: AttentionKind = escalated ? "escalated" : part.type === "question" ? "question" : "permission";
   const reason = ask ?? (escalated ? t("app.focus.decide", { summary: requestSummary(part, cwd) }) : t("app.focus.allowOrDeny", { summary: requestSummary(part, cwd) }));
-  return { id: part.id, kind, sessionId: w.sessionId, since: w.since, reason, detail: escalated && part.reason ? t("app.focus.coordinator", { reason: part.reason }) : undefined, request: part, action: "answer" };
+  return { id: part.id, kind, sessionId: w.sessionId, since: w.since, reason, request: part, action: "answer" };
 };
 
 /** Every row of the Needs you and Finished lists, in display order: request rows, then at most one row per session without a request. */

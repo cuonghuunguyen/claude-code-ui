@@ -260,7 +260,7 @@ it("an error row says what failed and Open session opens it", async () => {
 
 const three = (): State => ({
   list: [item("a"), item("b"), item("c")],
-  views: { a: view([bash("pa", "ls pa", NOW - 600_000)]), b: view([bash("pb", "ls pb", NOW - 300_000, { escalated: true, reason: "risky" })]), c: view([bash("pc", "ls pc", NOW - 60_000)]) },
+  views: { a: view([bash("pa", "ls pa", NOW - 600_000)]), b: view([bash("pb", "ls pb", NOW - 300_000, { escalated: true })]), c: view([bash("pc", "ls pc", NOW - 60_000)]) },
 });
 const selectedText = () => rows().find((r) => r.getAttribute("aria-current"))?.textContent ?? "";
 

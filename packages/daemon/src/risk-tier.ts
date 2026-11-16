@@ -1,5 +1,5 @@
-// The only boundary between a coordinator model and a worker's permission request (docs/spec.md "Permission tiers"): a
-// coordinator may settle a `low` request, every other request is the user's. Unknown -> high. Any error -> high.
+// The permission tier of a request (docs/spec.md "Permission tiers"): the Focus page offers Always allow and a notification card
+// offers Allow once / Deny inline only for `low`. No coordinator settles a request (GH-835). Unknown -> high. Any error -> high.
 import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { foreignPointer } from "./remote-path.ts";
@@ -10,8 +10,6 @@ export type Tier = "low" | "high";
 export type TierContext = {
   cwd: string;
   blockedPath?: string;
-  /** The CLI's own reason for asking (SDK `decisionReason`). Carried to the coordinator; the tier does not read it. */
-  decisionReason?: string;
   defaultToNo?: boolean;
   requiresUserInteraction?: boolean;
   /** The CLI runs with CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1: every Bash command starts in `cwd`, so a read-only git command is judged by it. */

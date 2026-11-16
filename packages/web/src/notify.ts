@@ -134,11 +134,11 @@ export function describeCard(card: Card, view: SessionView | undefined, cwd: str
   const extra = Math.max(0, unsettled(view).length - 1);
   if (part?.type === "permission_request") {
     const summary = requestSummary(part, cwd);
-    return { kind: "permission", tool: part.tool, summary, body: summary.replace(/^[^·]*· ?/, ""), tier: part.tier, escalated: part.escalated, reason: part.reason, extra, requestId: part.requestId };
+    return { kind: "permission", tool: part.tool, summary, body: summary.replace(/^[^·]*· ?/, ""), tier: part.tier, escalated: part.escalated, extra, requestId: part.requestId };
   }
   if (part?.type === "question") {
     const q = part.questions[0]?.question ?? "";
-    return { kind: "question", summary: q, body: q, escalated: part.escalated, reason: part.reason, extra, requestId: part.requestId };
+    return { kind: "question", summary: q, body: q, escalated: part.escalated, extra, requestId: part.requestId };
   }
   return { kind: card.kind, summary: card.text ?? "", body: card.text ?? "", extra: 0 };
 }
@@ -147,8 +147,8 @@ export function describeCard(card: Card, view: SessionView | undefined, cwd: str
 const READ_ONLY = new Set(["Read", "NotebookRead", "LS", "Glob", "Grep", "TodoWrite", "WebSearch", "Bash"]);
 
 /** "answer": the card offers Allow once and Deny. "open": it only opens Focus or the session. */
-export const inlineActions = (d: { kind: CardKind; tier?: "low"; tool?: string; escalated?: boolean }): "answer" | "open" =>
-  d.kind === "permission" && d.tier === "low" && !d.escalated && !!d.tool && READ_ONLY.has(d.tool) ? "answer" : "open";
+export const inlineActions = (d: { kind: CardKind; tier?: "low"; tool?: string }): "answer" | "open" =>
+  d.kind === "permission" && d.tier === "low" && !!d.tool && READ_ONLY.has(d.tool) ? "answer" : "open";
 
 const waits = (c: Card) => c.kind === "permission" || c.kind === "question";
 const RANK: Record<CardKind, number> = { permission: 0, question: 0, error: 1, finished: 2 };

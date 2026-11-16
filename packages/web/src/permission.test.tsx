@@ -31,11 +31,6 @@ describe("ruleLabel", () => {
 });
 
 describe("PermissionPanel", () => {
-  it("an escalated request shows the coordinator's reason as text, escaped", () => {
-    expect(renderToStaticMarkup(<PermissionPanel part={request()} onRespond={() => {}} />)).not.toContain("permission-escalated");
-    const html = renderToStaticMarkup(<PermissionPanel part={request({ escalated: true, reason: "push: <b>x</b>" })} onRespond={() => {}} />);
-    expect(html).toMatch(/data-testid="permission-escalated"><span class="font-medium">Escalated by coordinator:<\/span> push: &lt;b&gt;x&lt;\/b&gt;<\/p>/);
-  });
   it("is bounded in height: the body scrolls and the Allow/Deny tray stays outside the scroller", () => {
     const html = renderToStaticMarkup(<PermissionPanel part={request()} onRespond={() => {}} />);
     expect(html).toMatch(/<form[^>]*max-h-\[60dvh\]/);

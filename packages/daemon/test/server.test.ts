@@ -4233,7 +4233,7 @@ describe("push", () => {
     }
   });
 
-  it("Notifications from workers off: a worker's request pushes nothing, a plain session's does; on again: the worker's next one pushes (GH-387)", async () => {
+  it("Notifications from workers off: a worker's request still pushes, like a plain session's (GH-387, GH-835)", async () => {
     const f = fakePush();
     const [w, w2, plain, coordinator] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
     const dir = mkdtempSync(join(tmpdir(), "cfg-"));
@@ -4251,14 +4251,10 @@ describe("push", () => {
       expect(await c.request({ type: "settings.set", patch: { orchestration: { workerNotifications: false } } })).toMatchObject({ type: "reply" });
       await c.request({ type: "session.prompt", sessionId: w, text: "run tests" });
       await c.waitFor((m) => m.type === "event" && m.sessionId === w && m.part.type === "permission_request");
-      await new Promise((r) => setTimeout(r, 50));
-      expect(f.sent).toEqual([]);
+      // A worker's request goes to the user whatever the setting says.
+      await vi.waitFor(() => expect(f.sent.map((p) => p.sessionId)).toEqual([w]));
       await c.request({ type: "session.prompt", sessionId: plain, text: "run tests" });
-      await vi.waitFor(() => expect(f.sent.map((p) => p.sessionId)).toEqual([plain]));
-      // On again: the next worker's request pushes (a second worker, so the first one's blocked turn is not in the way).
-      expect(await c.request({ type: "settings.set", patch: { orchestration: { workerNotifications: true } } })).toMatchObject({ type: "reply" });
-      await c.request({ type: "session.prompt", sessionId: w2, text: "run tests" });
-      await vi.waitFor(() => expect(f.sent.map((p) => p.sessionId)).toEqual([plain, w2]));
+      await vi.waitFor(() => expect(f.sent.map((p) => p.sessionId)).toEqual([w, plain]));
     } finally {
       d.close();
     }
