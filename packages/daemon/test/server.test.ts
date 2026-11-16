@@ -911,6 +911,7 @@ describe("daemon", () => {
     expect(created.result.session.id).toBe(X);
     await c.request({ type: "session.prompt", sessionId: X, text: "read it" });
     expect(calls.find((o) => o.sessionId === X)!.additionalDirectories![0]).toBe(join(uploadParent, X));
+    // The first message is taken: a duplicated tab's copy of the token makes its own session.
     const second = (await c.request({ type: "session.create", cwd: webRoot, draft: T })) as { result: { session: { id: string } } };
     expect(second.result.session.id).not.toBe(X);
     // A claimed token is spent: a copy of it (duplicated tab) cannot place files in that session's folder.
@@ -922,6 +923,27 @@ describe("daemon", () => {
     const bad = (await c.request({ type: "session.create", cwd: webRoot, draft: "zz" })) as { type: string; result: { session: { id: string } } };
     expect(bad.type).toBe("reply");
     expect(bad.result.session.id).not.toBe(X);
+  });
+
+  it("a first send repeated after a lost reply makes no second session and no second prompt, on a new socket too", async () => {
+    const a = await client();
+    const T = randomBytes(32).toString("hex");
+    const created = (await a.request({ type: "session.create", cwd: webRoot, draft: T })) as { result: { session: { id: string } } };
+    const id = created.result.session.id;
+    a.ws.close();
+    const b = await client();
+    const again = (await b.request({ type: "session.create", cwd: webRoot, draft: T })) as { result: { session: { id: string } } };
+    expect(again.result.session.id).toBe(id);
+    await b.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+    const [one, two] = await Promise.all([1, 2].map(() => b.request({ type: "session.prompt", sessionId: id, text: "once please", once: "k1" })));
+    expect([one.type, two.type]).toEqual(["reply", "reply"]);
+    await b.waitFor((m) => m.type === "event" && m.sessionId === id && m.part.type === "user_text" && m.part.text === "once please");
+    const echoes = () => b.inbox.filter((m) => m.type === "event" && m.sessionId === id && m.part.type === "user_text" && m.part.text === "once please").length;
+    expect(echoes()).toBe(1);
+    // A different key is a new prompt.
+    await b.request({ type: "session.prompt", sessionId: id, text: "second", once: "k2" });
+    await b.waitFor((m) => m.type === "event" && m.sessionId === id && m.part.type === "user_text" && m.part.text === "second");
+    b.ws.close();
   });
 
   it("a restored session keeps its upload folder", async () => {

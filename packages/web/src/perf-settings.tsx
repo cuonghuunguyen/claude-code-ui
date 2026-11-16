@@ -1,8 +1,8 @@
 // Settings > Performance (docs/spec.md "Performance monitor"): what the daemon measured: event-loop delay and use, slowest requests
-// and spans, processes, stalls linked to what was running, memory and the monitor's own cost. The on/off switch is a row of the
+// and spans, the first send of the browsers (marks) and the wait before a handler (queue), processes, stalls linked to what was running, memory and the monitor's own cost. The on/off switch is a row of the
 // Settings dialog above it. Durations and counts only: nothing here or in the export holds a title, prompt, path or session id.
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { HistSummary, PerfDaemon, PerfReport, PerfWorst } from "@claude-ui/protocol";
+import { PERF_CLIENT_MARKS, type HistSummary, type PerfDaemon, type PerfReport, type PerfWorst } from "@claude-ui/protocol";
 import type { Request } from "./client.ts";
 import { Button } from "@/components/ui/button";
 import { WEB_VERSION } from "./version.ts";
@@ -135,6 +135,8 @@ export function PerformanceSection({ request }: { request: <T>(msg: Request) => 
           {row("perf-elu", t("perf.elu"), `${(d.elu * 100).toFixed(1)} %`, t("perf.eluHint"))}
           {cpu.length > 0 && row("perf-cpu", t("perf.cpu"), t("perf.cpuValue", { last: cpu.at(-1)!, max: Math.max(...cpu) }), t("perf.cpuHint"))}
           <Table id="perf-slowest" title={t("perf.slowest")} rows={top(d.handlers, d.spans)} />
+          {d.client && <Table id="perf-first-send" title={t("perf.firstSend")} rows={PERF_CLIENT_MARKS.filter((k) => d.client![k]?.n).map((k) => ({ name: t(`perf.mark.${k}`), s: d.client![k]! }))} />}
+          {d.queue && <Table id="perf-queue" title={t("perf.queue")} rows={top(d.queue)} />}
           <Table id="perf-processes" title={t("perf.processes")} rows={top(d.children)} />
           <div className="border-t py-2" data-testid="perf-events">
             <h4 className="pb-1 text-sm">{t("perf.events")}</h4>

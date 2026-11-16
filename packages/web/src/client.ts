@@ -300,29 +300,34 @@ export function connect(opts: {
   }
   const stopWakeEvents = (opts.wakeEvents ?? browserWakeEvents)((force) => wake(force), () => (hiddenAt = Date.now()));
 
-  async function send<T>(msg: Request, reqId: string, expired = () => false): Promise<T> {
+  async function send<T>(msg: Request, reqId: string, expired = () => false, onSent?: () => void): Promise<T> {
     await ready;
     if (expired()) throw new Error("timed out");
     if (ws?.readyState !== WebSocket.OPEN) throw new Error("disconnected");
     ws.send(JSON.stringify({ ...msg, reqId }));
+    onSent?.();
     return new Promise<T>((resolve, reject) => pending.set(reqId, { resolve: resolve as (r: unknown) => void, reject }));
   }
 
   let lastReqId = 0;
-  /** Waits for a connection; rejects if it drops before the reply, or with "timed out" after `timeoutMs` (waiting for the connection included). */
-  function request<T>(msg: Request, { timeoutMs }: { timeoutMs?: number } = {}): Promise<T> {
+  /** Waits for a connection; rejects if it drops before the reply, or with "timed out" after `timeoutMs` (waiting for the connection included). `onSent`: called right after the request is written to the socket. */
+  function request<T>(msg: Request, { timeoutMs, onSent }: { timeoutMs?: number; onSent?: () => void } = {}): Promise<T> {
     // A counter, not crypto.randomUUID(): that needs a secure context, and --lan serves plain http://<LAN IP>.
     const reqId = String(++lastReqId);
-    if (!timeoutMs) return send<T>(msg, reqId);
+    if (!timeoutMs) return send<T>(msg, reqId, undefined, onSent);
     let t: ReturnType<typeof setTimeout>;
     let expired = false;
     const timeout = new Promise<never>((_, reject) => (t = setTimeout(() => (expired = true, pending.delete(reqId), reject(new Error("timed out"))), timeoutMs)));
     // A request that timed out waiting for the connection is not sent on reconnect.
-    return Promise.race([send<T>(msg, reqId, () => expired), timeout]).finally(() => clearTimeout(t));
+    return Promise.race([send<T>(msg, reqId, () => expired, onSent), timeout]).finally(() => clearTimeout(t));
   }
 
   return {
     request,
+    /** Checks the socket now: a silent one is dropped and redialed, a live one is left alone. */
+    probe() {
+      wake(true);
+    },
     /** `request` whose stream messages (sessions.search.result with its reqId) go to `onResult` until the reply. */
     search(msg: Extract<Request, { type: "sessions.search" }>, onResult: (m: SearchResultMessage) => void) {
       const reqId = String(++lastReqId);

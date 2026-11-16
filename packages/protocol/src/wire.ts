@@ -99,7 +99,7 @@ export type FsEntry = { name: string; path: string; isDir: boolean };
  */
 export type ClientMessage = { reqId: string; side?: string } & (
   /** `coordinator`: the session gets the orchestration tools (docs/spec.md "Orchestration"); refused while orchestration is off. */
-  /** `draft`: the new-session tab's upload token (fs.upload `draft`); the session gets the id, and with it the folder, of those uploads; one claim per token. */
+  /** `draft`: the new-session tab's upload token (fs.upload `draft`); the session gets the id, and with it the folder, of those uploads; one claim per token. A `draft` already used by a loaded session of the same `cwd` and Engine returns that session and creates none (a retry after a lost reply). */
   | { type: "session.create"; cwd: string; model?: string; draft?: string; engine?: Engine }
   /** Binary and version of OpenCode, never starts its server. Reply OpenCodeStatus. */
   | { type: "opencode.status" }
@@ -137,9 +137,10 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** URL of the local page an Artifact publish part of the session names (GH-175, GH-335); reply ArtifactPreviewResult. */
   | { type: "artifact.preview"; sessionId: string; partId: string }
   // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp. Reply `{}`; `{ local: true }` (PromptResult) when the Engine ran the text as its own command (OpenCode `/compact`, `/undo`, `/redo`): no `user_text` echo follows, the client drops its pending bubble.
-  | { type: "session.prompt"; sessionId: string; text: string; images?: string[] }
+  // once: a repeat with the same key on the same session is not sent again; it gets the first one's reply or error (a retry after a lost reply). Ignored by an older daemon.
+  | { type: "session.prompt"; sessionId: string; text: string; images?: string[]; once?: string }
   /** Bash mode: runs `command` with the user's shell in the session cwd; output streams as a `bash` part; Claude sees it with the next prompt. `session.interrupt` kills it. Idle: runs, reply `{}`. Busy (turn, pending input, rewind, shell command, terminal CLI turn): queued as a bash item (`prompt_queue`), reply `{ itemId }`; error `queue_full`. */
-  | { type: "session.bash"; sessionId: string; command: string }
+  | { type: "session.bash"; sessionId: string; command: string; once?: string }
   | { type: "session.setModel"; sessionId: string; model: string }
   /** Applies from the next turn on (`setPermissionMode()`); the session's start option before its query runs. */
   | { type: "session.setPermissionMode"; sessionId: string; mode: PermissionMode }
@@ -226,6 +227,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "jira.search"; text?: string }
   /** Performance data of this daemon (docs/spec.md "Performance monitor"); reply PerfReport. */
   | { type: "perf.report" }
+  /** First-send timings of this browser (docs/spec.md "Performance monitor"): ms since send pressed, per mark; reply {}. Ignored while the monitor is off. */
+  | { type: "perf.client"; marks: Partial<Record<PerfClientMark, number>> }
   /** Empties the performance store; reply {}. */
   | { type: "perf.clear" }
   /** Sets the SDK custom title (the terminal CLI shows it too). Needs a transcript: a session with no prompt yet has none. */
@@ -1155,6 +1158,9 @@ export type ClaudeAccountInfo = { id: string; name: string };
 export type EditorId = "code" | "cursor" | "idea";
 export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true; /** The daemon's own environment has CLAUDE_CODE_OAUTH_TOKEN: the Default Claude account is that token. */ claudeEnvToken?: true; /** This daemon can hold a sleep inhibitor (`supported`) and the last failure (`error`, kept until the setting is turned off); absent from a side or an older daemon. */ keepAwake?: { supported: boolean; error?: string }; /** The OS launcher shortcut exists; absent: this daemon cannot make one (side, older daemon, other OS). */ shortcut?: { installed: boolean }; /** Editors found on the hub (fs.openExternal `with`); absent from a side or an older daemon. */ editors?: { id: EditorId | "custom"; label: string }[] }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean; /** The saved Claude token accounts, without tokens. */ claudeAccounts?: ClaudeAccountInfo[]; /** An old-format token was cleared by a security update and none is saved since (GH-487). */ jiraTokenReset?: true };
 /** Spans of the daemon the monitor times (code constants; never a user value). */
+/** First-send marks a browser reports (`perf.client`), ms since send pressed; a closed list. */
+export const PERF_CLIENT_MARKS = ["firstSend.sent", "firstSend.info", "firstSend.taken", "firstSend.tab"] as const;
+export type PerfClientMark = (typeof PERF_CLIENT_MARKS)[number];
 export type PerfSpanName = "session.open" | "session.start" | "session.start.timeout" | "side.start" | "side.install" | "side.spawn" | "side.firstFrame" | "worktree.list" | "session.scan" | "session.scanAll";
 /** An event-loop block of at least 50 ms while spans were open; `spans` = the ones open then. */
 export type PerfStall = { kind: "stall"; at: number; ms: number; spans: { name: PerfSpanName; id: number }[] };
@@ -1181,6 +1187,10 @@ export type PerfDaemon = {
   memory: { at: number; rss: number; heapUsed: number; cpu?: number }[];
   /** The 50 slowest events, slowest first. */
   worst: PerfWorst[];
+  /** ms from the socket message to the handler start, per request type; absent from an older daemon. */
+  queue?: Record<string, HistSummary>;
+  /** First-send marks reported by browsers (`perf.client`); absent from an older daemon. */
+  client?: Partial<Record<PerfClientMark, HistSummary>>;
   /** The monitor's own JS time since `since` (ms) and the time it was on. */
   cost: { ownMs: number; wallMs: number };
 };

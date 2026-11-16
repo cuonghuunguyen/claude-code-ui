@@ -598,6 +598,7 @@ export default {
   // App.tsx
   "app.main.newSession": "Phiên mới",
   "app.main.promptNotSent": "Chưa gửi prompt: {message}",
+  "app.firstSend.noAnswer": "Daemon không trả lời. Kiểm tra kết nối rồi gửi lại.",
   "app.main.sessionGone": "Phiên này không còn trong daemon.",
   "app.main.closed": "Đã đóng {title}",
   "app.main.undo": "Hoàn tác",

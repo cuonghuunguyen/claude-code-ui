@@ -72,6 +72,7 @@ export function connect(opts: Opts): Client {
     },
     onFsChanged: (l) => (fs.add(l), () => void fs.delete(l)),
     onTerminal: (l) => (terminal.add(l), () => void terminal.delete(l)),
+    probe() {},
     close() {},
   } as Client;
 }

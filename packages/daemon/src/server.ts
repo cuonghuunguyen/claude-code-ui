@@ -60,6 +60,7 @@ import { createRouter, type Sides } from "./sides.ts";
 import { createListVersions } from "./list-versions.ts";
 import { createSessionSettings } from "./session-settings.ts";
 import { createUploads } from "./uploads.ts";
+import { createFirstSend } from "./first-send.ts";
 import { createUpdater, type Updater } from "./update.ts";
 import { createOrchestration, SERVER as ORCHESTRATION_SERVER } from "./orchestration.ts";
 import { createDaemonMcp, DAEMON_SERVER, ToolError } from "./daemon-mcp.ts";
@@ -324,6 +325,7 @@ export function createDaemon(opts: {
   const listVersions = createListVersions(logEpoch);
   /** fs.upload storage: one private folder per session; a session gets only its own as an additional directory, so Claude reads an attachment without asking (uploads.ts). */
   const uploads = createUploads({ dir: opts.uploadDir });
+  const firstSend = createFirstSend();
   const sessions = new Map<string, Session>();
   const settings = createSessionSettings({ file: opts.settingsFile });
   /** A failed save keeps the change in memory for the run (session-settings.ts). */
@@ -1940,6 +1942,7 @@ export function createDaemon(opts: {
     autoContinue,
     sessions,
     perfMon,
+    firstSend,
     syncRunning,
     addons,
     updater,
@@ -1993,7 +1996,7 @@ export function createDaemon(opts: {
       focused.delete(ws);
       covered.delete(ws);
     });
-    const onMessage = async (data: RawData) => {
+    const onMessage = async (data: RawData, receivedAt = 0) => {
       let msg: ClientMessage;
       try {
         msg = JSON.parse(String(data));
@@ -2005,7 +2008,7 @@ export function createDaemon(opts: {
       if (msg.type === "ping" && msg.note) console.warn(`${new Date().toISOString()} ws: page reconnected after: ${String(msg.note).slice(0, 600)}`);
       if (msg.type === "ping") return send(ws, { type: "reply", reqId: msg.reqId, result: {} });
       // Timed here, before the router, so a request a side serves or the router answers itself is attributed too.
-      const end = perfMon.request(String(msg.type), typeof (msg as { cwd?: unknown }).cwd === "string" ? (msg as { cwd: string }).cwd : undefined);
+      const end = perfMon.request(String(msg.type), typeof (msg as { cwd?: unknown }).cwd === "string" ? (msg as { cwd: string }).cwd : undefined, receivedAt);
       try {
         if (router) return await router.handle(msg as ClientMessage & Record<string, unknown>);
         return await local(msg, (m) => send(ws, m));
@@ -2055,7 +2058,7 @@ export function createDaemon(opts: {
       });
     // A handler that throws fails its request: a rejected promise nobody awaits would end the process (Node's default).
     ws.on("message", (data) =>
-      onMessage(data).catch((err) => {
+      onMessage(data, perfMon.stamp()).catch((err) => {
         console.error("request handler failed:", err);
         let reqId: unknown;
         try {

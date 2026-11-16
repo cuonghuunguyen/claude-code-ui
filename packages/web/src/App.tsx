@@ -206,6 +206,7 @@ import { askCommitBox } from "./commit-ask.ts";
 import { askPanel } from "./panel-ask.ts";
 import { useChangesFocus } from "./changes-focus.ts";
 import { applyAddonCss, applyAddonThemes, applyTheme, loadPref, nextPref, type ThemePref } from "./theme.ts";
+import { FIRST_SEND_TIMEOUT_MS, firstSendMarks, maybeTaken, type FirstSendMarks } from "./first-send.ts";
 import { draftToken, rotateDraftToken, uploadOwnerFor, uploadWithRetry, type UploadOwner } from "./upload-owner.ts";
 
 type Client = ReturnType<typeof connect>;
@@ -1677,46 +1678,79 @@ export function App() {
    * mode command. Rejects when the session was not created.
    */
   // A session whose first prompt failed: the retry from the new-session tab sends to it instead of creating another.
-  const unprompted = useRef<SessionInfo>(undefined);
+  const unprompted = useRef<FirstSendState>({});
   // GH-281: the new-session tab's uploads belong to this token until session.create claims them; the next draft gets a new one.
   const draftUpload = useRef(draftToken());
+  /** The session tab of a first send the daemon took: the pending bubble, the panels' state and the tab itself move to the session. */
+  function finishFirstSend(session: SessionInfo) {
+    setOptimistic((o) => movePending(o, session.id));
+    // GH-430: the panels keep their state across the first prompt: the Changes diff mode and each area's selected pane carry over to the session.
+    const choice = sessionDiffChoice.get(NEW_TAB);
+    if (choice) (sessionDiffChoice.set(session.id, choice), sessionDiffChoice.delete(NEW_TAB));
+    setPaneHist((x) => {
+      if (!x[NEW_TAB]) return x;
+      const { [NEW_TAB]: h, ...rest } = x;
+      return { ...rest, [session.id]: h };
+    });
+    openUi(session.id);
+    ws.dispatch({ type: "created", id: session.id });
+  }
   async function createSession(cwd: string, opts: StartOptions, first: FirstMessage) {
     setError(undefined);
     if (status !== "connected") throw new Error(`the daemon is ${status}`);
     const key = pendingKey();
+    const perfMarks = firstSendMarks();
+    // A retry is a new send: only its own failure may say the daemon took the message (the auto-open below waits for that).
+    unprompted.current.sent = undefined;
     // GH-133: the bubble shows in this commit; the new-session card hides (Activity keeps its prompt box for a failure).
     // A command has no user bubble: its bash card shows once the session tab does.
     if (!("command" in first)) setOptimistic((o) => ({ ...o, [NEW_TAB]: addPending(undefined, undefined, { key, text: first.text, images: first.images }) }));
     let listed = false;
+    let done = false;
     try {
       // The new-session tab (and its draft) stays until the first prompt is taken.
-      const session = await startSession(client.current!.request, unprompted, cwd, { ...opts, draft: draftUpload.current }, first, (s) => {
+      const session = await startSession(client.current!.request, unprompted.current, cwd, { ...opts, draft: draftUpload.current }, first, (s) => {
         follows.sent(s.id);
         setInfos((i) => ({ ...i, [s.id]: s }));
         setOptimistic((o) => (o[NEW_TAB] ? { ...o, [NEW_TAB]: o[NEW_TAB].map((p) => ({ ...p, sessionId: s.id })) } : o));
         // Listed (and so subscribed) before the prompt goes out: its echo can be in the view before the tab switches.
         if (!listed) (listed = true), void refreshList();
-      }, () => void (draftUpload.current = rotateDraftToken()));
-      setOptimistic((o) => movePending(o, session.id));
-      // GH-430: the panels keep their state across the first prompt: the Changes diff mode and each area's selected pane carry over to the session.
-      const choice = sessionDiffChoice.get(NEW_TAB);
-      if (choice) (sessionDiffChoice.set(session.id, choice), sessionDiffChoice.delete(NEW_TAB));
-      setPaneHist((x) => {
-        if (!x[NEW_TAB]) return x;
-        const { [NEW_TAB]: h, ...rest } = x;
-        return { ...rest, [session.id]: h };
-      });
-      openUi(session.id);
-      ws.dispatch({ type: "created", id: session.id });
+      }, () => void (draftUpload.current = rotateDraftToken()), perfMarks);
+      finishFirstSend(session);
+      done = true;
     } catch (e) {
       setOptimistic((o) => dropPending(o, NEW_TAB, key));
       // The new-session card shows again after this render; its prompt box got the text back.
       requestAnimationFrame(() => newPrompt.current?.focus());
+      // Silence from the daemon: check the socket now (a dead one is redialed) and say what happened.
+      if (e instanceof Error && e.message === "timed out") {
+        client.current?.probe();
+        throw new Error(tr("app.firstSend.noAnswer"));
+      }
       throw e;
     } finally {
       void refreshList();
+      // The marks are reported once per first send, with the ones reached; the tab mark waits for the frame that shows the session tab.
+      const report = () => {
+        if (settingsView?.perfMonitor) client.current?.request({ type: "perf.client", marks: perfMarks.marks() }).catch(() => {});
+      };
+      if (done) requestAnimationFrame(() => (perfMarks.mark("firstSend.tab"), report()));
+      else report();
     }
   }
+  // A first send the daemon took but whose reply was lost (timeout, dropped socket): the session is listed and followed already, and
+  // after the reconnect its view holds the message. Then it opens like a successful first send, without sending anything again.
+  useEffect(() => {
+    const u = unprompted.current;
+    // Only while the user is on the new-session tab: it does not pull them away from what they moved to (it opens when they come back).
+    const view = u.sent && u.current && activeId === NEW_TAB ? views[u.current.id] : undefined;
+    if (!u.current || !view || ![...view.parts.values()].some((p) => p.type === "user_text" || p.type === "bash")) return;
+    const session = u.current;
+    unprompted.current = {};
+    finishFirstSend(session);
+    // The new-session box unmounts and saves its restored text on the way: the draft is dropped after that.
+    requestAnimationFrame(() => saveDraft(NEW_TAB_DRAFT, ""));
+  }, [views, activeId]);
 
   /** The new-session tab, starting in `cwd`: by default the active session's project, else the newest project. */
   function newSession(cwd?: string) {
@@ -4147,7 +4181,7 @@ export function App() {
                   caps={engineEntry?.capabilities}
                   onOpenOpenCodeSettings={openSettingsGroup}
                   onOpenProject={() => setOpeningProject(true)}
-                  onUpload={upload(() => uploadOwnerFor(unprompted.current, draftProject, draftUpload.current), draftProject, () => void (draftUpload.current = rotateDraftToken()))}
+                  onUpload={upload(() => uploadOwnerFor(unprompted.current.current, draftProject, draftUpload.current), draftProject, () => void (draftUpload.current = rotateDraftToken()))}
                   onSearch={search}
                   commandsRev={Object.values(configChanged).reduce((a, b) => a + b, 0)}
                   onCommands={(cwd, engine) => client.current!.request<CommandsResult>({ type: "session.commands", cwd, engine }).then((r) => r.commands)}
@@ -4814,43 +4848,61 @@ function ConnectionBadge({ status }: { status: ConnectionStatus }) {
   );
 }
 
+/** The first send in progress or failed: the session made (reused by the retry), its `once` key and whether the daemon may have taken the message. */
+export type FirstSendState = { current?: SessionInfo; once?: string; sent?: boolean };
+
 /**
  * Creates the session (or reuses `created`: one in `cwd` whose first prompt failed), applies mode and effort, sends the first prompt
  * or runs the first bash mode command. Rejects when it was not taken; `created` then keeps the session for the retry.
+ * Every request has the first-send timeout. The prompt or command carries one `once` key per session: a retry after a lost reply is not run twice.
  */
 export async function startSession(
   request: Client["request"],
-  created: { current?: SessionInfo },
+  created: FirstSendState,
   cwd: string,
   { model, mode, effort, draft, engine, agent }: StartOptions,
   first: FirstMessage,
   onInfo: (s: SessionInfo) => void = () => {},
   /** The draft token is spent by session.create: the caller makes a new one at once (later attachments go by session id). */
   onDraftClaimed: () => void = () => {},
+  marks?: FirstSendMarks,
 ): Promise<SessionInfo> {
   const reused = created.current?.cwd === cwd;
-  let session = reused ? created.current! : (await request<CreateResult>({ type: "session.create", cwd, model, ...(engine && { engine }), ...(draft && { draft }) })).session;
+  const timeoutMs = FIRST_SEND_TIMEOUT_MS;
+  let session = reused
+    ? created.current!
+    : (await request<CreateResult>({ type: "session.create", cwd, model, ...(engine && { engine }), ...(draft && { draft }) }, { timeoutMs, onSent: () => marks?.mark("firstSend.sent") })).session;
   if (!reused && draft) onDraftClaimed();
   created.current = session;
   onInfo(session);
+  marks?.mark("firstSend.info");
   // Before the first prompt, mode and effort become the query's start options; on failure the prompt is not sent.
+  // The model is compared after any create: a repeated create (lost reply) returns the session as it was made.
   for (const msg of [
-    reused && model !== session.model && { type: "session.setModel" as const, sessionId: session.id, model },
+    model !== undefined && model !== session.model && { type: "session.setModel" as const, sessionId: session.id, model },
     agent && agent !== session.agent && { type: "session.setAgent" as const, sessionId: session.id, agent },
     mode !== session.permissionMode && { type: "session.setPermissionMode" as const, sessionId: session.id, mode },
     effort !== session.effort && { type: "session.setEffort" as const, sessionId: session.id, effort },
   ])
     if (msg) {
-      session = created.current = (await request<SetModelResult>(msg)).session;
+      session = created.current = (await request<SetModelResult>(msg, { timeoutMs })).session;
       onInfo(session);
     }
   // A command starts the query too (Session.bash), so mode and effort are set before it as well.
-  await request(
-    "command" in first
-      ? { type: "session.bash", sessionId: session.id, command: first.command }
-      : { type: "session.prompt", sessionId: session.id, text: first.text, images: first.images },
-  );
-  created.current = undefined;
+  const once = (created.once ??= draftToken());
+  try {
+    await request(
+      "command" in first
+        ? { type: "session.bash", sessionId: session.id, command: first.command, once }
+        : { type: "session.prompt", sessionId: session.id, text: first.text, images: first.images, once },
+      { timeoutMs },
+    );
+  } catch (e) {
+    if (maybeTaken(e)) created.sent = true;
+    throw e;
+  }
+  marks?.mark("firstSend.taken");
+  created.current = created.once = created.sent = undefined;
   return session;
 }
 

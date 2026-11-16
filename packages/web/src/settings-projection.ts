@@ -14,6 +14,8 @@ export type SettingsView = {
   ignoreSubmodules: boolean;
   chromeOn?: boolean;
   visualizeOn: boolean;
+  /** Settings › Performance monitor: the app reports its first-send marks (perf.client) only while on. */
+  perfMonitor: boolean;
   claudeAccount: string;
   claudeAccounts: ClaudeAccountInfo[];
   /** Settings › Notifications › desktop. */
@@ -41,6 +43,7 @@ function project(s: Settings, accounts: ClaudeAccountInfo[] | undefined, f: Fact
     ignoreSubmodules: s.git?.ignoreSubmodules === true,
     chromeOn: s.chrome?.enabled,
     visualizeOn: s.chat?.visualize === true,
+    perfMonitor: s.performance?.monitor === true,
     claudeAccount: s.claude?.account ?? "",
     claudeAccounts: accounts ?? [],
     desktop: s.notifications?.desktop === true,
