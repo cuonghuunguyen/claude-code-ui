@@ -1786,6 +1786,33 @@ describe("Session context usage", () => {
       expect(interrupts.length).toBe(n + 1);
     });
 
+    it("a hand-back notice with a <task-id> of the own background run and no <tool-use-id> sets no external turn (GH-130)", async () => {
+      const result = { type: "result", subtype: "success", uuid: "res", session_id: "x", is_error: false, duration_ms: 1, total_cost_usd: 0.01, usage: { input_tokens: 1, output_tokens: 1 }, permission_denials: [] };
+      let promptId = "";
+      const query = ({ prompt }: { prompt: AsyncIterable<unknown> }) => {
+        const gen = (async function* () {
+          for await (const p of prompt) {
+            promptId = (p as { uuid: string }).uuid;
+            yield { type: "assistant", uuid: "a1", session_id: "x", parent_tool_use_id: null, message: { id: "m1", content: [{ type: "tool_use", id: "bg-1", name: "Agent", input: { description: "Sweep", run_in_background: true } }] } };
+            yield { type: "user", uuid: "r1", session_id: "x", parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "bg-1", content: "Async agent launched successfully.\nagentId: a55f (internal)" }] } };
+            yield result;
+          }
+        })();
+        return Object.assign(gen, { supportedCommands: async () => [], close: () => void gen.return(undefined), getContextUsage: async () => fakeUsage, stopTask: async () => {} });
+      };
+      let notice: unknown[] = [];
+      const s = new Session("/tmp", { query: query as never, readTranscript: async () => ({ main: notice as never, runs: [] }) });
+      const events: Event[] = [];
+      s.subscribe(0, (e) => events.push(e));
+      s.prompt("go");
+      await until(events, (e) => e.part.type === "turn_result");
+      await until(events, () => s.info().state === "idle");
+      const handBack = "<task-notification>\n<task-id>a55f</task-id>\n<status>completed</status>\n<summary>Agent handed back</summary>\n</task-notification>";
+      notice = [rec(promptId, "go"), rec("hb", handBack)];
+      await s.sync();
+      expect(s.externalTurnRunning()).toBe(false);
+    });
+
     it("a terminal CLI's call-less Monitor notification still sets the external turn", async () => {
       const main = [...history, rec("int", "[Request interrupted by user]"), rec("mon", monitor)];
       const s = Session.restore(randomUUID(), "/tmp", history, { query: fakeQuery as never, readTranscript: async () => ({ main: main as never, runs: [] }) });

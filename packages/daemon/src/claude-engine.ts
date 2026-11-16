@@ -127,6 +127,11 @@ function noticeCall(m: SessionMessage) {
   return /<tool-use-id>(.*?)<\/tool-use-id>/.exec(noticeText(m))?.[1];
 }
 
+/** Task ID (`<task-id>`) of a `<task-notification>` user message; undefined for any other message. */
+function noticeTask(m: SessionMessage) {
+  return /<task-id>(.*?)<\/task-id>/.exec(noticeText(m))?.[1];
+}
+
 /** Index of the last message matching `pred`, -1 when none (Array#findLastIndex is ES2023). */
 function lastIndex(ms: SessionMessage[], pred: (m: SessionMessage) => boolean) {
   for (let i = ms.length - 1; i >= 0; i--) if (pred(ms[i]!)) return i;
@@ -1153,7 +1158,12 @@ export class ClaudeSession implements EngineSession {
     // The own CLI's notice of its own background call that it only logs (queueTranscriptOnly, e.g. a run that handed its
     // report back in a message): no stream message, no turn. Own: no external turn, the live query stays.
     // Also the own CLI's artifact-auto-react notice after an interrupt (GH-513): it names no call. A terminal CLI's call-less notices (Monitor, orphan shells) stay external.
-    const notices = chain.filter((m) => !this.known.has(m.uuid) && (this.ownCalls.has(noticeCall(m) ?? "") || /<task-type>artifact-auto-react<\/task-type>/.test(noticeText(m))));
+    // A hand-back notice (SendMessage) has no <tool-use-id>: its <task-id> maps to the launching call.
+    const ownNotice = (m: SessionMessage) => {
+      const task = noticeTask(m);
+      return this.ownCalls.has(noticeCall(m) ?? (task ? this.adapter.taskCall(task) : undefined) ?? "");
+    };
+    const notices = chain.filter((m) => !this.known.has(m.uuid) && (ownNotice(m) || /<task-type>artifact-auto-react<\/task-type>/.test(noticeText(m))));
     for (const m of notices) this.own.add(m.uuid);
     this.logTranscript(notices, this.adapter);
     const tail = this.timeline.at(-1);
