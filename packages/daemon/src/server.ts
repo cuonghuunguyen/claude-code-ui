@@ -594,7 +594,10 @@ export function createDaemon(opts: {
   const claudeLoginChanged = () => {
     models = undefined;
     known = [];
-    for (const s of sessions.values()) if (!s.releaseQuery()) s.staleLogin = true;
+    for (const s of sessions.values()) {
+      if (!s.releaseQuery()) s.staleLogin = true;
+      else console.log(`session ${s.id}: Claude login changed, CLI closed`);
+    }
     void plan.reset();
     // GH-668: the ready Haiku process holds the old login (token in its env).
     warmCommit.stop();

@@ -295,6 +295,8 @@ export class ClaudeSession implements EngineSession {
   private readonly timeline: string[] = [];
   /** tool_use IDs of the session's own query: their subagent runs are not external. */
   private readonly ownCalls = new Set<string>();
+  /** Call IDs of the own query's Monitor calls: their expiry notice is `stopped` but the CLI runs a turn on it (probe GH-852). */
+  private readonly monitorCalls = new Set<string>();
   /** True from a task_notification to the next result: the CLI runs a turn of its own for it, while the session is idle. */
   private cliTurn = false;
   private cliTurnTimer?: NodeJS.Timeout;
@@ -396,7 +398,10 @@ export class ClaudeSession implements EngineSession {
     // The turn of an Allow and retry follow-up ended: an approval its call did not use must not serve a later, unrelated identical call.
     if (this.retryRan) this.dropApprovals();
     // A login or account change came while busy: the finished turn drops the old CLI, the next prompt resumes in a new one.
-    if (this.staleLogin && this.session.releaseQuery()) this.staleLogin = false;
+    if (this.staleLogin && this.session.releaseQuery()) {
+      this.staleLogin = false;
+      console.log(`session ${this.id}: Claude login changed, CLI closed`);
+    }
   }
 
   private dropApprovals() {
@@ -856,7 +861,10 @@ export class ClaudeSession implements EngineSession {
     if (this.rewinding) throw new Error("session is rewinding");
     this.cleared = false;
     // A login or account change that could not replace the CLI at the end of a turn (a background shell kept it): now.
-    if (this.staleLogin && this.session.currentState() === "idle" && this.session.releaseQuery()) this.staleLogin = false;
+    if (this.staleLogin && this.session.currentState() === "idle" && this.session.releaseQuery()) {
+      this.staleLogin = false;
+      console.log(`session ${this.id}: Claude login changed, CLI closed`);
+    }
     const uuid = randomUUID();
     this.known.add(uuid);
     this.own.add(uuid);
@@ -1190,6 +1198,7 @@ export class ClaudeSession implements EngineSession {
       if (prompt) this.cut(prompt);
       this.timeline.length = common + 1;
     }
+    if (this.query) console.log(`session ${this.id}: transcript has messages the CLI did not send (external turn), CLI closed`);
     this.dropQuery();
     this.resumeAt = undefined;
     this.lastAssistant = chain[lastIndex(chain.slice(0, from + 1), (m) => m.type === "assistant")]?.uuid;
@@ -1310,7 +1319,10 @@ export class ClaudeSession implements EngineSession {
       this.own.add(m.uuid);
       if (!m.parent_tool_use_id && !("isReplay" in m && m.isReplay)) this.timeline.push(m.uuid);
     }
-    if (m.type === "assistant") for (const b of m.message.content) if (b.type === "tool_use") this.ownCalls.add(b.id);
+    if (m.type === "assistant") for (const b of m.message.content) if (b.type === "tool_use") {
+        this.ownCalls.add(b.id);
+        if (b.name === "Monitor") this.monitorCalls.add(b.id);
+      }
     if (this.opts.onFileEdit) this.trackEdits(m);
     // Echo of a prompt() message (replay-user-messages); its user_text is already logged. The CLI took it now:
     // a steering message pushed as the turn ended starts a turn of its own. Other replays (the model switch echo) start none.
@@ -1344,7 +1356,8 @@ export class ClaudeSession implements EngineSession {
       if (id) this.tasks.delete(id);
       this.ambientTasks.delete(m.task_id);
       // A stopped task (Kill, Stop agent) gets no turn of its own while the session is idle: the CLI hands the notice to Claude with the next message (probe, GH-442).
-      this.cliTurn = m.status !== "stopped";
+      // Except a Monitor's expiry: it is `stopped` too, but the CLI runs a turn on it (probe, GH-852).
+      this.cliTurn = m.status !== "stopped" || (!!id && this.monitorCalls.has(id));
       // Idle: `working` may end now. The CLI's own turn, if any, shows running from its first assistant message.
       if (this.session.currentState() === "idle") this.session.setState("idle");
       // ponytail: a stopped or killed task may get no CLI turn, so no result clears cliTurn; give up after 10 s. Upgrade: clear on a CLI signal if one exists.
@@ -1398,6 +1411,7 @@ export class ClaudeSession implements EngineSession {
     for (const part of this.adapter.endCalls(true)) this.session.emit(part);
     for (const call of this.adapter.openCalls()) {
       heir.ownCalls.add(call.id);
+      if (this.monitorCalls.has(call.id)) heir.monitorCalls.add(call.id);
       heir.session.emit(call);
     }
     // A command moved to the background keeps running here (list, Kill); its end notice is dropped: the heir's CLI does not know it.
