@@ -40,7 +40,7 @@ After the commit, start both verifiers on that SHA, in parallel, each with one `
 HANDOFF for them: same ticket, worktree, branch and report-dir; `commit` = your SHA; `coordinator` = your own worker name; `attempts` = used/budget of that stage. After the starts, end your turn and wait for the notices; call `worker_wait` once per notice, never in a loop. Answer every notice with one `worker_wait`, even one that looks stale (for a worker you closed or stopped yourself): it can be the only wake-up for events still queued. Read results with `worker_read` (path form `<name>` for your own) and the report files.
 
 - Red from either: fix, commit, start a **fresh** verifier of that kind (`reviewer-2`, `ui-tester-2`) on the new SHA. Never reuse a verifier for a new SHA.
-- Join: continue only when both are green on the same SHA.
+- Join: continue only when both are green on the same SHA. This holds for every diff, test-only and refactor included; see the gate under RESULT.
 - Attempts: three per stage; one tier up (`sonnet` to `opus`) after a failed worker result or two review rejects; never a third attempt on the same model. At the budget end `RESULT: failed` with the report paths.
 - Questions and permission requests of your workers go to the user, not to you or your coordinator: no event, no answer tool. `worker_list` shows them as `waitingForUser`. Never answer on a worker's behalf.
 - Delivery after the join, per the playbook and `references/delivery.md`: push only when `push` allows it for you; `push: ask` means ask the user with the question tool (it goes to the user); then watch the build if the playbook has one. Opening the pull request stays with the root coordinator.
@@ -64,3 +64,5 @@ REPORT: <path under report-dir, or ->
 `failed` = your stage is red. `blocked` = you cannot do the stage as asked (say why). Never end your last turn without the block.
 
 Role lines: `APP: <start command> on port <n>`, `COMMIT: <sha of last commit>`, `TESTS: <passed>/<failed>/<skipped>`, `REVIEW: <reviewer verdict and SHA>`, `UI: <ui-tester cases passed>/<total> and SHA`.
+
+**Gate before `RESULT: succeeded`:** `REVIEW` and `UI` are both green, from your own verifier workers, on the SHA in `COMMIT`. A line you cannot fill means you are not done: start the missing verifier (§ Your own workers) instead of writing the block. `UI: skipped (acceptance: none)` only when the playbook says `acceptance: none`. Never skip a verifier because of the kind of diff (tests only, refactor, docs, comment).
