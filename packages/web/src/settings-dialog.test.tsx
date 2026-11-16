@@ -28,7 +28,7 @@ async function render({ project, legacy = false, sides, docker, failGet = false,
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
   const onAddons = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {}, commitMessageWarm: false }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {}, commitMessageWarm: false }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } };
   if (legacy) (delete (settings as Partial<Settings>).power, delete (settings as Partial<Settings>).app, delete (settings as Partial<Settings>).launcher);
   let refuse: string | undefined;
   const calls: Request[] = [];
@@ -110,7 +110,7 @@ it("shows the Orchestration section with labelled controls, loaded from the daem
   await pick("orchestration");
   expect(q("settings-dialog")?.textContent).toContain("Orchestration");
   expect(q("settings-orchestration-enabled")?.getAttribute("aria-checked")).toBe("false");
-  expect(q("settings-orchestration-coordinatorPermissions")?.getAttribute("aria-checked")).toBe("true");
+  expect(q("settings-orchestration-coordinatorPermissions")).toBeNull();
   expect((q("settings-orchestration-workerCap") as HTMLInputElement).value).toBe("4");
   expect(document.querySelector('label[for="settings-orchestration-workerCap"]')?.textContent).toBe("Maximum workers per tree");
   // Short accessible name; the hint is the description.
@@ -118,11 +118,9 @@ it("shows the Orchestration section with labelled controls, loaded from the daem
   expect(q("settings-orchestration-enabled")?.getAttribute("aria-label")).toBe("Enable orchestration");
   expect(desc("settings-orchestration-enabled")).toContain("start and supervise worker sessions");
   expect(desc("settings-orchestration-workerCap")).toContain("root coordinator's tree");
-  expect(desc("settings-orchestration-coordinatorPermissions")).toContain("read-only git commands (status, log, diff, show). Other commands and everything else wait for you");
   expect(q("settings-orchestration-workerNotifications")?.getAttribute("aria-label")).toBe("Notifications from workers");
   expect(q("settings-orchestration-workerNotifications")?.getAttribute("aria-checked")).toBe("true");
-  expect(desc("settings-orchestration-workerNotifications")).toContain("a request the coordinator escalates to you still notifies");
-  expect(desc("settings-orchestration-coordinatorPermissions")).toContain("Edits can change code that commands you approve later will run.");
+  expect(desc("settings-orchestration-workerNotifications")).toContain("A permission request or question of a worker always notifies you.");
 });
 
 it("Notifications from workers is on by default and its switch sends a patch of that field (GH-387)", async () => {

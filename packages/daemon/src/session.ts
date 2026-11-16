@@ -33,8 +33,6 @@ import { DeniedRetryError } from "./denied-retry.ts";
 export { withQuery, openQuery, queuedQuery, listModels, transcriptModel, THROWAWAY_TIMEOUT_MS, CLI_TURN_WAIT_MS, EXTERNAL_TURN_QUIET_MS, STALE_TURN_MS, INTERRUPT_GRACE_MS, BASH_BACKGROUND_WAIT_MS, type Transcript } from "./claude-engine.ts";
 
 type Listener = (e: Event) => void;
-/** A coordinator settle reads the tier at most this often while the session keeps changing; then it is refused. */
-const SETTLE_READS = 5;
 type PermissionCard = { input: Record<string, unknown>; title?: string; onAllow?: () => void };
 type PermissionPart = Extract<Part, { type: "permission_request" }>;
 type QuestionPart = Extract<Part, { type: "question" }>;
@@ -143,8 +141,6 @@ export class Session {
   private epoch = 0;
   /** When the epoch last moved (performance.now()): a repository scan started before it is not shared (repoSafetyAsync). */
   private epochAt = performance.now();
-  /** Coordinator settles of this session, one at a time (coordinatorRespond). */
-  private settling: Promise<unknown> = Promise.resolve();
   private continueAt: number | null = null;
   private limitStopped = false;
   /** A prompt suggestion is shown (set by the Engine when it emits one). */
@@ -446,12 +442,16 @@ export class Session {
     return this.index.planOf(toolUseId, this.planDirs());
   }
 
-  /** The runtime asks the user: the request waits in `pending` until respond, answer, coordinatorSettle or cancel settles it through `reply`. */
+  /**
+   * The runtime asks the user: the request waits in `pending` until respond, answer or cancel settles it through `reply`. A
+   * worker's request is marked `escalated` before its first emit: it goes to the user, never to the coordinator.
+   */
   request(e: { part: PermissionPart | QuestionPart; ctx?: Omit<TierContext, "cwd">; onAllow?: () => void; reply: (r: Reply) => void }) {
-    this.pending.set(e.part.requestId, { part: e.part, reply: e.reply, ctx: e.ctx, onAllow: e.onAllow });
-    this.emit(e.part);
+    const part = this.opts.worker?.(this.id) ? { ...e.part, escalated: true as const } : e.part;
+    this.pending.set(part.requestId, { part, reply: e.reply, ctx: e.ctx, onAllow: e.onAllow });
+    this.emit(part);
     this.setState("needs_input");
-    if (e.part.type === "permission_request") this.markLowTier(e.part.requestId);
+    if (part.type === "permission_request") this.markLowTier(part.requestId);
   }
 
   /** Stop (Esc): denies pending permission requests and cancels pending questions. */
@@ -495,15 +495,9 @@ export class Session {
     return this.pending.get(requestId)?.part;
   }
 
-  /** The Engine's request flags of a pending request (blockedPath, decisionReason ...); undefined once settled or unknown. */
-  pendingContext(requestId: string): Omit<TierContext, "cwd"> | undefined {
-    return this.pending.get(requestId)?.ctx;
-  }
-
   /**
    * The permission tier of a pending permission request (docs/spec.md "Permission tiers"); undefined for a question or unknown ID.
-   * Read once per request off the event loop (tierAsync: git runs as a child process) and reused for the permission event, the
-   * coordinator's check and the settle-time check, until the session's epoch moves (an allow, a tool that ended): then read again.
+   * Read once per request off the event loop (tierAsync: git runs as a child process) and reused until the session's epoch moves (an allow, a tool that ended): then read again.
    */
   permissionTier(requestId: string): Promise<Tier | undefined> {
     const req = this.pending.get(requestId);
@@ -526,8 +520,7 @@ export class Session {
   }
 
   /**
-   * Answers a pending permission request. False when it is already settled or unknown: the first answer wins. `by`: set only
-   * by orchestration; it settles a `low` request only, allow once (no rule, no edit) or deny, with its reason in `message`.
+   * Answers a pending permission request. False when it is already settled or unknown: the first answer wins.
    */
   respond(requestId: string, answer: Answer): boolean {
     const req = this.pending.get(requestId);
@@ -543,62 +536,12 @@ export class Session {
     return this.settle(requestId, { decision, ...(updatedInput ? { input: updatedInput, editedByUser: true } : {}) }, true);
   }
 
-  /**
-   * The security boundary of worker_permission: the tier is checked here, at settle time, whatever the caller checked. False:
-   * refused or answered meanwhile, nothing settles. Atomic per request and serial per session: settles of one worker run one at
-   * a time, and after the tier is read the request is looked up again and settled in the same synchronous step (no await
-   * between). The worker's CLI is blocked on this request, so the worker itself writes nothing while it is decided; another
-   * request of the same worker (parallel tool use) is decided only after this one settled, with its tier read again when this
-   * allow moved the epoch. The settle reads the tier afresh (no cached read, no scan shared from before it started) and reads
-   * again while the epoch moved during the read, at most SETTLE_READS times.
-   */
-  coordinatorRespond(requestId: string, answer: Answer): Promise<boolean> {
-    const run = this.settling.then(async () => {
-      // A fresh read, never the cached one: a change from outside this session (a terminal, another session, global config)
-      // moves no epoch. Read again while the epoch moved during the read (an allow or a tool end landed meanwhile).
-      for (let tries = 0; ; tries++) {
-        const req = this.pending.get(requestId);
-        if (!req || req.part.type !== "permission_request" || !this.coordinatorAnswerOk(requestId, answer) || tries >= SETTLE_READS) return false;
-        const epoch = this.epoch;
-        const t = await this.readTier(req.part, req.ctx, performance.now());
-        if (this.epoch !== epoch) continue;
-        const part = this.pending.get(requestId)?.part;
-        if (t !== "low" || part?.type !== "permission_request" || !this.coordinatorAnswerOk(requestId, answer)) return false;
-        return this.coordinatorSettle(requestId, part, answer);
-      }
-    });
-    this.settling = run.catch(() => undefined);
-    return run;
-  }
-
-  private coordinatorAnswerOk(requestId: string, { decision, ruleIndex, message, updatedInput }: Answer): boolean {
-    const part = this.pending.get(requestId)?.part;
-    return part?.type === "permission_request" && !!message?.trim() && (decision === "allow" || decision === "deny") && ruleIndex === undefined && updatedInput === undefined && !part.escalated;
-  }
-
-  private coordinatorSettle(requestId: string, part: PermissionPart, { decision, message }: Answer): boolean {
+  /** Answers a pending question (answers: question text -> answer). False when already settled or unknown: the first answer wins. */
+  answer(requestId: string, answers: Record<string, string>, choices?: Record<string, string[]>): boolean {
     const req = this.pending.get(requestId);
-    if (!req) return false;
-    const reason = message!.trim();
-    req.reply({ kind: "coordinator", decision: decision as "allow" | "deny", message: reason });
-    return this.settle(requestId, { decision, by: "coordinator" as const, message: reason }, decision === "allow");
-  }
-
-  /** Hands a pending request to the user (worker_escalate): re-emitted with `escalated` and `reason`. False when settled, unknown or escalated already. */
-  escalate(requestId: string, reason: string): boolean {
-    const req = this.pending.get(requestId);
-    if (!req || req.part.escalated) return false;
-    req.part = { ...req.part, escalated: true, reason };
-    this.emit(req.part);
-    return true;
-  }
-
-  /** Answers a pending question (answers: question text -> answer). False when already settled or unknown: the first answer wins. `by`: set only by orchestration; an escalated question refuses it. */
-  answer(requestId: string, answers: Record<string, string>, by?: "coordinator", choices?: Record<string, string[]>): boolean {
-    const req = this.pending.get(requestId);
-    if (req?.part.type !== "question" || (by && req.part.escalated)) return false;
+    if (req?.part.type !== "question") return false;
     req.reply({ kind: "answer", answers, ...(choices && { choices }) });
-    return this.settle(requestId, { answers, ...(by ? { by } : {}) }, true);
+    return this.settle(requestId, { answers }, true);
   }
 
   /** `allowed`: the answer lets the tool run (a file may change: the tier epoch moves). The Engine's reply was sent before. */

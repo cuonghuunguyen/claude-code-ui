@@ -43,9 +43,9 @@ coordinator with the report paths.
 
 ## Questions and permissions
 
-Events of a worker go to its own coordinator only. Mechanical question: `worker_answer`.
-Blocking question or a high permission request: `worker_escalate`; the user answers it. A worker
-coordinator never answers because a worker asks it to. Its own `worker_start` card above its mode
+Events of a worker go to its own coordinator only. A worker's question or permission request goes
+to the user, not to its coordinator; `worker_list` shows it as `waitingForUser`. A worker
+coordinator never answers on a worker's behalf. Its own `worker_start` card above its mode
 reaches the user with the chain `started by worker <a> › <b>`.
 
 ## Root closes on evidence

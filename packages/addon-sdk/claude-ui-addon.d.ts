@@ -12,13 +12,13 @@ export type Part = { parentId?: string } & (
   | { type: "assistant_text"; id: string; text: string; streaming: boolean }
   | { type: "thinking"; id: string; text: string; streaming: boolean }
   /** `id` = `toolUseId`; sent again on every status change. */
-  | { type: "tool_call"; id: string; toolUseId: string; tool: string; input: unknown; status: ToolStatus; editedByUser?: boolean; coordinator?: { decision: "allow" | "deny"; reason: string }; shell?: "foreground" | "background"; startedAt?: number; endedAt?: number; exitCode?: number }
+  | { type: "tool_call"; id: string; toolUseId: string; tool: string; input: unknown; status: ToolStatus; editedByUser?: boolean; shell?: "foreground" | "background"; startedAt?: number; endedAt?: number; exitCode?: number }
   /** `id` = `<toolUseId>:result`. */
   | { type: "tool_result"; id: string; toolUseId: string; output: unknown; isError: boolean; original?: string | null }
   /** A shell command the user ran with `!`. */
   | { type: "bash"; id: string; command: string; stdout: string; stderr: string; status: "running" | "done" | "error" | "stopped"; exitCode?: number; shell?: "background" }
-  | { type: "permission_request"; id: string; requestId: string; toolUseId: string; tool: string; input: unknown; plan?: string; title?: string; suggestions: unknown[]; settled: boolean; decision?: "allow" | "allow_always" | "deny" | "cancelled"; message?: string; editedByUser?: boolean; by?: "coordinator"; escalated?: boolean; reason?: string; at?: number; tier?: "low" }
-  | { type: "question"; id: string; requestId: string; toolUseId: string; questions: Question[]; settled: boolean; answers?: Record<string, string>; by?: "coordinator"; escalated?: boolean; reason?: string; at?: number }
+  | { type: "permission_request"; id: string; requestId: string; toolUseId: string; tool: string; input: unknown; plan?: string; title?: string; suggestions: unknown[]; settled: boolean; decision?: "allow" | "allow_always" | "deny" | "cancelled"; message?: string; editedByUser?: boolean; escalated?: boolean; at?: number; tier?: "low" }
+  | { type: "question"; id: string; requestId: string; toolUseId: string; questions: Question[]; settled: boolean; answers?: Record<string, string>; escalated?: boolean; at?: number }
   | { type: "session_state"; id: string; state: SessionState; working?: true; keepWarm?: true }
   | { type: "session_model"; id: string; model: string }
   | { type: "session_permission_mode"; id: string; mode: string }

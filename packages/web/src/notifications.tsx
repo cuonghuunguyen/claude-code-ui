@@ -14,8 +14,6 @@ import { useT, type Key } from "./i18n.ts";
 const FINISHED_MS = 8000;
 /** The daemon's FINISH_DELAY_MS: running, idle, running again inside a tool loop never shows "finished". */
 export const FINISH_DELAY_MS = 1500;
-/** A worker's request that a coordinator may answer shows only if it is still waiting after this. */
-export const WORKER_DELAY_MS = 3000;
 const MAX_CARDS = 3;
 
 export type CardItem = { card: Card; d: Described; title: string; place: string; cwd?: string };
@@ -29,7 +27,7 @@ type Gate = {
   shown: (sessionId: string) => boolean;
   list: SessionListItem[];
   views: Record<string, SessionView | undefined>;
-  /** Settings › Orchestration › Notifications from workers: false = no card for a worker unless its request is escalated (GH-387). */
+  /** Settings › Orchestration › Notifications from workers: false = no finished or error card for a worker; its request (always escalated) still gets one (GH-387, GH-835). */
   workers: boolean;
 };
 
@@ -87,14 +85,9 @@ export function useNotifications(gate: Gate, onCard?: (card: Card) => void) {
         if (!allowed(s.sessionId, true, s.escalated) || !part || (part.type !== "permission_request" && part.type !== "question") || part.settled) return;
         add({ sessionId: s.sessionId, kind: s.kind, requestId: s.requestId, since: part.at ?? Date.now() });
       };
-      const worker = !!latest.current.list.find((x) => x.id === s.sessionId)?.coordinatorId;
-      // A coordinator often answers a worker's low-tier request within seconds: show it only if it still waits. An escalated one waits for the user for certain.
-      if (worker && !s.escalated) later(`req:${s.requestId}`, WORKER_DELAY_MS, () => show());
-      else {
-        cancel(`req:${s.requestId}`);
-        // The part arrives with this render; the view may not hold it yet when the event is handled.
-        later(`req:${s.requestId}`, 0, () => show());
-      }
+      // A worker's request is escalated: it waits for the user, so no delay. The part arrives with this render; the view may not hold it yet when the event is handled.
+      cancel(`req:${s.requestId}`);
+      later(`req:${s.requestId}`, 0, () => show());
       return;
     }
     // finish: the turn ended; it counts if the session is still idle (or in error) with nothing waiting after the delay.
@@ -298,7 +291,7 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
         const kind = KIND[d.kind];
         const answer = inlineActions(d) === "answer";
         const busy = !!sending[card.sessionId];
-        const lowEdit = d.kind === "permission" && d.tier === "low" && !answer && !d.escalated;
+        const lowEdit = d.kind === "permission" && d.tier === "low" && !answer;
         const named = d.tool ? `${d.tool}${d.body ? ` ${d.body}` : ""}` : d.summary;
         return (
           <article
@@ -347,7 +340,6 @@ export function NotificationStack({ items, now, focusTick, hidden, onRespond, on
                 d.body
               )}
             </p>
-            {d.escalated && d.reason && <p className="line-clamp-2 text-[11px] text-muted-foreground leading-4">{tr("notifications.escalatedBy", { reason: d.reason })}</p>}
             {d.extra > 0 && <p className="text-[11px] text-muted-foreground leading-4">{tr("notifications.more", { count: d.extra })}</p>}
             {lowEdit && <p className="text-[11px] text-muted-foreground leading-4">{tr("notifications.reviewInFocus")}</p>}
             {failed[card.sessionId] && (

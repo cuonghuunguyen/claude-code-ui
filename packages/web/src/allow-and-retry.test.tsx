@@ -31,8 +31,6 @@ it("shows Allow and retry only on a classifier-denied call, with a handler", asy
   expect(button()?.textContent).toBe("Allow and retry");
   await render(call({ denial: undefined }), h);
   expect(button()).toBeNull();
-  await render(call({ denial: undefined, coordinator: { decision: "deny", reason: "no" } }), h);
-  expect(button()).toBeNull();
   await render(call({ status: "running" }), h);
   expect(button()).toBeNull();
   await render(call({ status: "error" }), h);

@@ -226,7 +226,7 @@ A Session forked from an owner session with `/btw` (or palette Ask aside), shown
 _Avoid_: side question (Claude Code's tool-less `/btw`), side chat, branch, fork session. Not a Subagent run, not a Worker.
 
 **Escalation**:
-A coordinator hands a worker's pending question or permission request to the user (`worker_escalate`); only the user answers it then. The coordinator can still stop or close the worker, which cancels it.
+A worker's pending question or permission request goes straight to the user: the daemon marks it `escalated` when it arrives, and the coordinator gets no event and has no tool to answer it (`worker_list` shows it as `waitingForUser`). Only the user answers it. The coordinator can still stop or close the worker, which cancels it.
 
 **Focus**:
 The app-level page (sidebar row, pinned tab, `#focus`) that lists every pending permission request and question, and every session that needs a look (error, usage limit, quiet, finished unread), across all projects; answers requests in place.
@@ -302,7 +302,7 @@ A browser-wide timeline setting (Settings > General > Timeline, palette, Ctrl+Al
 _Avoid_: compact mode
 
 **Permission tier**:
-`low` or `high`, assigned by the daemon to a permission request (`risk-tier.ts`): a worker's for its coordinator, any session's for the Focus page (the tier at arrival, taken back if a later read says otherwise). A coordinator may settle a `low` one with `worker_permission` (allow once or deny); a `high` one is the user's. Unknown = `high`. Low covers reads in the worker folder and its repository's agent docs and main checkout, and, in a **plain repository** (nothing a worker can write decides what git runs: no hooks or programs in the cwd, no includes into it, no submodules or nested repositories), file edits in the worker folder and read-only git there.
+`low` or `high`, assigned by the daemon to a permission request (`risk-tier.ts`): for the Focus page (Always allow) and the notification card (inline Allow once and Deny), also for a worker's request (the tier at arrival, taken back if a later read says otherwise). It is no coordinator boundary: no coordinator answers a request. Unknown = `high`. Low covers reads in the worker folder and its repository's agent docs and main checkout, and, in a **plain repository** (nothing a worker can write decides what git runs: no hooks or programs in the cwd, no includes into it, no submodules or nested repositories), file edits in the worker folder and read-only git there.
 _Avoid_: risk level, trust level
 
 **Config scope**:

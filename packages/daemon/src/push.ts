@@ -97,10 +97,10 @@ export function createNotifier(opts: {
         t.request = part.settled ? undefined : part;
         // A grouped worker's notification is replaced through its group (leave), not through the session tag.
         if (part.settled && leave(id, t)) t.escalated.delete(part.requestId);
-        // One push per request (escalate refuses a second call); only a focused tab of this (worker) session suppresses it.
+        // One push per request (a worker's request arrives escalated); only a focused tab of this (worker) session suppresses it.
         // Only a push that went out is replaced later: a replacement for a notification never shown would show itself.
         if (!part.settled && part.escalated && !t.escalated.has(part.requestId)) {
-          if (fireGrouped(id, t, `Needs input · Escalated by coordinator: ${clip(part.reason ?? "", 200)} · ${describe(part)}`, true)) t.escalated.add(part.requestId);
+          if (fireGrouped(id, t, `Needs input · ${describe(part)}`, true)) t.escalated.add(part.requestId);
         } else if (part.settled && t.escalated.delete(part.requestId))
           opts.replace?.(id, `No longer needs input · ${part.type === "question" ? (part.answers ? "answered" : "cancelled") : (part.decision ?? "settled")} · ${clip(describe(part), 200)}`);
       }

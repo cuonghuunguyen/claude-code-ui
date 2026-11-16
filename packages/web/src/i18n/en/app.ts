@@ -491,7 +491,6 @@ export default {
   "app.focus.answer": "Answer: {question}",
   "app.focus.decide": "Decide: {summary}",
   "app.focus.allowOrDeny": "Allow or deny {summary}",
-  "app.focus.coordinator": "Coordinator: {reason}",
   "app.focus.reviewResult": "Review the result",
   "app.focus.checkError": "Check the error: {error}",
   "app.focus.limitContinues": "Wait for the usage limit to reset: continues at {time}",

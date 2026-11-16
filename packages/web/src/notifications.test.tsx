@@ -106,12 +106,12 @@ it("a tier arriving later adds Allow once and Deny in place after the focused bu
   expect(button("Open in Focus")).toBe(open);
 });
 
-it("a question has Open in Focus and Open session; escalated and extra requests show their note", async () => {
-  await show([item("d", "question", { body: "Keep the old route?", summary: "Keep the old route?", escalated: true, reason: "outside the folder", extra: 1 })]);
+it("a question has Open in Focus and Open session; an escalated card and extra requests show their note", async () => {
+  await show([item("d", "question", { body: "Keep the old route?", summary: "Keep the old route?", escalated: true, extra: 1 })]);
   const card = q("article");
   expect(card.textContent).toContain("Question");
   expect(card.textContent).toContain("Keep the old route?");
-  expect(card.textContent).toContain("Escalated by coordinator: outside the folder");
+  expect(card.textContent).toContain("Question · escalated");
   expect(card.textContent).toContain("+1 more request in this session");
   expect(button("Allow once")).toBeUndefined();
 });

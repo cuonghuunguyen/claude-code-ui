@@ -26,12 +26,12 @@ it("a question is a question signal; a settled request is none", () => {
   expect(t.observe(ev("b", perm("r2", { settled: true })), true)).toEqual([]);
 });
 
-it("a live request is one signal, its tier event is not another; a later coordinator escalation is a second signal, flagged escalated", () => {
+it("a live request is one signal, its tier event is not another; a later escalation is a second signal, flagged escalated", () => {
   const t = createTracker();
   expect(t.observe(ev("w", perm("r1")), true)).toEqual([{ type: "request", sessionId: "w", requestId: "r1", kind: "permission", escalated: false }]);
   expect(t.observe(ev("w", perm("r1", { tier: "low" })), true)).toEqual([]);
-  expect(t.observe(ev("w", perm("r1", { escalated: true, reason: "outside folder" })), true)).toEqual([{ type: "request", sessionId: "w", requestId: "r1", kind: "permission", escalated: true }]);
-  expect(t.observe(ev("w", perm("r1", { escalated: true, reason: "outside folder", tier: "low" })), true)).toEqual([]);
+  expect(t.observe(ev("w", perm("r1", { escalated: true })), true)).toEqual([{ type: "request", sessionId: "w", requestId: "r1", kind: "permission", escalated: true }]);
+  expect(t.observe(ev("w", perm("r1", { escalated: true, tier: "low" })), true)).toEqual([]);
 });
 
 it("finished: idle after running is a finish signal with the last non-empty line of the last answer", () => {
@@ -121,9 +121,9 @@ it("reconcile keeps finished and error cards while the session is listed and not
 
 // What a card shows, derived from the live view, so a tier arriving later changes it in place.
 it("describeCard (permission): summary with the tool, tier, escalation and the other waiting requests", () => {
-  const v = view([perm("r1", { escalated: true, reason: "outside the folder" }), ask("q2")]);
+  const v = view([perm("r1", { escalated: true }), ask("q2")]);
   const d = describeCard(card(), v, "/p");
-  expect(d).toMatchObject({ tool: "Read", body: "src/a.ts", tier: undefined, escalated: true, reason: "outside the folder", extra: 1 });
+  expect(d).toMatchObject({ tool: "Read", body: "src/a.ts", tier: undefined, escalated: true, extra: 1 });
   expect(describeCard(card(), view([perm("r1", { tier: "low" })]), "/p")).toMatchObject({ tier: "low", extra: 0 });
 });
 
@@ -132,13 +132,12 @@ it("describeCard (question): the first question's text; (finished/error): the ca
   expect(describeCard(card({ kind: "finished", requestId: undefined, text: "All 12 tests pass." }), view([]), "/p").body).toBe("All 12 tests pass.");
 });
 
-it("inlineActions: Allow and Deny only for a low-tier tool that changes nothing; an edit, a high tier, a question and an escalation open Focus", () => {
+it("inlineActions: Allow and Deny only for a low-tier tool that changes nothing; an edit, a high tier, a question and a high tier open Focus", () => {
   expect(inlineActions({ kind: "permission", tier: "low", tool: "Read" })).toBe("answer");
   expect(inlineActions({ kind: "permission", tier: "low", tool: "Bash" })).toBe("answer");
   expect(inlineActions({ kind: "permission", tier: "low", tool: "Edit" })).toBe("open");
   expect(inlineActions({ kind: "permission", tier: "low", tool: "Write" })).toBe("open");
   expect(inlineActions({ kind: "permission", tier: undefined, tool: "Read" })).toBe("open");
-  expect(inlineActions({ kind: "permission", tier: "low", tool: "Read", escalated: true })).toBe("open");
   expect(inlineActions({ kind: "question", tier: undefined, tool: undefined })).toBe("open");
   expect(inlineActions({ kind: "finished", tier: undefined, tool: undefined })).toBe("open");
 });

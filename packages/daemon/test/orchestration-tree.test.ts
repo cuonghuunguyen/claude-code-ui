@@ -3,9 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { createOrchestration } from "../src/orchestration.ts";
 import { createSessionSettings } from "../src/session-settings.ts";
 
-type Fake = { id: string; cli: boolean; state: string; mode: string; works: boolean; pending: Set<string> };
+type Fake = { id: string; cli: boolean; state: string; mode: string; works: boolean };
 function fakeSession(id: string, live = true): any {
-  const f: Fake = { id, cli: live, state: "idle", mode: "default", works: false, pending: new Set() };
+  const f: Fake = { id, cli: live, state: "idle", mode: "default", works: false };
   return Object.assign(f, {
     cwd: "/tmp",
     isLive: () => true,
@@ -13,9 +13,6 @@ function fakeSession(id: string, live = true): any {
     activity: () => ({ received: 0, at: 0, progress: 0 }),
     info: () => ({ state: f.state, permissionMode: f.mode }),
     working: () => f.works,
-    permissionTier: async () => "low",
-    pendingRequest: (r: string) => (f.pending.has(r) ? { type: "permission_request", escalated: false } : undefined),
-    pendingContext: () => undefined,
     subscribe: () => () => {},
     interrupt: async () => {},
     restartQuery: () => {
@@ -25,7 +22,7 @@ function fakeSession(id: string, live = true): any {
   });
 }
 
-type Cfg = { enabled: boolean; workerCap: number; workerCapTotal: number; maxDepth: number; maxChildren: number; coordinatorPermissions: boolean; workerMode: string; workerNotifications: boolean; closeFinished: boolean };
+type Cfg = { enabled: boolean; workerCap: number; workerCapTotal: number; maxDepth: number; maxChildren: number; workerMode: string; workerNotifications: boolean; closeFinished: boolean };
 
 function setup(links = createSessionSettings(), cfg: Partial<Cfg> = {}) {
   const sessions = new Map<string, any>();
@@ -33,7 +30,7 @@ function setup(links = createSessionSettings(), cfg: Partial<Cfg> = {}) {
   const created: { cwd: string; s: any; init: any }[] = [];
   const agentCalls: string[] = [];
   const agentBox: { list: string[]; fail?: string } = { list: ["claude", "Explore", "orchestration:implementer", "orchestration:reviewer", "a:dup", "b:dup", "local-x"] };
-  const settings: Cfg = { enabled: true, workerCap: 10, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true, closeFinished: false, ...cfg };
+  const settings: Cfg = { enabled: true, workerCap: 10, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, workerMode: "coordinator", workerNotifications: true, closeFinished: false, ...cfg };
   const removed: string[] = [];
   const o = createOrchestration({
     links,
@@ -497,23 +494,13 @@ describe("worker tree: list and read", () => {
   it("the other worker tools refuse a path", async () => {
     const t = setup();
     tree(t);
-    const args = { name: "impl/rev", text: "x", id: "r", allow: true, reason: "r", answer: "a" };
-    for (const tool of ["worker_send", "worker_answer", "worker_permission", "worker_escalate", "worker_stop", "worker_close", "worker_remove"]) {
+    const args = { name: "impl/rev", text: "x" };
+    for (const tool of ["worker_send", "worker_stop", "worker_close", "worker_remove"]) {
       const r = await call(t.o, "C", tool, args);
       expect(r.error, tool).toMatch(/Invalid input/);
     }
   });
 
-  it("a worker's worker_start reaches its coordinator as a high permission event", async () => {
-    const t = setup();
-    const [, W1] = tree(t, 1);
-    W1.pending.add("q1");
-    W1.permissionTier = async () => "high";
-    t.o.observe(W1, { part: { type: "permission_request", id: "p", requestId: "q1", tool: "mcp__orchestration__worker_start", input: { name: "x" }, settled: false } } as any);
-    await tick();
-    const ev = (await call(t.o, "C", "worker_wait", { timeoutMs: 0 })).events[0];
-    expect(ev).toMatchObject({ name: "impl", type: "permission", tier: "high", mayAnswer: false });
-  });
 });
 
 describe("worker tree: limits are refused before the card", () => {

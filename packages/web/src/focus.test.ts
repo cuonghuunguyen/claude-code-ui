@@ -95,10 +95,11 @@ it("attentionRows: kinds come in the fixed order escalated, permission, question
   expect(rows.map((r) => r.kind)).toEqual([...KIND_ORDER]);
 });
 
-it("escalated: Decide line, coordinator reason as line 3, action answer", () => {
+it("escalated: Decide line, no detail line, action answer", () => {
   const list = [item("a")];
-  const [r] = attentionRows(input(list, { a: view([perm("e1", { escalated: true, reason: "risky", at: 1 })]) }));
-  expect(r).toMatchObject({ id: "e1", kind: "escalated", reason: "Decide: Bash · npm run test -- auth", detail: "Coordinator: risky", action: "answer" });
+  const [r] = attentionRows(input(list, { a: view([perm("e1", { escalated: true, at: 1 })]) }));
+  expect(r).toMatchObject({ id: "e1", kind: "escalated", reason: "Decide: Bash · npm run test -- auth", action: "answer" });
+  expect(r).not.toHaveProperty("detail");
   const [q] = attentionRows(input(list, { a: view([ask("e2", { escalated: true, at: 1 })]) }));
   expect(q).toMatchObject({ kind: "escalated", reason: "Answer: Keep the old route?" });
 });

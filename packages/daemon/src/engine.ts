@@ -20,7 +20,6 @@ export type Reply =
   | { kind: "allow"; decision: "allow" | "allow_always"; ruleIndex?: number; updatedInput?: Record<string, unknown> }
   | { kind: "deny"; message?: string } // user "No"; no message stops the turn
   | { kind: "interrupt" } // Stop or Esc
-  | { kind: "coordinator"; decision: "allow" | "deny"; message: string }
   | { kind: "answer"; answers: Record<string, string>; choices?: Record<string, string[]> }
   | { kind: "cancel"; message: string };
 

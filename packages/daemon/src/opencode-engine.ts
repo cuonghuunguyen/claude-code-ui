@@ -3,7 +3,6 @@
 import { randomUUID } from "node:crypto";
 import { permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT, ASIDE_NO_WORKERS } from "./aside.ts";
-import { COORDINATOR_DENIED } from "./claude-engine.ts";
 import { DeniedRetryError } from "./denied-retry.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 import { MAX_WAIT_MS } from "./orchestration.ts";
@@ -177,7 +176,7 @@ export const openCodeModels = (engine: OpenCodeEngine, cwd?: string): Promise<Mo
 
 /**
  * A multi-select answer is the chosen labels joined with ", ": cut it at the option labels (longest first), so a label holding ", " stays whole; the rest is the user's own text.
- * shortcut: only for answers without `choices` (a coordinator's `worker_answer`); the web sends `choices`. Free text that starts with a label and ", ", or equals a label, is still read as that label.
+ * shortcut: only for answers without `choices` (a client that sends none); the web sends `choices`. Free text that starts with a label and ", ", or equals a label, is still read as that label.
  */
 export function splitLabels(value: string, labels: string[]): string[] {
   const out: string[] = [];
@@ -1123,13 +1122,10 @@ class OpenCodeSession implements EngineSession {
         this.post(path, { reply: "once" });
         return void this.setPermissionMode("acceptEdits").catch((err) => this.occurrence("mode_failed", `Could not switch the mode: ${(err as Error).message}`));
       case "deny":
-      case "interrupt":
-      case "coordinator": {
-        const message = r.kind === "deny" ? r.message : r.kind === "coordinator" && r.decision === "deny" ? COORDINATOR_DENIED + r.message : undefined;
-        if (r.kind === "coordinator" && r.decision === "allow") return this.post(path, { reply: "once" });
+      case "interrupt": {
         const card = denied();
         if (card) this.session.emit(card);
-        return this.post(path, { reply: "reject", ...(message && { message }) });
+        return this.post(path, { reply: "reject", ...(r.kind === "deny" && r.message && { message: r.message }) });
       }
       case "cancel":
         if (r.message !== ANSWERED) this.post(path, { reply: "reject" });

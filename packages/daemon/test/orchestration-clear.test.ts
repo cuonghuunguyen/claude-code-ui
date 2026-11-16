@@ -5,18 +5,15 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createOrchestration } from "../src/orchestration.ts";
 import { createSessionSettings } from "../src/session-settings.ts";
 
-type Fake = { id: string; cli: boolean; tier: () => Promise<string>; pending: Set<string> };
+type Fake = { id: string; cli: boolean };
 function fakeSession(id: string, live = true): any {
-  const f: Fake = { id, cli: live, tier: async () => "low", pending: new Set() };
+  const f: Fake = { id, cli: live };
   return Object.assign(f, {
     isLive: () => true,
     live: () => f.cli,
     activity: () => ({ received: 0, at: 0, progress: 0 }),
     info: () => ({ state: "idle", permissionMode: "default" }),
     working: () => false,
-    permissionTier: () => f.tier(),
-    pendingRequest: (r: string) => (f.pending.has(r) ? { type: "permission_request", escalated: false } : undefined),
-    pendingContext: () => undefined,
     subscribe: () => () => {},
   });
 }
@@ -29,7 +26,7 @@ function setup(links = createSessionSettings()) {
   let worktreeGate: (() => void) | undefined;
   const o = createOrchestration({
     links,
-    settings: () => ({ enabled: true, workerCap: 5, coordinatorPermissions: true, workerMode: "coordinator", workerNotifications: true }) as any,
+    settings: () => ({ enabled: true, workerCap: 5, workerMode: "coordinator", workerNotifications: true }) as any,
     sessions,
     find: async (id) => sessions.get(id),
     create: (cwd) => {
@@ -92,26 +89,6 @@ describe("orchestration /clear hand-over (GH-334 review)", () => {
     await tick();
     // Expected: the new conversation is told of the queued events (spec: "a queued event gets its notice at once").
     expect(prompts.filter((p) => p[0] === "H").length).toBeGreaterThan(0);
-  });
-
-  it("a permission event whose tier read spans the /clear goes to the new session, not the old one", async () => {
-    const { o, sessions, prompts, links } = setup();
-    const C = fakeSession("C"), H = fakeSession("H"), W = fakeSession("W");
-    [C, H, W].forEach((s) => sessions.set(s.id, s));
-    o.mcpServers("C");
-    links.set("W", { coordinatorId: "C", name: "w" });
-    let release!: (t: string) => void;
-    W.tier = () => new Promise<string>((r) => (release = r));
-    W.pending.add("req1");
-    o.observe(W, { part: { type: "permission_request", id: "p", requestId: "req1", tool: "Bash", input: {}, settled: false } } as any);
-    await tick();
-    C.cli = false;
-    o.handOver("C", "H");
-    release("low");
-    await tick();
-    // Old session C is idle, live state, no query: a notice to it resumes the old transcript (the GH-334 symptom).
-    expect(prompts.filter((p) => p[0] === "C")).toEqual([]);
-    expect(prompts.filter((p) => p[0] === "H").length).toBe(1);
   });
 
   it("a sessions.json write failure during handOver does not throw into the drive loop", () => {
@@ -211,26 +188,6 @@ describe("orchestration /clear hand-over (GH-334 review)", () => {
     const r = JSON.parse(((await c.callTool({ name: "worker_wait", arguments: { timeoutMs: 0 } })) as any).content[0].text);
     expect(r.events).toEqual([]);
     await c.close();
-  });
-
-  it("coordinator and worker both cleared during a worker's tier read: the event goes to the coordinator's heir, not the old coordinator", async () => {
-    const { o, sessions, prompts, links } = setup();
-    const C = fakeSession("C"), H = fakeSession("H"), W = fakeSession("W"), W2 = fakeSession("W2");
-    [C, H, W, W2].forEach((s) => sessions.set(s.id, s));
-    o.mcpServers("C");
-    links.set("W", { coordinatorId: "C", name: "w" });
-    let release!: (t: string) => void;
-    W.tier = () => new Promise<string>((r) => (release = r));
-    W.pending.add("r1");
-    o.observe(W, perm("r1"));
-    await tick();
-    C.cli = false;
-    o.handOver("C", "H");
-    o.handOver("W", "W2");
-    release("low");
-    await tick();
-    expect(prompts.filter((p) => p[0] === "C")).toEqual([]);
-    expect(prompts.filter((p) => p[0] === "H").length).toBe(1);
   });
 
   it("the old coordinator resumed with its own server after /clear: its card approves its own call, not the heir's", async () => {

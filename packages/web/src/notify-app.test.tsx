@@ -246,7 +246,7 @@ it("GH-356 a session shown in the other split makes no card", async () => {
 
 // GH-387: Settings › Orchestration › Notifications from workers.
 const W = "33333333-2222-3333-4444-555555555555";
-const orch = (workerNotifications: boolean) => ({ orchestration: { enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, coordinatorPermissions: false, workerMode: "coordinator", workerNotifications, closeFinished: true } });
+const orch = (workerNotifications: boolean) => ({ orchestration: { enabled: true, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications, closeFinished: true } });
 const withWorker = async (workerNotifications: boolean, run: () => Promise<void>) => {
   sessions.push({ ...mk(W, "Worker one"), coordinatorId: A } as SessionListItem);
   replies["settings.get"] = { settings: orch(workerNotifications) };
@@ -265,7 +265,7 @@ const idleTurn = async (id: string) => {
   await act(async () => void (await new Promise((r) => setTimeout(r, 1600))));
 };
 
-it("Notifications from workers off: a worker's finished turn and request make no card; an escalated request does (GH-387)", async () => {
+it("Notifications from workers off: a worker's finished turn makes no card; its request (escalated) does (GH-387, GH-835)", async () => {
   await withWorker(false, async () => {
     await mount(`#${A}`);
     await idleTurn(W);
@@ -273,12 +273,22 @@ it("Notifications from workers off: a worker's finished turn and request make no
     await live(W, perm("r1"));
     await act(async () => void (await new Promise((r) => setTimeout(r, 3300))));
     expect(cards()).toHaveLength(0);
-    await live(W, perm("r2", { escalated: true, reason: "blocked" }));
+    await live(W, perm("r2", { escalated: true }));
     await settle();
     expect(cards()).toHaveLength(1);
     expect(cards()[0]!.textContent).toContain("Worker one");
     // A plain session still gets its card.
     await idleTurn(B);
     expect(cards().some((c) => c.textContent?.includes("Fix login redirect"))).toBe(true);
+  });
+}, 15000);
+
+it("a worker's request shows its card at once, with Notifications from workers on, without the old wait for a coordinator (GH-835)", async () => {
+  await withWorker(true, async () => {
+    await mount(`#${A}`);
+    await live(W, perm("r3", { escalated: true }));
+    await settle();
+    expect(cards()).toHaveLength(1);
+    expect(cards()[0]!.textContent).toContain("Worker one");
   });
 }, 15000);

@@ -57,9 +57,6 @@ export const BASH_BACKGROUND_WAIT_MS = 30 * 60_000;
 // Claude Code's wording, so Claude reads the feedback as the user's instruction rather than as tool output.
 const REJECTED = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file).";
 
-// Never the user's words: coordinator text is not user intent (docs/spec.md "Permission tiers").
-export const COORDINATOR_DENIED = "The coordinator session denied this tool use; it was not run. Its reason:\n";
-
 // Claude Code's sources: "local" (.claude/settings.local.json) holds the rules "don't ask again" saves.
 const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 
@@ -494,7 +491,7 @@ export class ClaudeSession implements EngineSession {
    * `bridge`: a step of an inline run asks through the same flow; its call lives in the run's own adapter and its parts get the run's parentId.
    */
   private async askPermission(tool: string, input: Record<string, unknown>, opts: Parameters<CanUseTool>[2], bridge?: InlineBridge): Promise<PermissionResult> {
-    const { signal, toolUseID, title: sdkTitle, mcpServer, blockedPath, defaultToNo, decisionReason } = opts;
+    const { signal, toolUseID, title: sdkTitle, mcpServer, blockedPath, defaultToNo } = opts;
     let suggestions = opts.suggestions ?? [];
     // Forwarded by sdk.mjs (0.3.285) but not declared in its CanUseTool type.
     const { requiresUserInteraction } = opts as { requiresUserInteraction?: boolean };
@@ -528,7 +525,7 @@ export class ClaudeSession implements EngineSession {
               settled: false,
               at: Date.now(),
             };
-      this.session.request({ part, ctx: { blockedPath, defaultToNo, requiresUserInteraction, decisionReason }, onAllow: card?.onAllow, reply: (r) => this.reply(part, resolve, r, bridge) });
+      this.session.request({ part, ctx: { blockedPath, defaultToNo, requiresUserInteraction }, onAllow: card?.onAllow, reply: (r) => this.reply(part, resolve, r, bridge) });
       signal.addEventListener("abort", () => this.session.cancel(requestId, "Request cancelled"), { once: true });
     });
   }
@@ -570,12 +567,6 @@ export class ClaudeSession implements EngineSession {
         if (part.type === "question") return resolve({ behavior: "deny", message: REJECTED });
         denyCard();
         return resolve({ behavior: "deny", message: REJECTED, interrupt: true });
-      case "coordinator":
-        for (const p of adapter.byCoordinator(toolUseId, r.decision, r.message)) emit(p);
-        if (r.decision === "allow") return resolve({ behavior: "allow", updatedInput: (part as { input: unknown }).input as Record<string, unknown> });
-        denyCard();
-        // No interrupt: the worker goes on with the reason, like the user's "No" with feedback.
-        return resolve({ behavior: "deny", message: COORDINATOR_DENIED + r.message });
       case "answer":
         // The SDK docs: updatedInput must carry the original questions next to the answers.
         return resolve({ behavior: "allow", updatedInput: { questions: (part as { questions: unknown }).questions, answers: r.answers } });
