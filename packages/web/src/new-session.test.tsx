@@ -3,6 +3,7 @@ import { act, useState, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ModelInfo } from "@claude-ui/protocol";
+import { FIRST_SEND_TIMEOUT_MS } from "./first-send.ts";
 import { draftStartMode, NewSession, NewSessionTab, startSession, type StartOptions } from "./App.tsx";
 
 Element.prototype.scrollIntoView ??= () => {};
@@ -94,6 +95,36 @@ it("a first prompt that fails after session.create rejects (the draft stays); th
   expect(created.current).toBeUndefined();
 });
 
+it("startSession sends every first-send request with the first-send timeout", async () => {
+  const seen: { type: string; timeoutMs?: number }[] = [];
+  const request = vi.fn(async (msg: { type: string }, o?: { timeoutMs?: number }) => (seen.push({ type: msg.type, timeoutMs: o?.timeoutMs }), { session: { id: "s1", cwd: "/p/a", model: "default", permissionMode: "default", effort: "default" } }));
+  await startSession(request as never, {}, "/p/a", { model: "default", mode: "plan", effort: "high" }, { text: "hi", images: [] });
+  expect(seen.map((r) => r.type)).toEqual(["session.create", "session.setPermissionMode", "session.setEffort", "session.prompt"]);
+  expect(seen.every((r) => r.timeoutMs === FIRST_SEND_TIMEOUT_MS)).toBe(true);
+});
+
+it("a prompt that timed out keeps the session for the retry; the retry sends the same once key and no session.create", async () => {
+  const sent: { type: string; once?: string }[] = [];
+  let fail = true;
+  const request = vi.fn(async (msg: { type: string; once?: string }) => {
+    sent.push(msg);
+    if (msg.type === "session.prompt" && fail) throw new Error("timed out");
+    return { session: { id: "s1", cwd: "/p/a", model: "default", permissionMode: "default", effort: "default" } };
+  });
+  const created: { current?: never; once?: string; sent?: boolean } = {};
+  const opts = { model: "default", mode: "default", effort: "default" } as const;
+  await expect(startSession(request as never, created, "/p/a", opts, { text: "hi", images: [] })).rejects.toThrow("timed out");
+  expect(created.sent).toBe(true);
+  fail = false;
+  await startSession(request as never, created, "/p/a", opts, { text: "hi", images: [] });
+  expect(sent.filter((m) => m.type === "session.create")).toHaveLength(1);
+  const prompts = sent.filter((m) => m.type === "session.prompt");
+  expect(prompts).toHaveLength(2);
+  expect(prompts[0]!.once).toBeTruthy();
+  expect(prompts[1]!.once).toBe(prompts[0]!.once);
+  expect(created.sent).toBeUndefined();
+});
+
 it("startSession sends the draft token with session.create; without one no draft key", async () => {
   const T = "d".repeat(64);
   const requests: Record<string, unknown>[] = [];
@@ -162,7 +193,7 @@ it("startSession with a command: create, then mode and effort, then session.bash
   const opts = { model: "default", mode: "plan", effort: "high" } as const;
   await expect(startSession(request as never, created, "/p/a", opts, { command: "ls" })).rejects.toThrow("busy");
   expect(sent.map((m) => m.type)).toEqual(["session.create", "session.setPermissionMode", "session.setEffort", "session.bash"]);
-  expect(sent.at(-1)).toEqual({ type: "session.bash", sessionId: "s1", command: "ls" });
+  expect(sent.at(-1)).toEqual(expect.objectContaining({ type: "session.bash", sessionId: "s1", command: "ls", once: expect.any(String) }));
   expect(created.current).toMatchObject({ id: "s1" });
   fail = false;
   sent.length = 0;

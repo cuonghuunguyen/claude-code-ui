@@ -92,6 +92,7 @@ export const ROUTES: { readonly [T in ClientMessage["type"]]: Route } = {
   "jira.test": HUB,
   "jira.search": HUB,
   "perf.report": HUB,
+  "perf.client": HUB,
   "perf.clear": HUB,
   "session.rename": SESSION,
   "session.archive": SESSION,

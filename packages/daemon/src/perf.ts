@@ -1,11 +1,12 @@
 // Performance monitor of the daemon (docs/spec.md "Performance monitor"): event-loop delay and use, request handler times, spans
 // (session open, side start, worktree list), child processes and memory, in one in-memory store. Off = no timer, no observer, no allocation.
+// Also queue time (socket message to handler start) and first-send marks of browsers (perf.client).
 // Privacy: only numbers and labels from closed lists are stored; cwd, args, paths, ids and titles never are.
 import type { ChildProcess } from "node:child_process";
 import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { ROUTES } from "./side-routes.ts";
-import { newHistogram, percentile, record, summarize, type Histogram, type PerfDaemon, type PerfSpanName, type PerfWorst } from "@claude-ui/protocol";
+import { PERF_CLIENT_MARKS, newHistogram, percentile, record, summarize, type Histogram, type PerfDaemon, type PerfSpanName, type PerfWorst } from "@claude-ui/protocol";
 
 /** Every ClientMessage type, from the routing table (side-routes.ts); any other request type is counted as "other". */
 export const KNOWN_TYPES: ReadonlySet<string> = new Set(Object.keys(ROUTES));
@@ -33,7 +34,11 @@ type EluFn = (a?: EluValue, b?: EluValue) => EluValue;
 export type PerfSpanHandle = { readonly id: number; end(): void };
 export type PerfMonitor = {
   /** Times a request handler and lists it as in flight (a child process started meanwhile is attributed to it). Returns the end function. */
-  request(type: string, cwd?: string): () => void;
+  request(type: string, cwd?: string, receivedAt?: number): () => void;
+  /** The clock for `request`'s `receivedAt`: now while on, 0 while off (no allocation). */
+  stamp(): number;
+  /** First-send marks of a browser (ms): known names and finite values 0..600000 only; off records nothing. */
+  client(marks: Record<string, unknown>): void;
   span(name: PerfSpanName, parent?: PerfSpanHandle): PerfSpanHandle;
   /** A child process of a seam that the diagnostics channel cannot see (worker thread). Returns the exit function. */
   child(o: { cmd: string; args?: readonly string[]; cwd?: string; thread: "main" | "worker" }): (exit: number | "error" | "signal") => void;
@@ -87,6 +92,8 @@ const STALL_MS = 50;
 const WORST_MAX = 50;
 const MEMORY_MAX = 60;
 const LONG_LIVED = 600_000;
+/** Largest first-send mark a browser may report (ms). */
+const CLIENT_MARK_MAX = 600_000;
 /** Longest a span may stay open; then it closes as `<name>.timeout`. */
 const SPAN_MAX: Partial<Record<PerfSpanName, number>> = { "session.start": 60_000 };
 
@@ -119,6 +126,8 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
 
   type Store = {
     handlers: Map<string, Histogram>;
+    queue: Map<string, Histogram>;
+    client: Map<string, Histogram>;
     spans: Map<PerfSpanName, Histogram>;
     children: Map<string, Histogram>;
     excess: Histogram;
@@ -126,7 +135,7 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
     memory: { at: number; rss: number; heapUsed: number; cpu?: number }[];
     worst: PerfWorst[];
   };
-  const fresh = (): Store => ({ handlers: new Map(), spans: new Map(), children: new Map(), excess: newHistogram(), excessMax: undefined, memory: [], worst: [] });
+  const fresh = (): Store => ({ handlers: new Map(), queue: new Map(), client: new Map(), spans: new Map(), children: new Map(), excess: newHistogram(), excessMax: undefined, memory: [], worst: [] });
   let st = fresh();
   const flight: { id: number; type: string; cwd?: string }[] = [];
   const open = new Map<number, { name: PerfSpanName; parent?: number; t0: number; elu0: EluValue }>();
@@ -310,10 +319,20 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
       return on;
     },
     setEnabled,
-    request(type, cwd) {
+    stamp: () => (on ? now() : 0),
+    client(marks) {
+      if (!on) return;
+      for (const k of PERF_CLIENT_MARKS) {
+        const v = marks[k];
+        if (typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= CLIENT_MARK_MAX) record(hist(st.client, k), v);
+      }
+    },
+    request(type, cwd, receivedAt) {
       if (!on) return NOOP_END;
       const e = { id: ++nextId, type: KNOWN_TYPES.has(type) ? type : "other", cwd };
       const t0 = now();
+      // Time from the socket message to here: parse and sync work before the handler (the wait before Node reads the socket is not visible).
+      if (receivedAt && receivedAt > 0) record(hist(st.queue, e.type), Math.max(0, t0 - receivedAt));
       flight.push(e);
       return () =>
         own(() => {
@@ -376,6 +395,8 @@ export function createPerf(o: PerfOptions = {}): PerfMonitor {
         eld: { excessP95: percentile(st.excess, 95), excessMax: st.excessMax, idleP50, resolutionMs: RESOLUTION },
         elu: lastElu,
         handlers: sum(st.handlers),
+        queue: sum(st.queue),
+        client: sum(st.client),
         spans: sum(st.spans),
         children: sum(st.children),
         memory: st.memory.slice(),

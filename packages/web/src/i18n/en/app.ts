@@ -596,6 +596,7 @@ export default {
   // App.tsx
   "app.main.newSession": "New session",
   "app.main.promptNotSent": "Prompt not sent: {message}",
+  "app.firstSend.noAnswer": "The daemon did not answer. Check the connection and send again.",
   "app.main.sessionGone": "That session no longer exists in the daemon.",
   "app.main.closed": "Closed {title}",
   "app.main.undo": "Undo",

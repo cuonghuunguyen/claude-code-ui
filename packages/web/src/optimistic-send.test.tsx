@@ -29,14 +29,16 @@ const replies: Record<string, unknown> = {};
 vi.mock("@xterm/xterm", () => ({ Terminal: class { options = {}; cols = 80; rows = 24; loadAddon() {} open() {} focus() {} write() {} reset() {} onData() {} onResize() {} onSelectionChange() {} onScroll() {} attachCustomKeyEventHandler() {} dispose() {} } }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 let emit: (e: unknown) => void = () => {};
-const sent: { type: string }[] = [];
+const sent: { type: string; draft?: string; once?: string; marks?: Record<string, number> }[] = [];
+const probed: number[] = [];
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
   connect: (opts: { onEvents: (es: unknown[]) => void; onOpen?: () => void; onStatus?: (s: string) => void }) => {
     emit = (e) => opts.onEvents([e]);
     queueMicrotask(() => (opts.onStatus?.("connected"), opts.onOpen?.()));
     return {
-      request: async (m: { type: string }) => (sent.push(m), typeof replies[m.type] === "function" ? (replies[m.type] as (m: unknown) => unknown)(m) : (replies[m.type] ?? {})),
+      request: async (m: { type: string; draft?: string; once?: string; marks?: Record<string, number> }, o?: { onSent?: () => void }) => (sent.push(m), o?.onSent?.(), typeof replies[m.type] === "function" ? (replies[m.type] as (m: unknown) => unknown)(m) : (replies[m.type] ?? {})),
+      probe: () => void probed.push(1),
       onFsChanged: () => () => {},
       onTerminal: () => () => {},
       close() {},
@@ -70,6 +72,7 @@ const mount = async (hash: string) => {
 
 beforeEach(() => {
   sent.length = 0;
+  probed.length = 0;
   localStorage.clear();
   for (const k of Object.keys(replies)) delete replies[k];
   Object.assign(replies, {
@@ -168,6 +171,80 @@ describe("first prompt", () => {
     expect(box().value).toBe("hello");
     expect(one('[data-testid="prompt-error"]')?.textContent).toContain("boom");
     expect(visible('[data-testid="user-message"]')).toHaveLength(0);
+  });
+
+  it("timeout: the error says the daemon did not answer, the text is back, the socket is checked, the retry makes no second Session", async () => {
+    let calls = 0;
+    // The first create never gets its reply; the daemon dedupes the repeat by its draft token and returns the same session.
+    replies["session.create"] = () => (++calls === 1 ? Promise.reject(new Error("timed out")) : Promise.resolve({ session: info }));
+    replies["session.prompt"] = {};
+    replies["session.subscribe"] = { logEpoch: "e1", seq: 0, session: info, title: "New session" };
+    await mount("#new");
+    await type("hello");
+    await enter();
+    await act(async () => {});
+    expect(one('[data-testid="prompt-error"]')?.textContent).toContain("The daemon did not answer");
+    expect(box().value).toBe("hello");
+    expect(probed).toHaveLength(1);
+    replies["session.list"] = { sessions: [item(NEW, "New session", false)], projects: ["/p/demo"] };
+    await enter();
+    await act(async () => {});
+    const creates = sent.filter((m) => m.type === "session.create");
+    expect(creates).toHaveLength(2);
+    expect(creates[1]!.draft).toBeTruthy();
+    expect(creates[1]!.draft).toBe(creates[0]!.draft);
+    expect(sent.filter((m) => m.type === "session.prompt")).toHaveLength(1);
+    expect(location.hash).toBe(`#${NEW}`);
+  });
+
+  it("a first send the daemon took but whose reply was lost opens its session after reconnect, without a resend", async () => {
+    replies["session.create"] = { session: info };
+    replies["session.prompt"] = () => Promise.reject(new Error("disconnected"));
+    replies["session.subscribe"] = { logEpoch: "e1", seq: 0, session: info, title: "New session" };
+    replies["session.list"] = { sessions: [item(NEW, "New session", false)], projects: ["/p/demo"] };
+    await mount("#new");
+    await type("hello");
+    await enter();
+    await act(async () => {});
+    expect(box().value).toBe("hello");
+    // After the reconnect the follow loop resubscribes the session: its snapshot holds the message.
+    await act(async () => emit({ type: "event", sessionId: NEW, seq: 1, part: { type: "user_text", id: "u1", text: "hello", images: [] } }));
+    await act(async () => {});
+    expect(location.hash).toBe(`#${NEW}`);
+    expect(visible('[data-testid="new-session-tab"]')).toHaveLength(0);
+    expect(localStorage.getItem("claude-ui.draft.new") ?? "").toBe("");
+    expect(sent.filter((m) => m.type === "session.prompt")).toHaveLength(1);
+  });
+
+  it("a first send reports its marks to the perf monitor while it is on", async () => {
+    replies["session.create"] = { session: info };
+    replies["session.prompt"] = {};
+    replies["session.subscribe"] = { logEpoch: "e1", seq: 0, session: info, title: "New session" };
+    replies["settings.get"] = { settings: { orchestration: {}, performance: { monitor: true } } };
+    await mount("#new");
+    await type("hello");
+    await enter();
+    await act(async () => {});
+    await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+    const reports = sent.filter((m) => m.type === "perf.client");
+    expect(reports).toHaveLength(1);
+    const marks = reports[0]!.marks!;
+    const order = ["firstSend.sent", "firstSend.info", "firstSend.taken", "firstSend.tab"].map((k) => marks[k]);
+    expect(order.every((v) => typeof v === "number")).toBe(true);
+    expect([...order].sort((a, b) => a! - b!)).toEqual(order);
+  });
+
+  it("a first send reports nothing while the perf monitor is off", async () => {
+    replies["session.create"] = { session: info };
+    replies["session.prompt"] = {};
+    replies["session.subscribe"] = { logEpoch: "e1", seq: 0, session: info, title: "New session" };
+    replies["settings.get"] = { settings: { orchestration: {}, performance: { monitor: false } } };
+    await mount("#new");
+    await type("hello");
+    await enter();
+    await act(async () => {});
+    await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
+    expect(sent.filter((m) => m.type === "perf.client")).toHaveLength(0);
   });
 });
 

@@ -21,6 +21,7 @@ import type { ServerResponse } from "node:http";
 import type { createReplaceUndo } from "./replace.ts";
 import type { FsOpsContext } from "./fs-ops.ts";
 import type { createUploads } from "./uploads.ts";
+import type { FirstSend } from "./first-send.ts";
 import type { createTerminals } from "./terminals.ts";
 import type { createConfig } from "./config.ts";
 import type { createPlugins } from "./plugins.ts";
@@ -76,6 +77,8 @@ export type DaemonContext = {
   replaceUndo: ReturnType<typeof createReplaceUndo>;
   /** The upload folders; `fs.read` also reads a visualize file there. */
   uploads: ReturnType<typeof createUploads>;
+  /** Draft and `once` keys of a first send, for an idempotent retry (first-send.ts). */
+  firstSend: FirstSend;
   terminals: ReturnType<typeof createTerminals>;
   config: ReturnType<typeof createConfig>;
   plugins: ReturnType<typeof createPlugins>;

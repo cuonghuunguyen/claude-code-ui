@@ -118,3 +118,18 @@ it("polls every 5 s while mounted and stops on unmount", async () => {
   expect(request).toHaveBeenCalledTimes(2);
   root = createRoot(host);
 });
+
+it("shows First send rows in mark order and Wait before handler rows; hides both for an older daemon", async () => {
+  const r = report();
+  const h = (p50: number) => ({ n: 4, p50, max: p50 * 2 });
+  r.daemon.client = { "firstSend.tab": h(400), "firstSend.sent": h(10), "firstSend.taken": h(300) };
+  r.daemon.queue = { "session.create": h(0.4), "fs.list": h(0.1) };
+  await mount(async () => r);
+  const rows = [...host.querySelectorAll('[data-testid="perf-first-send"] [data-row] th')].map((x) => x.textContent);
+  expect(rows).toEqual(["Request sent", "First message taken", "Session tab shown"]);
+  expect(host.querySelector('[data-testid="perf-queue"]')?.textContent).toContain("session.create");
+  await act(async () => root.render(<PerformanceSection request={(async () => report()) as never} key="older" />));
+  await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+  expect(host.querySelector('[data-testid="perf-first-send"]')).toBeNull();
+  expect(host.querySelector('[data-testid="perf-queue"]')).toBeNull();
+});

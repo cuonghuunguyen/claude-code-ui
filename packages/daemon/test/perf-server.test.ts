@@ -70,7 +70,19 @@ describe("performance monitor in the daemon", () => {
     expect(Object.keys(d.children).some((k) => k.startsWith("git "))).toBe(true);
     // Privacy: no path, file name, branch name or message text anywhere in the report.
     const json = JSON.stringify(d);
-    for (const s of ["secret", "repo", "main", tmpdir(), "perf-"]) expect(json).not.toContain(s);
+    for (const s of ["secret", "/repo", "main", tmpdir(), "perf-"]) expect(json).not.toContain(s);
+    c.ws.close();
+  });
+
+  it("perf.client marks and the queue time of a request reach perf.report; a bad marks value is refused", async () => {
+    const c = await client();
+    await c.request({ type: "perf.clear" });
+    expect(await c.request({ type: "perf.client", marks: { "firstSend.sent": 12, "firstSend.info": 80, "firstSend.taken": 300, "firstSend.tab": 340, "secret": 1 } })).toMatchObject({ result: {} });
+    expect(await c.request({ type: "perf.client", marks: [1] })).toMatchObject({ code: "bad_request" });
+    const d = await report(c);
+    expect(Object.keys(d.client!).sort()).toEqual(["firstSend.info", "firstSend.sent", "firstSend.tab", "firstSend.taken"]);
+    expect(d.queue!["perf.client"]?.n).toBeGreaterThanOrEqual(1);
+    expect(JSON.stringify(d)).not.toContain("secret");
     c.ws.close();
   });
 

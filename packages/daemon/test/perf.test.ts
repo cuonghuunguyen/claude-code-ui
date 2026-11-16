@@ -88,3 +88,32 @@ describe("privacy", () => {
     expect(json).toContain("session.prompt");
   });
 });
+
+describe("queue and client marks", () => {
+  it("request records the time from the stamp to the handler start, per type; no stamp records nothing", () => {
+    const { p } = make();
+    p.setEnabled(true);
+    clock = 100;
+    const at = p.stamp();
+    clock = 130;
+    p.request("session.create", undefined, at)();
+    p.request("session.create", undefined, 0)();
+    const q = p.report().queue!;
+    expect(q["session.create"]).toMatchObject({ n: 1 });
+    expect(q["session.create"]!.max).toBeGreaterThanOrEqual(30);
+    p.setEnabled(false);
+    expect(p.stamp()).toBe(0);
+  });
+  it("client keeps the known marks with valid values only; off records nothing", () => {
+    const { p } = make();
+    p.client({ "firstSend.sent": 5 });
+    expect(p.report().client).toEqual({});
+    p.setEnabled(true);
+    p.client({ "firstSend.sent": 5, "firstSend.info": 70, "firstSend.taken": -1, "firstSend.tab": Number.NaN, "my.secret": 1, "firstSend.nope": 2 });
+    p.client({ "firstSend.sent": 600_001, "firstSend.info": "9" });
+    const c = p.report().client!;
+    expect(Object.keys(c).sort()).toEqual(["firstSend.info", "firstSend.sent"]);
+    expect(c["firstSend.sent"]!.n).toBe(1);
+    expect(c["firstSend.info"]!.n).toBe(1);
+  });
+});

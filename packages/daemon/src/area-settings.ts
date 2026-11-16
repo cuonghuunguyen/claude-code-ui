@@ -159,6 +159,11 @@ export function createSettingsArea(ctx: SettingsAreaContext, conn: Pick<Connecti
 
   const handlers: Handlers<SettingsTypes> = {
     "perf.report": (_msg, { reply }) => reply({ daemon: ctx.perfMon.report() }),
+    "perf.client": (msg, { reply, fail }) => {
+      if (typeof msg.marks !== "object" || msg.marks === null || Array.isArray(msg.marks)) return fail("bad_request", "marks must be an object");
+      ctx.perfMon.client(msg.marks);
+      reply({});
+    },
     "perf.clear": (_msg, { reply }) => (ctx.perfMon.clear(), reply({})),
     "settings.get": (_msg, { reply }) => reply(ctx.settingsReply()),
     "jira.token": jiraToken,

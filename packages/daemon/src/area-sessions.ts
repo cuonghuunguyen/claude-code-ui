@@ -21,6 +21,7 @@ import { trim } from "./projects.ts";
 import { clearSearchCache } from "./search.ts";
 import type { Session } from "./session.ts";
 import { SESSION_DIR } from "./uploads.ts";
+import { remember, sendOnce } from "./first-send.ts";
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 
@@ -45,10 +46,10 @@ function parseKnown(v: unknown): Map<string, string> | undefined | null {
   return out;
 }
 
-export type SessionsAreaContext = Pick<DaemonContext, "sessions" | "findSession" | "locate" | "titleOf" | "list" | "listVersions" | "sessionIds" | "catalogues" | "rememberEngine" | "addProject" | "projects" | "allowed" | "inside" | "refused" | "isRemoving" | "deleting" | "uploads" | "localFiles" | "localFilesCache" | "mirror" | "holds" | "unhold" | "queue" | "sendPrompt" | "runBash" | "autoContinue" | "briefDropped" | "briefFailed" | "startBrief" | "dropQueuedBrief" | "asideOf" | "settings" | "saveSettings" | "orchestration" | "deleteSessionById" | "appSettings" | "broadcast" | "broadcastSettings" | "clock" | "perfMon" | "logEpoch" | "media" | "checkArtifact" | "scratchpadRoot" | "within" | "transcripts" | "transcriptCwd" | "sessionCwd" | "projectsDir" | "port"> & { opts: Pick<DaemonContext["opts"], "attached" | "replayMaxEvents"> };
+export type SessionsAreaContext = Pick<DaemonContext, "sessions" | "findSession" | "locate" | "titleOf" | "list" | "listVersions" | "sessionIds" | "catalogues" | "rememberEngine" | "addProject" | "projects" | "allowed" | "inside" | "refused" | "isRemoving" | "deleting" | "uploads" | "firstSend" | "localFiles" | "localFilesCache" | "mirror" | "holds" | "unhold" | "queue" | "sendPrompt" | "runBash" | "autoContinue" | "briefDropped" | "briefFailed" | "startBrief" | "dropQueuedBrief" | "asideOf" | "settings" | "saveSettings" | "orchestration" | "deleteSessionById" | "appSettings" | "broadcast" | "broadcastSettings" | "clock" | "perfMon" | "logEpoch" | "media" | "checkArtifact" | "scratchpadRoot" | "within" | "transcripts" | "transcriptCwd" | "sessionCwd" | "projectsDir" | "port"> & { opts: Pick<DaemonContext["opts"], "attached" | "replayMaxEvents"> };
 
 export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): Area<SessionsTypes> {
-  const { sessions, findSession, locate, titleOf, list, listVersions, sessionIds, catalogues, rememberEngine, addProject, projects, allowed, inside, refused, isRemoving, deleting, uploads, localFiles, localFilesCache, mirror, holds, unhold, queue, sendPrompt, runBash, autoContinue, briefDropped, briefFailed, startBrief, dropQueuedBrief, asideOf, settings, saveSettings, orchestration, deleteSessionById, appSettings, broadcast, broadcastSettings, clock, perfMon, logEpoch, media, checkArtifact, scratchpadRoot, within, transcripts, transcriptCwd, sessionCwd, projectsDir, port, opts } = ctx;
+  const { sessions, findSession, locate, titleOf, list, listVersions, sessionIds, catalogues, rememberEngine, addProject, projects, allowed, inside, refused, isRemoving, deleting, uploads, firstSend, localFiles, localFilesCache, mirror, holds, unhold, queue, sendPrompt, runBash, autoContinue, briefDropped, briefFailed, startBrief, dropQueuedBrief, asideOf, settings, saveSettings, orchestration, deleteSessionById, appSettings, broadcast, broadcastSettings, clock, perfMon, logEpoch, media, checkArtifact, scratchpadRoot, within, transcripts, transcriptCwd, sessionCwd, projectsDir, port, opts } = ctx;
   const unsubscribes = new Map<string, () => void>();
   /** This connection's session feeds: events go to the socket while its buffer allows, else from the log later (feed.ts). */
   const feeds = createFeeds(conn.ws, (e) => conn.send(e));
@@ -67,6 +68,10 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     if (isRemoving(cwd)) return r.fail("worktree_removing", "This worktree is being removed");
     const catalogue = catalogues.byName(msg.engine ?? DEFAULT_ENGINE);
     if (!catalogue) return r.fail("bad_request", `no engine ${msg.engine}`);
+    // A repeat of a create whose reply was lost (same draft token, cwd and Engine, session still loaded): that session, not a second one.
+    const draft = typeof msg.draft === "string" && msg.draft ? msg.draft : undefined;
+    const made = draft ? sessions.get(firstSend.byDraft.get(draft) ?? "") : undefined;
+    if (made && made.cwd === cwd && made.info().engine === catalogue.engine.name) return r.reply({ session: made.info() });
     let s: Session | undefined;
     try {
       // The new-session tab's draft uploads are claimed only by an Engine that lets us choose the session id (OpenCode chooses its own).
@@ -78,6 +83,7 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     }
     // A removal may have started during the awaits: no live session in a deleted directory.
     if (!s) return r.fail("worktree_removing", "This worktree is being removed");
+    if (draft) remember(firstSend.byDraft, draft, s.id);
     rememberEngine(catalogue.engine.name);
     return r.reply({ session: s.info() });
   };
@@ -223,9 +229,12 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
       return r.fail("bad_images", "images must be base64 data URLs of type png, jpeg, gif or webp");
     if (typeof msg.text !== "string" || (!msg.text.trim() && !images.length)) return r.fail("bad_prompt", "empty prompt");
     const out: PromptResult = {};
-    const err = await sendPrompt(s, msg.text, images, undefined, out);
-    // A refused prompt keeps a usage-limit pause.
-    if (!err) queue.release(s.id);
+    const err = await sendOnce(firstSend, s.id, msg.once, async () => {
+      const e = await sendPrompt(s, msg.text, images, undefined, out);
+      // A refused prompt keeps a usage-limit pause.
+      if (!e) queue.release(s.id);
+      return e;
+    });
     return err ? r.fail(err.code, err.message) : r.reply(out);
   };
   const enqueue = async (msg: Msg<"session.enqueue">, res: Respond) => {
@@ -269,7 +278,7 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     if (!s) return;
     if (typeof msg.command !== "string" || !msg.command.trim()) return res.fail("bad_command", "empty command");
     // A send of the queue is in flight (a prompt awaiting its sync): the command goes behind it, in submit order.
-    const err = queue.sending(s.id) ? { code: "session_busy", message: "queue sending" } : await runBash(s, msg.command);
+    const err = await sendOnce(firstSend, s.id, msg.once, async () => (queue.sending(s.id) ? { code: "session_busy", message: "queue sending" } : await runBash(s, msg.command)));
     if (err?.code === "session_busy" || err?.code === "external_turn") {
       const r = queue.enqueue(s.id, { text: msg.command.trim(), images: [], bash: true });
       return typeof r === "string" ? res.reply({ itemId: r }) : res.fail(r.code, r.message);
