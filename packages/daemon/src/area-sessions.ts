@@ -77,8 +77,8 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     let s: Session | undefined;
     try {
       // The new-session tab's draft uploads are claimed only by an Engine that lets us choose the session id (OpenCode chooses its own).
-      const permissionMode = await catalogue.startMode(cwd, msg.model);
-      const making = catalogue.create(cwd, { model: msg.model, permissionMode }, { draft: msg.draft });
+      // One promise from the first await on (the mode lookup may wait for a cold model list): a repeat with the token waits for it.
+      const making = (async () => catalogue.create(cwd, { model: msg.model, permissionMode: await catalogue.startMode(cwd, msg.model) }, { draft: msg.draft }))();
       if (draft) firstSend.creating.set(draft, making);
       try {
         s = await making;

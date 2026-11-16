@@ -1411,7 +1411,7 @@ export function App() {
       savedSeq.current.set(id, v.lastSeq);
       if (v.lastSeq > 0 || v.order.length) s.markView(id);
     }
-  }, [views, activeId]);
+  }, [views]);
 
   // The page reads the view cache first (at most 300 ms), then connects; the cached state is committed before any socket event.
   useEffect(() => {
@@ -1750,7 +1750,7 @@ export function App() {
     finishFirstSend(session);
     // The new-session box unmounts and saves its restored text on the way: the draft is dropped after that.
     requestAnimationFrame(() => saveDraft(NEW_TAB_DRAFT, ""));
-  }, [views]);
+  }, [views, activeId]);
 
   /** The new-session tab, starting in `cwd`: by default the active session's project, else the newest project. */
   function newSession(cwd?: string) {
