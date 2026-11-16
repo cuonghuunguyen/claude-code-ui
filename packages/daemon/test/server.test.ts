@@ -911,9 +911,9 @@ describe("daemon", () => {
     expect(created.result.session.id).toBe(X);
     await c.request({ type: "session.prompt", sessionId: X, text: "read it" });
     expect(calls.find((o) => o.sessionId === X)!.additionalDirectories![0]).toBe(join(uploadParent, X));
-    // A repeat of the create (its reply was lost) returns the same session (first-send retry).
+    // The first message is taken: a duplicated tab's copy of the token makes its own session.
     const second = (await c.request({ type: "session.create", cwd: webRoot, draft: T })) as { result: { session: { id: string } } };
-    expect(second.result.session.id).toBe(X);
+    expect(second.result.session.id).not.toBe(X);
     // A claimed token is spent: a copy of it (duplicated tab) cannot place files in that session's folder.
     expect(await c.request({ type: "fs.upload", name: "f3.txt", data, draft: T })).toMatchObject({ code: "draft_claimed" });
     expect(readdirSync(join(uploadParent, X)).length).toBe(2);

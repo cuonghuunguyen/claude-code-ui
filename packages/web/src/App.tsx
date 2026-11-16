@@ -1411,7 +1411,7 @@ export function App() {
       savedSeq.current.set(id, v.lastSeq);
       if (v.lastSeq > 0 || v.order.length) s.markView(id);
     }
-  }, [views]);
+  }, [views, activeId]);
 
   // The page reads the view cache first (at most 300 ms), then connects; the cached state is committed before any socket event.
   useEffect(() => {
@@ -1742,7 +1742,8 @@ export function App() {
   // after the reconnect its view holds the message. Then it opens like a successful first send, without sending anything again.
   useEffect(() => {
     const u = unprompted.current;
-    const view = u.sent && u.current ? views[u.current.id] : undefined;
+    // Only while the user is on the new-session tab: it does not pull them away from what they moved to (it opens when they come back).
+    const view = u.sent && u.current && activeId === NEW_TAB ? views[u.current.id] : undefined;
     if (!u.current || !view || ![...view.parts.values()].some((p) => p.type === "user_text" || p.type === "bash")) return;
     const session = u.current;
     unprompted.current = {};

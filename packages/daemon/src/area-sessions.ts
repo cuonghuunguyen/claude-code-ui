@@ -70,13 +70,21 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     if (!catalogue) return r.fail("bad_request", `no engine ${msg.engine}`);
     // A repeat of a create whose reply was lost (same draft token, cwd and Engine, session still loaded): that session, not a second one.
     const draft = typeof msg.draft === "string" && msg.draft ? msg.draft : undefined;
+    // A create still running for this token (a retry after a timeout): wait for it, then find its session below.
+    if (draft) await firstSend.creating.get(draft)?.catch(() => {});
     const made = draft ? sessions.get(firstSend.byDraft.get(draft) ?? "") : undefined;
     if (made && made.cwd === cwd && made.info().engine === catalogue.engine.name) return r.reply({ session: made.info() });
     let s: Session | undefined;
     try {
       // The new-session tab's draft uploads are claimed only by an Engine that lets us choose the session id (OpenCode chooses its own).
       const permissionMode = await catalogue.startMode(cwd, msg.model);
-      s = await catalogue.create(cwd, { model: msg.model, permissionMode }, { draft: msg.draft });
+      const making = catalogue.create(cwd, { model: msg.model, permissionMode }, { draft: msg.draft });
+      if (draft) firstSend.creating.set(draft, making);
+      try {
+        s = await making;
+      } finally {
+        if (draft && firstSend.creating.get(draft) === making) firstSend.creating.delete(draft);
+      }
     } catch (err) {
       if (err instanceof EngineError) return r.fail(err.code, err.message);
       throw err;
@@ -228,14 +236,14 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     if (!Array.isArray(images) || !images.every((i) => imageBlock(i)))
       return r.fail("bad_images", "images must be base64 data URLs of type png, jpeg, gif or webp");
     if (typeof msg.text !== "string" || (!msg.text.trim() && !images.length)) return r.fail("bad_prompt", "empty prompt");
-    const out: PromptResult = {};
-    const err = await sendOnce(firstSend, s.id, msg.once, async () => {
+    const { err, reply } = await sendOnce(firstSend, s.id, msg.once, async () => {
+      const out: PromptResult = {};
       const e = await sendPrompt(s, msg.text, images, undefined, out);
       // A refused prompt keeps a usage-limit pause.
       if (!e) queue.release(s.id);
-      return e;
+      return { err: e, reply: out };
     });
-    return err ? r.fail(err.code, err.message) : r.reply(out);
+    return err ? r.fail(err.code, err.message) : r.reply(reply ?? {});
   };
   const enqueue = async (msg: Msg<"session.enqueue">, res: Respond) => {
     const s = await find(res, msg.sessionId);
@@ -278,12 +286,15 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     if (!s) return;
     if (typeof msg.command !== "string" || !msg.command.trim()) return res.fail("bad_command", "empty command");
     // A send of the queue is in flight (a prompt awaiting its sync): the command goes behind it, in submit order.
-    const err = await sendOnce(firstSend, s.id, msg.once, async () => (queue.sending(s.id) ? { code: "session_busy", message: "queue sending" } : await runBash(s, msg.command)));
-    if (err?.code === "session_busy" || err?.code === "external_turn") {
-      const r = queue.enqueue(s.id, { text: msg.command.trim(), images: [], bash: true });
-      return typeof r === "string" ? res.reply({ itemId: r }) : res.fail(r.code, r.message);
-    }
-    return err ? res.fail(err.code, err.message) : res.reply({});
+    const { err, reply } = await sendOnce(firstSend, s.id, msg.once, async () => {
+      const e = queue.sending(s.id) ? { code: "session_busy", message: "queue sending" } : await runBash(s, msg.command);
+      if (e?.code === "session_busy" || e?.code === "external_turn") {
+        const q = queue.enqueue(s.id, { text: msg.command.trim(), images: [], bash: true });
+        return typeof q === "string" ? { reply: { itemId: q } } : { err: q };
+      }
+      return { err: e, reply: {} };
+    });
+    return err ? res.fail(err.code, err.message) : res.reply(reply ?? {});
   };
   const setModel = async (msg: Msg<"session.setModel">, r: Respond) => {
     const s = await find(r, msg.sessionId);
