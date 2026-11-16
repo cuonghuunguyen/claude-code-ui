@@ -182,7 +182,7 @@ it("while generating the box is read-only and busy and the button is Stop; Stop 
   expect(generate().getAttribute("aria-label")).toBe("Stop generating");
   expect((byId("commit-button") as HTMLButtonElement).disabled).toBe(true);
   await act(async () => generate().click());
-  expect(m.sent.some((x) => x.type === "git.commitMessageCancel")).toBe(true);
+  expect(m.sent.filter((x) => x.type === "git.commitMessageCancel")).toEqual([{ type: "git.commitMessageCancel", cwd: "/p" }]);
   expect(ta.readOnly).toBe(false);
   expect(generate().getAttribute("aria-label")).toBe("Generate commit message");
   await act(async () => d.resolve({ message: "late" }));

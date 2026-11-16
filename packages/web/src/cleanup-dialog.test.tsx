@@ -307,7 +307,7 @@ it("closing the dialog sends worktree.cancel with the scan id", async () => {
   expect(sent.some((m) => m.type === "worktree.cancel")).toBe(false);
   await act(async () => root!.unmount());
   root = undefined;
-  expect(sent.filter((m) => m.type === "worktree.cancel")).toEqual([{ type: "worktree.cancel", scan }]);
+  expect(sent.filter((m) => m.type === "worktree.cancel")).toEqual([{ type: "worktree.cancel", cwd: "/r", scan }]);
 });
 
 it("a row shows ignored files: checked at removal and remote branch deleted", async () => {
