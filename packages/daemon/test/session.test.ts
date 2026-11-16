@@ -2691,6 +2691,40 @@ describe("Session background work", () => {
     }
   });
 
+  it("a Monitor's expiry notice is stopped but the CLI takes a turn on it (probe GH-852): working until that turn, or the wait", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { events, s, send } = await setup();
+      await send(call("mon-1", "Monitor", { command: "sleep 9", timeout_ms: 5000 }), ["running"]);
+      await send(task("task_started", "m1", "mon-1", { task_type: "local_bash", is_backgrounded: true }), ["running"]);
+      await send(result(), ["running", "idle+working"]);
+      await send(done("m1", "mon-1", "stopped"), ["running", "idle+working", "idle+working"]);
+      expect(s.working()).toBe(true);
+      expect(s.releaseQuery()).toBe(false);
+      await send(say(), ["running", "idle+working", "idle+working", "running"]);
+      await send(result(), ["running", "idle+working", "idle+working", "running", "idle"]);
+      expect(s.working()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a Monitor stopped with no CLI turn after it: the wait ends working (GH-852)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { s, send } = await setup();
+      await send(call("mon-1", "Monitor", { command: "sleep 9" }), ["running"]);
+      await send(task("task_started", "m1", "mon-1", { task_type: "local_bash", is_backgrounded: true }), ["running"]);
+      await send(result(), ["running", "idle+working"]);
+      await send(done("m1", "mon-1", "stopped"), ["running", "idle+working", "idle+working"]);
+      expect(s.working()).toBe(true);
+      vi.advanceTimersByTime(CLI_TURN_WAIT_MS);
+      expect(s.working()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("Stop agent while the parent turn runs: the session stays running until the turn's result, then idle without working", async () => {
     const { events, s, send } = await setup();
     await bg(send);
