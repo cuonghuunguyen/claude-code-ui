@@ -6,6 +6,8 @@ import { getSessionInfo, listSessions } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, describe, expect, it } from "vitest";
 import { FIRST_TAIL_BYTES, lastEntryTime, listSessionsOffThread, mapLimit, patchScan, scanThreadConfig, transcriptStamp } from "../src/session-scan.ts";
 
+const N_HEAVY = 400;
+const HEAP_CAP_MB = 48;
 const realScript = scanThreadConfig.script;
 const realEnv = process.env.CLAUDE_CONFIG_DIR;
 const dirs: string[] = [];
@@ -14,6 +16,7 @@ afterEach(() => {
   else process.env.CLAUDE_CONFIG_DIR = realEnv;
   scanThreadConfig.reset();
   scanThreadConfig.script = realScript;
+  scanThreadConfig.resourceLimits = undefined;
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -46,6 +49,42 @@ describe("session-scan", () => {
     const sessions = await listSessionsOffThread();
     expect(sessions).toEqual(await listSessions());
     expect(sessions).toHaveLength(1);
+    expect(scanThreadConfig.broken).toBe(false);
+  });
+
+  it("lists the same sessions as the SDK's plain listSessions() for paged reads and copied slices (many files, duplicates, escapes, non-ASCII)", async () => {
+    const root = config(0);
+    const base = Date.parse("2026-03-01T00:00:00Z") / 1000;
+    const folders = ["-tmp-a", "-tmp-b", "-tmp-c"].map((n) => join(root, "projects", n));
+    for (const f of folders) mkdirSync(f, { recursive: true });
+    const id = (n: number) => `5c2c3d4e-5f60-4718-8a9b-${String(n).padStart(12, "0")}`;
+    const put = (folder: number, name: string, lines: string[], mtime: number) => {
+      const f = join(folders[folder]!, name);
+      writeFileSync(f, lines.join("\n") + (lines.length ? "\n" : ""));
+      utimesSync(f, mtime, mtime);
+    };
+    const line = (o: object) => JSON.stringify({ type: "user", cwd: "/Users/someone/work/project", sessionId: "s", timestamp: "2026-01-01T00:00:00.000Z", message: { role: "user", content: "a prompt longer than thirteen characters" }, ...o });
+    const pad = (n: number) => Array.from({ length: n }, () => line({ type: "assistant", message: { role: "assistant", content: "ü".repeat(1000) } }));
+    // 70 plain transcripts over two folders cross the 32-file page twice; every 5th has an equal mtime to its neighbour.
+    for (let i = 0; i < 70; i++) put(i % 2, `${id(i)}.jsonl`, [line({ gitBranch: `feature/branch-number-${i}` }), ...pad(i % 3 === 0 ? 150 : 1)], base + Math.floor(i / 5) * 60);
+    // The same id in two folders with different mtimes: the SDK keeps the newer file.
+    put(0, `${id(100)}.jsonl`, [line({ message: { role: "user", content: "older copy of the session" } })], base + 5000);
+    put(2, `${id(100)}.jsonl`, [line({ message: { role: "user", content: "newer copy of the session" } })], base + 6000);
+    put(1, `${id(101)}.jsonl`, [], base + 7000); // empty
+    put(1, `${id(102)}.jsonl`, [line({ isSidechain: true })], base + 7100); // sidechain first line
+    put(1, "not-a-uuid.jsonl", [line({})], base + 7200);
+    // A continued session: A ends with continued-in B, B starts a new chain.
+    put(2, `${id(103)}.jsonl`, [line({}), JSON.stringify({ type: "continued-in", continuedInSessionId: id(104) })], base + 7300);
+    put(2, `${id(104)}.jsonl`, [line({ parentUuid: null })], base + 7400);
+    put(2, `${id(105)}.jsonl`, [line({ message: { role: "user", content: "pröмpt in Tiếng Việt, más texto non-ASCII, ü ü ü" } })], base + 7500);
+    put(2, `${id(106)}.jsonl`, [line({ message: { role: "user", content: "long prompt ".repeat(40) } })], base + 7600);
+    put(2, `${id(107)}.jsonl`, [line({ cwd: '/Users/some "one"/work\\project', message: { role: "user", content: 'say "hi"\nthen\\go' } })], base + 7700);
+    put(2, `${id(108)}.jsonl`, [line({}), ...pad(150), JSON.stringify({ type: "custom-title", customTitle: "A custom title for the session" }), JSON.stringify({ type: "tag", tag: "some-tag-value" })], base + 7800);
+    const sessions = await listSessionsOffThread();
+    expect(sessions).toEqual(await listSessions());
+    // 70 plain + the duplicate id once + 104 and 105-108; not listed: empty, sidechain, not-a-uuid, and 103 (hidden while its successor exists).
+    expect(sessions).toHaveLength(76);
+    expect(sessions.find((x) => x.sessionId === id(100))?.summary).toBe("newer copy of the session");
     expect(scanThreadConfig.broken).toBe(false);
   });
 
@@ -121,6 +160,20 @@ describe("session-scan", () => {
     scanThreadConfig.reset();
     scanThreadConfig.script = `require("node:worker_threads").parentPort.on("message", ({ id }) => require("node:worker_threads").parentPort.postMessage({ id, error: "bad dir" }));`;
     await expect(listSessionsOffThread()).rejects.toThrow(/bad dir/);
+  });
+
+  it("scans many transcripts in a scan thread with a small heap (entries do not hold their file's head and tail)", { timeout: 60_000 }, async () => {
+    const root = config(0);
+    const dir = join(root, "projects", "-tmp-p");
+    // Two-byte text, 140 KB per transcript: on base every listed entry kept its 64 KB head and tail (~256 KB) alive.
+    // V8 slices only strings of 13+ characters, so cwd, branch and prompt are long like real ones.
+    const line = (type: string, text: string) => JSON.stringify({ type, cwd: "/Users/someone/work/project", gitBranch: "feature/some-long-branch-name", sessionId: "s", timestamp: "2026-01-01T00:00:00.000Z", message: { role: type, content: text } });
+    const body = () => [line("user", "a prompt that is longer than thirteen characters ü"), ...Array.from({ length: 140 }, () => line("assistant", "ü".repeat(1000)))].join("\n") + "\n";
+    for (let i = 0; i < N_HEAVY; i++) writeFileSync(join(dir, `4b2c3d4e-5f60-4718-8a9b-${String(i).padStart(12, "0")}.jsonl`), body());
+    scanThreadConfig.resourceLimits = { maxOldGenerationSizeMb: HEAP_CAP_MB };
+    const sessions = await listSessionsOffThread();
+    expect(scanThreadConfig.broken).toBe(false); // an out-of-memory thread is retired as broken, and the main thread answers instead
+    expect(sessions).toHaveLength(N_HEAVY);
   });
 
   it("keeps the main event loop free while it scans many transcripts", { timeout: 60_000 }, async () => {
