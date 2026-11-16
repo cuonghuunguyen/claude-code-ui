@@ -587,7 +587,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
   const timer = setInterval(() => sweep(), SWEEP_MS);
   timer.unref();
 
-  /** Per worker: events queued behind a permission event whose tier is still being read. Empty = deliver at once. */
+  /** Per worker: a turn_end step that waits for the end-of-turn sync (closeFinished); later events queue behind it. Empty = deliver at once. */
   const ordered = new Map<string, Promise<void>>();
   function inOrder(sessionId: string, step: () => Promise<void>) {
     const next = (ordered.get(sessionId) ?? Promise.resolve()).then(step).catch((err) => console.warn(`orchestration: event of ${sessionId} not delivered: ${err}`));

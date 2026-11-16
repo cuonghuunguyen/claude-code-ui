@@ -56,7 +56,7 @@ export function createNotifier(opts: {
     // The first push keeps the 5 s gap; a later one only changes the count of a notification that was really shown.
     if (!g.shown && !force && Date.now() - t.lastSent < MIN_GAP_MS) return false;
     t.lastSent = Date.now();
-    // An escalation is no count change: it pushes its reason with sound, under the group's tag (it replaces the count notification).
+    // A worker request is no count change: it pushes with sound, under the group's tag (it replaces the count notification).
     const counted = g.shown && !force;
     const text = counted ? countBody(g) : force && g.members.size > 1 ? body.replace(/^Needs input/, `${g.members.size} workers need input`) : body; // count first: a long body is cut from the end
     opts.push(id, text, { tag: g.tag, titleSession: g.title, ...(counted && { silent: true, replace: true }) });
