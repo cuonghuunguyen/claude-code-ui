@@ -1,4 +1,4 @@
-import { Worker } from "node:worker_threads";
+import { Worker, type ResourceLimits } from "node:worker_threads";
 import { open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { listSessions } from "@anthropic-ai/claude-agent-sdk";
@@ -11,8 +11,22 @@ import { listSessions } from "@anthropic-ai/claude-agent-sdk";
  * A thread that cannot start, errors, or cannot import the SDK is marked broken and the main-thread call takes over from then
  * on; a thread that exits, or does not answer within `timeoutMs`, is dropped (terminated), its calls are answered on the main
  * thread and the next call starts a new thread.
+ * Memory (GH-837): the SDK reads all transcripts at once without a `limit` and, per transcript, builds the entry's strings as
+ * slices of the 64 KB head and tail it read, which keep both alive (~1.3 GB for 5900 transcripts). The call is therefore paged
+ * (`paged`: 32 transcripts at a time, the same list) and the thread copies short slices, so a scan holds about 32 transcripts'
+ * heads and tails, not all of them. The main-thread fallback is paged too, without the slice copy (it cannot patch the daemon's
+ * String.prototype).
  */
 const SCAN_THREAD = `
+"use strict";
+// A V8 slice keeps its whole parent string alive. A short slice of a long string is copied instead ("\\0" + s is a new string,
+// slice(1) of it a flat copy), so each entry's cwd, summary, ... no longer holds its file's head and tail. Thresholds measured
+// on 5890 real transcripts (16 MB retained); do not change without measuring. This thread runs nothing but the scan.
+const slice = String.prototype.slice;
+String.prototype.slice = function (start, end) {
+  const s = slice.call(this, start, end);
+  return this.length > 1024 && s.length < 1024 ? slice.call("\\0" + s, 1) : s;
+};
 const { parentPort } = require("node:worker_threads");
 let sdk;
 parentPort.on("message", async ({ id, url, options }) => {
@@ -34,6 +48,8 @@ export const scanThreadConfig = {
   sdkUrl: import.meta.resolve("@anthropic-ai/claude-agent-sdk"),
   /** A call the thread has not answered by then drops the thread (the scan has no natural bound, but 30 s is far beyond any real one). */
   timeoutMs: 30_000,
+  /** Test only: caps the thread's heap. Production has no cap (an out-of-memory thread would be marked broken for good). */
+  resourceLimits: undefined as ResourceLimits | undefined,
   reset() {
     const w = thread;
     thread = undefined;
@@ -44,6 +60,8 @@ export const scanThreadConfig = {
     return broken;
   },
 };
+/** Without a limit the SDK reads every transcript at once; with one it reads 32 at a time. Same list. */
+const paged = (o: Parameters<typeof listSessions>[0]) => ({ ...o, limit: o?.limit ?? Number.MAX_SAFE_INTEGER });
 type Sessions = Awaited<ReturnType<typeof listSessions>>;
 let thread: Worker | undefined;
 let broken = false;
@@ -68,7 +86,7 @@ function retire(w: Worker, unusable: boolean) {
 function scanThread(): Worker | undefined {
   if (thread || broken) return thread;
   try {
-    const w = new Worker(scanThreadConfig.script, { eval: true });
+    const w = new Worker(scanThreadConfig.script, { eval: true, resourceLimits: scanThreadConfig.resourceLimits });
     w.on("message", ({ id, sessions, error, fatal }: { id: number; sessions?: Sessions; error?: string; fatal?: string }) => {
       const c = calls.get(id);
       if (!c) return;
@@ -100,7 +118,7 @@ function scanThread(): Worker | undefined {
 /** listSessions() off the main thread; same signature as the SDK's. */
 export const listSessionsOffThread: typeof listSessions = (options) => {
   const w = scanThread();
-  if (!w) return listSessions(options);
+  if (!w) return listSessions(paged(options));
   const id = ++nextCall;
   return new Promise<Sessions>((ok, fail) => {
     const timer = setTimeout(() => {
@@ -108,8 +126,9 @@ export const listSessionsOffThread: typeof listSessions = (options) => {
       retire(w, false);
     }, scanThreadConfig.timeoutMs);
     timer.unref();
-    calls.set(id, { ok, fail, w, timer, options });
-    w.postMessage({ id, url: scanThreadConfig.sdkUrl, options });
+    const paging = paged(options);
+    calls.set(id, { ok, fail, w, timer, options: paging });
+    w.postMessage({ id, url: scanThreadConfig.sdkUrl, options: paging });
   });
 };
 
