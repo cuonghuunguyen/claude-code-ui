@@ -371,7 +371,7 @@ export function createDaemon(opts: {
     // `live` of the session list changed (CLI started or dropped).
     onLiveChange: (id) => {
       broadcast({ type: "sessions.changed" });
-      orchestration?.liveChanged(id);
+      orchestration.liveChanged(id);
     },
     supportsAuto,
     uploadDir: (id: string) => {

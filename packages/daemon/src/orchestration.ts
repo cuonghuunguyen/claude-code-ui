@@ -455,7 +455,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
     if (p.type === "session_state" && (p.state === "closed" || p.state === "error")) (warming.delete(s.id), wake(s.id));
     // Each move into running (also after needs_input) restarts the silence clock: a long wait for the user is not silence.
     if (p.type === "session_state" && p.state === "running") open.set(s.id, Date.now());
-    if (p.type === "session_state" && (p.state === "running" || p.state === "needs_input")) waiting.delete(s.id);
+    // A keep-warm tick is the daemon's own turn: the wait it interrupts goes on.
+    if (p.type === "session_state" && (p.state === "running" || p.state === "needs_input") && !warming.has(s.id)) waiting.delete(s.id);
     if (p.type === "turn_result" || p.type === "turn_interrupted" || (p.type === "session_state" && p.state !== "running" && p.state !== "needs_input")) {
       // A CLI that ended in the middle of a turn: no result will come.
       if (p.type === "session_state" && p.state === "closed" && open.has(s.id) && !quiet.has(s.id) && !stallOf(s.id)) stall(s, "ended_without_result");
