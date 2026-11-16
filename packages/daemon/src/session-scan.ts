@@ -181,3 +181,69 @@ export async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (it
   );
   return out;
 }
+
+export type Scanned = Awaited<ReturnType<typeof listSessions>>;
+
+/** Tail bytes the SDK reads per transcript (`listSessions`, `getSessionInfo`). */
+const SDK_TAIL_BYTES = 64 * 1024;
+/** More added or changed transcripts than this: one full scan (in the scan thread) costs less than reading them one by one on the main thread. */
+export const PATCH_LIMIT = 200;
+
+/** The full scan's order (SDK listSessions): newest first, then session id descending. */
+function bySdkOrder(a: Scanned[number], b: Scanned[number]): number {
+  return b.lastModified - a.lastModified || (b.sessionId < a.sessionId ? -1 : b.sessionId > a.sessionId ? 1 : 0);
+}
+
+/** Whether the last SDK_TAIL_BYTES of `file` contain `needle`; undefined when unreadable. */
+async function tailIncludes(file: string, needle: string): Promise<boolean | undefined> {
+  let fh;
+  try {
+    fh = await open(file, "r");
+    const { size } = await fh.stat();
+    const buf = Buffer.alloc(Math.min(size, SDK_TAIL_BYTES));
+    await fh.read(buf, 0, buf.length, size - buf.length);
+    return buf.includes(needle);
+  } catch {
+    return undefined;
+  } finally {
+    await fh?.close();
+  }
+}
+
+/**
+ * `last.result` brought up to `stamp` without a full scan: added and changed transcripts are read alone (getSessionInfo),
+ * removed ones dropped. undefined when only a full listSessions() gives the same list: a session id in two project folders
+ * (the SDK keeps the newer file), a `continued-in` entry (the SDK hides that session while its successor exists), a read
+ * that failed, or more than PATCH_LIMIT files to read.
+ * Known gap: a session with `continued-in` from before the last full scan stays listed when only its successor changes,
+ * until the next full scan.
+ */
+export async function patchScan(
+  last: { stamp: ReadonlyMap<string, string>; result: Scanned },
+  stamp: ReadonlyMap<string, string>,
+  projectsDir: string,
+  getSessionInfo: (id: string) => Promise<Scanned[number] | undefined>,
+): Promise<Scanned | undefined> {
+  const idOf = (file: string) => file.slice(file.lastIndexOf("/") + 1, -".jsonl".length);
+  const count = new Map<string, number>();
+  for (const f of stamp.keys()) count.set(idOf(f), (count.get(idOf(f)) ?? 0) + 1);
+  const touched = [...stamp].filter(([f, v]) => last.stamp.get(f) !== v).map(([f]) => f);
+  const removed = [...last.stamp.keys()].filter((f) => !stamp.has(f));
+  if (!touched.length && !removed.length) return last.result;
+  if (touched.length > PATCH_LIMIT) return undefined;
+  if (touched.some((f) => count.get(idOf(f)) !== 1) || removed.some((f) => count.has(idOf(f)))) return undefined;
+  const reads = await mapLimit(touched, 8, async (f) => {
+    const id = idOf(f);
+    const [info, continued] = await Promise.all([
+      getSessionInfo(id).then((i) => ({ i }), () => undefined),
+      tailIncludes(join(projectsDir, f), '"type":"continued-in"'),
+    ]);
+    return { id, info: info?.i, failed: !info, continued };
+  });
+  if (reads.some((r) => r.failed || r.continued !== false || (r.info && r.info.sessionId !== r.id))) return undefined;
+  const drop = new Set([...touched, ...removed].map(idOf));
+  return [
+    ...last.result.filter((t) => !drop.has(t.sessionId)),
+    ...reads.flatMap((r) => (r.info ? [r.info] : [])),
+  ].sort(bySdkOrder);
+}
