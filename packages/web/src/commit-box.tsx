@@ -50,7 +50,8 @@ export function CommitBox({ client, cwd, exact, repoName, project, rows, checked
   const [writing, setWriting] = useState(false);
   const [writeError, setWriteError] = useState("");
   const write = useRef(0);
-  const writingNow = useRef(false);
+  /** The cwd of the running generation: a cancel goes to the Side that runs it, and `cwd` may have changed since. */
+  const writingNow = useRef<string | undefined>(undefined);
   const paths = commitPaths(rows, checked);
   const busy = running !== undefined;
   const ready = !busy && !writing && !!message.trim() && (paths.length > 0 || amend);
@@ -58,10 +59,11 @@ export function CommitBox({ client, cwd, exact, repoName, project, rows, checked
   /** Ignores the running generation's reply and tells the daemon to stop it. */
   const stopWriting = () => {
     write.current++;
-    if (!writingNow.current) return;
-    writingNow.current = false;
+    const at = writingNow.current;
+    if (at === undefined) return;
+    writingNow.current = undefined;
     setWriting(false);
-    client.request({ type: "git.commitMessageCancel" }).catch(() => {});
+    client.request({ type: "git.commitMessageCancel", cwd: at }).catch(() => {});
   };
   // A message belongs to one repository.
   useEffect(() => {
@@ -101,19 +103,19 @@ export function CommitBox({ client, cwd, exact, repoName, project, rows, checked
   }, [client, cwd, exact, t]);
   const generate = () => {
     const id = ++write.current;
-    writingNow.current = true;
+    writingNow.current = cwd;
     setWriting(true);
     setWriteError("");
     client.request<GitCommitMessageResult>({ type: "git.commitMessage", cwd, ...(exact && { exact: true as const }), paths, ...(project && { project }) }).then(
       (r) => {
         if (id !== write.current) return;
-        writingNow.current = false;
+        writingNow.current = undefined;
         setWriting(false);
         setMessage(r.message);
       },
       (e: Error & { code?: string }) => {
         if (id !== write.current) return;
-        writingNow.current = false;
+        writingNow.current = undefined;
         setWriting(false);
         if (e.code !== "cancelled") setWriteError(e.message);
       },

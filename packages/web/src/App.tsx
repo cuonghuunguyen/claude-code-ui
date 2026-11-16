@@ -1817,13 +1817,13 @@ export function App() {
   const wtStatus = useRef(new Map<string, WorktreeStatusResult>());
   /** Stable identity: Clean up re-runs its scan (and the fetch) when `request` changes. */
   const cleanupRequest = useCallback(<T,>(m: Request) => client.current!.request<T>(m), []);
-  const warmed = useRef({ path: "", at: 0, scan: "" });
+  const warmed = useRef({ project: "", path: "", at: 0, scan: "" });
   function warmWorktree(project: string, path: string) {
     const w = warmed.current;
     if (w.path === path && Date.now() - w.at < 10_000) return;
-    if (w.scan) void client.current?.request({ type: "worktree.cancel", scan: w.scan }).catch(() => {});
+    if (w.scan) void client.current?.request({ type: "worktree.cancel", cwd: w.project, scan: w.scan }).catch(() => {});
     const scan = crypto.randomUUID();
-    warmed.current = { path, at: Date.now(), scan };
+    warmed.current = { project, path, at: Date.now(), scan };
     client.current?.request<WorktreeStatusResult>({ type: "worktree.status", cwd: project, path, scan }).then((st) => wtStatus.current.set(path, st), () => {});
   }
   async function askRemoveWorktree(project: string, path: string) {

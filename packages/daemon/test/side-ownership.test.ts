@@ -415,6 +415,20 @@ describe("cwd claims (GH-320)", () => {
     expect(frames(a, "fs.delete")).toHaveLength(1);
   });
 
+  it("GH-818: commit message and worktree scan cancel reach the side that owns cwd", async () => {
+    const a = fakeSide(list({ projects: ["/ct"] }));
+    const t = await setup(a, undefined, undefined, own);
+    await t.req({ type: "session.list" });
+    await t.req({ type: "git.commitMessageCancel", cwd: "/ct" });
+    await t.req({ type: "worktree.cancel", cwd: "/ct", scan: "s" });
+    expect(frames(a, "git.commitMessageCancel")).toHaveLength(1);
+    expect(frames(a, "worktree.cancel")).toHaveLength(1);
+    expect(t.localSeen.filter((m) => m.type === "git.commitMessageCancel" || m.type === "worktree.cancel")).toHaveLength(0);
+    await t.req({ type: "git.commitMessageCancel", cwd: "/host/x" });
+    expect(t.localSeen.filter((m) => m.type === "git.commitMessageCancel")).toHaveLength(1);
+    expect(frames(a, "git.commitMessageCancel")).toHaveLength(1);
+  });
+
   it("a cwd in a reply counts only for project.open sent to that side or the side's own session", async () => {
     const a = fakeSide((m) => (m.type === "fs.list" ? { cwd: "/ct2" } : m.type === "session.open" ? { session: { cwd: "/ct3" } } : m.type === "project.open" ? { cwd: "/ct4" } : null));
     const t = await setup(a, undefined, undefined, own);

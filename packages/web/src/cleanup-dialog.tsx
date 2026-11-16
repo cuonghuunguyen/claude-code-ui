@@ -88,7 +88,8 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemov
     }
     return () => {
       live = false;
-      void request({ type: "worktree.cancel", scan }).catch(() => {});
+      // One scan id spans the repositories, which may sit on different Sides: each gets the cancel.
+      for (const repo of repos) void request({ type: "worktree.cancel", cwd: repo, scan }).catch(() => {});
     };
   }, [cands, repos, request]);
 

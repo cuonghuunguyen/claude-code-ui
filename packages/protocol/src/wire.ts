@@ -417,8 +417,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "git.stashApply" | "git.stashPop" | "git.stashDrop"; cwd: string; index: number; hash: string; exact?: true }
   /** Claude writes a commit message for `paths` (GH-559). `project`: the project cwd, the key of `git.commitMessageInstructions`. */
   | { type: "git.commitMessage"; cwd: string; paths: string[]; project?: string; exact?: true }
-  /** Stops this connection's running `git.commitMessage` (it replies `cancelled`). */
-  | { type: "git.commitMessageCancel" }
+  /** Stops this connection's running `git.commitMessage` (it replies `cancelled`). `cwd`: that request's `cwd`, routing only (the Side that runs it). */
+  | { type: "git.commitMessageCancel"; cwd: string }
   /** Pull `ref` (fast-forward only) as `git.branch` showed it; `local`: the sha shown; `argv`: the command shown. Reply GitRemoteResult. */
   | { type: "git.pull"; cwd: string; ref: string; local: string; argv: string[]; /** The remote-tracking hash the dialog showed (`upstreamHash`), absent when none; a different one now is `stale`. */ tracking?: string; exact?: true }
   /**
@@ -436,8 +436,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "worktree.status"; cwd: string; path: string; /** A Clean up scan or warming read: low git priority, cancelled by `worktree.cancel`. */ scan?: string }
   /** The last preview status of each path, without git (GH-463); `stale: true` when it would be recomputed. Reply WorktreeCachedResult. */
   | { type: "worktree.cached"; cwd: string; paths: string[] }
-  /** Cancels the queued and running `worktree.status` requests of `scan` (replied `cancelled`). Reply {}. */
-  | { type: "worktree.cancel"; scan: string }
+  /** Cancels the queued and running `worktree.status` requests of `scan` (replied `cancelled`). Reply {}. `cwd`: the scan's `worktree.status` `cwd`, routing only (the Side that runs it). */
+  | { type: "worktree.cancel"; cwd: string; scan: string }
   /**
    * `git worktree remove --force` of a linked worktree inside the roots (not main, not locked, not a symlink), then `git branch -D` for a Created branch (git config `branch.<name>.claudeUiCreated`, or legacy `worktree-*`; ADR 0005),
    * `git branch -d` for another one only with `deleteBranch`; `expectSafe`: refused with `stale` unless status is still safe; `expect`: refused with `stale` when the current status has more uncommitted files, commits ahead or ignored files than listed (checked before and after the sessions and terminals close). Transcripts stay.
