@@ -386,7 +386,7 @@ export function createSessionFollow(host: FollowHost) {
         else follow.drop(id, { unsubscribe: false });
       }
       const worker = async () => {
-        for (let id = background.shift(); id !== undefined && at === gen; id = background.shift()) if (views[id]) await subscribe(id, { background: true });
+        for (let id = background.shift(); id !== undefined && at === gen; id = background.shift()) if (views[id] && intent.get(id) !== "hold") await subscribe(id, { background: true }); // opened while it waited: its hold stays
       };
       // Bounded wait: a request that never settles must not keep the background views and the repos from loading.
       let timer: ReturnType<typeof setTimeout>;

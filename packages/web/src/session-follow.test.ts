@@ -128,6 +128,33 @@ describe("reconnect with hundreds of Sessions", () => {
     expect(t.fake.subs().filter((c) => c.msg.background)).toHaveLength(4);
   });
 
+  it("a queued Session opened before its turn keeps its hold: the queue skips it", async () => {
+    const t = setup();
+    seedMany(t);
+    void t.follow.resync();
+    await flush();
+    t.fake.subs().forEach((c) => c.ok());
+    await flush();
+    const first = t.fake.subs().filter((c) => c.msg.background).map((c) => c.msg.sessionId);
+    expect(first).toEqual(["s2", "s3", "s4", "s5"]);
+    const waiting = "s10"; // still in the queue
+    t.shown.set(waiting, "tab");
+    void t.follow.show(waiting);
+    await flush();
+    const holds = t.fake.subs().filter((c) => c.msg.sessionId === waiting);
+    expect(holds.map((c) => !!c.msg.background)).toEqual([false]);
+    holds[0]!.ok();
+    const sent: string[] = [];
+    for (let guard = 0; guard < 400; guard++) {
+      const open = t.fake.calls.splice(0);
+      if (!open.length) break;
+      for (const c of open) (c.msg.background && sent.push(c.msg.sessionId), c.ok());
+      await flush();
+    }
+    expect(sent).not.toContain(waiting);
+    expect(sent.length).toBeGreaterThan(200);
+  });
+
   it("a background view of a Session that is not live is dropped unless it is unread, without unsubscribing", async () => {
     const t = setup();
     t.follow.seed("idle", view());
