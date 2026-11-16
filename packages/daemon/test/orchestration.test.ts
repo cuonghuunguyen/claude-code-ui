@@ -1350,6 +1350,7 @@ describe("orchestration", () => {
       Worker events arrive as a notice in this conversation. After worker_start or worker_send, end your turn; call worker_wait only after a notice (even a stale one), once per notice, never in a loop.
       A worker's permission request or question goes to the user, never to you: you get no event and no tool answers it. worker_list shows it as \`waitingForUser\` (kind, tool, summary). Check worker_list when a worker stays quiet for long. Do not ask the user in this chat to answer for the worker: the user sees the request in the worker's own session, in Focus and in a notification.
       A message starting with [claude-ui keep-warm] is not a worker event: reply "ok", call no tool, no worker_wait.
+      A worker on a Side raises unreachable when the Side's connection drops, back when it returns, and ended when the Side restarted or stayed away too long: worker_list shows \`unreachable\`, and worker_send resumes an ended worker once the Side is back.
       If you are a worker, the same rules hold for your workers; report to your coordinator with your RESULT block. A daemonNote in a result: the daemon runs older code; tell the user."
     `);
     const names = daemon.orchestration.tools("x").map((t) => t.name);

@@ -85,6 +85,11 @@ export class RemoteWorker {
   }
   /** Not used for a remote worker: worker.close does the Side's own restart (orchestration.ts closeWorker). */
   restartQuery() {}
+  /** The Hub gave the worker up (its Side stayed away past the grace period): it no longer counts as live or working. A later subscribe restores the state. */
+  giveUp() {
+    this.state = "closed";
+    this.liveFlag = false;
+  }
 
   /** One event of the Side's stream. Returns whether it is news (a worker event may follow from it). */
   receive(e: Event, news: boolean) {
@@ -284,12 +289,23 @@ export function createSideWorkers(deps: SideWorkersDeps) {
       claim(side, l.id);
       try {
         await subscribe(w, again ? w.seq : 0, again);
+        // The pipe drop made the Hub forget its request IDs, and the resume replays only newer parts: pending requests stay answerable from the held parts.
+        for (const p of w.parts.values()) if ((p.type === "permission_request" || p.type === "question") && !p.settled) sides.noteRequest(side, p as never);
         if (w.reportedDown) {
           w.reportedDown = false;
           deps.onReach?.(w, again ? "back" : "restarted");
         }
-      } catch {
-        // The worker's session is gone on the Side, or the pipe dropped again: the next attach tries again.
+      } catch (e) {
+        // The Side is up but has no such session any more (its transcript is gone): the worker is over there. Else the pipe dropped again: the next attach tries again.
+        if (e instanceof RemoteError && e.code === "unknown_session") {
+          w.reachable = true;
+          w.state = "closed";
+          w.liveFlag = false;
+          if (w.reportedDown) {
+            w.reportedDown = false;
+            deps.onReach?.(w, "restarted");
+          }
+        }
       }
     }
   }

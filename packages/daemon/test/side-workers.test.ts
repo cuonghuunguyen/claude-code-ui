@@ -53,6 +53,9 @@ function workerQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMe
       emit({ type: "assistant", uuid: randomUUID(), session_id: sid, parent_tool_use_id: null, message: { id: `msg_${toolUseID}`, role: "assistant", content: [{ type: "tool_use", id: toolUseID, name: "Bash", input: { command: "ls" } }] } });
       const r = await options.canUseTool!("Bash", { command: "ls" }, { signal: new AbortController().signal, suggestions: [], toolUseID, requestId: randomUUID() });
       reply(`perm: ${r!.behavior}`);
+    } else if (text === "slow") {
+      await new Promise((r) => setTimeout(r, 700));
+      reply("done: slow");
     } else if (text === "hold") {
       reply("holding");
       reply(`released by ${await new Promise<string>((r) => (held = r))}`);
@@ -111,8 +114,10 @@ const spawnSide = async (): Promise<SideProcess> => {
   const exit = new EventEmitter();
   const running = runSide({ ready: { schema: [1, 1], version: "1.0.0" }, input: stdin, output: stdout, accept: side.accept, onEnd: () => exit.emit("exit", 0) });
   hostPush = running.push;
-  return { stdin, stdout, stderr: new PassThrough(), kill: () => stdin.end(), on: (e, l) => exit.on(e, l) };
+  return (pipe = { stdin, stdout, stderr: new PassThrough(), kill: () => stdin.end(), on: (e, l) => exit.on(e, l) });
 };
+/** The pipe of the Side's current process: killing it is a pipe drop (the Side's daemon keeps running, as an SSH Side does). */
+let pipe: SideProcess;
 const hubPushes: PushPayload[] = [];
 const hub = createSides({ targets: [wslSide("Ubuntu")], spawn: spawnSide, onPush: forwardSidePush({ send: async (p) => void hubPushes.push(p) }), posixLocal: true });
 const midCoordinator = randomUUID();
@@ -211,7 +216,7 @@ describe("a Hub coordinator drives workers on a Side", () => {
 });
 
 /** A Side driven by hand: its hello (with or without caps), its list, and what the Hub sent it. */
-function handSide(caps?: string[]) {
+function handSide(caps?: string[], epoch = "e") {
   const stdin = new PassThrough();
   const stdout = new PassThrough();
   const got: { type: string }[] = [];
@@ -222,16 +227,16 @@ function handSide(caps?: string[]) {
     buf = lines.pop()!;
     for (const l of lines) {
       const f = JSON.parse(l);
-      if (f.o) stdout.write(JSON.stringify({ c: f.c, m: { type: "daemon_hello", daemonId: "d", logEpoch: "e", ...(caps && { caps }) } }) + "\n");
+      if (f.o) stdout.write(JSON.stringify({ c: f.c, m: { type: "daemon_hello", daemonId: "d", logEpoch: epoch, ...(caps && { caps }) } }) + "\n");
       if (!f.m) continue;
       got.push(f.m);
-      const result = f.m.type === "session.list" ? { sessions: [], projects: ["/side/p"], recentProjects: [] } : {};
+      const result = f.m.type === "session.list" ? { sessions: [], projects: ["/side/p"], recentProjects: [] } : f.m.type === "session.subscribe" ? { logEpoch: epoch, seq: 0, session: { state: "idle" } } : {};
       stdout.write(JSON.stringify({ c: f.c, m: { type: "reply", reqId: f.m.reqId, result } }) + "\n");
     }
   });
   stdout.write('{"ready":true,"schema":[1,1],"version":"1.0.0"}\n');
   const exit = new EventEmitter();
-  return { got, proc: { stdin, stdout, stderr: new PassThrough(), kill: () => exit.emit("exit", 1), on: (e: string, l: (...a: any[]) => void) => exit.on(e, l) } as SideProcess };
+  return { got, kill: () => exit.emit("exit", 1), proc: { stdin, stdout, stderr: new PassThrough(), kill: () => exit.emit("exit", 1), on: (e: string, l: (...a: any[]) => void) => exit.on(e, l) } as SideProcess };
 }
 
 describe("a Side that cannot run workers for this Hub", () => {
@@ -256,4 +261,110 @@ describe("a Side that cannot run workers for this Hub", () => {
     expect(checkRemoteWorker({ coordinatorId: "c1", name: "ok" }, "dontAsk")).toMatch(/does not run in dontAsk/);
     expect(checkRemoteWorker({ coordinatorId: "c1", name: "ok", depth: 0 }, undefined)).toMatch(/worker.depth must be/);
   });
+});
+
+describe("a Side that goes away and comes back", () => {
+  const types = (r: { events: { type: string }[] }) => r.events.map((e) => e.type).sort();
+  const start = async (name: string, prompt: string) => run("worker_start", { name, project: repo, prompt, side: LABEL });
+  const dropPipe = async () => {
+    pipe.kill();
+    await vi.waitFor(() => expect(hub.list().find((x) => x.id === "wsl:Ubuntu")!.state).not.toBe("ready"), { timeout: 5000 });
+  };
+
+  it("a pipe drop reports unreachable; the turn that ended meanwhile replays as turn_end after back; commands fail with side_not_ready meanwhile", async () => {
+    await start("away", "slow");
+    await dropPipe();
+    expect((await wait({ names: ["away"] })).events).toEqual([expect.objectContaining({ type: "unreachable" })]);
+    expect((await run("worker_list", {})).workers.find((x: { name: string }) => x.name === "away")).toMatchObject({ unreachable: true, side: LABEL });
+    expect(await run("worker_send", { name: "away", text: "x" })).toEqual({ error: expect.stringMatching(/is not running/) });
+    // The turn ends on the Side while it is away (its daemon keeps running, as an SSH Side's does).
+    await new Promise((r) => setTimeout(r, 900));
+    await hub.start("wsl:Ubuntu");
+    const got = await vi.waitFor(async () => {
+      const r = await wait({ names: ["away"], timeoutMs: 0 });
+      expect(r.events.length).toBeGreaterThan(0);
+      return r;
+    }, { timeout: 8000 });
+    const all = [...got.events, ...(await wait({ names: ["away"], timeoutMs: 500 })).events];
+    expect(types({ events: all })).toEqual(["back", "turn_end"]);
+    expect(all.find((e) => e.type === "turn_end")!.result).toBe("done: slow");
+    expect((await run("worker_list", {})).workers.find((x: { name: string }) => x.name === "away").unreachable).toBeUndefined();
+    await run("worker_close", { name: "away" });
+    await run("worker_remove", { name: "away" });
+  }, 40000);
+
+  it("a request pending while the pipe drops is still answerable from a Hub browser after back", async () => {
+    await start("pending", "perm");
+    await vi.waitFor(async () => expect((await run("worker_list", {})).workers.find((x: { name: string }) => x.name === "pending")?.waitingForUser).toHaveLength(1), { timeout: 8000 });
+    const w = (await run("worker_list", {})).workers.find((x: { name: string }) => x.name === "pending");
+    await dropPipe();
+    await hub.start("wsl:Ubuntu");
+    await vi.waitFor(async () => expect((await wait({ names: ["pending"], types: ["back"], timeoutMs: 0 })).events).toHaveLength(1), { timeout: 8000 });
+    const ws = new WebSocket(`ws://127.0.0.1:${hubPort}/ws`, [WS_PROTOCOL, `${TOKEN_PROTOCOL_PREFIX}${token}`], { origin: `http://127.0.0.1:${hubPort}` });
+    const inbox: ServerMessage[] = [];
+    ws.on("message", (d) => inbox.push(JSON.parse(String(d))));
+    await new Promise((r) => ws.once("open", r));
+    ws.send(JSON.stringify({ type: "permission.respond", reqId: "r2", sessionId: w.sessionId, requestId: w.waitingForUser[0].requestId, decision: "allow" }));
+    await vi.waitFor(() => expect(inbox.find((m) => m.type === "reply" && m.reqId === "r2")).toMatchObject({ result: { settled: true } }), { timeout: 5000 });
+    ws.close();
+    expect((await wait({ names: ["pending"], types: ["turn_end"] })).events[0]).toMatchObject({ result: "perm: allow" });
+  }, 40000);
+
+  it("a Side whose daemon restarted reports ended side_restarted (the link stays)", async () => {
+    await start("restarty", "hi");
+    expect((await wait({ names: ["restarty"] })).events[0]).toMatchObject({ type: "turn_end" });
+    await dropPipe();
+    expect((await wait({ names: ["restarty"], types: ["unreachable"] })).events).toHaveLength(1);
+    side.close();
+    side = makeSide();
+    await hub.start("wsl:Ubuntu");
+    const ended = await wait({ names: ["restarty"], types: ["ended"] });
+    expect(ended.events).toEqual([expect.objectContaining({ type: "ended", reason: "side_restarted" })]);
+    expect((await run("worker_list", {})).workers.map((x: { name: string }) => x.name)).toContain("restarty");
+  }, 40000);
+
+  it("a Side that stays away past its grace period reports ended side_unreachable", async () => {
+    // A second Hub daemon on the same Sides, with a short grace period.
+    const g = createDaemon({ webRoot, token, roots: [hubRoot], appSettings: hubSettings, query: workerQuery as never, projects: createProjects(), settingsFile: join(cfg, "grace-sessions.json"), history, listCache: false, modelListWaitMs: 0, sides: hub, sideGraceMs: 400, push: { publicKey: "", subscribe: () => false, send: async () => {} } });
+    const gt = g.orchestration.tools(randomUUID());
+    const call = async (name: string, input: object) => JSON.parse(((await gt.find((t) => t.name === name)!.handler(input as never, {})) as { content: { text: string }[] }).content[0]!.text);
+    await call("worker_start", { name: "gone", project: repo, prompt: "hi", side: LABEL });
+    await dropPipe();
+    const r = await call("worker_wait", { names: ["gone"], timeoutMs: 8000 });
+    const r2 = await call("worker_wait", { names: ["gone"], timeoutMs: 8000 });
+    expect([...r.events, ...r2.events].filter((e: { type: string }) => e.type !== "turn_end").map((e: { type: string; reason?: string }) => `${e.type}${e.reason ? `:${e.reason}` : ""}`)).toEqual(["unreachable", "ended:side_unreachable"]);
+    // An ended worker no longer holds a cap slot, and its Hub link can be removed while the Side is away.
+    expect((await call("worker_list", {})).workers[0]).toMatchObject({ name: "gone", live: false, state: "closed" });
+    expect(await call("worker_remove", { name: "gone" })).toEqual({ name: "gone", removed: true });
+    g.close();
+    await hub.start("wsl:Ubuntu");
+  }, 40000);
+});
+
+describe("a Side runtime that is not the one a worker was seen on", () => {
+  it("a Hub restart adopts the worker without events; a later attach to another Side run reports ended side_restarted", async () => {
+    const coordinatorId = randomUUID();
+    const sessionId = randomUUID();
+    const sessions = join(cfg, "hand-sessions.json");
+    writeFileSync(sessions, JSON.stringify({ [sessionId]: { coordinatorId, name: "w", cwd: "/side/p", side: "wsl:Hand", saved: Date.now() } }));
+    let hand = handSide(["remoteWorkers"], "run1");
+    const handHub = createSides({ targets: [wslSide("Hand")], spawn: () => hand.proc, posixLocal: true });
+    const d = createDaemon({ webRoot, token, roots: [hubRoot], appSettings: hubSettings, query: workerQuery as never, projects: createProjects(), settingsFile: sessions, history, listCache: false, modelListWaitMs: 0, sides: handHub, sideGraceMs: 60_000, push: { publicKey: "", subscribe: () => false, send: async () => {} } });
+    const t = d.orchestration.tools(coordinatorId);
+    const call = async (name: string, input: object) => JSON.parse(((await t.find((x) => x.name === name)!.handler(input as never, {})) as { content: { text: string }[] }).content[0]!.text);
+    // Before the Side is up the link is listed, and no command reaches it.
+    expect((await call("worker_list", {})).workers).toEqual([expect.objectContaining({ name: "w", state: "idle", live: false })]);
+    await handHub.start("wsl:Hand");
+    await vi.waitFor(() => expect(hand.got.map((m) => m.type)).toContain("session.subscribe"), { timeout: 5000 });
+    expect((await call("worker_wait", { timeoutMs: 0 })).events).toEqual([]);
+    // The Side process ends and another run of its daemon (a new epoch) comes up.
+    hand.kill();
+    await vi.waitFor(() => expect(handHub.list().find((x) => x.id === "wsl:Hand")!.state).not.toBe("ready"), { timeout: 5000 });
+    expect((await call("worker_wait", { timeoutMs: 2000 })).events).toEqual([expect.objectContaining({ type: "unreachable" })]);
+    hand = handSide(["remoteWorkers"], "run2");
+    await handHub.start("wsl:Hand");
+    expect((await call("worker_wait", { timeoutMs: 5000 })).events).toEqual([expect.objectContaining({ type: "ended", reason: "side_restarted" })]);
+    d.close();
+    handHub.close();
+  }, 30000);
 });

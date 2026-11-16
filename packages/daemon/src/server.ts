@@ -314,6 +314,8 @@ export function createDaemon(opts: {
   perf?: PerfMonitor;
   /** How long worker_stop and worker_close wait for a stopped worker to leave running/needs_input (orchestration.ts); tests shorten it. */
   stopWaitMs?: number;
+  /** How long a Side may stay away before the workers on it are reported ended (default: the Side's grace period); tests shorten it. */
+  sideGraceMs?: number;
   /** GH-553: the OS launcher shortcut (shortcut.ts); none: launcher.shortcut fails (a side, another OS). */
   shortcut?: { installed(): boolean; set(on: boolean): Promise<boolean> };
   /** A background resubscribe behind by more events than this gets the snapshot (default REPLAY_MAX_EVENTS). */
@@ -1154,7 +1156,7 @@ export function createDaemon(opts: {
     : undefined;
   const orchestration = createOrchestration({
     links: settings,
-    remote: sideWorkers && opts.sides && { workers: sideWorkers, pathSide: (path) => { const id = opts.sides!.pathSide(path); return id && id !== LOCAL_SIDE ? id : undefined; } },
+    remote: sideWorkers && opts.sides && { workers: sideWorkers, graceMs: (id) => opts.sideGraceMs ?? opts.sides!.graceMin(id) * 60_000, pathSide: (path) => { const id = opts.sides!.pathSide(path); return id && id !== LOCAL_SIDE ? id : undefined; } },
     changed: () => broadcast({ type: "sessions.changed" }),
     held: (id) => !!holds.get(id),
     settings: () => appSettings.get().orchestration,
