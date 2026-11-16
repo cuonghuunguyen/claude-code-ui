@@ -2231,6 +2231,30 @@ describe("keep the coordinator's cache warm", () => {
     return { coord, w };
   };
 
+  it("a keep-warm tick keeps a worker-coordinator's waiting mark: idle_waiting after its work ends (GH-852)", async () => {
+    enable({ keepWarmMinutes: 55, stallMinutes: 20 });
+    const root = await coordinator();
+    const mid = await call(root, "worker_start", { name: "mid", cwd: dirB, prompt: "bg" });
+    await until(() => runsOf(mid.sessionId)[0]?.texts.length);
+    await settle(mid.sessionId);
+    await call(mid.sessionId, "worker_start", { name: "kid", cwd: dirC, prompt: "ok" });
+    await pause();
+    await settle(mid.sessionId);
+    await call(root, "worker_wait", { timeoutMs: 0 });
+    await until(async () => (await call(mid.sessionId, "worker_wait", { timeoutMs: 0 })).events.length > 0);
+    await pause();
+    await settle(mid.sessionId);
+    expect(await sweepAt(mid.sessionId, 56 * MIN, true)).toBe(1);
+    const sid = mid.sessionId;
+    pushTo.get(sid)!({ type: "system", subtype: "background_tasks_changed", uuid: randomUUID(), session_id: sid, tasks: [] });
+    pushTo.get(sid)!({ type: "system", subtype: "task_notification", uuid: randomUUID(), session_id: sid, task_id: "bg1", tool_use_id: "bgcall", status: "stopped", output_file: "", summary: "" });
+    await new Promise((r) => setTimeout(r, 50));
+    daemon.orchestration.sweep(Date.now() + 60 * MIN);
+    daemon.orchestration.sweep(Date.now() + 90 * MIN);
+    const ev = (await call(root, "worker_wait", { types: ["stalled"], timeoutMs: 0 })).events;
+    expect(ev).toEqual([expect.objectContaining({ name: "mid", reason: "idle_waiting" })]);
+  });
+
   it("an idle coordinator with a running worker gets one keep-warm prompt after keepWarmMinutes, not before", async () => {
     const { coord } = await withWorker();
     expect(await sweepAt(coord, 54 * MIN)).toBe(0);
