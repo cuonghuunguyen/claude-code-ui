@@ -2,9 +2,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, uti
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listSessions } from "@anthropic-ai/claude-agent-sdk";
+import { getSessionInfo, listSessions } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, describe, expect, it } from "vitest";
-import { FIRST_TAIL_BYTES, lastEntryTime, listSessionsOffThread, mapLimit, scanThreadConfig, transcriptStamp } from "../src/session-scan.ts";
+import { FIRST_TAIL_BYTES, lastEntryTime, listSessionsOffThread, mapLimit, patchScan, scanThreadConfig, transcriptStamp } from "../src/session-scan.ts";
 
 const realScript = scanThreadConfig.script;
 const realEnv = process.env.CLAUDE_CONFIG_DIR;
@@ -189,5 +189,56 @@ describe("session-scan", () => {
     });
     expect(out).toEqual(Array.from({ length: 20 }, (_, i) => i * 2));
     expect(max).toBe(3);
+  });
+
+  describe("patchScan", () => {
+    const id = (n: number) => `4b2c3d4e-5f60-4718-8a9b-${String(n).padStart(12, "0")}`;
+    const path = (root: string, n: number | string, folder = "-tmp-p") => join(root, "projects", folder, typeof n === "number" ? `${id(n)}.jsonl` : n);
+    const at = (f: string, sec: number) => utimesSync(f, sec, sec);
+    const base = async (root: string) => ({ stamp: (await transcriptStamp(join(root, "projects")))!, result: await listSessions() });
+    const patch = async (root: string, last: Awaited<ReturnType<typeof base>>) =>
+      patchScan(last, (await transcriptStamp(join(root, "projects")))!, join(root, "projects"), (s) => getSessionInfo(s));
+
+    it("gives the same list as a full listSessions() after transcripts are added, changed and removed", async () => {
+      const root = config(3);
+      for (let i = 0; i < 3; i++) at(path(root, i), 1_700_000_000 + i * 10);
+      const last = await base(root);
+      writeFileSync(path(root, 10), entry("user", "2026-02-01T00:00:00.000Z", " new") + "\n");
+      at(path(root, 10), 1_700_000_100);
+      writeFileSync(path(root, 11), "");
+      writeFileSync(path(root, 12), JSON.stringify({ type: "user", isSidechain: true, cwd: "/tmp/p", sessionId: "s", timestamp: "2026-02-01T00:00:00.000Z", message: { role: "user", content: "side" } }) + "\n");
+      writeFileSync(path(root, "not-a-uuid.jsonl"), entry("user", "2026-02-01T00:00:00.000Z") + "\n");
+      writeFileSync(path(root, 1), entry("user", "2026-01-01T00:00:00.000Z") + "\n" + entry("assistant", "2026-01-01T00:00:05.000Z") + "\n");
+      at(path(root, 1), 1_700_000_200);
+      rmSync(path(root, 2));
+      const got = await patch(root, last);
+      expect(got).toEqual(await listSessions());
+      const ids = got!.map((s) => s.sessionId);
+      expect(ids).toContain(id(10));
+      expect(ids).not.toContain(id(2));
+      expect(ids).not.toContain(id(11));
+      expect(ids).not.toContain(id(12));
+    });
+
+    it("leaves a duplicate session id and a continued-in transcript to the full scan", async () => {
+      const root = config(1);
+      const last = await base(root);
+      mkdirSync(join(root, "projects", "-tmp-q"));
+      writeFileSync(path(root, 0, "-tmp-q"), entry("user", "2026-02-01T00:00:00.000Z") + "\n");
+      expect(await patch(root, last)).toBeUndefined();
+      // The duplicate stays, one copy is removed.
+      const dup = await base(root);
+      rmSync(path(root, 0, "-tmp-q"));
+      expect(await patch(root, dup)).toBeUndefined();
+
+      const root2 = config(1);
+      const last2 = await base(root2);
+      const A = id(20);
+      const B = id(21);
+      writeFileSync(path(root2, 20), entry("user", "2026-02-01T00:00:00.000Z") + "\n" + JSON.stringify({ type: "continued-in", continuedInSessionId: B }) + "\n");
+      writeFileSync(path(root2, 21), JSON.stringify({ ...JSON.parse(entry("user", "2026-02-02T00:00:00.000Z")), parentUuid: null }) + "\n");
+      expect(await patch(root2, last2)).toBeUndefined();
+      expect((await listSessions()).map((s) => s.sessionId)).not.toContain(A);
+    });
   });
 });
