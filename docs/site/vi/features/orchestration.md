@@ -65,4 +65,5 @@ Hoặc dùng hộp thoại Plugin. Reviewer cần skill `pr-review`; nghiệm th
 - `worker_close` từ chối worker còn đang chạy worker riêng; `worker_remove` từ chối worker còn bất kỳ worker nào bên dưới (hãy gỡ các worker đó trước).
 - `worker_start` vượt giới hạn không hỏi bạn: worker nhận lỗi ngay.
 - Yêu cầu mức cao luôn thuộc về bạn. Coordinator vẫn có thể dừng hoặc đóng worker.
+- Coordinator ở cửa sổ chính có thể khởi động worker trong dự án của một side đang chạy (WSL, Docker, SSH). Thẻ duyệt ghi tên side (`on WSL: Ubuntu`). Worker chạy trên side đó; hãy trả lời yêu cầu của nó ở cửa sổ chính. Side chạy Claude UI cũ bị từ chối: cập nhật ở Settings > Sides. Coordinator chạy trên một side chỉ khởi động worker trên chính side đó.
 - Worker tính vào mức dùng gói của bạn như mọi phiên.

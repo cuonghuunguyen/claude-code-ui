@@ -2,6 +2,8 @@
 import type { AgentInfo, Effort, EffortLevel, Part, PermissionMode, PlanUsage, SessionState, SlashCommand } from "./parts.ts";
 import type { HistSummary } from "./histogram.ts";
 
+/** `session.create.worker`: the Hub coordinator's ID and the worker's name; `depth`: the worker's depth in the Hub's tree (a worker's own workers on this Side count from it). */
+export type CreateWorker = { coordinatorId: string; name: string; agent?: string; keepOpen?: true; depth?: number };
 /** A model an Engine offers (models.list). `value` goes to session.setModel; "default" = the Engine's default. */
 export type ModelInfo = {
   value: string;
@@ -99,8 +101,11 @@ export type FsEntry = { name: string; path: string; isDir: boolean };
  */
 export type ClientMessage = { reqId: string; side?: string } & (
   /** `coordinator`: the session gets the orchestration tools (docs/spec.md "Orchestration"); refused while orchestration is off. */
-  /** `draft`: the new-session tab's upload token (fs.upload `draft`); the session gets the id, and with it the folder, of those uploads; one claim per token. A `draft` already used by a loaded session of the same `cwd` and Engine returns that session and creates none (a retry after a lost reply). */
-  | { type: "session.create"; cwd: string; model?: string; draft?: string; engine?: Engine }
+  /**
+   * `permissionMode` / `effort`: the new session's own settings instead of the Engine's start mode (a Hub starting a worker on this Side, docs/spec.md "Orchestration").
+   * `worker`: the session is a worker of the Hub's coordinator (a Side link is written before the reply); errors `bad_request` (name, mode), `orchestration_off`.
+   * `draft`: the new-session tab's upload token (fs.upload `draft`); the session gets the id, and with it the folder, of those uploads; one claim per token. A `draft` already used by a loaded session of the same `cwd` and Engine returns that session and creates none (a retry after a lost reply). */
+  | { type: "session.create"; cwd: string; model?: string; draft?: string; engine?: Engine; permissionMode?: PermissionMode; effort?: Effort; worker?: CreateWorker }
   /** Binary and version of OpenCode, never starts its server. Reply OpenCodeStatus. */
   | { type: "opencode.status" }
   /** Stops OpenCode's server (the next use starts it again) and drops its cached model data; broadcasts opencode.providersChanged. Reply `{}`; error `opencode_busy` while a turn runs, an OAuth login waits or a session is created. */
@@ -244,6 +249,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "aside.close"; sessionId: string }
   /** Keep as session: the Aside becomes a listed Session (link to its owner dropped). Reply `{}`; errors unknown_session, not_an_aside. */
   | { type: "aside.keep"; sessionId: string }
+  /** A Hub keeps a worker open (worker_keep_open): `keepOpen` true keeps the CLI after each turn. Reply `{}`; errors not_worker. */
+  | { type: "worker.keepOpen"; sessionId: string; keepOpen: boolean }
   /** Web app Remove worker: as `worker_remove` (session and transcript deleted, link dropped, worktree kept). Reply `{}`; errors not_worker, unknown_worker, held_elsewhere, session_running, has_workers, delete_failed. Broadcasts `sessions.changed`. */
   | { type: "worker.remove"; sessionId: string }
   /** Without `path`: the allowlisted roots (of `side`). */
@@ -576,7 +583,7 @@ export type ServerMessage =
   | Event
   | { type: "reply"; reqId: string; result: unknown }
   /** The first message on every connection (before `plan_usage`): this daemon's persistent identity (`<config dir>/daemon-id`) and the epoch of its event log. A side daemon's hello is not relayed by the Hub. */
-  | { type: "daemon_hello"; daemonId: string; logEpoch: string }
+  | { type: "daemon_hello"; daemonId: string; logEpoch: string; /** What this build supports beyond the base protocol: `remoteWorkers` = `session.create.worker`, `worker.keepOpen`. Absent from older daemons. */ caps?: string[] }
   /** A watched file changed on disk; `path` as given in `fs.watch`, `mtime` 0 when it was deleted. */
   | { type: "fs.changed"; path: string; mtime: number }
   /** Sent to every connection after a rename, archive, delete, project open or project remove, worktree create or remove: refetch `session.list`. `deleted`: drop that session. */

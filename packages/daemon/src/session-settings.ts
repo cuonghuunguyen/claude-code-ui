@@ -22,6 +22,12 @@ export type Link = { coordinatorId?: string; name?: string; cwd?: string; port?:
   readOnly?: true;
   /** GH-574: worker_start / worker_keep_open keepOpen: no auto-close after a turn. */
   keepOpen?: true;
+  /** GH-575, on a Side: a worker a Hub's coordinator started here (`coordinatorId` is the Hub's session ID, unknown on this daemon). Nothing here delivers events for it; this daemon only runs its CLI lifecycle. */
+  remote?: true;
+  /** GH-575, on a Hub: the Side (SideInfo.id) that runs this worker. The session ID is in no local catalogue, so `prune` keeps it. */
+  side?: string;
+  /** GH-575, on a Side: the worker's depth in the Hub's tree, where the walk along `coordinatorId` ends (the Hub coordinator has no link here). */
+  depth?: number;
 };
 /** `saved`: when the entry last changed (ms); absent in files written before GH-91. */
 type Entry = Partial<SessionSettings> & Link & { saved?: number };
@@ -53,10 +59,10 @@ export function createSessionSettings({ file, max = MAX_SETTINGS, now = Date.now
       });
     },
     delete: remove,
-    /** Removes the entries `keep` rejects (no transcript, not live here) that were saved before the grace period. */
+    /** Removes the entries `keep` rejects (no transcript, not live here) that were saved before the grace period; never a Hub link to a worker on a Side (`side`). */
     prune(keep: (id: string) => boolean) {
       const old = now() - PRUNE_GRACE_MS;
-      const stale = Object.entries(store.get()).filter(([id, e]) => !keep(id) && !((e.saved ?? 0) > old)).map(([id]) => id);
+      const stale = Object.entries(store.get()).filter(([id, e]) => !keep(id) && !e.side && !((e.saved ?? 0) > old)).map(([id]) => id);
       if (stale.length) remove(stale);
     },
   };

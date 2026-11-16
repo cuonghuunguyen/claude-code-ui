@@ -8,9 +8,10 @@ State these when they bite.
 
 1. **The coordinator must be a claude-ui session.** A Claude Code CLI session in a terminal
    does not get the `worker_*` tools.
-2. **Workers start on the coordinator's side only.** A coordinator in a Windows project cannot
-   start workers in a WSL path, and the reverse. Start the coordinator in a project on the side
-   where the repos, skills and MCP servers are.
+2. **A coordinator on a Side starts workers on its own side only.** A coordinator on the Hub
+   starts workers on the Hub's Sides too (`worker_start` with `side`, WSL, Docker, SSH). A
+   coordinator that runs on a Side cannot start workers on the Hub or another Side: start the
+   coordinator on the Hub, or in a project on the side where the repos, skills and MCP servers are.
 3. **Workers belong to one coordinator session.** Resume that session to keep driving them; a
    new session cannot adopt them (`workers.md` "Restarts"). The ledger is what makes a
    hand-finish possible.

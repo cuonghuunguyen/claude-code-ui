@@ -67,4 +67,5 @@ Or use the Plugins dialog. The reviewer needs the `pr-review` skill; acceptance 
 - `worker_close` refuses a worker that has running workers of its own; `worker_remove` refuses a worker that has any worker below it (remove those first).
 - A `worker_start` over a limit asks you nothing: the worker gets the error at once.
 - High-tier requests are always yours. The coordinator can still stop or close the worker.
+- A coordinator on your main window can start workers in a project of a running side (WSL, Docker, SSH). The card names the side (`on WSL: Ubuntu`). The worker runs on that side; answer its requests in the main window. A side on an older Claude UI is refused: update it in Settings > Sides. A coordinator that runs on a side starts workers on that side only.
 - Workers count toward your plan usage like any session.

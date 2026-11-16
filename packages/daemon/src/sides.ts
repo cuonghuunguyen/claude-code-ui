@@ -1333,6 +1333,7 @@ export function createSides(opts: {
     claimCwd,
     markLocal,
     pathSide,
+    graceMin,
     onChange(l: () => void) {
       changeListeners.add(l);
       return () => void changeListeners.delete(l);
