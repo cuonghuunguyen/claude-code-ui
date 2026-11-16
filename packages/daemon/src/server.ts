@@ -365,7 +365,10 @@ export function createDaemon(opts: {
     allowBypass: opts.allowBypass,
     onFileEdit: (path: string, original: string) => localHistory.before(path, "agent", original),
     // `live` of the session list changed (CLI started or dropped).
-    onLiveChange: () => broadcast({ type: "sessions.changed" }),
+    onLiveChange: (id: string) => {
+      broadcast({ type: "sessions.changed" });
+      orchestration.liveChanged(id);
+    },
     supportsAuto,
     uploadDir: (id: string) => {
       try {
@@ -583,7 +586,10 @@ export function createDaemon(opts: {
   const claudeLoginChanged = () => {
     models = undefined;
     known = [];
-    for (const s of sessions.values()) if (!s.releaseQuery()) s.staleLogin = true;
+    for (const s of sessions.values()) {
+      if (!s.releaseQuery()) s.staleLogin = true;
+      else console.log(`session ${s.id}: Claude login changed, CLI closed`);
+    }
     void plan.reset();
     // GH-668: the ready Haiku process holds the old login (token in its env).
     warmCommit.stop();

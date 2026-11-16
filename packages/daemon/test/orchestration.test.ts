@@ -33,6 +33,8 @@ const clears: { from: string; to: string }[] = [];
  * auto-mode classifier denies; "/clear" resets the conversation under a new session ID (no turn, as the CLI); any other prompt
  * replies "done: <text>". Each turn ends with a result.
  */
+/** Pushes a message into the live fake query of a session outside a turn (set by the "bg" prompt): a notice the CLI sends while idle. */
+const pushTo = new Map<string, (m: unknown) => void>();
 const AGENTS = ["claude", "Explore", "orchestration:implementer", "orchestration:reviewer"];
 function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) {
   const run: Run = { options, texts: [] };
@@ -84,6 +86,7 @@ function orchQuery({ prompt, options = {} }: { prompt: AsyncIterable<SDKUserMess
       reply(`perm: ${JSON.stringify(r)}`);
     } else if (text === "bg") {
       // A background task no turn end stops (a subagent / shell still running).
+      pushTo.set(sid, emit);
       emit({ type: "system", subtype: "task_started", uuid: randomUUID(), session_id: sid, task_id: "bg1", tool_use_id: "bgcall", description: "bg" });
       reply("bg");
     } else if (text === "limit") {
@@ -2024,6 +2027,50 @@ describe("stall watchdog", () => {
   const stalls = async (coord: string, names?: string[]) => (await call(coord, "worker_wait", { names, types: ["stalled"], timeoutMs: 0 })).events as { name: string; reason: string; lastActivity: string }[];
   const row = async (coord: string, n: string) => (await call(coord, "worker_list")).workers.find((w: { name: string }) => w.name === n);
   const later = (ms: number) => daemon.orchestration.sweep(Date.now() + ms);
+  const turnEnd = async (coord: string, name: string) => (await call(coord, "worker_wait", { names: [name], types: ["turn_end"], timeoutMs: POLL_MS })).events[0];
+
+  it("an idle worker whose background task ends with no CLI turn raises one stalled idle_waiting (GH-852); not while it runs, not before stallMinutes", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "iw1", cwd: dirB, prompt: "bg" });
+    await settle(w.sessionId);
+    expect((await turnEnd(coord, "iw1"))?.type).toBe("turn_end");
+    // The task runs: no stall, however long (the sweep records that it was busy).
+    later(SILENT);
+    expect(await stalls(coord)).toEqual([]);
+    const sid = w.sessionId;
+    pushTo.get(sid)!({ type: "system", subtype: "background_tasks_changed", uuid: randomUUID(), session_id: sid, tasks: [] });
+    pushTo.get(sid)!({ type: "system", subtype: "task_notification", uuid: randomUUID(), session_id: sid, task_id: "bg1", tool_use_id: "bgcall", status: "stopped", output_file: "", summary: "" });
+    await new Promise((r) => setTimeout(r, 50));
+    later(SILENT + 60_000);
+    expect(await stalls(coord)).toEqual([]);
+    later(SILENT * 2);
+    expect(await stalls(coord)).toEqual([expect.objectContaining({ name: "iw1", reason: "idle_waiting" })]);
+    later(SILENT * 3);
+    expect(await stalls(coord)).toEqual([]);
+    expect(await row(coord, "iw1")).toMatchObject({ stalled: "idle_waiting" });
+    await call(coord, "worker_send", { name: "iw1", text: "go on" });
+    await settle(sid);
+    expect(await row(coord, "iw1")).not.toHaveProperty("stalled");
+  });
+
+  it("a daemon drop of a waiting worker's CLI raises stalled closed_waiting with the last reply; worker_close raises none (GH-852)", async () => {
+    enable();
+    const coord = await coordinator();
+    const w = await call(coord, "worker_start", { name: "cw1", cwd: dirB, prompt: "bg" });
+    await settle(w.sessionId);
+    await turnEnd(coord, "cw1");
+    // A silent daemon drop of the CLI (plugins restart).
+    await c.request({ type: "plugins.restart", cwd: dirB, sessionId: w.sessionId });
+    const [e] = await stalls(coord);
+    expect(e).toMatchObject({ name: "cw1", reason: "closed_waiting", result: "bg" });
+    expect(await row(coord, "cw1")).toMatchObject({ live: false, stalled: "closed_waiting" });
+    const w2 = await call(coord, "worker_start", { name: "cw2", cwd: dirB, prompt: "bg" });
+    await settle(w2.sessionId);
+    await turnEnd(coord, "cw2");
+    await call(coord, "worker_close", { name: "cw2" });
+    expect(await stalls(coord)).toEqual([]);
+  });
 
   it("a CLI that ends in the middle of a turn raises one stalled ended_without_result and a notice", async () => {
     enable();
@@ -2183,6 +2230,30 @@ describe("keep the coordinator's cache warm", () => {
     await pause();
     return { coord, w };
   };
+
+  it("a keep-warm tick keeps a worker-coordinator's waiting mark: idle_waiting after its work ends (GH-852)", async () => {
+    enable({ keepWarmMinutes: 55, stallMinutes: 20 });
+    const root = await coordinator();
+    const mid = await call(root, "worker_start", { name: "mid", cwd: dirB, prompt: "bg" });
+    await until(() => runsOf(mid.sessionId)[0]?.texts.length);
+    await settle(mid.sessionId);
+    await call(mid.sessionId, "worker_start", { name: "kid", cwd: dirC, prompt: "ok" });
+    await pause();
+    await settle(mid.sessionId);
+    await call(root, "worker_wait", { timeoutMs: 0 });
+    await until(async () => (await call(mid.sessionId, "worker_wait", { timeoutMs: 0 })).events.length > 0);
+    await pause();
+    await settle(mid.sessionId);
+    expect(await sweepAt(mid.sessionId, 56 * MIN, true)).toBe(1);
+    const sid = mid.sessionId;
+    pushTo.get(sid)!({ type: "system", subtype: "background_tasks_changed", uuid: randomUUID(), session_id: sid, tasks: [] });
+    pushTo.get(sid)!({ type: "system", subtype: "task_notification", uuid: randomUUID(), session_id: sid, task_id: "bg1", tool_use_id: "bgcall", status: "stopped", output_file: "", summary: "" });
+    await new Promise((r) => setTimeout(r, 50));
+    daemon.orchestration.sweep(Date.now() + 60 * MIN);
+    daemon.orchestration.sweep(Date.now() + 90 * MIN);
+    const ev = (await call(root, "worker_wait", { types: ["stalled"], timeoutMs: 0 })).events;
+    expect(ev).toEqual([expect.objectContaining({ name: "mid", reason: "idle_waiting" })]);
+  });
 
   it("an idle coordinator with a running worker gets one keep-warm prompt after keepWarmMinutes, not before", async () => {
     const { coord } = await withWorker();
