@@ -16,6 +16,7 @@ import { EngineError, isModel } from "./engine-catalogue.ts";
 import { real } from "./fd-check.ts";
 import { createFeeds } from "./feed.ts";
 import { localSettingsFile } from "./local-settings.ts";
+import { checkRemoteWorker } from "./orchestration.ts";
 import { redact } from "./plugins.ts";
 import { trim } from "./projects.ts";
 import { clearSearchCache } from "./search.ts";
@@ -68,6 +69,14 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     if (isRemoving(cwd)) return r.fail("worktree_removing", "This worktree is being removed");
     const catalogue = catalogues.byName(msg.engine ?? DEFAULT_ENGINE);
     if (!catalogue) return r.fail("bad_request", `no engine ${msg.engine}`);
+    // GH-575: a Hub's coordinator starts a worker here (docs/spec.md "Orchestration"): its own mode and effort, and the Side link written before the reply.
+    const worker = msg.worker;
+    if (worker !== undefined) {
+      const bad = checkRemoteWorker(worker, msg.permissionMode);
+      if (bad) return r.fail("bad_request", bad);
+    }
+    if (msg.permissionMode !== undefined && !PERMISSION_MODES.includes(msg.permissionMode)) return r.fail("bad_request", `permissionMode must be one of ${PERMISSION_MODES.join(", ")}`);
+    if (msg.effort !== undefined && !EFFORTS.includes(msg.effort)) return r.fail("bad_request", `effort must be one of ${EFFORTS.join(", ")}`);
     // A repeat of a create whose reply was lost (same draft token, cwd and Engine, session still loaded): that session, not a second one.
     const draft = typeof msg.draft === "string" && msg.draft ? msg.draft : undefined;
     // A create still running for this token (a retry after a timeout): wait for it, then find its session below.
@@ -78,7 +87,7 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     try {
       // The new-session tab's draft uploads are claimed only by an Engine that lets us choose the session id (OpenCode chooses its own).
       // One promise from the first await on (the mode lookup may wait for a cold model list): a repeat with the token waits for it.
-      const making = (async () => catalogue.create(cwd, { model: msg.model, permissionMode: await catalogue.startMode(cwd, msg.model) }, { draft: msg.draft }))();
+      const making = (async () => catalogue.create(cwd, { model: msg.model, permissionMode: msg.permissionMode ?? (await catalogue.startMode(cwd, msg.model)), ...(msg.effort !== undefined && { effort: msg.effort }) }, { draft: msg.draft }))();
       if (draft) firstSend.creating.set(draft, making);
       try {
         s = await making;
@@ -93,6 +102,17 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     if (!s) return r.fail("worktree_removing", "This worktree is being removed");
     if (draft) remember(firstSend.byDraft, draft, s.id);
     rememberEngine(catalogue.engine.name);
+    if (worker) {
+      const id = s.id;
+      try {
+        saveSettings(() => settings.set(id, { coordinatorId: worker.coordinatorId, name: worker.name, cwd, remote: true, ...(worker.agent && { agent: worker.agent }), ...(worker.keepOpen && { keepOpen: true as const }), ...(worker.depth !== undefined && { depth: worker.depth }) }));
+      } catch (e) {
+        // No worker without its link: the Hub gets the error and creates nothing.
+        void deleteSessionById(id);
+        return r.fail("worker_failed", `the worker link was not saved: ${(e as Error).message}`);
+      }
+      broadcast({ type: "sessions.changed" });
+    }
     return r.reply({ session: s.info() });
   };
   const defaultMode = async (msg: Msg<"session.defaultMode">, r: Respond) => {
@@ -635,6 +655,12 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     const err = await orchestration.userOp(msg.type === "worker.close" ? "close" : "remove", msg.sessionId);
     return err ? r.fail(err.code, err.message) : r.reply({});
   };
+  const workerKeepOpen = async (msg: Msg<"worker.keepOpen">, r: Respond) => {
+    if (typeof msg.sessionId !== "string" || typeof msg.keepOpen !== "boolean") return r.fail("bad_request", "sessionId must be a string and keepOpen a boolean");
+    if (!settings.get(msg.sessionId)?.coordinatorId) return r.fail("not_worker", "This session is not a worker");
+    saveSettings(() => settings.set(msg.sessionId, { keepOpen: msg.keepOpen || undefined }, ["keepOpen"]));
+    return r.reply({});
+  };
   const rewind = async (msg: Msg<"session.rewindPreview" | "session.rewind">, r: Respond) => {
     const s = await find(r, msg.sessionId);
     if (!s) return;
@@ -722,6 +748,7 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     "aside.keep": asideKeep,
     "worker.close": worker,
     "worker.remove": worker,
+    "worker.keepOpen": workerKeepOpen,
     "session.rewindPreview": rewind,
     "session.rewind": rewind,
     "sessions.search": search,

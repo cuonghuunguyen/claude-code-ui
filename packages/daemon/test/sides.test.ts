@@ -912,14 +912,16 @@ describe.skipIf(process.platform === "win32")("docker sides", () => {
     c.ws.close();
   });
 
-  it("a coordinator on the host cannot start a worker in a container", async () => {
+  it("a coordinator on the host starts a worker in a container (GH-575: the Hub drives workers on its Sides)", async () => {
     const c = await client(await dport());
     const coord = await c.request({ type: "session.create", cwd: localRoot, side: "local" });
     expect(coord).toMatchObject({ type: "reply" });
+    // The container's list is known to the Hub: its path routes there.
+    await c.request({ type: "session.list" });
     const tools = dhub.orchestration.tools(coord.result.session.id);
     const r = (await tools.find((t) => t.name === "worker_start")!.handler({ name: "w2", cwd: dockRoot, prompt: "p" } as never, {})) as { content: { text: string }[]; isError?: boolean };
-    expect(r.isError).toBe(true);
-    expect(r.content[0]!.text).toMatch(/is on Docker: dev: a coordinator starts workers on its own side only/);
+    expect(r.isError).toBeFalsy();
+    expect(JSON.parse(r.content[0]!.text)).toMatchObject({ name: "w2", cwd: dockRoot, side: expect.stringContaining("dev") });
     c.ws.close();
   });
 

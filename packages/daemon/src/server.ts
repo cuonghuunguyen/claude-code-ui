@@ -57,6 +57,7 @@ import { cliTurnRunning, JsonlTail, parseJsonl, transcriptEnd, withoutForkPrefix
 import type { KeepAwake } from "./keep-awake.ts";
 import { EDITORS, type Launcher, type OpenCommand } from "./open-external.ts";
 import { createRouter, type Sides } from "./sides.ts";
+import { createSideWorkers } from "./side-workers.ts";
 import { createListVersions } from "./list-versions.ts";
 import { createSessionSettings } from "./session-settings.ts";
 import { createUploads } from "./uploads.ts";
@@ -101,6 +102,8 @@ export { REPLAY_MAX_EVENTS } from "./area-sessions.ts";
 export const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 
 /** Transcript restores running at once. */
+/** `daemon_hello.caps` of this build (GH-575): a Hub starts workers on a Side only when it lists remoteWorkers. */
+export const DAEMON_CAPS = ["remoteWorkers"];
 const MAX_RESTORES = 2;
 
 /** Idle close of unheld sessions (docs/spec.md "Idle close"): the one place of the timeout and the scan interval. */
@@ -1138,8 +1141,21 @@ export function createDaemon(opts: {
     if (!c) throw new Error("This daemon has no OpenCode engine");
     return c;
   };
+  // GH-575: this Hub's coordinators drive workers on its Sides (side-workers.ts). Its events go through orchestration like a local worker's.
+  const sideWorkers = opts.sides
+    ? createSideWorkers({
+        sides: opts.sides,
+        isLocal: (id) => sessions.has(id),
+        links: () => settings.entries().flatMap(([id, l]) => (l.side ? [{ id, cwd: l.cwd ?? "", side: l.side }] : [])),
+        onEvent: (w, e) => orchestration.observe(w, e),
+        onGone: (id) => orchestration.droppedRemote(id),
+        onReach: (w, change) => orchestration.remoteState(w, change),
+      })
+    : undefined;
   const orchestration = createOrchestration({
     links: settings,
+    remote: sideWorkers && opts.sides && { workers: sideWorkers, pathSide: (path) => { const id = opts.sides!.pathSide(path); return id && id !== LOCAL_SIDE ? id : undefined; } },
+    changed: () => broadcast({ type: "sessions.changed" }),
     held: (id) => !!holds.get(id),
     settings: () => appSettings.get().orchestration,
     sessions,
@@ -1973,7 +1989,7 @@ export function createDaemon(opts: {
     ws.on("pong", () => (stat.ponged = true));
     ws.on("message", () => (stat.recvMsgs++, (stat.lastRecvAt = Date.now())));
     // First: the page reads the daemon's identity and epoch before anything else (GH-771).
-    send(ws, { type: "daemon_hello", daemonId, logEpoch });
+    send(ws, { type: "daemon_hello", daemonId, logEpoch, caps: DAEMON_CAPS });
     const usage = plan.current();
     if (usage !== undefined) send(ws, { type: "plan_usage", usage });
     if (plan.age() > PLAN_STALE_MS) void plan.reread();
@@ -2107,7 +2123,7 @@ export function createDaemon(opts: {
       .catch((e) => console.error("uploads: sweep failed:", e));
   const firstSweep = sweepMs > 0 ? setTimeout(() => void sweepUploads(), opts.uploadSweepFirstMs ?? 60_000).unref() : undefined;
   const sweeper = sweepMs > 0 ? setInterval(() => void sweepUploads(), sweepMs).unref() : undefined;
-  http.on("close", () => (clearInterval(sleepTimer), backReminders?.stop(), opts.keepAwake?.close(), orchestration.shutdown(), [...mcpRoutes.keys()].forEach(dropMcp), void Promise.all(catalogues.all.map((c) => c.close())), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close(), warmCommit.stop()));
+  http.on("close", () => (clearInterval(sleepTimer), backReminders?.stop(), opts.keepAwake?.close(), orchestration.shutdown(), sideWorkers?.close(), [...mcpRoutes.keys()].forEach(dropMcp), void Promise.all(catalogues.all.map((c) => c.close())), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close(), warmCommit.stop()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).
   return Object.assign(http, {
     accept,

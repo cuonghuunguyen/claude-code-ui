@@ -102,6 +102,7 @@ export const ROUTES: { readonly [T in ClientMessage["type"]]: Route } = {
   "aside.close": SESSION,
   "aside.keep": SESSION,
   "worker.remove": SESSION,
+  "worker.keepOpen": SESSION,
   "fs.list": PATH,
   "side.start": HUB,
   "side.updateRemote": HUB,

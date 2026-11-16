@@ -102,6 +102,16 @@ describe("session settings (sessions.json)", () => {
     expect(b.ids()).toEqual([]);
   });
 
+  it("prune keeps the hub link of a worker on a Side whatever its age: its session is in no local catalogue (GH-575)", () => {
+    let t = 0;
+    const s = createSessionSettings({ file: file(), now: () => t });
+    s.set("remote", { coordinatorId: "c", name: "w", cwd: "/side/app", side: "wsl:Ubuntu" });
+    s.set("gone", { effort: "low" });
+    t = PRUNE_GRACE_MS * 3;
+    s.prune(() => false);
+    expect(s.ids()).toEqual(["remote"]);
+  });
+
   it("a truncated or wrong-shaped file counts as empty; a save replaces the file atomically, no temp file left", () => {
     const f = file();
     writeFileSync(f, '{"s1":{"model":"haiku"');
