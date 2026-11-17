@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
-import { VISUALIZE_CSP, VISUALIZE_SHELL, visualizePluginDir, visualizeSystem } from "../src/visualize.ts";
+import { VISUALIZE_CSP, VISUALIZE_FIT, VISUALIZE_SHELL, visualizePluginDir, visualizeSystem } from "../src/visualize.ts";
 
 it("the CSP is exactly the documented policy", () => {
   expect(VISUALIZE_CSP).toBe(
@@ -85,6 +85,9 @@ it("the written prefix paints the page with the host colours and color-scheme be
   expect(doc).toContain("html{color-scheme:var(--scheme,light)}");
   expect(doc).toContain("html,body{margin:0;background:var(--background);color:var(--foreground);font:13px var(--font-sans,ui-sans-serif,system-ui,sans-serif)}");
   expect(doc).not.toContain("background:transparent");
+  // Narrow-frame fallbacks at specificity 0, before the fence HTML so its own CSS wins.
+  expect(doc).toContain(`${VISUALIZE_FIT}</style>`);
+  expect(VISUALIZE_FIT).toContain(":where(*,*::before,*::after){box-sizing:border-box;min-width:0}");
   expect(doc.indexOf("<style>")).toBeLessThan(doc.indexOf("<p>x</p>"));
   // The theme listener of the written document sets the same variables, --scheme included, and refuses unsafe ones.
   const inner = /<script>([\s\S]*)<\/script>/.exec(doc)![1]!;

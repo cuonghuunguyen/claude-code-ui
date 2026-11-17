@@ -45,6 +45,7 @@ Rules:
   - Shape and type: `--radius`, `--font-sans`.
   - SVG: `fill="var(--chart-1)"`. JS (canvas, Chart.js, D3): read with `getComputedStyle(document.documentElement).getPropertyValue("--chart-1").trim()` and redraw on `addEventListener("themechange", draw)` (fired after a theme switch updates the variables; CSS `var()` updates by itself).
 - The page has `--background`, `--foreground` text, 13px `--font-sans`. The frame height follows the content; make the width fluid (`width:100%`, `viewBox`), height at most ~800px.
+- Fit a 360px phone frame: no fixed pixel widths on boxes (use `max-width`, `flex-wrap`, `grid-template-columns:repeat(auto-fit,minmax(160px,1fr))`), SVG with a `viewBox`. Long text wraps; monospace blocks (`pre`) scroll sideways in their own box.
 - The frame is as tall as the root box: keep every element in normal flow inside it. No `position:absolute`/`fixed` content outside the root box, no negative margins pushing out, no `100vh`/`100%`-height layouts; give the root an explicit height when a chart library needs one.
 - Add one short sentence of text outside the fence about what the visual shows.
 

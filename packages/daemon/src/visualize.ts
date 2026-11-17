@@ -49,8 +49,13 @@ export const VISUALIZE_HEADERS = {
 // Runs inside the written document (document.open drops the shell's listeners): reports its height, applies theme updates and fires `themechange` so JS-drawn visuals recolour.
 const INNER = `(function(){var p=parent,H=function(){p.postMessage({v:1,type:"height",height:Math.ceil(document.documentElement.getBoundingClientRect().height)},"*")};new ResizeObserver(H).observe(document.documentElement);addEventListener("load",H);addEventListener("message",function(e){var d=e.data;if(e.source===p&&d&&d.v===1&&d.type==="theme"&&d.vars){for(var k in d.vars)if(OK(k,d.vars[k]))document.documentElement.style.setProperty(k,d.vars[k]);dispatchEvent(new Event("themechange"))}})})();`;
 
+// Narrow-frame fallbacks (a phone is ~360px wide): flex and grid items may shrink, long words wrap, monospace blocks scroll in their own box, media never exceeds the frame.
+// :where() keeps them at specificity 0, so any rule of the fence HTML wins.
+export const VISUALIZE_FIT = ":where(*,*::before,*::after){box-sizing:border-box;min-width:0}body{overflow-wrap:break-word}:where(pre){overflow-x:auto;max-width:100%}:where(img,svg,canvas,video,table){max-width:100%}:where(img,canvas,video){height:auto}";
+
 /** The shell: waits for the host's render message, then replaces its document with the fence HTML after a style and script prefix. */
 export const VISUALIZE_SHELL = `<!doctype html><meta charset="utf-8"><title>visualization</title><script>
+var FIT=${JSON.stringify(VISUALIZE_FIT)};
 var OK=function(k,v){return /^--[a-z0-9-]+$/.test(k)&&typeof v==="string"&&v.length<200&&!/[<;{}]/.test(v)};
 var done=false;
 addEventListener("message",function(e){
@@ -60,7 +65,7 @@ done=true;
 var vars="";for(var k in (d.vars||{}))if(OK(k,d.vars[k]))vars+=k+":"+d.vars[k]+";";
 var ok="var OK="+OK.toString()+";";
 document.open();
-document.write("<!doctype html><meta charset=utf-8><style>:root{"+vars+"}html{color-scheme:var(--scheme,light)}html,body{margin:0;background:var(--background);color:var(--foreground);font:13px var(--font-sans,ui-sans-serif,system-ui,sans-serif)}</style><scr"+"ipt>"+ok+${JSON.stringify(INNER)}+"</scr"+"ipt>"+d.html);
+document.write("<!doctype html><meta charset=utf-8><style>:root{"+vars+"}html{color-scheme:var(--scheme,light)}html,body{margin:0;background:var(--background);color:var(--foreground);font:13px var(--font-sans,ui-sans-serif,system-ui,sans-serif)}"+FIT+"</style><scr"+"ipt>"+ok+${JSON.stringify(INNER)}+"</scr"+"ipt>"+d.html);
 document.close();
 });
 parent.postMessage({v:1,type:"ready"},"*");
