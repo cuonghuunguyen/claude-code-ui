@@ -7,8 +7,8 @@ export type Rect = { x: number; y: number; w: number; h: number };
 /** One open Aside popup. Array order = stacking order, last on top. `from`: the Aside question's part id (its timeline starts there). */
 export type AsideState = { id: string; ownerId: string; title: string; from: string; minimized: boolean; readOnly: boolean; /** Position and size once moved or resized; absent: the cascade slot. */ rect?: Rect };
 
-/** Tall enough for a permission panel (command, rules, reason box, buttons) under the header and the project row. */
-export const DEFAULT_SIZE = { w: 480, h: 520 };
+/** Room for a readable answer above the composer, and for a permission panel (command, rules, reason box, buttons). */
+export const DEFAULT_SIZE = { w: 640, h: 760 };
 export const ASIDE_MIN = { w: 320, h: 240 };
 export const HEADER_MIN_VISIBLE = 40;
 
@@ -27,6 +27,13 @@ export const cascade = (index: number, area: { w: number } = { w: 1200 }, size =
   y: 24 + (index % 6) * 56,
 });
 
+/** Rect of the `index`th popup not yet moved or resized: its cascade slot, DEFAULT_SIZE shrunk to fit the viewport with a 24 px margin. */
+export function defaultRect(index: number, viewport: { w: number; h: number }): Rect {
+  const w = Math.max(ASIDE_MIN.w, Math.min(DEFAULT_SIZE.w, viewport.w - 48));
+  const pos = cascade(index, viewport, { w, h: DEFAULT_SIZE.h });
+  return { ...pos, w, h: Math.max(ASIDE_MIN.h, Math.min(DEFAULT_SIZE.h, viewport.h - pos.y - 24)) };
+}
+
 /** Keeps the header inside the viewport (at least HEADER_MIN_VISIBLE px of it) and the size at least ASIDE_MIN. */
 export function clampRect(r: Rect, viewport: { w: number; h: number }): Rect {
   const w = Math.max(ASIDE_MIN.w, Math.min(r.w, viewport.w));
@@ -37,6 +44,26 @@ export function clampRect(r: Rect, viewport: { w: number; h: number }): Rect {
     x: Math.min(Math.max(r.x, HEADER_MIN_VISIBLE - w), viewport.w - HEADER_MIN_VISIBLE),
     y: Math.min(Math.max(r.y, 0), viewport.h - HEADER_MIN_VISIBLE),
   };
+}
+
+/** Edge or corner a resize handle drags: n, s, e, w or a corner pair. */
+export type ResizeEdge = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
+
+/** `from` resized by dragging `edge` by (dx, dy): the opposite edges stay put; size at least ASIDE_MIN; the top edge stays at y >= 0. */
+export function resizeRect(from: Rect, edge: ResizeEdge, dx: number, dy: number): Rect {
+  let { x, y, w, h } = from;
+  if (edge.includes("e")) w = Math.max(ASIDE_MIN.w, from.w + dx);
+  if (edge.includes("s")) h = Math.max(ASIDE_MIN.h, from.h + dy);
+  if (edge.includes("w")) {
+    w = Math.max(ASIDE_MIN.w, from.w - dx);
+    x = from.x + from.w - w;
+  }
+  if (edge.includes("n")) {
+    const bottom = from.y + from.h;
+    y = Math.max(0, Math.min(from.y + dy, bottom - ASIDE_MIN.h));
+    h = bottom - y;
+  }
+  return { x, y, w, h };
 }
 
 /** Focus lists an Aside's requests as its own session (the list never has it): "Aside: <title>". */

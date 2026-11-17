@@ -1,9 +1,9 @@
 // Floating Aside popup (docs/spec.md "Aside"): non-modal window over the owner session; full screen on a phone.
 import { MinusIcon, XIcon } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { clampRect, type Rect } from "./aside.ts";
+import { clampRect, resizeRect, type Rect, type ResizeEdge } from "./aside.ts";
 import { usePhone } from "./lib/use-narrow.ts";
 import { useT } from "./i18n.ts";
 
@@ -25,6 +25,18 @@ type Props = {
   children: ReactNode;
 };
 
+/** Resize handles: 6 px strips on the edges, 12 px squares on the corners (corners last: on top). */
+const EDGES: [ResizeEdge, string][] = [
+  ["n", "inset-x-0 top-0 h-1.5 cursor-ns-resize"],
+  ["s", "inset-x-0 bottom-0 h-1.5 cursor-ns-resize"],
+  ["e", "inset-y-0 right-0 w-1.5 cursor-ew-resize"],
+  ["w", "inset-y-0 left-0 w-1.5 cursor-ew-resize"],
+  ["nw", "top-0 left-0 size-3 cursor-nwse-resize"],
+  ["se", "right-0 bottom-0 size-3 cursor-nwse-resize"],
+  ["ne", "top-0 right-0 size-3 cursor-nesw-resize"],
+  ["sw", "bottom-0 left-0 size-3 cursor-nesw-resize"],
+];
+
 const viewport = () => ({ w: window.innerWidth, h: window.innerHeight });
 
 export function AsidePopup({ title, readOnly, minimized, rect, index, id, onRect, onMinimize, onRestore, onClose, onKeep, onFocus, children }: Props) {
@@ -32,21 +44,7 @@ export function AsidePopup({ title, readOnly, minimized, rect, index, id, onRect
   const phone = usePhone();
   const section = useRef<HTMLElement>(null);
   const drag = useRef<{ x: number; y: number; from: Rect }>(undefined);
-  const latest = useRef({ rect, onRect });
-  latest.current = { rect, onRect };
-  // Native `resize: both` changes the size; the observer keeps it in state so it survives a re-render.
-  useEffect(() => {
-    const el = section.current;
-    if (!el || phone || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => {
-      const { rect: r, onRect: set } = latest.current;
-      const w = el.offsetWidth;
-      const h = el.offsetHeight;
-      if (w && h && (Math.abs(w - r.w) > 1 || Math.abs(h - r.h) > 1)) set({ ...r, w, h });
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [phone, minimized]);
+  const resize = useRef<{ x: number; y: number; from: Rect; edge: ResizeEdge }>(undefined);
   if (minimized)
     return (
       <Button type="button" variant="secondary" size="sm" data-aside-chip data-aside-id={id} className="fixed right-3 z-40 max-w-64 max-md:h-11" style={{ bottom: 12 + index * 40 }} onClick={onRestore}>
@@ -64,7 +62,7 @@ export function AsidePopup({ title, readOnly, minimized, rect, index, id, onRect
       data-aside-id={id}
       onPointerDownCapture={onFocus}
       onFocusCapture={onFocus}
-      className={phone ? "fixed inset-0 z-40 flex flex-col overflow-hidden bg-background" : "fixed z-40 flex min-h-60 min-w-80 resize flex-col overflow-hidden rounded-lg border bg-background shadow-lg"}
+      className={phone ? "fixed inset-0 z-40 flex flex-col overflow-hidden bg-background" : "fixed z-40 flex min-h-60 min-w-80 flex-col overflow-hidden rounded-lg border bg-background shadow-lg"}
       style={phone ? undefined : { left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
     >
       <header
@@ -95,6 +93,26 @@ export function AsidePopup({ title, readOnly, minimized, rect, index, id, onRect
         </Button>
       </header>
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">{children}</div>
+      {!phone &&
+        EDGES.map(([edge, cls]) => (
+          <div
+            key={edge}
+            aria-hidden
+            data-aside-resize={edge}
+            className={`absolute z-10 touch-none ${cls}`}
+            onPointerDown={(e) => {
+              e.preventDefault();
+              resize.current = { x: e.clientX, y: e.clientY, from: rect, edge };
+              (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+            }}
+            onPointerMove={(e) => {
+              const r = resize.current;
+              if (r) onRect(resizeRect(r.from, r.edge, e.clientX - r.x, e.clientY - r.y));
+            }}
+            onPointerUp={() => (resize.current = undefined)}
+            onPointerCancel={() => (resize.current = undefined)}
+          />
+        ))}
     </section>
   );
 }

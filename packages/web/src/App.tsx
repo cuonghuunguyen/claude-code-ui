@@ -142,7 +142,7 @@ import { RetryRow } from "./retry-row.tsx";
 import { AsideAsk } from "./aside-ask.tsx";
 import { AsidePopup } from "./aside-popup.tsx";
 import { isClearCommand } from "./clear.ts";
-import { asideItem, cascade, clampRect, DEFAULT_SIZE, raise, setMinimized, type AsideState } from "./aside.ts";
+import { asideItem, clampRect, defaultRect, raise, setMinimized, type AsideState } from "./aside.ts";
 import { nextWaiting, waitingCount, waitingRequests, waitingStatus } from "./focus.ts";
 import { useAppIcon, useAppName } from "./app-icon.ts";
 import { announcement, faviconHref, setAppleTitle, setAppleTouchIcon, setFavicon } from "./attention.ts";
@@ -4123,7 +4123,7 @@ export function App() {
                 if (!visibleIds.includes(a.ownerId)) return null;
                 const s = sessionOf(a.id);
                 const v = views[a.id];
-                const rect = a.rect ?? { ...cascade(i, { w: window.innerWidth }), ...DEFAULT_SIZE };
+                const rect = a.rect ?? defaultRect(i, { w: window.innerWidth, h: window.innerHeight });
                 const notHere = () => Promise.reject(new Error("Not available inside an aside"));
                 return (
                   <AsidePopup

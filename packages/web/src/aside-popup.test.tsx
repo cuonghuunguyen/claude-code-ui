@@ -41,6 +41,12 @@ it("renders a non-modal dialog with the title, Read-only badge and a body that s
   ptr(handle, "pointerup", 100, 220);
   expect(h.rect, "after drag").toMatchObject({ x: -100, y: 200 });
   expect((el.querySelector("[role=dialog]") as HTMLElement).style.left).toBe("-100px");
+  expect([...el.querySelectorAll("[data-aside-resize]")].map((x) => x.getAttribute("data-aside-resize")).sort()).toEqual(["e", "n", "ne", "nw", "s", "se", "sw", "w"]);
+  const west = el.querySelector("[data-aside-resize=w]")!;
+  ptr(west, "pointerdown", 0, 0);
+  ptr(west, "pointermove", -50, 0);
+  ptr(west, "pointerup", -50, 0);
+  expect(h.rect, "after resize from the left edge").toEqual({ x: -150, y: 200, w: 450, h: 300 });
   await act(async () => void (el.querySelector("[aria-label='Minimize aside']") as HTMLElement).click());
   expect(el.querySelector("[role=dialog]")).toBeNull();
   const chip = el.querySelector("[data-aside-chip]") as HTMLElement;
@@ -60,6 +66,7 @@ it("on a phone the title has a row of its own, so the question is truncated only
   const title = [...el.querySelectorAll("header span")].find((s) => s.textContent === "Aside: why?")!;
   expect(title.className).toContain("max-md:basis-full");
   expect(el.querySelector("header")!.className).toContain("max-md:flex-wrap");
+  expect(el.querySelector("[data-aside-resize]")).toBeNull();
   const d = el.querySelector("[role=dialog]") as HTMLElement;
   expect(d.className).toContain("inset-0");
   expect(d.style.left).toBe("");
