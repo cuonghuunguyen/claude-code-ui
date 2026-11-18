@@ -21,6 +21,7 @@ import type {
   ArtifactPreviewResult,
   Engine,
   EngineCapabilities,
+  FsMediaResult,
   MediaResult,
   ModelInfo,
   ModelsResult,
@@ -129,7 +130,7 @@ import { PermissionPanel, type PermissionAnswer } from "./permission.tsx";
 import { QuestionMarker, QuestionPanel } from "./question.tsx";
 import { awaitingPermission, bashRunning, emptySession, pendingPermission, pendingQuestion, hitKey, partOf, shownState, timeline, turnText, withoutResultText, lastTextOf, stepCountOf, type SessionView, type TimelineItem, type ToolCall } from "./store.ts";
 import { createSessionFollow, type Effect, type FollowHost } from "./session-follow.ts";
-import { FILE_LINK_PROPS, FileLinkContext, resolveBareName } from "./file-links.tsx";
+import { FILE_LINK_PROPS, FileImageContext, FileLinkContext, resolveBareName } from "./file-links.tsx";
 import { AllowDeniedContext, AlwaysAllowDeniedContext, BackgroundShellContext, LocalSettingsFileContext, PlanTabContext, ViewerContext, isFileTarget, latestPlan, planOfPart, useOpenViewer, type OpenViewer, type ViewerState } from "./viewer.ts";
 import { BackgroundButton, ContextGroup, CwdContext, SubagentGroup, ToolBody, ToolCard, useExpanded } from "./tool-card.tsx";
 import { ForkCard, StopRunContext } from "./run-card.tsx";
@@ -2231,6 +2232,7 @@ export function App() {
                           client.current!.request({ type: "session.rewind", sessionId: s.id, userMessageId, mode })
                         }
                         onMedia={(partId, index) => client.current!.request<MediaResult>({ type: "session.media", sessionId: s.id, partId, index }).then((r) => r.dataUrl)}
+                        onFileImage={fileImage}
                         onArtifactPreview={(partId) => client.current!.request<ArtifactPreviewResult>({ type: "artifact.preview", sessionId: s.id, partId })}
                         onArtifactTab={(partId) => (openArtifactTab(s.id, partId), offer("artifactsPane", { artifacts: sessionArtifacts(follows.views()[s.id] ?? v).length, paneSeen: recSeen("artifactsPane") > 0 }, () => showArtifacts(s.id)))}
                         onRespond={respond}
@@ -2736,6 +2738,8 @@ export function App() {
     // The session's side keeps the file: its Claude reads it there.
     return uploadWithRetry(async (o) => (await client.current!.request<UploadResult>({ type: "fs.upload", name: file.name, data, ...o, ...(uploadCwd && { cwd: uploadCwd }) })).path, owner, rotate);
   };
+  // Stable: a chat image reloads when its loader changes.
+  const fileImage = useCallback((path: string) => client.current!.request<FsMediaResult>({ type: "fs.media", path }).then((m) => m.url), []);
   // Offline, a request would wait for the reconnect with no feedback; a reply that never comes times out.
   const search = (cwd: string) => (query: string) =>
     status === "connected"
@@ -5292,6 +5296,7 @@ export function SessionPane({
   onRewindPreview,
   onRewind,
   onMedia,
+  onFileImage,
   onArtifactPreview,
   onArtifactTab,
   onRespond,
@@ -5379,6 +5384,8 @@ export function SessionPane({
   onRewindPreview: (userMessageId: string) => Promise<RewindPreview>;
   /** Loads a payload a snapshot or page left out (session.media). */
   onMedia?: MediaLoader;
+  /** Loads a file a reply's markdown image names (fs.media; the path picks the side). */
+  onFileImage?: (path: string) => Promise<string>;
   /** Asks for the preview URL of an Artifact publish part (artifact.preview). */
   onArtifactPreview?: ArtifactPreviewLoader;
   /** Open in tab of an Artifact card: opens the artifact tab of the part (GH-400). */
@@ -5559,6 +5566,7 @@ export function SessionPane({
 
   return (
     <MediaContext value={onMedia}>
+    <FileImageContext value={onFileImage}>
     <ArtifactPreviewContext value={onArtifactPreview}>
     <ArtifactConnectedContext value={connected}>
     <ArtifactOpenedContext value={artifactOpened}>
@@ -5862,6 +5870,7 @@ export function SessionPane({
     </ArtifactOpenedContext>
     </ArtifactConnectedContext>
     </ArtifactPreviewContext>
+    </FileImageContext>
     </MediaContext>
   );
 }

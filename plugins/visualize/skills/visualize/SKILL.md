@@ -54,3 +54,7 @@ Example fragment (the file content, or the fence content without an uploads fold
 ```visualize
 <svg viewBox="0 0 240 120" width="100%"><rect x="20" y="70" width="40" height="40" fill="var(--primary)"/><rect x="90" y="40" width="40" height="70" fill="var(--chart-2)"/><rect x="160" y="10" width="40" height="100" fill="var(--chart-3)"/></svg>
 ```
+
+# Images
+
+To show an existing image file (screenshot, generated chart, picture in the repo), write Markdown `![alt](path)` with its absolute path, or a path relative to the session folder. claude-ui loads it from the session's machine, local or SSH side. Remote `http(s)` images are blocked: download the file first.
