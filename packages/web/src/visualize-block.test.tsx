@@ -130,6 +130,39 @@ it("Show code swaps the frame for the source and back", async () => {
   expect(frameOf(el)).not.toBeNull();
 });
 
+it("Expand opens a fullscreen frame that gets the code; Escape closes it; Download saves a standalone page with the theme tokens", async () => {
+  document.documentElement.style.setProperty("--card", "#123456");
+  const el = await mount(<VisualizeBlock code="<p>big</p>" name="chart.html" />);
+  await act(async () => el.querySelector<HTMLElement>('[data-testid="visualize-expand"]')!.click());
+  const big = document.querySelector<HTMLIFrameElement>('[data-testid="visualize-frame-expanded"]')!;
+  expect(big.getAttribute("sandbox")).toBe("allow-scripts");
+  const post = vi.fn();
+  Object.defineProperty(big, "contentWindow", { value: { postMessage: post } });
+  await from(big.contentWindow, { v: 1, type: "ready" });
+  expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: "render", html: "<p>big</p>" }), "*");
+  await from(big.contentWindow, { v: 1, type: "height", height: 300 }); // the expanded frame never sizes the inline block
+  expect(frameOf(el).style.height).toBe("48px");
+
+  const saved: Blob[] = [];
+  const url = vi.spyOn(URL, "createObjectURL").mockImplementation((b) => (saved.push(b as Blob), "blob:x"));
+  let name = "";
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+    name = this.download;
+  });
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="visualize-fullscreen"] [data-testid="visualize-download"]')!.click());
+  expect(name).toBe("chart.html");
+  const page = await saved[0]!.text();
+  expect(page).toMatch(/^<!doctype html>/);
+  expect(page).toContain("--card:#123456;");
+  expect(page).toContain("<p>big</p>");
+  url.mockRestore();
+  click.mockRestore();
+  document.documentElement.style.removeProperty("--card");
+
+  await act(async () => void document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+  expect(document.querySelector('[data-testid="visualize-fullscreen"]')).toBeNull();
+});
+
 it("MessageResponse: the setting on draws the frame, off shows the fence as code", async () => {
   const md = "```visualize\n<p>chart</p>\n```";
   const on = await mount(

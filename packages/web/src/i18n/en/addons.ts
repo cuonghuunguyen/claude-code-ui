@@ -72,5 +72,8 @@ export default {
   "visualize.frameTitle": "Visualization",
   "visualize.drawing": "Drawing visualization…",
   "visualize.unavailable": "Visualization file unavailable: {path} ({error})",
+  "visualize.download": "Download as HTML",
+  "visualize.expand": "View fullscreen",
+  "visualize.collapse": "Exit fullscreen",
   "addons.refused": "Addon {name} was refused: {type}",
 } as const;

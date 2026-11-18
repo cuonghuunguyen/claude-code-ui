@@ -71,5 +71,8 @@ export default {
   "visualize.frameTitle": "Hình vẽ",
   "visualize.drawing": "Đang vẽ…",
   "visualize.unavailable": "Không đọc được tệp hình vẽ: {path} ({error})",
+  "visualize.download": "Tải về dạng HTML",
+  "visualize.expand": "Xem toàn màn hình",
+  "visualize.collapse": "Thoát toàn màn hình",
   "addons.refused": "Addon {name} bị từ chối: {type}",
 } satisfies Partial<Messages>;
