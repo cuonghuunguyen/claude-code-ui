@@ -7,7 +7,7 @@ import { ArchiveIcon, ArrowLeftIcon, CloudDownloadIcon, GitCommitHorizontalIcon,
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { connect, RequestError } from "./client.ts";
-import { KindBadge, StatsText, useNarrow } from "./changes-panel.tsx";
+import { KindBadge, ListResizer, loadListWidth, saveListWidth, StatsText, useNarrow } from "./changes-panel.tsx";
 import { FileIcon } from "./file-icon.tsx";
 import { pathKey } from "./file-tree-model.ts";
 import { repoRoot } from "./diff-mode.ts";
@@ -128,6 +128,9 @@ const CommitRow = memo(function CommitRow({ c, row, start, on, filtered, h, sets
 
 type Page = { commits: GitCommit[]; rows: GraphRow[]; state: GraphState };
 const NO_PAGE: Page = { commits: [], rows: [], state: emptyGraph() };
+
+// Commit list width after a drag, per browser; unset: the details pane keeps its default width.
+const GRAPH_LIST_WIDTH_KEY = "claude-ui.graphListWidth";
 
 /** `hidden`: the tab is not showing; the panel stays mounted and keeps its list (docs/spec.md "Layout", Graph tab). */
 /** `exact`: `cwd` is a repository top from `git.repos` (every request carries `exact: true`); `onRefresh`: Refresh also re-reads the repository list. `repoName`: names the repository in remote result and running texts. `toolbar`: first in the filter row (the repository selector). `repos`, `onShowRepo`: a submodule entry of a commit that the list holds offers "Show graph of <path>". */
@@ -267,6 +270,9 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
   }, [commits]);
   const index = commits.findIndex((c) => c.hash === selected);
   const scroller = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [listWidth, setListWidth] = useState(() => loadListWidth(GRAPH_LIST_WIDTH_KEY));
+  useEffect(() => saveListWidth(listWidth, GRAPH_LIST_WIDTH_KEY), [listWidth]);
   const v = useVirtualizer({ count: rows.length, getScrollElement: () => scroller.current, estimateSize: () => ROW, overscan: 10, useFlushSync: false, initialRect: { width: 0, height: window.innerHeight },
     // Zero size (jsdom, a hidden tab) keeps the last size.
     observeElementRect: (inst, cb) => observeElementRect(inst, (r) => void (r.height && cb(r))),
@@ -343,7 +349,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
         <p className="m-auto p-4 text-muted-foreground">{tr("files.graph.notGit")}</p>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col @2xl:flex-row">
-          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          <div ref={listRef} className={cn("relative flex min-h-0 min-w-0 flex-1 flex-col", selected && listWidth && "@2xl:w-(--list-w) @2xl:flex-none")} style={selected && listWidth ? ({ "--list-w": `min(${listWidth}px, calc(100% - 240px))` } as object) : undefined}>
             {error && (
               <p className="p-3 text-destructive" role="alert">
                 {error}
@@ -372,12 +378,17 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
             {loading && <p className="absolute right-3 bottom-2 rounded bg-card px-2 text-muted-foreground text-xs">{tr("files.graph.loading")}</p>}
           </div>
           {selected && (
-            <div className={cn("flex min-h-0 min-w-0 flex-col overflow-auto @max-2xl:border-t @2xl:border-l",  file || compare ? "@max-2xl:max-h-3/4 @2xl:w-3/5" : "@max-2xl:max-h-1/2 @2xl:w-80", "shrink-0")} data-testid="commit-details">
+            <>
+            <div className="hidden @2xl:contents">
+              <ListResizer list={listRef} width={listWidth} onResize={setListWidth} testId="graph-list-resizer" />
+            </div>
+            <div className={cn("flex min-h-0 min-w-0 flex-col overflow-auto @max-2xl:border-t @2xl:border-l", file || compare ? "@max-2xl:max-h-3/4" : "@max-2xl:max-h-1/2", listWidth ? "@2xl:flex-1" : file || compare ? "@2xl:w-3/5" : "@2xl:w-80", "shrink-0")} data-testid="commit-details">
               {compare && <CompareView key={`${compare.base}`} client={client} cwd={cwd} ex={ex} compare={compare} reload={reload} dark={dark} narrow={narrow} onBack={() => setCompare(undefined)} />}
               {!compare && detailError && <p className="p-3 text-destructive">{detailError}</p>}
               {!compare && !detail && !detailError && <p className="p-3 text-muted-foreground">{tr("files.graph.loading")}</p>}
               {!compare && detail && (file ? <FileView file={file} load={() => commitSides(client, cwd, ex, detail, file)} loadKey={detail.hash} back={tr("files.graph.commit")} dark={dark} narrow={narrow} onBack={() => setFile(undefined)} /> : <Details showRepo={(f) => repos?.find((r) => !r.outsideRoots && pathKey(r.path) === pathKey(joinPath(cwd, f.path)))?.rel} onShowRepo={onShowRepo} wrap={(el, refs) => <BranchMenu client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} hash={() => detail.hash} tagsOf={() => refs} onCompare={onCompare}>{cloneElement(el, { "data-hash": detail.hash } as object)}</BranchMenu>} detail={detail} refs={commits.find((c) => c.hash === detail.hash)?.refs ?? detail.refs} loaded={commits} onSelect={(h) => select(commits.findIndex((c) => c.hash === h))} onFile={setFile} />)}
             </div>
+            </>
           )}
         </div>
       )}
