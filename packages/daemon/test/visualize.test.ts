@@ -83,7 +83,7 @@ it("the written prefix paints the page with the host colours and color-scheme be
   const doc = written[0]!;
   expect(doc).toContain(":root{--background:#111;--scheme:dark;}");
   expect(doc).toContain("html{color-scheme:var(--scheme,light)}");
-  expect(doc).toContain("html,body{margin:0;background:var(--background);color:var(--foreground);font:13px var(--font-sans,ui-sans-serif,system-ui,sans-serif)}");
+  expect(doc).toContain("html,body{margin:0;background:var(--background);color:var(--foreground);font:13px var(--font-sans,ui-sans-serif,system-ui,sans-serif)}body{padding:12px}");
   expect(doc).not.toContain("background:transparent");
   // Narrow-frame fallbacks at specificity 0, before the fence HTML so its own CSS wins.
   expect(doc).toContain(`${VISUALIZE_FIT}</style>`);
