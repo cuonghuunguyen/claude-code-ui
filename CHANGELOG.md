@@ -2,6 +2,52 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
+## 1.4.0 - 2026-11-19
+
+### Added
+
+- Agent terminal access: the session agent can list, read and run commands in the project's open terminals. Secrets in the output are hidden ([#709](https://github.com/cuonghuunguyen/claude-code-ui/issues/709)).
+- Terminal: selected output goes to the chat from a floating menu and the context menu **Add to chat** ([#710](https://github.com/cuonghuunguyen/claude-code-ui/issues/710)).
+- Diff and editor: selected text shows an **Add to chat** / **Quote** menu ([#706](https://github.com/cuonghuunguyen/claude-code-ui/issues/706)).
+- Files: drag files and folders from the Files tree into a prompt box; multi-select rows; folders get **Add to prompt** ([#707](https://github.com/cuonghuunguyen/claude-code-ui/issues/707)). Several selected rows move or copy onto a folder after one confirm ([#757](https://github.com/cuonghuunguyen/claude-code-ui/issues/757)).
+- Inline task: the agent runs a mid-size task as one call on a small model, shown as a collapsible card ([#734](https://github.com/cuonghuunguyen/claude-code-ui/issues/734)). A denied step shows its reason; Stop ends a waiting inline task ([#791](https://github.com/cuonghuunguyen/claude-code-ui/issues/791)).
+- Fork subagents: a fork shows as a **Fork** card with collapsed steps. Settings can turn forking off ([#718](https://github.com/cuonghuunguyen/claude-code-ui/issues/718)).
+- Math: `\( \)` and `\[ \]` formulas render in chat ([#798](https://github.com/cuonghuunguyen/claude-code-ui/issues/798)).
+- Always allow: on a tool call that auto mode denied, **Allow and retry** and **Always allow** save the rule for the session or project ([#711](https://github.com/cuonghuunguyen/claude-code-ui/issues/711), [#756](https://github.com/cuonghuunguyen/claude-code-ui/issues/756)).
+- Git graph: **New Tag…** (with signing) and **Remove Tag…** (opt-in remote delete) ([#666](https://github.com/cuonghuunguyen/claude-code-ui/issues/666)). **Compare with Local**, **Compare Before with Local** and **Edit Commit Message** (amend or rebase) ([#667](https://github.com/cuonghuunguyen/claude-code-ui/issues/667)).
+- Git graph: the commit list width is resizable.
+- Session: **Run in terminal** button on shell code blocks.
+- Inline visualizations: fullscreen view and standalone download.
+- Add-ons: install from git subfolders with a picker.
+- Aside popup: resizes from every edge and corner, opens larger.
+- Neon: cyberpunk colour theme with a **Rain** switch and a **Light rain** option.
+- Settings › About: export and clear this browser's logs.
+
+### Changed
+
+- Changes: **Generate commit message** answers in about 5 s instead of 20 s, with an optional warm process ([#668](https://github.com/cuonghuunguyen/claude-code-ui/issues/668), [#758](https://github.com/cuonghuunguyen/claude-code-ui/issues/758)).
+- Opening a session shows a skeleton of the session layout until it loads ([#774](https://github.com/cuonghuunguyen/claude-code-ui/issues/774)).
+- A reloaded page shows the cached session at once and resumes incrementally ([#771](https://github.com/cuonghuunguyen/claude-code-ui/issues/771)).
+- The entry chunk is 69% smaller: dialogs, panels, diffs and markdown plugins load on first use ([#775](https://github.com/cuonghuunguyen/claude-code-ui/issues/775)).
+- Reconnect: the visible tab catches up first, only changed session rows are fetched, and a phone stays connected with hundreds of sessions ([#767](https://github.com/cuonghuunguyen/claude-code-ui/issues/767), [#760](https://github.com/cuonghuunguyen/claude-code-ui/issues/760)).
+- Workers: permission requests and questions go straight to you, not to the coordinator ([#835](https://github.com/cuonghuunguyen/claude-code-ui/issues/835)). Auto-mode workers write their scratch folder without a prompt ([#755](https://github.com/cuonghuunguyen/claude-code-ui/issues/755)).
+- Default mode, plan folders and skill overrides use the local settings file Claude Code reads, also in a linked worktree ([#763](https://github.com/cuonghuunguyen/claude-code-ui/issues/763)).
+
+### Fixed
+
+- Chat replies show markdown images, not only their alt text.
+- Chat math renders once, with KaTeX fonts; math and mermaid keep their height while loading ([#790](https://github.com/cuonghuunguyen/claude-code-ui/issues/790)).
+- Inline visualizations: in Ask and Plan mode a visualization draws without a Write permission prompt ([#807](https://github.com/cuonghuunguyen/claude-code-ui/issues/807)).
+- Inline visualizations stay inside a narrow (phone) frame.
+- A first send repeated after a lost reply no longer creates a second session or message ([#838](https://github.com/cuonghuunguyen/claude-code-ui/issues/838)).
+- A subagent hand-back no longer blocks the prompt ([#130](https://github.com/cuonghuunguyen/claude-code-ui/issues/130)).
+- Stop generating and Clean up cancel on the Side that runs the job ([#818](https://github.com/cuonghuunguyen/claude-code-ui/issues/818)).
+- A full transcript scan no longer blocks the daemon ([#837](https://github.com/cuonghuunguyen/claude-code-ui/issues/837), [#836](https://github.com/cuonghuunguyen/claude-code-ui/issues/836)).
+- A Session opened while the reconnect queue waited keeps its hold ([#819](https://github.com/cuonghuunguyen/claude-code-ui/issues/819)).
+- Git graph branch popup works in WebKit; Escape on a phone returns to the list ([#777](https://github.com/cuonghuunguyen/claude-code-ui/issues/777), [#787](https://github.com/cuonghuunguyen/claude-code-ui/issues/787)).
+- No CSP error for the KaTeX font on page load ([#799](https://github.com/cuonghuunguyen/claude-code-ui/issues/799)).
+- Changes: the file list fills the panel height.
+
 ## 1.3.0 - 2026-11-14
 
 ### Added
