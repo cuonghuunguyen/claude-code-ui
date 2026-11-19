@@ -1119,6 +1119,7 @@ it("Appearance: a theme with options shows one switch per option; toggling appli
   localStorage.clear();
   document.documentElement.removeAttribute("data-theme");
   document.documentElement.removeAttribute("data-opt-rain");
+  document.documentElement.removeAttribute("data-opt-rain-light");
   const { q } = await render();
   expect(q("settings-theme-option-rain")).toBeNull();
   await act(async () => q("settings-theme")!.click());
@@ -1126,6 +1127,8 @@ it("Appearance: a theme with options shows one switch per option; toggling appli
   const sw = q("settings-theme-option-rain")!;
   expect(sw.getAttribute("aria-checked")).toBe("true");
   expect(document.documentElement.getAttribute("data-opt-rain")).toBe("on");
+  expect(q("settings-theme-option-rain-light")!.getAttribute("aria-checked")).toBe("false");
+  expect(document.documentElement.getAttribute("data-opt-rain-light")).toBe("off");
   await act(async () => sw.click());
   expect(q("settings-theme-option-rain")!.getAttribute("aria-checked")).toBe("false");
   expect(document.documentElement.getAttribute("data-opt-rain")).toBe("off");
@@ -1134,6 +1137,7 @@ it("Appearance: a theme with options shows one switch per option; toggling appli
   await act(async () => q("settings-theme-nord")!.click());
   expect(q("settings-theme-option-rain")).toBeNull();
   expect(document.documentElement.hasAttribute("data-opt-rain")).toBe(false);
+  expect(document.documentElement.hasAttribute("data-opt-rain-light")).toBe(false);
   document.documentElement.removeAttribute("data-theme");
 });
 

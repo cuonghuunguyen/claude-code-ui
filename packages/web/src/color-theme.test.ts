@@ -12,6 +12,7 @@ beforeEach(() => {
   localStorage.clear();
   root.removeAttribute("data-theme");
   root.removeAttribute("data-opt-rain");
+  root.removeAttribute("data-opt-rain-light");
   root.removeAttribute("data-opt-glow");
   root.classList.remove("dark");
   if (!document.querySelector('meta[name="theme-color"]')) document.head.insertAdjacentHTML("beforeend", '<meta name="theme-color" content="#fafafa">');
@@ -39,6 +40,7 @@ describe("colour theme", () => {
   it("theme options: data-opt-<id> is on by default, follows the current theme only, and a stored off is kept", () => {
     setColorTheme("neon");
     expect(root.getAttribute("data-opt-rain")).toBe("on");
+    expect(root.getAttribute("data-opt-rain-light")).toBe("off");
     setThemeOption("neon", "rain", false);
     expect(root.getAttribute("data-opt-rain")).toBe("off");
     expect(JSON.parse(localStorage.getItem("claude-ui.theme-options")!)).toEqual({ neon: { rain: false } });
@@ -46,7 +48,7 @@ describe("colour theme", () => {
     expect(root.hasAttribute("data-opt-rain")).toBe(false);
     applyColorTheme("neon");
     expect(root.getAttribute("data-opt-rain")).toBe("off");
-    expect(getThemeOptions(themeById("neon"))).toEqual([{ id: "rain", label: "Rain", on: false }]);
+    expect(getThemeOptions(themeById("neon"))).toEqual([{ id: "rain", label: "Rain", on: false }, { id: "rain-light", label: "Light rain", on: false }]);
     localStorage.setItem("claude-ui.theme-options", '{"neon":{"rain":"no"}}');
     expect(getThemeOptions(themeById("neon"))[0]!.on).toBe(true);
     localStorage.setItem("claude-ui.theme-options", "not json");

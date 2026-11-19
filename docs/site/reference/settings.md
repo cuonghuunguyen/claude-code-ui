@@ -20,7 +20,7 @@ Most settings are **kept in this browser** only. Orchestration, Focus, Chat, New
 | Setting | Options |
 | --- | --- |
 | Theme | Default, Catppuccin, Tokyo Night, Solarized, Nord, Dracula, One, Neon. Recolors the app, the editor, diffs, the terminal and the git graph at once. Dracula has no light colors: in light mode it shows Default. Kept in this browser. |
-| Theme switches | A theme may have on/off switches, shown under the theme list for the picked theme only (Neon: **Rain**). A change applies at once and is kept in this browser per theme. |
+| Theme switches | A theme may have on/off switches, shown under the theme list for the picked theme only (Neon: **Rain**, **Light rain**). A change applies at once and is kept in this browser per theme. |
 
 | App name and icon | Your own name and icon (an emoji or an image) for the browser tab and the installed app. **Change…** opens the editor; an empty name means "Claude UI". Saved in the daemon: it applies to every browser of this Claude UI. The tab changes at once. An installed app takes it when the browser next checks for updates (up to a day) or after you reinstall it. |
 

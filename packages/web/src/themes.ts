@@ -92,7 +92,7 @@ export const THEMES: readonly Theme[] = [
   {
     id: "neon",
     name: "Neon",
-    options: [{ id: "rain", label: "Rain" }],
+    options: [{ id: "rain", label: "Rain" }, { id: "rain-light", label: "Light rain", default: false }],
     // Cyberpunk HUD: navy-black / pale blue-white surfaces, electric cyan primary, hot magenta keywords, yellow / lime / purple accents.
     // Moved in lightness for contrast (ref chips, diff lines, text over the scene): light primary #007a8f -> #006577, kw #b8146f -> #9c0d5c, warn #7a5200 -> #6a4600, ok #2b6a00 -> #225a00;
     // dark kw #ff3ea5 -> #ff6ebc, cmt #7f95b8 -> #98aed1, err #ff4d7d -> #ff7898. `x`: graph lanes and context colours in the same hues (cyan, magenta, yellow, lime, purple).

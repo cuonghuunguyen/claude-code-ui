@@ -97,11 +97,11 @@ describe("addonThemes", () => {
   const addon = (themes: NonNullable<AddonInfo["manifest"]>["themes"], name = "example"): AddonInfo =>
     ({ name, source: { kind: "local", path: "/x" }, approved: [], state: "enabled", manifest: { name, version: "1", description: "", capabilities: [], themes, views: [], commands: [], renderers: [] } }) as AddonInfo;
 
-  it("passes theme options through; Neon declares Rain (on by default)", () => {
+  it("passes theme options through; Neon declares Rain (on by default) and Light rain (off by default)", () => {
     const options = [{ id: "glow", label: "Glow", default: false }];
     const [t] = addonThemes([addon([{ id: "dusk", name: "D", dark: full(), options }])]);
     expect(t!.options).toEqual(options);
-    expect(THEMES.find((x) => x.id === "neon")!.options).toEqual([{ id: "rain", label: "Rain" }]);
+    expect(THEMES.find((x) => x.id === "neon")!.options).toEqual([{ id: "rain", label: "Rain" }, { id: "rain-light", label: "Light rain", default: false }]);
   });
 
   it("maps an addon palette to addon:<name>:<id>", () => {
