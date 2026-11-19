@@ -361,6 +361,18 @@ describe("review fixes (GH-516)", () => {
     expect(u.base).toBeUndefined();
   });
 
+  it("validates theme options: up to 4, unique kebab ids up to 24, label 1-40, boolean default", async () => {
+    const o = { id: "rain", label: "Rain" };
+    const all = Object.fromEntries(["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"].map((k) => [k, "#112233"]));
+    const theme = (options: unknown) => commitAddon({ themes: [{ id: "dusk", name: "D", dark: all, options }] });
+    for (const bad of [[{ ...o, id: "Rain" }], [{ ...o, id: "a".repeat(25) }], [{ ...o, label: "" }], [{ ...o, label: "x".repeat(41) }], [{ ...o, default: "yes" }], [o, o], Array.from({ length: 5 }, (_, i) => ({ ...o, id: `o${i}` })), "rain"]) {
+      theme(bad);
+      expect(await installGit(), JSON.stringify(bad)).toMatchObject({ code: "bad_manifest" });
+    }
+    theme([o, { id: "glow", label: "Glow", default: false }]);
+    expect(await installGit()).toMatchObject({ type: "reply" });
+  });
+
   it("refuses a theme mode that lacks a palette key or uses a colour the web app would drop", async () => {
     const all = Object.fromEntries(["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"].map((k) => [k, "#112233"]));
     const { info: _, ...short } = all;

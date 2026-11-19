@@ -15,14 +15,16 @@ import type { AddonInfo } from "@claude-ui/protocol";
 export type Mode = "light" | "dark";
 export const KEYS = ["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"] as const;
 export type Key = (typeof KEYS)[number];
-/** `x`: extra tokens (`--graph-*`, `--context-*`) moved in lightness from Default so they reach 3:1 on this palette's surfaces. */
+/** `x`: extra tokens (`--graph-*`, `--context-*`) moved in lightness from Default so they reach 3:1 on this palette's surfaces (Neon: its own hues, also 3:1). */
 export type Palette = Record<Key, string> & { x?: Record<string, string> };
 export type BuiltinThemeId = "default" | "catppuccin" | "tokyonight" | "solarized" | "nord" | "dracula" | "one" | "neon";
 /** `addon:<addon name>:<theme id>` (GH-516): a theme an addon declares. */
 export type ThemeId = BuiltinThemeId | `addon:${string}:${string}`;
 export const ADDON_THEME_ID = /^addon:[a-z0-9]+(?:-[a-z0-9]+)*:[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /** Default has no palette: it is the `:root` / `.dark` blocks of index.css. Dracula has no light. */
-export type Theme = { id: ThemeId; name: string; light?: Palette; dark?: Palette };
+/** A boolean switch of a theme: `data-opt-<id>="on"|"off"` on <html> while the theme is current; `default` absent = on. */
+export type ThemeOption = { id: string; label: string; default?: boolean };
+export type Theme = { id: ThemeId; name: string; light?: Palette; dark?: Palette; options?: ThemeOption[] };
 
 /** The Default `--card` and `--foreground` (index.css): the editor, diff and terminal surface. */
 export const SURFACE = { light: { bg: "#ffffff", fg: "#161616" }, dark: { bg: "#161616", fg: "#fafafa" } } as const;
@@ -90,9 +92,12 @@ export const THEMES: readonly Theme[] = [
   {
     id: "neon",
     name: "Neon",
-    // original values moved in lightness (OKLCH) for contrast. light: side #ece5f0, primary #0f8a62, kw #6b3fb3, str #1d7a4c, num #b8430f, cmt #6e6585, varc/err unchanged, warn #8a5200, ok #1d7a4c; --context-4/6 set like the other light themes. dark: cmt #8a82a3, err #ff5d6c
-    light: P(["#f6f1ea", "#fdfaf5", "#eae3ee", "#231d2e", "#5c5470", "#ddd3e3", "#00805a", "#ffffff", "#6335a9", "#0d7144", "#2459b0", "#8a5200", "#b13d02", "#655c7c", "#b02a63", "#c0263a", "#7b4300", "#006235", "#2459b0"], { "--context-4": "#ea3a00", "--context-6": "#008aa0" }),
-    dark: P(["#0d0b14", "#16131f", "#1f1a2c", "#ece6f5", "#a9a0bd", "#2c2540", "#46d6a0", "#0d0b14", "#c39bff", "#8ee6b8", "#7fb4ff", "#ffc46b", "#ff8a5c", "#9f97b9", "#ff7aa8", "#ff7784", "#ffb454", "#46d6a0", "#7fb4ff"]),
+    options: [{ id: "rain", label: "Rain" }],
+    // Cyberpunk HUD: navy-black / pale blue-white surfaces, electric cyan primary, hot magenta keywords, yellow / lime / purple accents.
+    // Moved in lightness for contrast (ref chips, diff lines, text over the scene): light primary #007a8f -> #006577, kw #b8146f -> #9c0d5c, warn #7a5200 -> #6a4600, ok #2b6a00 -> #225a00;
+    // dark kw #ff3ea5 -> #ff6ebc, cmt #7f95b8 -> #98aed1, err #ff4d7d -> #ff7898. `x`: graph lanes and context colours in the same hues (cyan, magenta, yellow, lime, purple).
+    light: P(["#eef4fb", "#f8fbff", "#dde8f5", "#0a1a2f", "#3b5373", "#b9cde4", "#006577", "#ffffff", "#9c0d5c", "#3d6600", "#0058b0", "#7a5800", "#6a2fc0", "#52668a", "#a3420b", "#c2183f", "#6a4600", "#225a00", "#0058b0"], { "--graph-1": "#007a8f", "--graph-2": "#c2187a", "--graph-3": "#7a5800", "--graph-4": "#2b6a00", "--graph-5": "#6a2fc0", "--graph-6": "#b84a00", "--graph-7": "#c2183f", "--graph-8": "#0058b0", "--context-1": "#007a8f", "--context-2": "#c2187a", "--context-3": "#2b6a00", "--context-4": "#ea3a00", "--context-5": "#7a5800", "--context-6": "#6a2fc0" }),
+    dark: P(["#05070d", "#0a0f1c", "#0e1526", "#e4f6ff", "#8fa9c8", "#1c2a44", "#00e5ff", "#05070d", "#ff6ebc", "#b6ff5c", "#5cc8ff", "#ffe34d", "#c38bff", "#98aed1", "#ff9e64", "#ff7898", "#ffe34d", "#a8ff3e", "#5cc8ff"], { "--graph-1": "#00e5ff", "--graph-2": "#ff3ea5", "--graph-3": "#ffe34d", "--graph-4": "#a8ff3e", "--graph-5": "#c38bff", "--graph-6": "#ff9e64", "--graph-7": "#ff4d7d", "--graph-8": "#5cc8ff", "--context-1": "#00e5ff", "--context-2": "#ff3ea5", "--context-3": "#a8ff3e", "--context-4": "#ff9e64", "--context-5": "#ffe34d", "--context-6": "#c38bff" }),
   },
 ];
 
@@ -189,7 +194,7 @@ export function addonThemes(addons: readonly AddonInfo[]): Theme[] {
       const id = `addon:${a.name}:${th.id}`;
       const light = addonPalette(th.light);
       const dark = addonPalette(th.dark);
-      return ADDON_THEME_ID.test(id) && (light || dark) ? [{ id: id as ThemeId, name: th.name, ...(light && { light }), ...(dark && { dark }) }] : [];
+      return ADDON_THEME_ID.test(id) && (light || dark) ? [{ id: id as ThemeId, name: th.name, ...(light && { light }), ...(dark && { dark }), ...(th.options?.length && { options: th.options }) }] : [];
     }),
   );
 }

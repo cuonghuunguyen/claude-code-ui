@@ -55,7 +55,7 @@ The card lists what the addon asks for, one plain line each, and the themes, vie
 | `name` | Lowercase letters, digits and `-`, up to 64. The namespace of commands and pane ids. Never changes between versions |
 | `version`, `description` | Shown in the dialog |
 | `capabilities` | The list above; every entry that needs one must be covered |
-| `themes` | `[{id, name, light?, dark?}]`, see [themes](#themes) |
+| `themes` | `[{id, name, light?, dark?, options?}]`, see [themes](#themes) |
 | `css` | A `.css` file applied app-wide while the addon is enabled |
 | `views` | `[{id, title, entry, kind: "pane" \| "band", phone?}]`. `phone: false` hides the view below 640 px |
 | `commands` | `[{name, description, argumentHint?}]` |
@@ -105,6 +105,8 @@ To have Claude write an addon for you, install the `addons` plugin from this rep
 ## Themes {#themes}
 
 A theme has a `light` and a `dark` palette; you may leave a mode out (like Dracula, which has no light), but a mode you give must be complete: installing an addon with an incomplete or non-`#rrggbb` palette fails and names the missing key. A palette has all of these keys, each a `#rrggbb` colour: `bg`, `card`, `side`, `fg`, `muted`, `border`, `primary`, `pfg`, `kw`, `str`, `fn`, `type`, `num`, `cmt`, `varc`, `err`, `warn`, `ok`, `info`. The theme appears in **Settings › Appearance** after the built-in ones, only while its addon is enabled. If you turn the addon off while its theme is picked, the default look shows until you pick another. Diffs and the terminal keep the default colours for an addon theme.
+
+A theme may declare up to 4 on/off `options`: `[{id, label, default?}]` (`id` lowercase words joined by `-`, up to 24 characters; `label` 1 to 40 characters; `default` is `true` when absent). **Settings › Appearance** shows one switch per option while the theme is picked. While it is picked, `<html>` has `data-opt-<id>="on"` or `"off"` (the attributes of other themes' options are removed), so the addon CSS can react: `:root[data-opt-rain="off"] .rain { display: none }`.
 
 ## Panes, band and commands {#views}
 

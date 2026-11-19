@@ -1115,6 +1115,28 @@ it("Appearance (GH-468): the theme list has 8 themes in order, each with a swatc
   expect(q("settings-theme")!.textContent).toContain("Catppuccin");
 });
 
+it("Appearance: a theme with options shows one switch per option; toggling applies data-opt-rain and is kept", async () => {
+  localStorage.clear();
+  document.documentElement.removeAttribute("data-theme");
+  document.documentElement.removeAttribute("data-opt-rain");
+  const { q } = await render();
+  expect(q("settings-theme-option-rain")).toBeNull();
+  await act(async () => q("settings-theme")!.click());
+  await act(async () => q("settings-theme-neon")!.click());
+  const sw = q("settings-theme-option-rain")!;
+  expect(sw.getAttribute("aria-checked")).toBe("true");
+  expect(document.documentElement.getAttribute("data-opt-rain")).toBe("on");
+  await act(async () => sw.click());
+  expect(q("settings-theme-option-rain")!.getAttribute("aria-checked")).toBe("false");
+  expect(document.documentElement.getAttribute("data-opt-rain")).toBe("off");
+  expect(JSON.parse(localStorage.getItem("claude-ui.theme-options")!)).toEqual({ neon: { rain: false } });
+  await act(async () => q("settings-theme")!.click());
+  await act(async () => q("settings-theme-nord")!.click());
+  expect(q("settings-theme-option-rain")).toBeNull();
+  expect(document.documentElement.hasAttribute("data-opt-rain")).toBe(false);
+  document.documentElement.removeAttribute("data-theme");
+});
+
 it("Appearance (GH-468): Dracula in light mode shows the warning; dark mode does not", async () => {
   localStorage.clear();
   document.documentElement.classList.remove("dark");

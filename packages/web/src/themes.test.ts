@@ -97,6 +97,13 @@ describe("addonThemes", () => {
   const addon = (themes: NonNullable<AddonInfo["manifest"]>["themes"], name = "example"): AddonInfo =>
     ({ name, source: { kind: "local", path: "/x" }, approved: [], state: "enabled", manifest: { name, version: "1", description: "", capabilities: [], themes, views: [], commands: [], renderers: [] } }) as AddonInfo;
 
+  it("passes theme options through; Neon declares Rain (on by default)", () => {
+    const options = [{ id: "glow", label: "Glow", default: false }];
+    const [t] = addonThemes([addon([{ id: "dusk", name: "D", dark: full(), options }])]);
+    expect(t!.options).toEqual(options);
+    expect(THEMES.find((x) => x.id === "neon")!.options).toEqual([{ id: "rain", label: "Rain" }]);
+  });
+
   it("maps an addon palette to addon:<name>:<id>", () => {
     const [t] = addonThemes([addon([{ id: "dusk", name: "Example Dusk", light: full("#eeeeee"), dark: full() }])]);
     expect(t).toMatchObject({ id: "addon:example:dusk", name: "Example Dusk" });

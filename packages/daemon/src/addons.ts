@@ -36,6 +36,7 @@ const PALETTE_KEYS = ["bg", "card", "side", "fg", "muted", "border", "primary", 
 const GIT_TIMEOUT = 5 * 60_000;
 const MAX_ERROR = 400;
 const MAX_DEPTH = 3;
+const MAX_THEME_OPTIONS = 4;
 const MAX_CANDIDATES = 50;
 
 const bad = (msg: string) => new ConfigError("bad_manifest", msg);
@@ -126,7 +127,19 @@ export function parseManifest(raw: unknown, root: string): AddonManifest {
     };
     const light = palette("light");
     const dark = palette("dark");
-    return { id: tid, name: str(t.name, `themes[${tid}].name`, 64), ...(light && { light }), ...(dark && { dark }) };
+    const rawOptions = list(t.options, `themes[${tid}].options`);
+    if (rawOptions.length > MAX_THEME_OPTIONS) throw bad(`themes[${tid}].options: at most ${MAX_THEME_OPTIONS}`);
+    const optionIds = new Set<string>();
+    const options = rawOptions.map((o, j) => {
+      if (!isObj(o)) throw bad(`themes[${tid}].options[${j}]: not an object`);
+      const oid = o.id;
+      if (typeof oid !== "string" || !NAME.test(oid) || oid.length > 24) throw bad(`themes[${tid}].options[${j}].id: must match ${NAME} (up to 24 characters)`);
+      const dup = seen(optionIds, oid, `themes[${tid}].options[${oid}]`);
+      if (dup) throw dup;
+      if (o.default !== undefined && typeof o.default !== "boolean") throw bad(`themes[${tid}].options[${oid}].default: must be true or false`);
+      return { id: oid, label: str(o.label, `themes[${tid}].options[${oid}].label`, 40), ...(o.default !== undefined && { default: o.default }) };
+    });
+    return { id: tid, name: str(t.name, `themes[${tid}].name`, 64), ...(light && { light }), ...(dark && { dark }), ...(options.length && { options }) };
   });
   const viewIds = new Set<string>();
   const views: AddonManifest["views"] = list(raw.views, "views").map((v, i) => {

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { themeById, tokensOf } from "./themes.ts";
 import type { AddonInfo } from "@claude-ui/protocol";
 import { addonThemes } from "./themes.ts";
-import { applyAddonCss, applyAddonThemes, applyColorTheme, applyTheme, loadColorTheme, setColorTheme } from "./theme.ts";
+import { applyAddonCss, applyAddonThemes, applyColorTheme, applyTheme, getThemeOptions, loadColorTheme, setColorTheme, setThemeOption } from "./theme.ts";
 
 const root = document.documentElement;
 const meta = () => document.querySelector('meta[name="theme-color"]')!.getAttribute("content");
@@ -11,6 +11,8 @@ const meta = () => document.querySelector('meta[name="theme-color"]')!.getAttrib
 beforeEach(() => {
   localStorage.clear();
   root.removeAttribute("data-theme");
+  root.removeAttribute("data-opt-rain");
+  root.removeAttribute("data-opt-glow");
   root.classList.remove("dark");
   if (!document.querySelector('meta[name="theme-color"]')) document.head.insertAdjacentHTML("beforeend", '<meta name="theme-color" content="#fafafa">');
   window.matchMedia = (() => ({ matches: false, addEventListener() {}, removeEventListener() {} })) as never;
@@ -32,6 +34,23 @@ describe("colour theme", () => {
     setColorTheme("default");
     expect(root.hasAttribute("data-theme")).toBe(false);
     expect(localStorage.getItem("claude-ui.colorTheme")).toBe("default");
+  });
+
+  it("theme options: data-opt-<id> is on by default, follows the current theme only, and a stored off is kept", () => {
+    setColorTheme("neon");
+    expect(root.getAttribute("data-opt-rain")).toBe("on");
+    setThemeOption("neon", "rain", false);
+    expect(root.getAttribute("data-opt-rain")).toBe("off");
+    expect(JSON.parse(localStorage.getItem("claude-ui.theme-options")!)).toEqual({ neon: { rain: false } });
+    setColorTheme("nord");
+    expect(root.hasAttribute("data-opt-rain")).toBe(false);
+    applyColorTheme("neon");
+    expect(root.getAttribute("data-opt-rain")).toBe("off");
+    expect(getThemeOptions(themeById("neon"))).toEqual([{ id: "rain", label: "Rain", on: false }]);
+    localStorage.setItem("claude-ui.theme-options", '{"neon":{"rain":"no"}}');
+    expect(getThemeOptions(themeById("neon"))[0]!.on).toBe(true);
+    localStorage.setItem("claude-ui.theme-options", "not json");
+    expect(getThemeOptions(themeById("neon"))[0]!.on).toBe(true);
   });
 
   it("applyColorTheme at startup writes no storage (a fresh browser stays fresh)", () => {
@@ -84,6 +103,17 @@ describe("addon themes and CSS (GH-516)", () => {
     applyAddonThemes([]);
     expect(document.querySelectorAll("#claude-ui-addon-themes")).toHaveLength(1);
     expect(document.getElementById("claude-ui-addon-themes")!.textContent).toBe("");
+  });
+
+  it("addon theme options: the option default applies once the addons arrive", () => {
+    const palette = Object.fromEntries(["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"].map((k) => [k, "#101010"]));
+    const a = { ...addon("example"), manifest: { ...addon("example").manifest!, themes: [{ id: "dusk", name: "D", dark: palette, options: [{ id: "glow", label: "Glow", default: false }] }] } };
+    applyColorTheme("addon:example:dusk");
+    expect(root.hasAttribute("data-opt-glow")).toBe(false);
+    applyAddonThemes(addonThemes([a]));
+    expect(root.getAttribute("data-opt-glow")).toBe("off");
+    applyAddonThemes([]);
+    expect(root.hasAttribute("data-opt-glow")).toBe(false);
   });
 
   it("applyAddonCss adds a link per enabled addon with css and removes it when the addon is gone", () => {

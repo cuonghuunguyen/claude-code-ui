@@ -20,6 +20,7 @@ Phần lớn cài đặt chỉ **được lưu trong trình duyệt này**. Đi�
 | Cài đặt | Tùy chọn |
 | --- | --- |
 | Chủ đề | Default, Catppuccin, Tokyo Night, Solarized, Nord, Dracula, One, Neon. Đổi màu cùng lúc cho ứng dụng, trình soạn thảo, diff, terminal và đồ thị git. Dracula không có màu sáng: ở chế độ sáng nó hiện Default. Được lưu trong trình duyệt này. |
+| Công tắc của chủ đề | Một chủ đề có thể có công tắc bật/tắt, hiện dưới danh sách chủ đề và chỉ cho chủ đề đang chọn (Neon: **Rain**). Thay đổi áp dụng ngay và được lưu trong trình duyệt này theo từng chủ đề. |
 
 | Tên và biểu tượng ứng dụng | Tên và biểu tượng riêng của bạn (emoji hoặc ảnh) cho thẻ trình duyệt và ứng dụng đã cài. **Thay đổi…** mở trình chỉnh sửa; tên trống nghĩa là "Claude UI". Lưu trong daemon: áp dụng cho mọi trình duyệt dùng Claude UI này. Thẻ trình duyệt đổi ngay. Ứng dụng đã cài nhận khi trình duyệt kiểm tra cập nhật lần tới (tối đa một ngày) hoặc sau khi cài lại. |
 

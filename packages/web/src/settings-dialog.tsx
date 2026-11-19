@@ -3,7 +3,7 @@
 // daemon-side settings come from SECTIONS; per-browser choices (General, Layout, Keyboard, most of Notifications) never reach the daemon.
 // A later setting is one more row in SECTIONS or a section component; a later section joins a group in `groups`, a later group is one
 // more entry there.
-import { useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useContext, useEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { APP_ICON_MAX, APP_ICON_PX, APP_NAME_DEFAULT, DEFAULT_COMMIT_INSTRUCTION, LOCAL_SIDE, type ClaudeAccountInfo, type DockerState, type Engine, type Settings, type SettingsPatch, type SettingsResult, type SideInfo, type UpdateCheckResult } from "@claude-ui/protocol";
 import { sideStatus, sideTitle } from "./sides.tsx";
 import { LabelDialog } from "./label-dialog.tsx";
@@ -45,7 +45,7 @@ import { JiraSection } from "./jira-settings.tsx";
 import { OpenCodeSection } from "./opencode-settings.tsx";
 import { OpenAppSection } from "./open-app-settings.tsx";
 import { onDaemonMachine } from "./open-external-menu.ts";
-import { setColorTheme, useColorTheme, useDark } from "./theme.ts";
+import { getThemeOptions, setColorTheme, setThemeOption, useColorTheme, useDark } from "./theme.ts";
 import { LOCALES, setLocalePref, t, useLocale, useT, type Key } from "./i18n.ts";
 import { addonThemes, swatchOf, THEMES, type Theme, type ThemeId } from "./themes.ts";
 import { AddonsContext, enabledAddons } from "./addons.ts";
@@ -225,6 +225,8 @@ function AppearanceSection({ app, request }: { app?: Settings["app"]; request: <
   const addons = useContext(AddonsContext).addons;
   const list = useMemo(() => [...THEMES, ...addonThemes(enabledAddons(addons))], [addons]);
   const id = list.some((th) => th.id === stored) ? stored : "default";
+  const [optionsRev, bump] = useReducer((n: number) => n + 1, 0);
+  const options = useMemo(() => getThemeOptions(list.find((th) => th.id === id)), [list, id, optionsRev]);
   return (
     <section aria-labelledby="settings-appearance-title" className="flex flex-col" data-testid="settings-appearance">
       <h3 id="settings-appearance-title" className="pb-1 font-medium text-[13px] text-muted-foreground">
@@ -257,6 +259,12 @@ function AppearanceSection({ app, request }: { app?: Settings["app"]; request: <
           </SelectContent>
         </Select>
       </div>
+      {options.map((o) => (
+        <div key={o.id} className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+          <span className="min-w-0 flex-1 text-sm">{o.label}</span>
+          <Switch on={o.on} label={o.label} held={false} onToggle={(on) => (setThemeOption(id, o.id, on), bump())} title={o.label} testId={`settings-theme-option-${o.id}`} />
+        </div>
+      ))}
       <LanguageRow />
       {app && <AppIconRow request={request} />}
       {id === "dracula" && !dark && (

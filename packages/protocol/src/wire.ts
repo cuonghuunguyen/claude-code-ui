@@ -1275,7 +1275,9 @@ export type AddonView = { id: string; title: string; entry: string; kind: "pane"
 export type AddonCommand = { name: string; description: string; argumentHint?: string };
 export type AddonRenderer = ({ fence: string } | { tool: string }) & { entry: string };
 /** Colours per palette key (themes.ts KEYS); a mode may be partial: the web drops incomplete modes. */
-export type AddonTheme = { id: string; name: string; light?: Record<string, string>; dark?: Record<string, string> };
+/** A boolean switch of a theme (Settings > Appearance): the web app sets `data-opt-<id>="on"|"off"` on <html> while the theme is current. `default` absent = on. */
+export type AddonThemeOption = { id: string; label: string; default?: boolean };
+export type AddonTheme = { id: string; name: string; light?: Record<string, string>; dark?: Record<string, string>; options?: AddonThemeOption[] };
 export type AddonManifest = {
   name: string;
   version: string;
