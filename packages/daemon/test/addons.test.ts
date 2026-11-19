@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import type { AddonInfo, AddonUpdateCheck, AddonsListResult, ServerMessage } from "@claude-ui/protocol";
+import type { AddonCandidate, AddonInfo, AddonUpdateCheck, AddonsListResult, ServerMessage } from "@claude-ui/protocol";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createDaemon } from "../src/server.ts";
 import { parseManifest, toInfo } from "../src/addons.ts";
@@ -150,6 +150,87 @@ describe("addons.install", () => {
     commitAddon();
     await installGit();
     expect(await installGit()).toMatchObject({ code: "exists" });
+  });
+});
+
+describe("repository with addons in subfolders", () => {
+  const multi = join(tmp, "multi.git");
+  const mwork = join(tmp, "multi-work");
+  const put = (rel: string, content: string) => {
+    mkdirSync(join(mwork, rel, ".."), { recursive: true });
+    writeFileSync(join(mwork, rel), content);
+  };
+  const manifest = (name: string, patch: Record<string, unknown> = {}) => json({ ...BASE, name, ...patch });
+  const push = () => {
+    git(mwork, "add", "-A");
+    git(mwork, "commit", "-q", "--allow-empty", "-m", "c");
+    git(mwork, "push", "-q", "origin", "HEAD:main");
+    return git(mwork, "rev-parse", "HEAD");
+  };
+  const discover = async (extra: object = {}) => c.request({ type: "addons.discover", source: { kind: "git", url: multi, ...extra } });
+  const installAt = (path: string) => c.request({ type: "addons.install", source: { kind: "git", url: multi, path } });
+  beforeAll(() => {
+    git(tmp, "init", "-q", "--bare", "-b", "main", multi);
+    git(tmp, "init", "-q", "-b", "main", mwork);
+    git(mwork, "remote", "add", "origin", multi);
+    for (const d of ["alpha", "packs/beta"]) {
+      put(`${d}/addon.json`, manifest(d.split("/").pop()!));
+      put(`${d}/pane.html`, "<p>x</p>");
+    }
+    put("broken/addon.json", "{not json");
+    put("a/b/c/d/deep/addon.json", manifest("deep")); // 4 folders deep
+    put("node_modules/dep/addon.json", manifest("dep"));
+    mkdirSync(join(tmp, "folder-outside"), { recursive: true });
+    writeFileSync(join(tmp, "folder-outside/addon.json"), manifest("outside"));
+    writeFileSync(join(tmp, "folder-outside/pane.html"), "x");
+    if (canSymlink) {
+      mkdirSync(join(mwork, "links"), { recursive: true });
+      symlinkSync("../alpha/addon.json", join(mwork, "links/addon.json"));
+      symlinkSync(join(tmp, "folder-outside"), join(mwork, "escape"));
+    }
+    push();
+  }, process.platform === "win32" ? 60_000 : undefined);
+
+  it("discover lists addon.json files sorted, flags a broken one, and skips deep folders, node_modules and links", async () => {
+    const r = (await discover()).result as AddonCandidate[];
+    expect(r.map((x) => x.path)).toEqual(["alpha", "broken", "packs/beta"]);
+    expect(r[0]).toMatchObject({ name: "alpha", version: "1.0.0", description: "d" });
+    expect(r[1]).toMatchObject({ error: "addon.json is not valid JSON" });
+    expect(readdirSync(join(addonsDir, "addons")).filter((n) => n.startsWith(".tmp-"))).toEqual([]);
+  });
+
+  it("installs the addon of a subfolder, pins the SHA, stores the path and keeps one checkout per addon", async () => {
+    const head = git(mwork, "rev-parse", "HEAD");
+    const r = await installAt("packs/beta");
+    expect(r.result).toMatchObject({ name: "beta", state: "needs_approval", sha: head, source: { kind: "git", url: multi, path: "packs/beta" } });
+    const i = await approveAll("beta");
+    expect(i.state).toBe("enabled");
+    expect((await fetchAddon(`${i.base}pane.html`)).status).toBe(200);
+    expect((await installAt("alpha")).result).toMatchObject({ name: "alpha" });
+    expect(existsSync(join(addonsDir, "addons/alpha/alpha/addon.json"))).toBe(true);
+  });
+
+  it("the repository root without addon.json stays 'addon.json not found'; a missing subfolder is not_found", async () => {
+    expect(await c.request({ type: "addons.install", source: { kind: "git", url: multi } })).toMatchObject({ type: "error", message: "addon.json not found" });
+    expect(await installAt("nope")).toMatchObject({ type: "error", code: "not_found" });
+  });
+
+  it("checkUpdate reads addon.json of the subfolder", async () => {
+    await installAt("packs/beta");
+    await approveAll("beta");
+    put("packs/beta/addon.json", manifest("beta", { capabilities: ["ui.pane", "ui.toast"] }));
+    const next = push();
+    const r = (await c.request({ type: "addons.checkUpdate", name: "beta" })).result as AddonUpdateCheck;
+    expect(r).toMatchObject({ latest: next, added: ["ui.toast"], removed: [] });
+  });
+
+  it.skipIf(!canSymlink)(needsLinks("a subfolder that is a link out of the repository is refused"), async () => {
+    expect(await installAt("escape")).toMatchObject({ type: "error", code: "not_found" });
+    expect((await list()).addons).toEqual([]);
+  });
+
+  it.each(["../x", "/etc", "a//b", "./a", "a/../b", "a\\b", "a/b/c/d", "-x", ".git", "a/.git"])("refuses the path %s", async (path) => {
+    expect(await installAt(path)).toMatchObject({ type: "error", code: "bad_request" });
   });
 });
 

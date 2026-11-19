@@ -8,6 +8,8 @@ Addon thay đổi giao diện và tính năng của claude-ui trong trình duy�
 2. Chọn **Kho git** và nhập URL, thêm nhánh, tag hoặc SHA nếu muốn. Hoặc chọn **Thư mục cục bộ** và nhập đường dẫn tuyệt đối trên máy chạy claude-ui.
 3. **Cài.** claude-ui clone kho (git chạy không hỏi gì: dùng credential helper, ssh-agent và khóa ssh của bạn, không lưu gì), ghim commit và hiện **thẻ duyệt**.
 
+`addon.json` của kho có thể nằm trong thư mục con, và một kho có thể chứa nhiều addon (như `npx skills add`). claude-ui tìm các tệp `addon.json` sâu tối đa ba cấp thư mục. Chỉ tìm thấy một addon: cài ngay. Tìm thấy nhiều: hiện danh sách, bạn tick các addon cần cài rồi chọn **Cài mục đã chọn**. `addon.json` hỏng vẫn được liệt kê nhưng không tick được. Mỗi addon có checkout, phần duyệt và cập nhật riêng. Thư mục cục bộ không được tìm kiếm: đường dẫn phải là thư mục của addon.
+
 Addon nằm trên Hub (máy chạy claude-ui) và hoạt động ở mọi trình duyệt kết nối tới. Addon nằm trong thư mục dự án không bao giờ được chạy: chỉ addon bạn cài ở đây mới chạy.
 
 ## Duyệt quyền của addon {#approval}

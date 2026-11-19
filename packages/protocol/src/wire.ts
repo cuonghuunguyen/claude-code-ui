@@ -494,6 +494,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "addons.list" }
   /** Clones (git) or reads (local) and validates; stored with approved [] (state needs_approval). Reply AddonInfo. */
   | { type: "addons.install"; source: AddonSource }
+  /** Lists the `addon.json` files of a git repository (clone without checkout, no install). Reply AddonCandidate[]. */
+  | { type: "addons.discover"; source: { kind: "git"; url: string; ref?: string } }
   /** git fetch; reply AddonUpdateCheck. */
   | { type: "addons.checkUpdate"; name: string }
   /** Checks out `sha` (the last checkUpdate's latest). Reply AddonInfo. */
@@ -1265,7 +1267,10 @@ export type PluginUpdateFailure = "timeout" | "policy" | "disabled" | "needs_con
 export type PluginUpdateResult = { outcome: "ok"; message?: string; reload?: ReloadResult } | { outcome: "failed"; kind: PluginUpdateFailure; message: string };
 
 // Addons (docs/spec.md "Addons", ADR 0006).
-export type AddonSource = { kind: "git"; url: string; ref?: string } | { kind: "local"; path: string };
+/** git `path`: repo-relative folder of the addon, no leading slash; absent = repo root. */
+export type AddonSource = { kind: "git"; url: string; ref?: string; path?: string } | { kind: "local"; path: string };
+/** An `addon.json` found in a repository by `addons.discover`; `path` "" = repo root; `error`: the file does not read. */
+export type AddonCandidate = { path: string; name: string; version: string; description: string; error?: string };
 export type AddonView = { id: string; title: string; entry: string; kind: "pane" | "band"; phone?: boolean };
 export type AddonCommand = { name: string; description: string; argumentHint?: string };
 export type AddonRenderer = ({ fence: string } | { tool: string }) & { entry: string };

@@ -8,6 +8,8 @@ An addon changes how claude-ui looks and what it offers in the browser: colour t
 2. Choose **Git repository** and enter the URL and, if you want one, a branch, tag or SHA. Or choose **Local folder** and enter an absolute path on the machine that runs claude-ui.
 3. **Install.** claude-ui clones the repository (git runs without any prompt: it uses your credential helper, ssh-agent and ssh keys, and stores nothing), pins the commit and shows the **approval card**.
 
+The `addon.json` of a repository may sit in a subfolder, and one repository may hold several addons (like `npx skills add`). claude-ui looks for `addon.json` files up to three folders deep. One addon found: it installs at once. Several found: a list appears, you check the addons to install and choose **Install selected**. A broken `addon.json` is listed but cannot be checked. Each addon gets its own checkout, approval and updates. A local folder is not searched: its path must be the addon folder.
+
 Addons live on the Hub (the machine that runs claude-ui) and are active in every browser that connects to it. An addon in a project folder is never run: only addons you install here are.
 
 ## Approve what it can do {#approval}

@@ -6,7 +6,7 @@ import { ASIDE_COMMAND, DIALOG_COMMANDS } from "./commands.ts";
 import type { Key } from "./i18n.ts";
 import type { AddonPaneId } from "./layout.ts";
 
-export type { AddonInfo, AddonsListResult, AddonUpdateCheck } from "@claude-ui/protocol";
+export type { AddonCandidate, AddonInfo, AddonSource, AddonsListResult, AddonUpdateCheck } from "@claude-ui/protocol";
 
 /** One line of an addon's log: a refused or invalid bridge call (warn) or a `log` call of the addon. Kept per browser in localStorage, the last LOG_MAX per addon. */
 export type AddonLogLevel = "info" | "warn" | "error";
@@ -131,8 +131,10 @@ export function capabilityDiff(declared: readonly string[], approved: readonly s
 }
 
 /** Where an addon came from: `git: <url>@<ref or HEAD> · <sha7>` or `folder: <path>`. */
-export const sourceText = (a: Pick<AddonInfo, "source" | "sha">) => (a.source.kind === "git" ? `git: ${a.source.url}@${a.source.ref ?? "HEAD"}${a.sha ? ` · ${a.sha.slice(0, 7)}` : ""}` : `folder: ${a.source.path}`);
-export const sourceKey = (s: AddonSource) => (s.kind === "git" ? s.url : s.path);
+export const sourceText = (a: Pick<AddonInfo, "source" | "sha">) =>
+  a.source.kind === "git" ? `git: ${a.source.url}${a.source.path ? ` (${a.source.path})` : ""}@${a.source.ref ?? "HEAD"}${a.sha ? ` · ${a.sha.slice(0, 7)}` : ""}` : `folder: ${a.source.path}`;
+/** One key per addon source: two addons of one repository (different subfolders) differ. */
+export const sourceKey = (s: AddonSource) => (s.kind === "git" ? (s.path ? `${s.url} (${s.path})` : s.url) : s.path);
 
 /** The catalog key and values of a capability's plain-language line. */
 export function capabilityLine(c: string): { key: Key; vars?: Record<string, string> } {

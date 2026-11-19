@@ -8,9 +8,11 @@ import type { Request } from "./client.ts";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { isImeKey } from "./ime.ts";
 import { useT } from "./i18n.ts";
-import { capabilityDiff, capabilityLine, rendererConflicts, sourceText, type AddonInfo, type AddonLogEntry, type AddonUpdateCheck, type AddonsListResult } from "./addons.ts";
+import { capabilityDiff, capabilityLine, rendererConflicts, sourceText, type AddonCandidate, type AddonInfo, type AddonSource, type AddonLogEntry, type AddonUpdateCheck, type AddonsListResult } from "./addons.ts";
 import { Switch } from "./plugins-dialog.tsx";
 
+type GitSource = { kind: "git"; url: string; ref?: string };
+const withPath = (s: GitSource, path: string) => (path ? { ...s, path } : s);
 const INPUT = "h-9 w-full rounded-md bg-secondary/60 px-3 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary max-md:h-11 max-md:text-base";
 
 /** `changed`: bumped on `config.changed` kind addons. `log`: the addon logs of this browser (`log` calls and refused calls), by addon. */
@@ -31,6 +33,10 @@ export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onCl
   const [checks, setChecks] = useState<Record<string, AddonUpdateCheck>>({});
   const [confirmRemove, setConfirmRemove] = useState<string>();
   const [working, setWorking] = useState<string>();
+  /** A git repository with several addons: the picker (`pick.source` is the repository without a path). */
+  const [pick, setPick] = useState<{ source: GitSource; items: AddonCandidate[] }>();
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [failures, setFailures] = useState<Record<string, string>>({});
 
   const ask = useRef(request);
   ask.current = request;
@@ -59,6 +65,7 @@ export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onCl
     void load();
   }, [open]);
   useEffect(() => void (open && changed && load()), [changed]);
+  useEffect(() => (setPick(undefined), setChecked(new Set()), setFailures({})), [url, ref, kind, open]);
 
   /** One write at a time: the buttons wait for it; the list is read again after. */
   async function act<T>(name: string, msg: Request, then?: (r: T) => void) {
@@ -77,22 +84,66 @@ export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onCl
     await load();
   }
   async function install() {
-    const source = kind === "git" ? { kind, url: url.trim(), ...(ref.trim() && { ref: ref.trim() }) } : { kind, path: path.trim() };
     if (installing || !(kind === "git" ? url.trim() : path.trim())) return;
     setError(undefined);
     setNotice(undefined);
     setInstalling(true);
     try {
-      const a = await request<AddonInfo>({ type: "addons.install", source });
-      setFresh(a.name);
-      setUrl("");
-      setRef("");
-      setPath("");
+      if (kind === "local") await installOne({ kind: "local", path: path.trim() });
+      else {
+        const source: GitSource = { kind: "git", url: url.trim(), ...(ref.trim() && { ref: ref.trim() }) };
+        const found = await request<AddonCandidate[]>({ type: "addons.discover", source });
+        if (found.length === 0) setError(t("addons.noneFound"));
+        else if (found.length === 1) await installOne(withPath(source, found[0]!.path));
+        else (setPick({ source, items: found }), setChecked(new Set()), setFailures({}));
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setInstalling(false);
     }
+    await load();
+  }
+  async function installOne(source: AddonSource) {
+    const a = await request<AddonInfo>({ type: "addons.install", source });
+    setFresh(a.name);
+    setUrl("");
+    setRef("");
+    setPath("");
+  }
+  /** The checked candidates one after the other; a failure is shown on its row and the rest go on. */
+  async function installSelected() {
+    if (!pick || installing || checked.size === 0) return;
+    setError(undefined);
+    setNotice(undefined);
+    setInstalling(true);
+    const failed: Record<string, string> = {};
+    const left: AddonCandidate[] = [];
+    let ok = 0;
+    let last: string | undefined;
+    for (const c of pick.items) {
+      if (!checked.has(c.path)) {
+        left.push(c);
+        continue;
+      }
+      try {
+        last = (await request<AddonInfo>({ type: "addons.install", source: withPath(pick.source, c.path) })).name;
+        ok++;
+      } catch (e) {
+        failed[c.path] = (e as Error).message;
+        left.push(c);
+      }
+    }
+    setFailures(failed);
+    setChecked(new Set());
+    if (left.length === 0) {
+      setPick(undefined);
+      setUrl("");
+      setRef("");
+    } else setPick({ source: pick.source, items: left });
+    if (ok === 1) setFresh(last);
+    else if (ok > 1) setNotice(t("addons.installedMany", { count: ok }));
+    setInstalling(false);
     await load();
   }
   const approve = (a: AddonInfo) => act(a.name, { type: "addons.approve", name: a.name, capabilities: a.manifest!.capabilities }, () => setFresh(undefined));
@@ -306,6 +357,43 @@ export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onCl
           </Button>
         </div>
       </section>
+      {pick && (
+        <section className="flex flex-col gap-2 rounded-lg border p-3" data-testid="addons-pick" aria-label={t("addons.pickTitle")}>
+          <h3 className="font-medium text-[14px]">{t("addons.pickTitle")}</h3>
+          <ul className="flex flex-col gap-1">
+            {pick.items.map((c) => (
+              <li key={c.path} data-testid="addons-candidate" data-path={c.path}>
+                <label className={cn("flex items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-secondary/50 max-md:min-h-11", c.error && "opacity-70")}>
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    disabled={!!c.error || installing}
+                    checked={checked.has(c.path)}
+                    onChange={(e) => setChecked((s) => (e.target.checked ? new Set(s).add(c.path) : new Set([...s].filter((x) => x !== c.path))))}
+                    data-testid="addons-candidate-check"
+                  />
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="[overflow-wrap:anywhere]">
+                      {c.name || c.path || t("addons.rootPath")} {c.version && <span className="text-muted-foreground text-xs">{c.version}</span>}
+                    </span>
+                    {c.description && <span className="text-muted-foreground text-xs leading-4">{c.description}</span>}
+                    <span className="text-muted-foreground text-xs [overflow-wrap:anywhere]">{c.path || t("addons.rootPath")}</span>
+                    {(c.error || failures[c.path]) && <span className="text-destructive text-xs" data-testid="addons-candidate-error">{c.error ?? failures[c.path]}</span>}
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+          <div className="flex flex-wrap gap-2">
+            <Button className="max-md:h-11" disabled={installing || checked.size === 0} onClick={() => void installSelected()} data-testid="addons-install-selected">
+              {installing ? t("addons.installing") : t("addons.installSelected")}
+            </Button>
+            <Button variant="secondary" className="max-md:h-11" disabled={installing} onClick={() => setPick(undefined)}>
+              {t("addons.cancel")}
+            </Button>
+          </div>
+        </section>
+      )}
       {error && <Banner kind="error">{error}</Banner>}
       {notice && <Banner kind="success">{notice}</Banner>}
       {freshAddon && card(freshAddon)}

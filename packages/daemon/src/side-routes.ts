@@ -219,6 +219,7 @@ export const ROUTES: { readonly [T in ClientMessage["type"]]: Route } = {
   "marketplace.update": PATH,
   "addons.list": HUB,
   "addons.install": HUB,
+  "addons.discover": HUB,
   "addons.checkUpdate": HUB,
   "addons.update": HUB,
   "addons.approve": HUB,

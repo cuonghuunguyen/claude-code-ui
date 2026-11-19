@@ -2,10 +2,10 @@
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import type { AddonInfo, AddonUpdateCheck, AddonsListResult } from "@claude-ui/protocol";
+import type { AddonCandidate, AddonInfo, AddonUpdateCheck, AddonsListResult } from "@claude-ui/protocol";
 import type { Request } from "./client.ts";
 import { AddonsDialog } from "./addons-dialog.tsx";
-import type { AddonLogEntry } from "./addons.ts";
+import { sourceKey, sourceText, type AddonLogEntry } from "./addons.ts";
 
 const CAPS = ["session.read", "ui.pane", "render.fence:example", "net:https://api.github.com"];
 const addon = (name: string, o: Partial<AddonInfo> = {}): AddonInfo => ({
@@ -55,9 +55,59 @@ async function render(list: AddonsListResult, handlers: Record<string, Handler> 
   return { calls, q, all, click, type, set: (l: AddonsListResult) => (current = l) };
 }
 
+const cand = (path: string, name: string, o: Partial<AddonCandidate> = {}): AddonCandidate => ({ path, name, version: "1.0.0", description: `${name} addon`, ...o });
+
+it("a repository with one addon in a subfolder installs it at once with that path", async () => {
+  const d = await render({ addons: [], picks: {} }, { "addons.discover": () => [cand("reze", "reze")], "addons.install": () => addon("reze", { state: "needs_approval", approved: [] }) });
+  await d.type(d.q("addons-url")!, "https://example.com/r.git");
+  await d.click(d.q("addons-install"));
+  expect(d.calls).toContainEqual({ type: "addons.discover", source: { kind: "git", url: "https://example.com/r.git" } });
+  expect(d.calls).toContainEqual({ type: "addons.install", source: { kind: "git", url: "https://example.com/r.git", path: "reze" } });
+  expect(d.q("addons-pick")).toBeNull();
+});
+
+it("a repository without addon.json shows an error and installs nothing", async () => {
+  const d = await render({ addons: [], picks: {} }, { "addons.discover": () => [] });
+  await d.type(d.q("addons-url")!, "https://example.com/r.git");
+  await d.click(d.q("addons-install"));
+  expect(document.body.textContent).toContain("No addon.json found in the repository");
+  expect(d.calls.some((c) => c.type === "addons.install")).toBe(false);
+});
+
+it("a repository with several addons shows a picker and installs only the checked ones, reporting a failure without stopping", async () => {
+  const items = [cand("a", "alpha"), cand("b", "beta"), cand("c", "gamma"), cand("bad", "", { error: "addon.json is not valid JSON" })];
+  const d = await render({ addons: [], picks: {} }, {
+    "addons.discover": () => items,
+    "addons.install": (m) => {
+      const path = (m as { source: { path?: string } }).source.path;
+      if (path === "a") throw new Error('addon "alpha" is already installed');
+      return addon("gamma", { state: "needs_approval", approved: [] });
+    },
+  });
+  await d.type(d.q("addons-url")!, "https://example.com/r.git");
+  await d.click(d.q("addons-install"));
+  expect(d.calls.some((c) => c.type === "addons.install")).toBe(false);
+  const rows = d.all("addons-candidate");
+  expect(rows).toHaveLength(4);
+  const checks = d.all("addons-candidate-check") as HTMLInputElement[];
+  expect(checks.map((c) => c.checked)).toEqual([false, false, false, false]);
+  expect(checks[3]!.disabled).toBe(true);
+  expect(rows[3]!.textContent).toContain("addon.json is not valid JSON");
+  await d.click(checks[0]!);
+  await d.click(checks[2]!);
+  await d.click(d.q("addons-install-selected"));
+  const installs = d.calls.filter((c) => c.type === "addons.install");
+  expect(installs).toEqual([
+    { type: "addons.install", source: { kind: "git", url: "https://example.com/r.git", path: "a" } },
+    { type: "addons.install", source: { kind: "git", url: "https://example.com/r.git", path: "c" } },
+  ]);
+  expect(d.all("addons-candidate").map((r) => r.dataset.path)).toEqual(["a", "b", "bad"]);
+  expect(d.all("addons-candidate-error")[0]!.textContent).toContain("already installed");
+});
+
 it("installs from a git URL and shows the approval card with the declared capabilities", async () => {
   const fresh = addon("example", { state: "needs_approval", approved: [] });
-  const d = await render({ addons: [], picks: {} }, { "addons.install": () => ((d.set({ addons: [fresh], picks: {} }), fresh)) });
+  const d = await render({ addons: [], picks: {} }, { "addons.discover": () => [cand("", "example")], "addons.install": () => ((d.set({ addons: [fresh], picks: {} }), fresh)) });
   await d.type(d.q("addons-url")!, "https://example.com/r.git");
   await d.type(d.q("addons-ref")!, "v1");
   await d.click(d.q("addons-install"));
@@ -86,7 +136,7 @@ it("a local folder install sends the path", async () => {
 
 it("approve sends addons.approve with the declared set", async () => {
   const fresh = addon("example", { state: "needs_approval", approved: [] });
-  const d = await render({ addons: [fresh], picks: {} }, { "addons.install": () => fresh });
+  const d = await render({ addons: [fresh], picks: {} }, { "addons.discover": () => [cand("", "example")], "addons.install": () => fresh });
   await d.click(d.q("addons-source-git"));
   await d.type(d.q("addons-url")!, "https://example.com/r.git");
   await d.click(d.q("addons-install"));
@@ -151,6 +201,11 @@ it("a row in error shows the error and no switch", async () => {
   const d = await render({ addons: [addon("gone", { state: "error", error: "addon.json not found", manifest: undefined, base: undefined })], picks: {} });
   expect(d.q("addons-error")!.textContent).toBe("addon.json not found");
   expect(d.q("addons-enabled")).toBeNull();
+});
+
+it("a subfolder addon shows its folder in the source and has its own key", () => {
+  expect(sourceText({ source: { kind: "git", url: "https://example.com/r.git", path: "reze" }, sha: "abcdef0123" })).toBe("git: https://example.com/r.git (reze)@HEAD · abcdef0");
+  expect(sourceKey({ kind: "git", url: "u", path: "a" })).not.toBe(sourceKey({ kind: "git", url: "u", path: "b" }));
 });
 
 it("the source URL is shown as the daemon sent it", async () => {

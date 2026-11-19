@@ -181,6 +181,7 @@ export function createSettingsArea(ctx: SettingsAreaContext, conn: Pick<Connecti
     "push.focus": pushFocus,
     "addons.list": addonsRun,
     "addons.install": addonsRun,
+    "addons.discover": addonsRun,
     "addons.checkUpdate": addonsRun,
     "addons.update": addonsRun,
     "addons.approve": addonsRun,

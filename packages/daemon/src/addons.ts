@@ -4,6 +4,7 @@ import { lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, s
 import { randomBytes } from "node:crypto";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
+  AddonCandidate,
   AddonInfo,
   AddonManifest,
   AddonSource,
@@ -34,6 +35,8 @@ const COLOR = /^#[0-9a-f]{6}$/i;
 const PALETTE_KEYS = ["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"];
 const GIT_TIMEOUT = 5 * 60_000;
 const MAX_ERROR = 400;
+const MAX_DEPTH = 3;
+const MAX_CANDIDATES = 50;
 
 const bad = (msg: string) => new ConfigError("bad_manifest", msg);
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -218,7 +221,7 @@ const parseState = (raw: unknown): State => {
       if (!NAME.test(k) || !isObj(v) || !isObj(v.source)) continue;
       const s = v.source;
       const source: AddonSource | undefined =
-        s.kind === "git" && typeof s.url === "string" ? { kind: "git", url: s.url, ...(typeof s.ref === "string" && { ref: s.ref }) } : s.kind === "local" && typeof s.path === "string" ? { kind: "local", path: s.path } : undefined;
+        s.kind === "git" && typeof s.url === "string" ? { kind: "git", url: s.url, ...(typeof s.ref === "string" && { ref: s.ref }), ...(typeof s.path === "string" && s.path !== "" && { path: s.path }) } : s.kind === "local" && typeof s.path === "string" ? { kind: "local", path: s.path } : undefined;
       if (!source) continue;
       out.addons[k] = { source, ...(typeof v.sha === "string" && { sha: v.sha }), approved: Array.isArray(v.approved) ? v.approved.filter((c): c is string => typeof c === "string") : [], enabled: v.enabled === true };
     }
@@ -228,7 +231,23 @@ const parseState = (raw: unknown): State => {
 
 const declared = (m: AddonManifest) => m.capabilities;
 const covered = (m: AddonManifest, approved: string[]) => declared(m).every((c) => approved.includes(c));
-const rootOf = (dir: string, name: string, r: Record_) => (r.source.kind === "git" ? join(dir, "addons", name) : r.source.path);
+/** Root of the addon files. A git subfolder whose real path leaves the checkout (a symlink) gives a path that does not exist, so load() reports "addon.json not found". */
+const rootOf = (dir: string, name: string, r: Record_) => {
+  if (r.source.kind !== "git") return r.source.path;
+  const checkout = join(dir, "addons", name);
+  if (!r.source.path) return checkout;
+  const root = join(checkout, r.source.path);
+  try {
+    if (within(realpathSync(checkout), realpathSync(root))) return root;
+  } catch {
+    // missing: the load error says so
+  }
+  return join(checkout, ".missing");
+};
+
+/** A repo-relative subfolder: up to 3 segments, none empty, `.`, `..`, `.git` or starting with `-`; no backslash, NUL or leading slash. */
+const subpathOk = (p: unknown): p is string =>
+  typeof p === "string" && p !== "" && !p.includes("\0") && !p.includes("\\") && !isAbsolute(p) && p.split("/").length <= 3 && p.split("/").every((s) => s !== "" && s !== "." && s !== ".." && s !== ".git" && !s.startsWith("-"));
 
 /** The manifest of the addon on disk, or the error that stops it loading. */
 function load(root: string, name: string): { manifest: AddonManifest } | { error: string } {
@@ -300,6 +319,7 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
     if (s.kind === "git") {
       if (typeof s.url !== "string" || s.url.trim() === "" || s.url.startsWith("-")) throw err("bad_request", "invalid git URL");
       if (s.ref !== undefined && (typeof s.ref !== "string" || s.ref.startsWith("-"))) throw err("bad_request", "invalid ref");
+      if (s.path !== undefined && !subpathOk(s.path)) throw err("bad_request", "invalid addon path");
     }
   };
 
@@ -331,7 +351,14 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
         await git(dir, ["clone", "--no-checkout", "--", source.url, tmp]);
         sha = await resolveRef(tmp, source.ref);
         await git(tmp, ["checkout", "--detach", sha]);
-        manifest = parseManifest(readJson(tmp), tmp);
+        const root = join(tmp, source.path ?? "");
+        try {
+          if (!within(realpathSync(tmp), realpathSync(root)) || !statSync(root).isDirectory()) throw 0;
+        } catch {
+          throw err("not_found", `folder not found in the repository: ${source.path ?? ""}`);
+        }
+        manifest = parseManifest(readJson(root), root);
+        source = { kind: "git", url: source.url, ...(source.ref !== undefined && { ref: source.ref }), ...(source.path && { path: source.path }) };
       }
       name = manifest.name;
       if (store.get().addons[name]) throw err("exists", `addon "${name}" is already installed`);
@@ -351,13 +378,15 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
   async function checkUpdate(name: string): Promise<AddonUpdateCheck> {
     const r = get(name);
     if (r.source.kind !== "git" || !r.sha) throw err("bad_request", "only git addons update");
+    const checkout = join(dir, "addons", name);
     const root = rootOf(dir, name, r);
-    await git(root, ["fetch", "--tags", "origin"]);
-    const latest = await resolveRef(root, r.source.ref);
+    await git(checkout, ["fetch", "--tags", "origin"]);
+    const latest = await resolveRef(checkout, r.source.ref);
     checked.set(name, latest);
     let next: string[] = [];
     try {
-      const raw = JSON.parse(await git(root, ["show", `${latest}:addon.json`])) as { capabilities?: unknown };
+      const sub = r.source.path ? `${r.source.path}/` : "";
+      const raw = JSON.parse(await git(checkout, ["show", `${latest}:${sub}addon.json`])) as { capabilities?: unknown };
       next = Array.isArray(raw.capabilities) ? raw.capabilities.filter((c): c is string => typeof c === "string") : [];
     } catch (e) {
       return { name, current: r.sha, latest, added: [], removed: [], error: e instanceof ConfigError ? e.message : "addon.json of the new version is not valid JSON" };
@@ -370,11 +399,12 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
     const r = get(name);
     if (r.source.kind !== "git" || !r.sha) throw err("bad_request", "only git addons update");
     if (typeof sha !== "string" || sha !== checked.get(name)) throw err("bad_request", "update the version the last check showed");
+    const checkout = join(dir, "addons", name);
     const root = rootOf(dir, name, r);
-    await git(root, ["checkout", "--detach", sha]);
+    await git(checkout, ["checkout", "--detach", sha]);
     const l = load(root, name);
     if ("error" in l) {
-      await git(root, ["checkout", "--detach", r.sha]);
+      await git(checkout, ["checkout", "--detach", r.sha]);
       throw bad(l.error);
     }
     changed((s) => {
@@ -386,6 +416,50 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
     });
     checked.delete(name);
     return info(name);
+  }
+
+  /** The addon.json files of a repository (no install): one candidate per file, sorted by path. Files that are links, deeper than 3 folders, or under `.git` or `node_modules` are ignored. */
+  async function discover(source: unknown): Promise<AddonCandidate[]> {
+    if (!isObj(source) || source.kind !== "git") throw err("bad_request", "source must be git");
+    gitSource(source as AddonSource);
+    const s = source as { url: string; ref?: string };
+    mkdirSync(join(dir, "addons"), { recursive: true });
+    const tmp = join(dir, "addons", `.tmp-${randomBytes(6).toString("hex")}`);
+    try {
+      await git(dir, ["clone", "--no-checkout", "--", s.url, tmp]);
+      const sha = await resolveRef(tmp, s.ref);
+      const tree = await git(tmp, ["ls-tree", "-r", "-z", "--full-tree", sha]);
+      const files: string[] = [];
+      for (const e of tree.split("\0")) {
+        const m = /^(\d{6}) blob [0-9a-f]+\t(.+)$/s.exec(e);
+        if (!m || (m[1] !== "100644" && m[1] !== "100755")) continue;
+        const p = m[2]!;
+        if (p !== "addon.json" && !p.endsWith("/addon.json")) continue;
+        const segs = p.split("/").slice(0, -1);
+        if (segs.length > MAX_DEPTH || segs.some((x) => x === ".git" || x === "node_modules")) continue;
+        files.push(segs.join("/"));
+      }
+      files.sort();
+      const out: AddonCandidate[] = [];
+      for (const path of files.slice(0, MAX_CANDIDATES)) {
+        const c: AddonCandidate = { path, name: "", version: "", description: "" };
+        try {
+          const raw: unknown = JSON.parse(await git(tmp, ["show", `${sha}:${path ? `${path}/` : ""}addon.json`]));
+          if (!isObj(raw)) throw new SyntaxError();
+          if (typeof raw.name === "string" && NAME.test(raw.name) && typeof raw.version === "string" && raw.version !== "") {
+            c.name = raw.name.slice(0, 64);
+            c.version = raw.version.slice(0, 64);
+            if (typeof raw.description === "string") c.description = raw.description.slice(0, 500);
+          } else c.error = "addon.json has no valid name and version";
+        } catch (e) {
+          c.error = e instanceof SyntaxError ? "addon.json is not valid JSON" : "addon.json cannot be read";
+        }
+        out.push(c);
+      }
+      return out;
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   }
 
   function approve(name: string, caps: unknown): AddonInfo {
@@ -434,6 +508,8 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
       }
       case "addons.install":
         return install(msg.source);
+      case "addons.discover":
+        return discover(msg.source);
       case "addons.checkUpdate":
         return checkUpdate(String(msg.name));
       case "addons.update":
