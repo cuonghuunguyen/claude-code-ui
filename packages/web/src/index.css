@@ -227,3 +227,21 @@
   font-size: 14px;
   line-height: 1.6;
 }
+
+/* Neon theme decoration (colours: themes.ts). Gradient background, glass work-area panels, prompt-box focus glow. */
+:root[data-theme="neon"].dark body {
+  background: radial-gradient(120% 80% at 80% 0%, #3a1f4f 0%, #0d0b14 60%) fixed;
+}
+:root[data-theme="neon"]:not(.dark) body {
+  background: radial-gradient(120% 80% at 80% 0%, #e6dcf3 0%, #f6f1ea 60%) fixed;
+}
+:root[data-theme="neon"] [data-testid="work-area"] .bg-card.shadow-raised {
+  background-color: color-mix(in srgb, var(--card) 80%, transparent);
+  backdrop-filter: blur(14px) saturate(1.15);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
+  border-color: color-mix(in srgb, var(--primary) 18%, var(--border));
+}
+:root[data-theme="neon"] [data-testid="prompt-box"]:focus-within {
+  box-shadow: 0 0 0 1px var(--primary), 0 0 28px -8px var(--primary);
+  transition: box-shadow 0.2s ease;
+}

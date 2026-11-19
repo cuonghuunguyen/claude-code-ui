@@ -17,7 +17,7 @@ export const KEYS = ["bg", "card", "side", "fg", "muted", "border", "primary", "
 export type Key = (typeof KEYS)[number];
 /** `x`: extra tokens (`--graph-*`, `--context-*`) moved in lightness from Default so they reach 3:1 on this palette's surfaces. */
 export type Palette = Record<Key, string> & { x?: Record<string, string> };
-export type BuiltinThemeId = "default" | "catppuccin" | "tokyonight" | "solarized" | "nord" | "dracula" | "one";
+export type BuiltinThemeId = "default" | "catppuccin" | "tokyonight" | "solarized" | "nord" | "dracula" | "one" | "neon";
 /** `addon:<addon name>:<theme id>` (GH-516): a theme an addon declares. */
 export type ThemeId = BuiltinThemeId | `addon:${string}:${string}`;
 export const ADDON_THEME_ID = /^addon:[a-z0-9]+(?:-[a-z0-9]+)*:[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -86,6 +86,13 @@ export const THEMES: readonly Theme[] = [
     light: P(["#eaeaeb", "#fafafa", "#dfdfe0", "#383a42", "#53555d", "#dbdbdc", "#366be2", "#ffffff", "#8c028a", "#217523", "#295ed6", "#935800", "#8c5c00", "#65666b", "#be3128", "#b82f26", "#7c4200", "#065f0d", "#00689e"], { "--context-4": "#eb3e00", "--context-6": "#008aa0" }),
     // dark values the issue lists, moved again for the active line, diff lines, keybind chip and graph chips: fg #abb2bf -> #d7dae0, muted #9da5b4 -> #adb5c4, kw #c678dd -> #f2a4ff, fn #61afef -> #6dbbfb, num #d19a66 -> #e1aa76, cmt #8e939d -> #b0b5bf, varc #e36f78 -> #ff969f, err #e36f78 -> #ff969f, ok #98c379 -> #a2cd83, info #56b6c2 -> #62c2ce
     dark: P(["#21252b", "#282c34", "#323842", "#d7dae0", "#adb5c4", "#3e4451", "#61afef", "#21252b", "#f2adff", "#98c379", "#71bdfb", "#e5c07b", "#e1aa76", "#b0b5bf", "#ff99a2", "#ff99a2", "#e5c07b", "#abd18e", "#67c4cf"]),
+  },
+  {
+    id: "neon",
+    name: "Neon",
+    // original values moved in lightness (OKLCH) for contrast. light: side #ece5f0, primary #0f8a62, kw #6b3fb3, str #1d7a4c, num #b8430f, cmt #6e6585, varc/err unchanged, warn #8a5200, ok #1d7a4c; --context-4/6 set like the other light themes. dark: cmt #8a82a3, err #ff5d6c
+    light: P(["#f6f1ea", "#fdfaf5", "#eae3ee", "#231d2e", "#5c5470", "#ddd3e3", "#00805a", "#ffffff", "#6335a9", "#0d7144", "#2459b0", "#8a5200", "#b13d02", "#655c7c", "#b02a63", "#c0263a", "#7b4300", "#006235", "#2459b0"], { "--context-4": "#ea3a00", "--context-6": "#008aa0" }),
+    dark: P(["#0d0b14", "#16131f", "#1f1a2c", "#ece6f5", "#a9a0bd", "#2c2540", "#46d6a0", "#0d0b14", "#c39bff", "#8ee6b8", "#7fb4ff", "#ffc46b", "#ff8a5c", "#9f97b9", "#ff7aa8", "#ff7784", "#ffb454", "#46d6a0", "#7fb4ff"]),
   },
 ];
 

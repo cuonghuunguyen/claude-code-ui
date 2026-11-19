@@ -1095,7 +1095,7 @@ it("list buttons are 44px below md", async () => {
   expect(q(`${id}-input`)!.className).toContain("max-md:h-11");
 });
 
-it("Appearance (GH-468): the theme list has 7 themes in order, each with a swatch; Dracula says dark only; a pick recolours without reload and is kept", async () => {
+it("Appearance (GH-468): the theme list has 8 themes in order, each with a swatch; Dracula says dark only; a pick recolours without reload and is kept", async () => {
   localStorage.clear();
   document.documentElement.removeAttribute("data-theme");
   document.documentElement.classList.remove("dark");
@@ -1105,7 +1105,7 @@ it("Appearance (GH-468): the theme list has 7 themes in order, each with a swatc
   expect(q("settings-theme")!.textContent).toContain("Default");
   await act(async () => q("settings-theme")!.click());
   const items = [...document.querySelectorAll('[role=option]')];
-  expect(items.map((i) => i.textContent)).toEqual(["Default", "Catppuccin", "Tokyo Night", "Solarized", "Nord", "Dracula" + "dark only", "One"]);
+  expect(items.map((i) => i.textContent)).toEqual(["Default", "Catppuccin", "Tokyo Night", "Solarized", "Nord", "Dracula" + "dark only", "One", "Neon"]);
   for (const i of items) expect(i.querySelector('[data-testid="settings-theme-swatch"]')).not.toBeNull();
   expect(q("settings-theme-dracula")!.textContent).toContain("dark only");
   expect(q("settings-theme-nord")!.textContent).not.toContain("dark only");

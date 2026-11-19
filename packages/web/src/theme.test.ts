@@ -43,7 +43,7 @@ const PAIRS = [
   ),
 ];
 
-it("covers Default and every theme in both modes (Dracula: dark only)", () => expect(PAIRS).toHaveLength(2 + 5 * 2 + 1));
+it("covers Default and every theme in both modes (Dracula: dark only)", () => expect(PAIRS).toHaveLength(2 + 6 * 2 + 1));
 
 for (const { name, mode, t } of PAIRS) {
   describe(`theme ${name}`, () => {

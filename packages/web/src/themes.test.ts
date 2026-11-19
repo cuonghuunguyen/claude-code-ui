@@ -9,9 +9,9 @@ const dracula = THEMES.find((t) => t.id === "dracula")!;
 const catppuccin = THEMES.find((t) => t.id === "catppuccin")!;
 
 describe("THEMES", () => {
-  it("lists Default, Catppuccin, Tokyo Night, Solarized, Nord, Dracula, One in order", () => {
-    expect(THEMES.map((t) => t.name)).toEqual(["Default", "Catppuccin", "Tokyo Night", "Solarized", "Nord", "Dracula", "One"]);
-    expect(THEMES.map((t) => t.id)).toEqual(["default", "catppuccin", "tokyonight", "solarized", "nord", "dracula", "one"]);
+  it("lists Default, Catppuccin, Tokyo Night, Solarized, Nord, Dracula, One, Neon in order", () => {
+    expect(THEMES.map((t) => t.name)).toEqual(["Default", "Catppuccin", "Tokyo Night", "Solarized", "Nord", "Dracula", "One", "Neon"]);
+    expect(THEMES.map((t) => t.id)).toEqual(["default", "catppuccin", "tokyonight", "solarized", "nord", "dracula", "one", "neon"]);
   });
 
   it("every palette has the 19 keys as #rrggbb; Default has none (index.css), Dracula has no light", () => {
@@ -44,7 +44,7 @@ describe("themeCss", () => {
     expect(css).toContain(':root[data-theme="dracula"].dark {');
     expect(css).not.toContain('[data-theme="dracula"]:not(.dark)');
     expect(css).not.toContain('[data-theme="default"]');
-    expect(css.match(/\{/g)).toHaveLength(11);
+    expect(css.match(/\{/g)).toHaveLength(13);
   });
 });
 

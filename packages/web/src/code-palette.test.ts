@@ -139,12 +139,12 @@ it("diffThemes: Dracula's light is Default's light theme; others have their own"
   expect(diffThemes("catppuccin").dark).toBe("claude-ui-catppuccin-dark");
 });
 
-it("registerDiffThemes, called twice, registers Default (on the app's card) and every theme and mode (13 names)", async () => {
+it("registerDiffThemes, called twice, registers Default (on the app's card) and every theme and mode (15 names)", async () => {
   const { resolveTheme, registerCustomTheme } = await import("@pierre/diffs");
   registerDiffThemes(registerCustomTheme);
   registerDiffThemes(registerCustomTheme);
   for (const mode of ["light", "dark"] as const) expect((await resolveTheme(DIFF_THEMES[mode] as never)).bg).toBe(cssVar(MODE[mode].selector, "card"));
   const names = new Set(THEMES.flatMap((t) => Object.values(diffThemes(t.id))));
-  expect(names.size).toBe(13);
+  expect(names.size).toBe(15);
   for (const n of names) expect((await resolveTheme(n as never)).name).toBe(n);
 });
