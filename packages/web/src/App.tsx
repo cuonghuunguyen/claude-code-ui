@@ -117,6 +117,7 @@ import { clearDrafts, draftKeys, loadDraft, loadDraftImages, NEW_TAB_DRAFT, save
 import { autoCloseDue, autoCloseTargets, cleanupMenu as buildCleanupMenu, cleanupTargets, loadAutoClose, saveAutoClose, type AutoClose, type CleanupContext, type CleanupRule, type TabFacts } from "./tab-cleanup.ts";
 import { loadUsed, pruneUsed, saveUsed, seedUsed, stampUsed } from "./tab-used.ts";
 import { announceDraft, flushDrafts, onDraftWritten, useDraft } from "./use-draft.ts";
+import { RunInTerminalContext } from "./shell-fence.tsx";
 import { ClaudeLoginContext, RawPart } from "./raw-part.tsx";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
 import { PlanMeter } from "./plan-meter.tsx";
@@ -2303,6 +2304,8 @@ export function App() {
   const [spawnFor, setSpawnFor] = useState<string>();
   /** The Claude login terminal was asked for (RawPart's button, Settings › Claude account): the terminal panel starts it once it shows. */
   const [loginAsk, setLoginAsk] = useState(false);
+  /** A shell fence's "Run in terminal": the terminal panel types the command once it shows. */
+  const [runAsk, setRunAsk] = useState<{ command: string; n: number }>();
   // While a folder's shells are unknown the last known answer stays (no collapse and remount for one terminal.list round trip).
   const lastAvail = useRef(false);
   const availKnown = !!panelCwd && (hasShells[panelCwd] !== undefined || termWanted.has(panelCwd));
@@ -3247,6 +3250,16 @@ export function App() {
     if (shows("terminal")) setTermFocusReq((n) => n + 1);
     reveal("terminal");
   };
+  /** Run a command in the shown project's terminal: reveals the pane like the login does, the panel types the command. */
+  const runInTerminal = (command: string) => {
+    if (!panelCwd) return setToast(tr("app.run.noProject"));
+    setRunAsk((r) => ({ command, n: (r?.n ?? 0) + 1 }));
+    if (termHome === "main") return showTerminal();
+    askTerminal();
+    if (!wide(1024)) return setPane("terminal");
+    if (shows("terminal")) setTermFocusReq((n) => n + 1);
+    reveal("terminal");
+  };
   const toggleTerminal = () => {
     if (termHome === "main") return showTerminal();
     if (!wide(1024)) return pane === "terminal" ? setPane("session") : (askTerminal(), setPane("terminal"));
@@ -3532,7 +3545,7 @@ export function App() {
 
 
   // The terminal panel: the dock's (one) and each terminal tab's, built the same way.
-  type TermProps = { login?: boolean; onLoginStarted?: () => void; shown: boolean; quiet: boolean; ensure: boolean; onEnsured: () => void; newTick: number; focusReq: number; onEmpty: () => void; onTerminals?: (n: number) => void; onSend?: (text: string) => void };
+  type TermProps = { run?: { command: string; n: number }; onRunStarted?: () => void; login?: boolean; onLoginStarted?: () => void; shown: boolean; quiet: boolean; ensure: boolean; onEnsured: () => void; newTick: number; focusReq: number; onEmpty: () => void; onTerminals?: (n: number) => void; onSend?: (text: string) => void };
   const terminalSection = (cwd: string, p: TermProps, dock: string) => (
     <section className={p.shown || dock === "main" ? "flex min-h-0 flex-1 flex-col" : "hidden"} data-testid="terminal-panel" data-dock={dock}>
       <Suspense fallback={<p className="m-auto text-muted-foreground text-sm">{tr("app.main.loadingTerminal")}</p>}>
@@ -3547,6 +3560,8 @@ export function App() {
       {
         login: loginAsk,
         onLoginStarted: () => setLoginAsk(false),
+        run: runAsk,
+        onRunStarted: () => setRunAsk(undefined),
         ensure: spawnFor === panelTarget.cwd,
         onEnsured: () => setSpawnFor(undefined),
         onTerminals: (n) => setHasShells((h) => (h[panelTarget.cwd] === n > 0 ? h : { ...h, [panelTarget.cwd]: n > 0 })),
@@ -3582,6 +3597,8 @@ export function App() {
           quiet: termLoud !== ref,
           login: loginAsk && carry,
           onLoginStarted: () => setLoginAsk(false),
+          run: ref === activeId ? runAsk : undefined,
+          onRunStarted: () => setRunAsk(undefined),
           ensure: termSpawn === ref,
           onEnsured: () => setTermSpawn(undefined),
           newTick: carry ? terminalTick : termReq[ref]?.add ?? 0,
@@ -3714,7 +3731,7 @@ export function App() {
   );
   return (
     <OpenExternalContext value={openExternal}>
-    <ClaudeLoginContext value={openLogin}>
+    <RunInTerminalContext value={runInTerminal}><ClaudeLoginContext value={openLogin}>
     <AddonsContext value={addons}>
     <VisualizeContext value={visualizeOn}>
     <VisualizeReadContext value={visualizeRead}>
@@ -4688,7 +4705,7 @@ export function App() {
     </VisualizeReadContext>
     </VisualizeContext>
     </AddonsContext>
-    </ClaudeLoginContext>
+    </ClaudeLoginContext></RunInTerminalContext>
     </OpenExternalContext>
   );
 }

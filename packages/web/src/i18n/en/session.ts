@@ -124,6 +124,8 @@ export default {
   "session.ai.scrollBottom": "Scroll to bottom",
   "session.ai.branchPrevious": "Previous branch",
   "session.ai.branchNext": "Next branch",
+  "session.shell.copy": "Copy",
+  "session.shell.run": "Run in terminal",
   "session.ai.branchPage": "{current} of {total}",
   "session.ai.thinking": "Thinking...",
   "session.ai.thoughtFewSeconds": "Thought for a few seconds",

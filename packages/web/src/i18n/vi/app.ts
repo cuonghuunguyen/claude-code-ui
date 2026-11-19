@@ -754,6 +754,7 @@ export default {
   "app.timeline.warning": "Cảnh báo",
   "app.login.action": "Đăng nhập Claude",
   "app.login.noProject": "Hãy mở một dự án trước: lệnh đăng nhập chạy trong terminal của dự án.",
+  "app.run.noProject": "Hãy mở một dự án trước: lệnh chạy trong terminal của dự án.",
   "app.timeline.backgroundFailed": "Không chạy nền được: {message}",
   "app.timeline.sdkMessage": "Tin nhắn SDK",
   "app.timeline.compacted": "Cuộc trò chuyện đã được nén",

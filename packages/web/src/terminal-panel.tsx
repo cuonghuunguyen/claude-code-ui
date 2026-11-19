@@ -67,6 +67,8 @@ export function TerminalPanel({
   onTerminals,
   login = false,
   onLoginStarted,
+  run,
+  onRunStarted,
   onSend,
 }: {
   client: Client;
@@ -87,6 +89,9 @@ export function TerminalPanel({
   /** A level: start the Claude CLI login terminal once the list loaded (a request made before this mounted is not lost). */
   login?: boolean;
   onLoginStarted?: () => void;
+  /** A level: type this command in the active shell and press Enter once the list loaded (a shell starts if there is none). `n` tells equal commands apart. */
+  run?: { command: string; n: number };
+  onRunStarted?: () => void;
   /** Add to chat (GH-710): the selected output as a prompt block goes to the prompt box. Without it the menus have no such action. */
   onSend?: (text: string) => void;
 }) {
@@ -189,6 +194,17 @@ export function TerminalPanel({
     void create(true, true);
     onLoginStarted?.();
   }, [login, loaded]);
+  const runCreating = useRef(false);
+  useEffect(() => {
+    if (!run || !loaded) return;
+    if (!activeId) {
+      if (!runCreating.current) (runCreating.current = true), void create(true).finally(() => (runCreating.current = false));
+      return;
+    }
+    for (const part of inputParts(`${run.command}\r`))
+      client.request({ type: "terminal.input", terminalId: activeId, data: part }).catch((e: Error) => e.message !== "disconnected" && setError(e.message));
+    onRunStarted?.();
+  }, [run, loaded, activeId]);
   useEffect(() => void (loaded && onTerminals?.(terminals.length)), [loaded, terminals.length]);
 
   // Only an id of the shown folder's list: after a folder switch `activeId` is still the old folder's until the new list loads.

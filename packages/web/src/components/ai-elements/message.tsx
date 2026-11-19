@@ -28,6 +28,7 @@ import {
 } from "react";
 import { Streamdown } from "streamdown";
 import { useAddonFenceRenderers } from "../../addon-render.tsx";
+import { SHELL_LANGUAGES, ShellFence } from "../../shell-fence.tsx";
 import { VisualizeContext, VisualizeFence } from "../../visualize-block.tsx";
 import { useDark } from "../../theme.ts";
 import { useT } from "../../i18n.ts";
@@ -348,6 +349,7 @@ export const MessageResponse = memo(
       () => [
         ...(on ? [{ language: ["visualize"], component: VisualizeFence as never }] : []),
         ...addonRenderers,
+        { language: SHELL_LANGUAGES, component: ShellFence as never },
         ...(waitMermaid ? [{ language: ["mermaid"], component: MermaidPlaceholder as never }] : []),
       ],
       [on, waitMermaid, addonRenderers],

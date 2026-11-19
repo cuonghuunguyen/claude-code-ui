@@ -126,6 +126,8 @@ export default {
   "session.ai.scrollBottom": "Cuộn xuống cuối",
   "session.ai.branchPrevious": "Nhánh trước",
   "session.ai.branchNext": "Nhánh sau",
+  "session.shell.copy": "Sao chép",
+  "session.shell.run": "Chạy trong terminal",
   "session.ai.branchPage": "{current} trên {total}",
   "session.ai.thinking": "Đang suy nghĩ...",
   "session.ai.thoughtFewSeconds": "Đã suy nghĩ vài giây",
