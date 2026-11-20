@@ -9,7 +9,7 @@ import { ASIDE_NO_EDIT } from "./aside.ts";
 import { DeniedRetryError } from "./denied-retry.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 import { ascending } from "./opencode-id.ts";
-import { OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels } from "./opencode-engine.ts";
+import { LOCAL_COMMANDS, OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels } from "./opencode-engine.ts";
 import { OpenCode2Mapper, bashPart, failureText, mapTool2, type Failure, type OpenCode2Message, type Shell2 } from "./opencode2-parts.ts";
 import type { OpenCodeServer } from "./opencode-server.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
@@ -198,6 +198,8 @@ class OpenCode2Session implements EngineSession {
   begin() {
     this.engine.add(this);
     this.revertAt = this.history?.revert;
+    // The slash menu of an open session: the daemon's own commands (OpenCode 2's server commands are a later slice).
+    this.session.emit({ type: "commands", id: "commands", commands: LOCAL_COMMANDS });
     if (!this.history) return;
     this.apply(this.history);
     this.session.setState(this.history.busy ? "running" : "idle");

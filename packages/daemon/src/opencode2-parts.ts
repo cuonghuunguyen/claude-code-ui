@@ -126,8 +126,8 @@ export class OpenCode2Mapper {
     });
   }
 
+  /** A stored user message, also one sent here: a read after a revert clear must bring its bubble back (same id, so a re-emit replaces). */
   private user(m: OpenCode2Message): Part[] {
-    if (this.own.has(m.id)) return [];
     const images = (m.files ?? []).filter((f) => f.mime?.startsWith("image/") && f.data).map((f) => `data:${f.mime};base64,${f.data}`);
     return m.text || images.length ? [{ type: "user_text", id: m.id, text: m.text ?? "", images }] : [];
   }

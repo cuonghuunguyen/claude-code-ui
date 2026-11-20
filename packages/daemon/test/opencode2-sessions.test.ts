@@ -406,7 +406,7 @@ describe("OpenCode 2 sessions: list and restore", { timeout: TEST_MS }, () => {
     const s = d.view("ses_one");
     await until(() => !!s.find("assistant_text"));
     // The history is read at the open and again once the stream connected; a re-emit of a part id replaces it.
-    const kinds = [...new Set(s.parts().filter((p) => p.type !== "session_state" && p.type !== "context_usage").map((p) => `${p.type}:${p.id}`))];
+    const kinds = [...new Set(s.parts().filter((p) => p.type !== "session_state" && p.type !== "context_usage" && p.type !== "commands").map((p) => `${p.type}:${p.id}`))];
     expect(kinds).toEqual(["user_text:msg_u1", "thinking:msg_a1:reasoning:0", "tool_call:call_9", "tool_result:call_9:result", "tool_call:call_10", "tool_result:call_10:result", "assistant_text:msg_a1:text:0"]);
     expect(s.last("call_9")).toMatchObject({ tool: "Bash", status: "done", exitCode: 0, input: { command: "ls" } });
     expect(s.last("call_10")).toMatchObject({ status: "denied" });
@@ -735,6 +735,8 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     const { d, s } = await opened({}, { env: { FAKE_OPENCODE2_CLEAR_ACTIVE_MS: "300" } });
     const names = (await d.ok({ type: "session.commands", cwd: d.project, engine: "opencode" })).commands.map((c: { name: string }) => c.name);
     expect(names).toEqual(expect.arrayContaining(["compact", "undo", "redo"]));
+    // An open session's slash menu reads its `commands` part.
+    expect(s.find("commands")?.commands.map((c) => c.name)).toEqual(expect.arrayContaining(["compact", "undo", "redo"]));
     expect(await s.prompt("/undo")).toMatchObject({ local: true, draft: { text: "three", images: [] } });
     expect(await s.prompt("/undo")).toMatchObject({ local: true, draft: { text: "two" } });
     expect(stages(d)).toEqual([{ messageID: "msg_u3", files: false }, { messageID: "msg_u2", files: true }]);
@@ -753,6 +755,18 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     await s.prompt("/redo");
     await until(() => s.parts().some((p) => p.type === "notice" && /Nothing to redo/.test((p as { text: string }).text)));
     expect(s.parts().filter((p) => p.type === "user_text" && /^\/(undo|redo)/.test((p as { text: string }).text))).toEqual([]);
+  });
+
+  it("a prompt sent here, undone and redone, comes back with its user message", async () => {
+    const { d, s } = await opened();
+    const id: string = (await s.prompt("four")).messageId ?? lastOf(s.parts(), (p) => p.type === "user_text" && (p as { text: string }).text === "four")!.id;
+    await until(() => s.parts().some((p) => p.type === "turn_result"));
+    await s.prompt("/undo");
+    expect(lastOf(stages(d), () => true)).toMatchObject({ messageID: id });
+    const before = s.parts().length;
+    await s.prompt("/redo");
+    await until(() => d.requests("DELETE", "/api/session/ses_own/revert").length === 1);
+    await until(() => s.parts().slice(before).some((p) => p.id === id && p.type === "user_text"));
   });
 
   it("a revert staged, moved or cleared in OpenCode's own app cuts the timeline or brings the messages back", async () => {
