@@ -19,6 +19,9 @@ describe("scopeCss", () => {
     [':root[data-theme="addon:reze:dusk"] .card { --x: 1 }', '&[data-theme="addon:reze:dusk"] .card { --x: 1 }'],
     ["html body .a { --x: 1 }", "& body .a { --x: 1 }"],
     [".dark .a, :root:not(.dark) .b { --x: 1 }", "&.dark .a, &:not(.dark) .b { --x: 1 }"],
+    [':where(:root[data-theme="addon:reze:dusk"].dark) { --x: 1 }', ':where(&[data-theme="addon:reze:dusk"].dark) { --x: 1 }'],
+    [":is(:root, .dark) .a { --x: 1 }", ":is(&, &.dark) .a { --x: 1 }"],
+    [":where(.a, :root) { --x: 1 }", ":where(.a, :root) { --x: 1 }"],
     [".html-like { --x: 1 }", ".html-like { --x: 1 }"],
   ])("a token rule on the root element keeps matching it: %s", (css, rule) => {
     expect(flat(scope(css))).toBe(`${ROOT} { ${rule} }`);
