@@ -421,6 +421,20 @@ describe("OpenCode Plugins dialog", { timeout: TEST_MS }, () => {
     expect(await d.request({ type: "plugins.install", cwd: d.project, engine: "opencode", pluginId: "./plugins/mine.js", scope: "project" })).toMatchObject({ type: "error", code: "already_exists" });
   });
 
+  it("a relative path is saved relative to the config file that wins, and a listed one is refused as a duplicate", async () => {
+    const d = await boot({ file: `{ "plugin": ["./plugins/rel.js"] }\n`, fileName: "opencode.json" });
+    expect(await d.request({ type: "plugins.install", cwd: d.project, engine: "opencode", pluginId: "./plugins/../plugins/rel.js", scope: "project" })).toMatchObject({ type: "error", code: "already_exists" });
+    mkdirSync(join(d.project, ".opencode"));
+    writeFileSync(join(d.project, ".opencode", "opencode.json"), "{}\n");
+    await d.plugins({ type: "plugins.install", pluginId: "./plugins/mine.js", scope: "project" });
+    // OpenCode resolves the entry against `.opencode/`: it must still point at <project>/plugins/mine.js.
+    expect(strip(d.file(".opencode/opencode.json")).plugin).toEqual(["../plugins/mine.js"]);
+    // Without OpenCode's answer the list still treats the relative entries as project plugins.
+    await fetch(`http://127.0.0.1:${d.port()}/__fail`, { method: "POST", body: JSON.stringify({ path: "/config" }) });
+    const { installed } = await d.plugins({ type: "plugins.list" });
+    expect(installed.map((p: any) => p.scope)).toEqual(["project", "project"]);
+  });
+
   it("a relative plugin entry that OpenCode reports as a file URL is a project plugin and can be uninstalled", async () => {
     const d = await boot({ file: `{ "plugin": ["./plugins/rel.js", "other"] }\n`, fileName: "opencode.json" });
     const url = pathToFileURL(join(d.project, "plugins", "rel.js")).href;

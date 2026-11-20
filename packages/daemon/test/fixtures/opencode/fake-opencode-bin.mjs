@@ -16,7 +16,7 @@ import { createServer } from "node:http";
 import { Server } from "node:net";
 import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const log = (o) => process.env.FAKE_OPENCODE_LOG && appendFileSync(process.env.FAKE_OPENCODE_LOG, `${JSON.stringify(o)}\n`);
 const args = process.argv.slice(2);
@@ -104,7 +104,7 @@ function projectConfig(dir) {
     if (!dir || !existsSync(file)) continue;
     const cfg = JSON.parse(readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""));
     // Like the real server: `plugin` lists of the files are joined (without duplicates), other keys override.
-    for (const [k, v] of Object.entries(cfg)) out[k] = k === "plugin" && Array.isArray(v) ? [...new Set([...(out[k] ?? []), ...v])] : v && typeof v === "object" && !Array.isArray(v) ? { ...out[k], ...v } : v;
+    for (const [k, v] of Object.entries(cfg)) out[k] = k === "plugin" && Array.isArray(v) ? [...new Set([...(out[k] ?? []), ...v.map((x) => (/^\.\.?\//.test(typeof x === "string" ? x : x[0]) ? pathToFileURL(resolve(dirname(file), typeof x === "string" ? x : x[0])).href : x))])] : v && typeof v === "object" && !Array.isArray(v) ? { ...out[k], ...v } : v;
   }
   // Plugin files of .opencode/plugin(s)/ are found by OpenCode and listed as file:// URLs.
   for (const d of ["plugin", "plugins"]) {

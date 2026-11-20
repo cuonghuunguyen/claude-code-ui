@@ -2,13 +2,13 @@
 // (`GET /config`), and install and uninstall edit the `plugin` list of the project's opencode.json (opencode-config-file.ts), then dispose the folder so OpenCode loads it again.
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parse } from "jsonc-parser";
 import type { InstalledPlugin, PluginsListResult, PluginWriteResult } from "@claude-ui/protocol";
 import { EngineError, type EngineConfig } from "./engine-catalogue.ts";
 import { OPENCODE_CAPABILITIES } from "./opencode-engine.ts";
-import { ConfigFileError, editProjectList, projectLists } from "./opencode-config-file.ts";
+import { ConfigFileError, editProjectList, projectLists, writeTarget } from "./opencode-config-file.ts";
 import type { OpenCodeServer } from "./opencode-server.ts";
 
 /** The longest a list waits for OpenCode before it answers from the config files. */
@@ -55,8 +55,15 @@ function inPluginFolder(spec: string, cwd: string): boolean {
 }
 
 const RELATIVE = /^\.\.?\//;
-/** What the user typed as a spec: an npm name, a `file://` URL or a relative path as it is (a repo keeps working in another folder), an absolute path as the `file://` URL OpenCode takes. */
-function normalize(typed: string): string {
+/**
+ * What the user typed as a spec: an npm name or a `file://` URL as it is; an absolute path as the `file://` URL OpenCode takes; a relative path (from the project folder)
+ * relative to the file it is saved in (OpenCode resolves an entry against the folder of its config file, so `.opencode/opencode.json` needs another prefix), staying portable.
+ */
+function normalize(typed: string, cwd: string): string {
+  if (RELATIVE.test(typed)) {
+    const rel = relative(dirname(writeTarget(cwd)), resolve(cwd, typed)).split(sep).join("/");
+    return rel.startsWith("..") ? rel : `./${rel}`;
+  }
   if (/^(\/|~\/|[a-zA-Z]:[\\/])/.test(typed)) return pathToFileURL(typed.startsWith("~/") ? join(homedir(), typed.slice(2)) : typed).href;
   return typed;
 }
@@ -91,7 +98,7 @@ export function createOpenCodePluginsConfig(o: { server: OpenCodeServer; repair(
     } finally {
       clearTimeout(timer);
     }
-    return [...new Set([...projectLists(cwd, ["plugin"]).flatMap((l) => specs(l.items)), ...globalSpecs()])];
+    return [...new Set([...projectLists(cwd, ["plugin"]).flatMap((l) => specs(l.items).map((x) => canon(x, dirname(l.file)))), ...globalSpecs()])];
   }
 
   async function list(cwd: string): Promise<PluginsListResult> {
@@ -105,8 +112,8 @@ export function createOpenCodePluginsConfig(o: { server: OpenCodeServer; repair(
     const spec = typed.trim();
     if (!spec) throw fail("invalid_input", "Type an npm package or a path.");
     if (/\s/.test(spec)) throw fail("invalid_input", "A plugin is one npm package or one path, without spaces.");
-    const entry = normalize(spec);
-    if ((await known(cwd)).map((x) => canon(x, cwd)).includes(canon(entry, cwd))) throw fail("already_exists", `${entry} is already in the plugin list.`);
+    const entry = normalize(spec, cwd);
+    if ((await known(cwd)).includes(canon(entry, dirname(writeTarget(cwd))))) throw fail("already_exists", `${entry} is already in the plugin list.`);
     editProjectList(cwd, ["plugin"], { append: entry });
     return { ...WRITTEN, ...((await o.repair(cwd)) ? {} : { applied: false }) };
   }
