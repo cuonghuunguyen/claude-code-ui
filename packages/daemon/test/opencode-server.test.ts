@@ -112,7 +112,7 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     expect(d.log().filter((l) => l.type === "version")).toHaveLength(0);
   });
 
-  it("session.list starts OpenCode for a user whose last engine is Claude when sessions.json has an OpenCode session; an OpenCode 2 binary is never started", async () => {
+  it("session.list starts OpenCode for a user whose last engine is Claude when sessions.json has an OpenCode session; with an OpenCode 2 binary it starts the version 2 server and keeps the entry", async () => {
     const entry = { ses_hist: { model: "default", permissionMode: "default", effort: "default", saved: Date.now() } };
     const d = await boot({ sessionsJson: entry });
     expect(d.appSettings.get().sessions.engine).toBe("claude");
@@ -122,11 +122,14 @@ describe("OpenCode engine: lifecycle, create and list", () => {
 
     const v2 = await boot({ bin: BIN2, sessionsJson: entry });
     await d_list(v2);
+    await until(() => v2.starts().length === 1);
     await new Promise((r) => setTimeout(r, 500));
     const again = (await d_list(v2)).result;
     expect(again.sessions.filter((s: any) => s.engine === "opencode")).toEqual([]);
-    expect(v2.starts()).toHaveLength(0);
-    expect(v2.log().filter((l) => l.type === "request")).toHaveLength(0);
+    // The version 2 server answered the list through the version 2 routes only; its list lacks `ses_hist` (an OpenCode 1 session) and the entry stays.
+    const paths = v2.log().filter((l) => l.type === "request").map((l) => l.path);
+    expect(paths).toContain("/api/session");
+    expect(paths.filter((p) => !p.startsWith("/api/"))).toEqual([]);
     expect(JSON.parse(readFileSync(join(v2.root, "sessions.json"), "utf8"))).toHaveProperty("ses_hist");
   });
 
@@ -327,7 +330,9 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     await d.ok({ type: "settings.set", patch: { opencode: { path: script } } });
     await d_list(d);
     await until(() => versions() > before);
-    expect(d.starts()).toEqual([]);
+    // The check read version 2: the version 2 adapter (not the OpenCode 1 one) lists, and starts its server.
+    await until(() => d.starts().length === 1);
+    expect(d.log().filter((l) => l.type === "request").every((l) => l.path.startsWith("/api/"))).toBe(true);
   }, 30_000);
 
   // A script as the path needs a POSIX shell.
@@ -379,7 +384,7 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     const d = await boot({ bin: BIN2 });
     expect((await d.ok({ type: "opencode.status" })).result).toMatchObject({ state: "stopped", version: "2.3.0", major: 2 });
     expect(d.starts()).toHaveLength(0);
-    // The adapter stub never starts the server (OpenCode 2's first start imports the OpenCode 1 history): the server object is started here.
+    // A status read never starts the server (OpenCode 2's first start imports the OpenCode 1 history): the server object is started here.
     const server = createOpenCodeServer({ path: () => "", command: [process.execPath, BIN2], env: () => ({ FAKE_OPENCODE_LOG: join(d.root, "fake.log") }) });
     try {
       await server.ensure(2);
@@ -403,6 +408,22 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     }
   });
 
+  it("a version 2 start is not taken over by the refusal of a version 1 start that is in flight: ensure(2) next to ensure(1) starts version 2", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "oc-ens-")));
+    const logFile = join(root, "fake.log");
+    const server = createOpenCodeServer({ path: () => "", command: [process.execPath, BIN2], env: () => ({ FAKE_OPENCODE_LOG: logFile }) });
+    try {
+      const v1 = server.ensure(1).then(() => undefined, (err) => err);
+      const v2 = server.ensure(2);
+      expect(await v2).toMatchObject({ major: 2 });
+      expect(await v1).toMatchObject({ code: "opencode_v2_unsupported" });
+      expect(server.running()).toBe(true);
+      expect(readFileSync(logFile, "utf8").split("\n").filter((l) => l.includes('"start"'))).toHaveLength(1);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("an OpenCode 2 binary older than 2.3.0 answers opencode_old naming 2.3.0", async () => {
     const d = await boot({ bin: BIN2, env: { FAKE_OPENCODE_VERSION: "2.2.0" } });
     expect((await d.ok({ type: "opencode.status" })).result).toMatchObject({ state: "old", message: expect.stringContaining("2.3.0") });
@@ -410,14 +431,6 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     expect(created).toMatchObject({ type: "error", code: "opencode_old" });
     expect((created as any).message).toContain("2.3.0");
     expect(d.starts()).toHaveLength(0);
-  });
-
-  it("session.create with an OpenCode 2 binary answers opencode_v2_unsupported and creates no session", async () => {
-    const d = await boot({ bin: BIN2 });
-    const created = await d.request({ type: "session.create", cwd: d.project, engine: "opencode" });
-    expect(created).toMatchObject({ type: "error", code: "opencode_v2_unsupported" });
-    expect(d.starts()).toHaveLength(0);
-    expect(d.log().filter((l) => l.type === "request" && l.path === "/session")).toEqual([]);
   });
 
   it("changing the binary path stops the running server", async () => {

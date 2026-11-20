@@ -1,0 +1,268 @@
+[
+ {
+  "event": "session.execution.started",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "agent": "build",
+   "model": {
+    "id": "m",
+    "providerID": "fake"
+   },
+   "assistantMessageID": "$A1",
+   "started": 1795172925823
+  }
+ },
+ {
+  "event": "session.step.first-token",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1"
+  }
+ },
+ {
+  "event": "session.tool.input.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "call_1",
+   "name": "shell"
+  }
+ },
+ {
+  "event": "session.tool.input.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "call_1",
+   "text": "{\"command\":\"echo hi > b.txt\",\"description\":\"write b\"}"
+  }
+ },
+ {
+  "event": "session.tool.called",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "call_1",
+   "input": {
+    "command": "echo hi > b.txt",
+    "description": "write b"
+   },
+   "executed": false
+  }
+ },
+ {
+  "event": "permission.asked",
+  "data": {
+   "id": "$PERM",
+   "sessionID": "$SESSION",
+   "action": "shell",
+   "resources": [
+    "echo hi > b.txt"
+   ],
+   "save": [
+    "echo *"
+   ],
+   "source": {
+    "type": "tool",
+    "messageID": "$A1",
+    "id": "call_1"
+   }
+  }
+ },
+ {
+  "wait": "permission"
+ },
+ {
+  "event": "session.tool.failed",
+  "when": "reject",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "call_1",
+   "error": {
+    "type": "permission.rejected",
+    "message": "$REJECT"
+   },
+   "executed": false
+  }
+ },
+ {
+  "event": "session.step.streamed",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1"
+  }
+ },
+ {
+  "event": "session.tool.progress",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "call_1",
+   "metadata": {
+    "shellID": "sh_fake"
+   }
+  },
+  "when": "allowed"
+ },
+ {
+  "event": "session.tool.success",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "call_1",
+   "content": [
+    {
+     "type": "text",
+     "text": "(no output)"
+    }
+   ],
+   "metadata": {
+    "status": "completed",
+    "truncated": false,
+    "exit": 0
+   },
+   "executed": false
+  },
+  "when": "allowed"
+ },
+ {
+  "event": "session.step.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "finish": "tool-calls",
+   "rawFinish": "tool_calls",
+   "tokens": {
+    "input": 10,
+    "output": 5,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   },
+   "cost": 0,
+   "files": [
+    "b.txt"
+   ]
+  }
+ },
+ {
+  "event": "session.usage.updated",
+  "data": {
+   "sessionID": "$SESSION",
+   "cost": 0,
+   "tokens": {
+    "input": 10,
+    "output": 5,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "agent": "build",
+   "model": {
+    "id": "m",
+    "providerID": "fake"
+   },
+   "assistantMessageID": "$A2",
+   "started": 1795172926295
+  }
+ },
+ {
+  "event": "session.step.first-token",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2"
+  }
+ },
+ {
+  "event": "session.text.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "ordinal": 0
+  }
+ },
+ {
+  "event": "session.text.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "ordinal": 0,
+   "delta": "done"
+  }
+ },
+ {
+  "event": "session.text.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "ordinal": 0,
+   "text": "done"
+  }
+ },
+ {
+  "event": "session.step.streamed",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2"
+  }
+ },
+ {
+  "event": "session.step.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "finish": "stop",
+   "rawFinish": "stop",
+   "tokens": {
+    "input": 10,
+    "output": 5,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   },
+   "cost": 0,
+   "files": []
+  }
+ },
+ {
+  "event": "session.usage.updated",
+  "data": {
+   "sessionID": "$SESSION",
+   "cost": 0,
+   "tokens": {
+    "input": 20,
+    "output": 10,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  }
+ },
+ {
+  "event": "session.execution.succeeded",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ }
+]

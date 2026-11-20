@@ -1,0 +1,40 @@
+[
+ {
+  "event": "session.execution.started",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "agent": "build",
+   "model": {
+    "id": "m",
+    "providerID": "fake"
+   },
+   "assistantMessageID": "$A1"
+  }
+ },
+ {
+  "event": "session.text.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0
+  }
+ },
+ {
+  "event": "session.text.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": "working"
+  }
+ },
+ {
+  "hold": true
+ }
+]
