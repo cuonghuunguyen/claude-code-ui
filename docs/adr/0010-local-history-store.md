@@ -14,3 +14,4 @@ Rollback of a hunk runs without confirmation (IntelliJ behaviour). In IntelliJ a
 - Writing entries never blocks a turn: snapshots queue in the background and are dropped under load, so an entry can be missing.
 - History is per daemon machine; a repository opened from another machine has none.
 - Agent-edit entries duplicate part of Claude Code's file-history on disk.
+- OpenCode edits (GH-866) depend on OpenCode's snapshot store, an internal: git dir `<data>/snapshot/<projectID>/<sha1 of the worktree path>`, `patch` part `{hash, files}`, `git show <hash>:<file>`; checked on OpenCode 1.19.5 (the same layout holds on 2.3.0). The store is not an API and may change. Fallback: store missing or `git show` fails gives no entry, one log line, no error to the user.
