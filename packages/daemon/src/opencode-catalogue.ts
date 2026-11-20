@@ -98,6 +98,7 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     const permission = await openCodeEngine.block(initial.permissionMode, cwd); // may reject: before the counter goes up
     openCodeCreating++;
     const row = await openCode.request<OpenCodeSessionRow>("/session", { method: "POST", directory: cwd, timeoutMs: 0, resend: true, body: { permission } }).finally(() => openCodeCreating--);
+    openCodeEngine.noteCreated(row.id, permission);
     if (ctx.isRemoving(cwd) || !existsSync(cwd)) return undefined;
     const opts = sessionOpts(initial);
     const s = ctx.track(new Session(cwd, opts, { id: row.id }));
@@ -129,6 +130,9 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
       openCodeListError = undefined;
       openCodeAnswered = true;
       out.ran = true;
+      // A session without a saved agent lists as OpenCode's default agent of its folder; a slow answer must not hold the list back (build then).
+      const defaults = new Map<string, Promise<string>>();
+      const folderDefault = (cwd: string) => (defaults.get(cwd) ?? defaults.set(cwd, Promise.race([openCodeEngine.defaultAgent(cwd), new Promise<string>((r) => setTimeout(() => r(openCodeEngine.defaultAgentKnown(cwd)), 2_000).unref())])).get(cwd)!);
       for (const [cwd, list] of rows)
         for (const row of list) {
           const loaded = ctx.session(row.id);
@@ -136,7 +140,7 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
           const savedMode = OPENCODE_MODES.find((m) => m === saved?.permissionMode) ?? "default";
           // Plan is the plan agent (GH-684): a saved plan mode lists as default + agent plan.
           const mode = savedMode === "plan" ? "default" : savedMode;
-          const agent = savedMode === "plan" ? "plan" : (saved?.agent ?? "build");
+          const agent = savedMode === "plan" ? "plan" : (saved?.agent ?? (await folderDefault(cwd)));
           const info = loaded?.info() ?? { id: row.id, cwd, state: "closed" as const, model: saved?.model ?? "default", permissionMode: mode, agent, effort: saved?.effort ?? "default", permissionModes: openCodeEngine.permissionModes({ allowBypass: ctx.allowBypass }), capabilities: OPENCODE_CAPABILITIES, engine: openCodeEngine.name };
           openCodeMeta.set(row.id, { cwd, title: row.title });
           out.ids.add(row.id);
@@ -323,7 +327,7 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
       }
     },
     commands: (cwd) => openCodeEngine.commands(cwd),
-    agents: async (cwd) => primaryAgents(await openCodeEngine.agents(cwd)).map(({ name, description }) => ({ name, ...(description && { description }) })),
+    agents: async (cwd) => (await openCodeEngine.primaryFirst(cwd)).map(({ name, description }) => ({ name, ...(description && { description }) })),
     models: (cwd) => openCodeModelsRepaired(cwd),
     // A model refresh held back by a running OpenCode session no longer waits for it.
     settled: () => void flushProviders(),

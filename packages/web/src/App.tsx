@@ -5076,8 +5076,8 @@ export function NewSession({
     onAgents?.(cwd, engine).then((l) => !stale && setAgentList(l), () => !stale && (setAgentList([]), setAgentsFailed(true)));
     return () => void (stale = true);
   }, [cwd, connected, engine, caps?.agents, agentsTry]);
-  // Until the list arrives (or when it failed) the chooser shows the pick, else build.
-  const agent = caps?.agents ? (draft.agent && (!agentList.length || agentList.some((a) => a.name === draft.agent)) ? draft.agent : (agentList.find((a) => a.name === "build") ?? agentList[0])?.name ?? "build") : undefined;
+  // Until the list arrives (or when it failed) the chooser shows the pick, else the first agent of the list (OpenCode's default agent), else build.
+  const agent = caps?.agents ? (draft.agent && (!agentList.length || agentList.some((a) => a.name === draft.agent)) ? draft.agent : agentList[0]?.name ?? "build") : undefined;
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   useEffect(() => {
     if (!cwd || !connected) return setCommands([]);
@@ -5846,7 +5846,14 @@ export function SessionPane({
               agentsFailed={view.agentsFailed}
               onRetryAgents={onRetryAgents}
               onUpload={onUpload}
-              onPrompt={onPrompt}
+              // /undo (OpenCode): the reply carries the undone prompt; it goes back into the box as the rewind panel's does.
+              onPrompt={(text, images) =>
+                onPrompt(text, images).then((r) => {
+                  const draft = (r as PromptResult | undefined)?.draft;
+                  if (draft) setDraft(draft);
+                  return r;
+                })
+              }
               onQueue={onQueue}
               takeBack={takeBack}
               onTaken={() => (setTakeBack(undefined), setDraft(undefined))}

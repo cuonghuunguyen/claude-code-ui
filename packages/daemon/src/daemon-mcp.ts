@@ -96,7 +96,7 @@ export function createDaemonMcp(deps: { groups: DaemonToolGroup[]; session: (id:
       return title === undefined ? undefined : { input, title };
     },
     /** OpenCode's rules for the session's own server `name` (its tool keys are `<name>_<tool>`): allow-tools allow, ask-tools take the mode's action. */
-    openCodeRules(name: string, askAction: "ask" | "allow"): Rule[] {
+    openCodeRules(name: string, askAction: "ask" | "allow" | "deny"): Rule[] {
       return deps.groups.flatMap((g) => g.tools).map((t) => ({ permission: `${name}_${t.name}`, pattern: "*", action: t.permission === "allow" ? ("allow" as const) : askAction }));
     },
     /** The longest timeout of the enabled groups (OpenCode's MCP client). */

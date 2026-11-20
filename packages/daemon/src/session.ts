@@ -86,7 +86,7 @@ export type SessionOpts = Partial<Omit<SessionSettings, "agent">> & {
   /** `engine`: the OpenCode engine asks which servers its route attaches (a tool group may be Claude-only); default Claude. */
   mcpServers?: (id: string, engine?: "claude" | "opencode") => Options["mcpServers"];
   /** The claude-ui MCP server's OpenCode side (daemon-mcp.ts): rules of the session's own server in a mode block, and the MCP client timeout. */
-  daemonMcp?: { openCodeRules: (name: string, ask: "ask" | "allow") => { permission: string; pattern: string; action: "allow" | "ask" | "deny" }[]; timeoutMs: () => number };
+  daemonMcp?: { openCodeRules: (name: string, ask: "ask" | "allow" | "deny") => { permission: string; pattern: string; action: "allow" | "ask" | "deny" }[]; timeoutMs: () => number };
   /** Tools removed from session `id`'s CLI (Aside: no edits while read-only, no orchestration tools); read at every query start. */
   disallowedTools?: (id: string) => string[] | undefined;
   /** Agent type the main thread of session `id` runs as (from the worker link); read at every query start. */
@@ -326,6 +326,9 @@ export class Session {
   }
   prompt(text: string, images: string[] = []) {
     return this.run.prompt(text, images);
+  }
+  localDraft() {
+    return this.run.localDraft?.();
   }
   setModel(model: string) {
     return this.run.setModel(model);

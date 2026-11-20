@@ -341,6 +341,12 @@ it("GH-684: an OpenCode draft fetches the agents of its folder, shows build, and
   expect(onStart).toHaveBeenCalledWith("/p/a", expect.objectContaining({ engine: "opencode", agent: "plan", mode: "default" }), { text: "hi", images: [] });
 });
 
+it("an OpenCode draft preselects the first agent of the list (OpenCode's default agent), not Build", async () => {
+  const onAgents = vi.fn(async () => [{ name: "review" }, { name: "build" }, { name: "plan" }]);
+  const { el } = await render({ onAgents, engine: "opencode" });
+  expect(el.querySelector<HTMLElement>('[data-testid="agent-select"]')!.textContent).toContain("Review");
+});
+
 it("GH-684: an OpenCode draft shows the agent chooser with Build before the list arrives and after the request failed; Retry asks again", async () => {
   let n = 0;
   const onAgents = vi.fn(() => (++n === 1 ? new Promise<never>(() => {}) : n === 2 ? Promise.reject(new Error("aborted")) : Promise.resolve([{ name: "build" }, { name: "plan" }])));
