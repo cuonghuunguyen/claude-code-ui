@@ -1,5 +1,5 @@
 // Sidebar helpers for the session list (docs/spec.md "Layout").
-import type { SessionListItem, SessionState, Worktree, WorktreeStatusResult } from "@claude-ui/protocol";
+import { LOCAL_SIDE, type SessionListItem, type SessionState, type Worktree, type WorktreeStatusResult } from "@claude-ui/protocol";
 import { baseName } from "./paths.ts";
 import { projectName } from "./tabs.ts";
 import { t, type Key } from "./i18n.ts";
@@ -8,14 +8,23 @@ const STATE_KEY = { running: "sidebar.state.running", idle: "sidebar.state.idle"
 /** A session state in words. */
 export const stateName = (st: SessionState) => t(STATE_KEY[st]);
 
-/** `idle`: sessions the "Show only active sessions" setting hides from the row (activeOnly). */
-export type WorktreeRow = Worktree & { sessions: SessionListItem[]; idle?: number };
+/**
+ * `idle`: sessions the "Show only active sessions" setting hides from the row (activeOnly).
+ * Rows of a merged group (`SessionGroup.repo`): `side` the Side id of the row's project, `project` that added project (its Project settings and
+ * Remove act on it), `clone` the folder name of a second main checkout on the same Side (the label tells two clones of one branch apart).
+ */
+export type WorktreeRow = Worktree & { sessions: SessionListItem[]; idle?: number; side?: string; project?: string; clone?: string };
 /**
  * `cwd`: the project the group shows (the main checkout when it is added). `members`: the added projects of its repository.
  * `worktrees`: one row per worktree when the repository has linked ones (main first, then by branch); `sessions` then holds only
  * sessions of no row.
+ * A merged group (`repo` set: the repository key, `mergeRepositories`) holds the projects of one repository on several Sides or clones: `cwd`
+ * is its primary project, `sides` the Side ids of its rows, `sessions` is empty and every project has a main row in `worktrees`.
  */
-export type SessionGroup = { cwd: string; members: string[]; sessions: SessionListItem[]; worktrees: WorktreeRow[]; idle?: number };
+export type SessionGroup = { cwd: string; members: string[]; sessions: SessionListItem[]; worktrees: WorktreeRow[]; idle?: number; repo?: string; sides?: string[] };
+
+/** The collapse key of a group: the repository key for a merged group (`repo:<host>/<path>`), else the project's cwd. */
+export const groupKey = (g: Pick<SessionGroup, "cwd" | "repo">) => (g.repo ? `repo:${g.repo}` : g.cwd);
 
 /** The added project whose worktree list holds `cwd` (a worktree path), else `cwd`. */
 export const projectOf = (cwd: string, worktrees: Record<string, Worktree[]> = {}) =>
@@ -94,17 +103,90 @@ export function resumeSearchText(name: string, text = "") {
 export const projectIs = (cwd: string, name: string) => [projectName(cwd), baseName(cwd)].some((n) => n.toLowerCase() === name.toLowerCase());
 
 /**
+ * What merging needs: `origins` (session.list: project cwd → repository key, absent for a project without origin or on an older Side), `sideOf` the
+ * Side id of a project, `sideOrder` the Side ids in the daemon's order (this machine first), `worktrees` (session.list's), `sideLabel` the Side's label.
+ */
+export type MergeContext = { origins: Record<string, string>; sideOf: (cwd: string) => string; sideOrder: string[]; worktrees: Record<string, Worktree[]>; sideLabel?: (cwd: string) => string | undefined };
+
+/** The repository key of a group (any of its projects has one), undefined without. */
+const repoKeyOf = (g: SessionGroup, origins: Record<string, string>) => [g.cwd, ...g.members].map((c) => origins[c]).find(Boolean);
+
+/**
+ * The groups of one repository (same `origin`) on several Sides or clones become one group, at the place of its first group; the others
+ * stay. The merged group's primary project (name, avatar, header actions): on this machine the clone with the shortest path (then
+ * lexical), else the same on the first Side. Rows: this machine first, then the other Sides in `sideOrder`; per Side the main checkout of
+ * the shortest clone, the other clones' main checkouts by path, then the linked worktrees by branch. A project without linked worktrees
+ * gets a row for its main checkout; the sessions of a group's own folder go to its main row.
+ */
+export function mergeRepositories(groups: SessionGroup[], ctx: MergeContext): SessionGroup[] {
+  const byRepo = new Map<string, SessionGroup[]>();
+  for (const g of groups) {
+    const key = repoKeyOf(g, ctx.origins);
+    if (key) byRepo.set(key, [...(byRepo.get(key) ?? []), g]);
+  }
+  const rank = (side: string) => (side === LOCAL_SIDE ? -1 : ctx.sideOrder.indexOf(side) < 0 ? Number.MAX_SAFE_INTEGER : ctx.sideOrder.indexOf(side));
+  const done = new Set<string>();
+  return groups.flatMap((g) => {
+    const key = repoKeyOf(g, ctx.origins);
+    const same = key ? byRepo.get(key)! : [];
+    if (same.length < 2) return [g];
+    if (done.has(key!)) return [];
+    done.add(key!);
+    const bySide = new Map<string, SessionGroup[]>();
+    for (const m of same) bySide.set(ctx.sideOf(m.cwd), [...(bySide.get(ctx.sideOf(m.cwd)) ?? []), m]);
+    const sides = [...bySide.keys()].sort((a, b) => rank(a) - rank(b));
+    const rows: WorktreeRow[] = [];
+    let primary: SessionGroup | undefined;
+    for (const side of sides) {
+      const clones = [...bySide.get(side)!].sort((a, b) => a.cwd.length - b.cwd.length || a.cwd.localeCompare(b.cwd));
+      const [first, ...rest] = clones;
+      const ordered = [first!, ...rest.sort((a, b) => a.cwd.localeCompare(b.cwd))];
+      primary ??= first;
+      const mains: WorktreeRow[] = [];
+      const linked: WorktreeRow[] = [];
+      ordered.forEach((m, i) => {
+        const tag = { side, project: m.cwd, ...(i > 0 && { clone: baseName(m.cwd) }) };
+        const main = m.worktrees.find((r) => r.main);
+        const own = [...(main?.sessions ?? []), ...m.sessions].sort((a, b) => b.lastActivity - a.lastActivity);
+        mains.push({ ...(main ?? ctx.worktrees[m.cwd]?.find((w) => w.main) ?? { path: m.cwd, main: true }), ...tag, sessions: own });
+        for (const r of m.worktrees) if (!r.main) linked.push({ ...r, ...tag });
+      });
+      rows.push(...mains, ...linked.sort(byRow));
+    }
+    return [{ cwd: primary!.cwd, members: same.flatMap((m) => m.members), sessions: [], worktrees: rows, repo: key, sides }];
+  });
+}
+
+/**
  * One group per working directory (per repository with `worktrees`) whatever the input order; groups and sessions newest first.
  * `@project=<name>` in the query (parseSessionQuery) keeps only the group with a project (its main checkout or an added worktree) of that name (case-insensitive), worktree rows included; with several tokens the first one counts.
  * A query keeps sessions whose title, project name or worktree branch contains it. Archived sessions show only with `archived`, and then only they.
  * With `projects` (the daemon's known projects): one group per project in that order, empty ones too (not with `archived`); other sessions
  * are dropped, except those of the projects' worktrees (`worktrees`: session.list's, docs/spec.md "Projects").
  * `workers` (nestWorkers): a coordinator also matches the query by the title or name of one of its workers.
+ * `merge` (with `projects`): the groups of one repository merge (`mergeRepositories`) before the search and `@project=` decide what stays:
+ * a project of the repository named by `@project=` keeps the whole merged group, a text also matches a row by its Side label.
  */
-export function groupByCwd(items: SessionListItem[], query = "", projects?: string[], archived = false, worktrees: Record<string, Worktree[]> = {}, workers?: Map<string, SessionListItem[]>): SessionGroup[] {
+export function groupByCwd(items: SessionListItem[], query = "", projects?: string[], archived = false, worktrees: Record<string, Worktree[]> = {}, workers?: Map<string, SessionListItem[]>, merge?: MergeContext): SessionGroup[] {
   const { project, text } = parseSessionQuery(query);
+  // Merging needs the known projects: the groups are complete before the first session is placed.
+  const ctx = projects ? merge : undefined;
   const q = text.toLowerCase();
-  const inScope = (g: SessionGroup) => !project || [g.cwd, ...g.members].some((c) => projectIs(c, project));
+  const direct = (g: SessionGroup) => [g.cwd, ...g.members].some((c) => projectIs(c, project!));
+  const keyOfGroup = (g: SessionGroup) => repoKeyOf(g, ctx!.origins);
+  let scoped: Set<string> | undefined;
+  let shared: Set<string> | undefined;
+  const inScope = (g: SessionGroup) => !project || direct(g) || (!!ctx && !!keyOfGroup(g) && (scoped ??= new Set([...groups.values()].filter(direct).map(keyOfGroup).filter((k): k is string => !!k))).has(keyOfGroup(g)!));
+  // A text search also finds the sessions of a Side by its label, in a repository that has several projects.
+  const sideNamed = (g: SessionGroup) => {
+    if (!ctx || !q || !has(ctx.sideLabel?.(g.cwd))) return false;
+    if (!shared) {
+      const n = new Map<string, number>();
+      for (const o of groups.values()) n.set(keyOfGroup(o) ?? "", (n.get(keyOfGroup(o) ?? "") ?? 0) + 1);
+      shared = new Set([...n].filter(([k, c]) => k && c > 1).map(([k]) => k));
+    }
+    return shared.has(keyOfGroup(g) ?? "");
+  };
   const has = (text: string | undefined) => !!text && text.toLowerCase().includes(q);
   const groups = new Map<string, SessionGroup>();
   // Session cwd → its group and worktree row.
@@ -130,13 +212,14 @@ export function groupByCwd(items: SessionListItem[], query = "", projects?: stri
     const found = at.get(cwd) ?? (projects ? undefined : add(cwd));
     if (!found) continue;
     if (!inScope(found.g)) continue;
-    if (q && !has(s.title) && !has(projectName(found.g.cwd)) && !has(baseName(found.g.cwd)) && !has(found.row?.branch) && !workers?.get(s.id)?.some((w) => has(w.title) || has(w.workerName))) continue;
+    if (q && !has(s.title) && !has(projectName(found.g.cwd)) && !has(baseName(found.g.cwd)) && !has(found.row?.branch) && !sideNamed(found.g) && !workers?.get(s.id)?.some((w) => has(w.title) || has(w.workerName))) continue;
     (found.row ?? found.g).sessions.push(s);
   }
-  return [...groups.values()].filter(inScope).flatMap((g) => {
-    const named = !q || has(projectName(g.cwd)) || has(baseName(g.cwd));
-    // Empty rows show unless archived; while searching, only those the project name or branch matches.
-    const rows = g.worktrees.filter((r) => r.sessions.length || (!archived && (named || has(r.branch))));
+  const all = [...groups.values()];
+  return (ctx ? mergeRepositories(all, ctx) : all).filter(inScope).flatMap((g) => {
+    const named = !q || [g.cwd, ...(g.repo ? g.members : [])].some((c) => has(projectName(c)) || has(baseName(c)));
+    // Empty rows show unless archived; while searching, only those the project name, branch or Side label matches.
+    const rows = g.worktrees.filter((r) => r.sessions.length || (!archived && (named || has(r.branch) || (!!r.side && has(ctx?.sideLabel?.(r.project ?? r.path))))));
     const count = g.sessions.length + rows.reduce((n, r) => n + r.sessions.length, 0);
     return count || (!archived && (named || rows.length)) ? [{ ...g, worktrees: rows }] : [];
   });
@@ -279,7 +362,7 @@ export const workerKey = (id: string, archived: boolean) => `${archived ? "archi
 
 /** Every collapse key of the view: project groups, worktree rows, worker groups (Collapse all). */
 export function collapseKeys(groups: SessionGroup[], workers: Map<string, SessionListItem[]>, archived: boolean) {
-  return [...groups.flatMap((g) => [g.cwd, ...g.worktrees.map((r) => rowKey(r.path))]), ...[...workers.keys()].map((id) => workerKey(id, archived))];
+  return [...groups.flatMap((g) => [groupKey(g), ...g.worktrees.map((r) => rowKey(r.path))]), ...[...workers.keys()].map((id) => workerKey(id, archived))];
 }
 
 /** The collapse keys that hide session `id` (its group, worktree row, coordinator's worker group); undefined when the groups do not list it. */
@@ -287,9 +370,9 @@ export function revealKeys(id: string, groups: SessionGroup[], workers: Map<stri
   const coordinator = [...workers].find(([, ws]) => ws.some((w) => w.id === id))?.[0];
   const top = coordinator ?? id;
   for (const g of groups) {
-    if (g.sessions.some((s) => s.id === top)) return [g.cwd, ...(coordinator ? [workerKey(coordinator, archived)] : [])];
+    if (g.sessions.some((s) => s.id === top)) return [groupKey(g), ...(coordinator ? [workerKey(coordinator, archived)] : [])];
     const r = g.worktrees.find((r) => r.sessions.some((s) => s.id === top));
-    if (r) return [g.cwd, rowKey(r.path), ...(coordinator ? [workerKey(coordinator, archived)] : [])];
+    if (r) return [groupKey(g), rowKey(r.path), ...(coordinator ? [workerKey(coordinator, archived)] : [])];
   }
 }
 
@@ -327,28 +410,37 @@ export function activeOnly(groups: SessionGroup[], workers: Map<string, SessionL
 
 /**
  * Classic layout: one list per project, the sessions of the main checkout and of every worktree merged newest first (as the flat order),
- * no worktree rows; `branch` names the branch of each session that sits in a linked worktree.
+ * no worktree rows; `branch` names the branch of each session that sits in a linked worktree. In a merged group (`repo`) it also names the
+ * Side of a session not on this machine (`sideName`: the short label of a project's Side) and the clone folder, joined by " · ".
  */
-export function classicGroup(g: SessionGroup): { group: SessionGroup; branch: Map<string, string> } {
+export function classicGroup(g: SessionGroup, sideName?: (cwd: string) => string | undefined): { group: SessionGroup; branch: Map<string, string> } {
   const branch = new Map<string, string>();
-  for (const r of g.worktrees) if (!r.main) for (const s of r.sessions) branch.set(s.id, r.branch ?? r.path.split("/").filter(Boolean).pop() ?? r.path);
+  for (const r of g.worktrees) {
+    const parts = [
+      !r.main && (r.branch ?? r.path.split("/").filter(Boolean).pop() ?? r.path),
+      g.repo && r.side !== LOCAL_SIDE && sideName?.(r.project ?? r.path),
+      g.repo && r.clone,
+    ].filter(Boolean);
+    if (parts.length) for (const s of r.sessions) branch.set(s.id, parts.join(" · "));
+  }
   const sessions = [...g.sessions, ...g.worktrees.flatMap((r) => r.sessions)].sort((a, b) => b.lastActivity - a.lastActivity);
   return { group: { ...g, sessions, worktrees: [] }, branch };
 }
 
 /** Sidebar view settings, per browser (docs/spec.md "Layout"). */
 export type SidebarLayout = "default" | "classic";
-export type SidebarView = { alwaysSelect: boolean; dayHeaders: boolean; layout: SidebarLayout; onlyActive: boolean; sort: SidebarSort };
+/** `merge`: the projects of one repository on several Sides or clones are one group (mergeRepositories). */
+export type SidebarView = { alwaysSelect: boolean; dayHeaders: boolean; layout: SidebarLayout; merge: boolean; onlyActive: boolean; sort: SidebarSort };
 const VIEW_KEY = "claude-ui.sidebarView";
 /** Fired on `window` by saveSidebarView. */
 export const VIEW_EVENT = "claude-ui:sidebar-view";
-const VIEW_DEFAULT: SidebarView = { alwaysSelect: false, dayHeaders: true, layout: "default", onlyActive: false, sort: "recent" };
+const VIEW_DEFAULT: SidebarView = { alwaysSelect: false, dayHeaders: true, layout: "default", merge: true, onlyActive: false, sort: "recent" };
 
 export function loadSidebarView(): SidebarView {
   try {
     const v = JSON.parse(localStorage.getItem(VIEW_KEY) ?? "{}") as Record<string, unknown>;
-    const bool = (k: "alwaysSelect" | "dayHeaders" | "onlyActive") => (typeof v[k] === "boolean" ? (v[k] as boolean) : VIEW_DEFAULT[k]);
-    return { alwaysSelect: bool("alwaysSelect"), dayHeaders: bool("dayHeaders"), layout: v.layout === "classic" ? "classic" : "default", onlyActive: bool("onlyActive"), sort: v.sort === "name" ? "name" : "recent" };
+    const bool = (k: "alwaysSelect" | "dayHeaders" | "merge" | "onlyActive") => (typeof v[k] === "boolean" ? (v[k] as boolean) : VIEW_DEFAULT[k]);
+    return { alwaysSelect: bool("alwaysSelect"), dayHeaders: bool("dayHeaders"), layout: v.layout === "classic" ? "classic" : "default", merge: bool("merge"), onlyActive: bool("onlyActive"), sort: v.sort === "name" ? "name" : "recent" };
   } catch {
     return VIEW_DEFAULT;
   }

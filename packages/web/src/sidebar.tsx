@@ -6,11 +6,11 @@ import { useNarrow } from "@/lib/use-narrow.ts";
 import { Menu } from "@base-ui/react/menu";
 import { ArchiveIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, CircleAlertIcon, EllipsisVerticalIcon, LocateFixedIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, LoaderCircleIcon, LockIcon, SearchIcon, SquarePenIcon, Trash2Icon, UsersIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { SessionListItem, SessionState, Worktree } from "@claude-ui/protocol";
+import { LOCAL_SIDE, type SessionListItem, type SessionState, type Worktree } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
 import type { CleanupScope } from "./cleanup.ts";
-import { displayTitle, activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, isWorkerKey, loadCollapsed, loadExpandedWorkers, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveExpandedWorkers, saveSidebarView, nestWorkers, classicGroup, projectIs, parseSessionQuery, sortGroups, stateName, timeAgo, workerKey, worktreeName, type SessionGroup, type SidebarView, type WorktreeRow } from "./sessions.ts";
+import { displayTitle, activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, groupKey, limitSessions, isWorkerKey, loadCollapsed, loadExpandedWorkers, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveExpandedWorkers, saveSidebarView, nestWorkers, classicGroup, projectIs, parseSessionQuery, sortGroups, stateName, timeAgo, workerKey, worktreeName, type MergeContext, type SessionGroup, type SidebarView, type WorktreeRow } from "./sessions.ts";
 import { ringLocate, useShakeToLocate } from "./locate.ts";
 import { useNow } from "./plan-meter.tsx";
 import { useLabels } from "./labels.ts";
@@ -121,6 +121,8 @@ export function SessionList({
   list,
   projects,
   worktrees,
+  origins,
+  sideOrder,
   state,
   titleLoading,
   unread,
@@ -152,6 +154,9 @@ export function SessionList({
   projects: string[];
   /** Git worktrees of each project (session.list); a repository with linked ones shows a row per worktree. */
   worktrees?: Record<string, Worktree[]>;
+  /** Repository key of each project with an origin (session.list `origins`) and the Side ids in the daemon's order: the projects of one repository merge into one group. */
+  origins?: Record<string, string>;
+  sideOrder?: string[];
   /** Live state of a session, falling back to its list state. */
   state: (s: SessionListItem) => SessionState;
   /** Title still a placeholder after a prompt (GH-133): the row shows a skeleton. */
@@ -272,7 +277,8 @@ export function SessionList({
   const cleanable = !!onCleanUp;
   const top = nested.top;
   const keepActive = (s: SessionListItem) => s.id === activeId || state(s) === "running" || state(s) === "needs_input";
-  const shown = sortGroups(groupByCwd(top, query, projects, archived, worktrees, nested.workers), view.sort);
+  const merge: MergeContext | undefined = view.merge && origins ? { origins, sideOf: (cwd) => sideInfo(cwd)?.id ?? LOCAL_SIDE, sideOrder: sideOrder ?? [], worktrees: worktrees ?? {}, sideLabel: (cwd) => sideOf(cwd)?.label } : undefined;
+  const shown = sortGroups(groupByCwd(top, query, projects, archived, worktrees, nested.workers, merge), view.sort);
   // Only active sessions: a coordinator lists just its workers that qualify too.
   const searching = !!query.trim();
   // Search still finds every session, and the archived view lists archived ones only.
@@ -285,7 +291,7 @@ export function SessionList({
   const branches = new Map<string, string>();
   const groups = classic
     ? kept.map((g) => {
-        const c = classicGroup(g);
+        const c = classicGroup(g, (cwd) => sideOf(cwd)?.short);
         c.branch.forEach((b, id) => branches.set(id, b));
         return c.group;
       })
@@ -299,7 +305,7 @@ export function SessionList({
   }
   // Menu targets come from the unfiltered, unsearched groups: search and Only active never shrink what an action covers.
   let unfiltered: SessionGroup[] | undefined;
-  const baseGroup = (cwd: string) => (unfiltered ??= groupByCwd(nested.top, "", projects, archived, worktrees, nested.workers)).find((g) => g.cwd === cwd);
+  const baseGroup = (cwd: string) => (unfiltered ??= groupByCwd(nested.top, "", projects, archived, worktrees, nested.workers, merge)).find((g) => g.cwd === cwd);
   const idle = (sessions: SessionListItem[], days: number) => idleTargets(sessions, nested.workers, { days, now: Date.now(), activeId, state });
   const menuBase = (sessions: () => SessionListItem[], where: string, prefix: string) => ({
     prefix,
@@ -337,7 +343,7 @@ export function SessionList({
     if (!activeSession) return undefined;
     const a = activeSession.archived;
     const nv = nestWorkers(list, a);
-    return revealKeys(activeSession.id, groupByCwd(nv.top, "", projects, a, worktrees, nv.workers), nv.workers, a);
+    return revealKeys(activeSession.id, groupByCwd(nv.top, "", projects, a, worktrees, nv.workers, merge), nv.workers, a);
   })();
   const revealActive = (focus: boolean) => {
     const keys = activeKeys;
@@ -600,7 +606,7 @@ export function SessionList({
           </p>
         )}
         {groups.map((g) => {
-          const open = isOpen(g.cwd);
+          const open = isOpen(groupKey(g));
           const firstOfSide = firstCwds.has(g.cwd);
           return (
             <section key={g.cwd} data-testid="session-group" data-cwd={g.cwd}>
@@ -610,7 +616,7 @@ export function SessionList({
                   className="flex h-7 w-full items-center gap-2 rounded-md pr-20 pl-1.5 text-left max-md:pr-26 pointer-coarse:pr-38 max-md:pointer-coarse:pr-26 text-muted-foreground text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11"
                   aria-expanded={open}
                   aria-label={sideOf(g.cwd) ? `${projectName(g.cwd)} (${sideOf(g.cwd)!.label})` : undefined}
-                  onClick={() => toggle(g.cwd)}
+                  onClick={() => toggle(groupKey(g))}
                   title={g.cwd}
                   data-testid="group-toggle" data-part="group-toggle"
                 >

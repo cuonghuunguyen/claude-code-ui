@@ -325,6 +325,8 @@ export function App() {
   const [docker, setDocker] = useState<ListResult["docker"]>();
   const [ssh, setSsh] = useState<ListResult["ssh"]>();
   const [cwdSides, setCwdSides] = useState<Record<string, string>>({});
+  // Repository key of each project with an origin (session.list `origins`): projects of one repository merge in the sidebar.
+  const [origins, setOrigins] = useState<Record<string, string>>({});
   const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({});
   const labels = useLabels();
   const sideOf = useMemo(() => sideLookup(sides, cwdSides, labels.sides), [sides, cwdSides, labels.sides]);
@@ -839,7 +841,7 @@ export function App() {
    * the cached list does none of that (and does not reach `follows.listReplied`) (it may be of before a project was removed).
    */
   function applyList(reply: ListResult, sessions: ListResult["sessions"], gen?: number) {
-    const { projects, recentProjects = [], permissionModes, engines: listedEngines, sideEngines: listedSideEngines, sides, docker, ssh, cwdSides = {}, worktrees = {} } = reply;
+    const { projects, recentProjects = [], permissionModes, engines: listedEngines, sideEngines: listedSideEngines, sides, docker, ssh, cwdSides = {}, origins: listedOrigins = {}, worktrees = {} } = reply;
     if (gen !== undefined) {
       newerThanCache.current = true;
       // A project removed here or by another client: its session tabs close (they would show a session no longer listed).
@@ -864,6 +866,7 @@ export function App() {
     setDocker(docker);
     setSsh(ssh);
     setCwdSides(cwdSides);
+    setOrigins(listedOrigins);
     setWorktrees(worktrees);
     if (gen !== undefined) setListLoaded(true);
     else setListCached(true);
@@ -4068,6 +4071,8 @@ export function App() {
               list={list}
               projects={projects}
               worktrees={worktrees}
+              origins={origins}
+              sideOrder={sides?.map((x) => x.id)}
               state={listState}
               titleLoading={(s) => titleLoading(s.title, prompted.has(s.id))}
               unread={unread}
