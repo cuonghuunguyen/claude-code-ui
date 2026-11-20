@@ -433,6 +433,22 @@ describe("OpenCode 2 sessions: list and restore", { timeout: TEST_MS }, () => {
     expect(d.requests("POST", new RegExp(`/api/session/ses_one/permission/`))).toEqual([]);
   });
 
+  it("a question of a subagent's session shows in the session and is answered under the subagent's id", async () => {
+    const d = await bootWith({ script: ["child-question"] });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    await until(() => d.log().some((l) => l.type === "start"));
+    await d.ok({ type: "session.subscribe", sessionId: "ses_one", sinceSeq: 0 });
+    const s = d.view("ses_one");
+    await until(() => !!s.find("assistant_text"));
+    await s.prompt("run the subagent");
+    await until(() => !!s.find("question"));
+    const q = s.find("question")!;
+    await d.ok({ type: "question.respond", requestId: q.requestId, answers: { "Pick a color?": "Red" } });
+    await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
+    expect(d.requests("POST", `/api/session/ses_child/form/${q.requestId}/reply`)[0]!.body).toEqual({ answer: { q0: "Red" } });
+  });
+
   it("an event stream that drops is read again from OpenCode: nothing shows twice and the session works afterwards", async () => {
     const d = await bootWith();
     await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
@@ -715,7 +731,8 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
   });
 
   it("/undo takes back the last prompt as a draft, /redo brings the messages back one prompt at a time; the clear's empty execution is no turn; the slash menu lists them", async () => {
-    const { d, s } = await opened();
+    // OpenCode lists the session as active during the clear's empty execution.
+    const { d, s } = await opened({}, { env: { FAKE_OPENCODE2_CLEAR_ACTIVE_MS: "300" } });
     const names = (await d.ok({ type: "session.commands", cwd: d.project, engine: "opencode" })).commands.map((c: { name: string }) => c.name);
     expect(names).toEqual(expect.arrayContaining(["compact", "undo", "redo"]));
     expect(await s.prompt("/undo")).toMatchObject({ local: true, draft: { text: "three", images: [] } });
@@ -738,15 +755,21 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     expect(s.parts().filter((p) => p.type === "user_text" && /^\/(undo|redo)/.test((p as { text: string }).text))).toEqual([]);
   });
 
-  it("a revert staged or cleared in OpenCode's own app cuts the timeline or brings the messages back", async () => {
-    const { d, s } = await opened();
+  it("a revert staged, moved or cleared in OpenCode's own app cuts the timeline or brings the messages back", async () => {
+    const { d, s } = await opened({}, { env: { FAKE_OPENCODE2_CLEAR_ACTIVE_MS: "300" } });
     await d.fake("/__stage/ses_own/msg_u2");
     await until(() => s.find("rewind")?.userMessageId === "msg_u2");
-    const before = s.parts().length;
+    // Moved to a later message: the messages between come back.
+    let before = s.parts().length;
+    await d.fake("/__stage/ses_own/msg_u3");
+    await until(() => s.find("rewind")?.userMessageId === "msg_u3");
+    await until(() => s.parts().slice(before).some((p) => p.id === "msg_u2"));
+    before = s.parts().length;
     await d.fake("/__clear/ses_own");
     await until(() => s.parts().slice(before).some((p) => p.id === "msg_u3"));
-    await sleep(300);
+    await sleep(500);
     expect(s.parts().some((p) => p.type === "turn_result")).toBe(false);
+    expect(s.states()).not.toContain("running");
   });
 
   it("/compact runs OpenCode's compaction as a turn: a compaction part with the summary, then the turn result; nothing to compact shows OpenCode's reason", async () => {
@@ -774,6 +797,12 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     expect(s.parts().some((p) => p.type === "turn_result")).toBe(false);
     await d.ok({ type: "session.bash", sessionId: "ses_own", command: "sleep 30" });
     await until(() => s.find("bash", (p) => p.command === "sleep 30")?.status === "running");
+    // A reconnect's read finds no OpenCode turn: the command still runs as this session's turn.
+    const reads = d.requests("GET", "/api/form").length;
+    await d.fake("/__drop");
+    await until(() => d.requests("GET", "/api/form").length > reads);
+    await sleep(300);
+    expect(s.states().at(-1)).toBe("running");
     await d.ok({ type: "session.interrupt", sessionId: "ses_own" });
     await until(() => s.find("bash", (p) => p.command === "sleep 30")?.status === "stopped");
     expect(d.requests("DELETE", /^\/api\/shell\/sh_/)).toHaveLength(1);
@@ -786,6 +815,15 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     await until(() => s.states().at(-1) === "idle");
     expect(s.find("bash", (p) => p.command === "sleep 31")).toMatchObject({ status: "running", shell: "background" });
     expect(d.requests("DELETE", /^\/api\/shell\/sh_/)).toHaveLength(1);
+  });
+
+  it("Stop before OpenCode named the shell kills the command once it is named", async () => {
+    const { d, s } = await opened({}, { env: { FAKE_OPENCODE2_SHELL_START_MS: "400" } });
+    await d.ok({ type: "session.bash", sessionId: "ses_own", command: "sleep 30" });
+    await d.ok({ type: "session.interrupt", sessionId: "ses_own" });
+    await until(() => s.find("bash", (p) => p.command === "sleep 30")?.status === "stopped");
+    expect(d.requests("DELETE", /^\/api\/shell\/sh_/)).toHaveLength(1);
+    await until(() => s.states().at(-1) === "idle");
   });
 
   it("a question shows as a question part under its call; the answer goes back by field, a multi-select as a list; it survives a stream reconnect; Stop cancels it", async () => {

@@ -132,9 +132,17 @@ class OpenCode2Session implements EngineSession {
   private readonly unshown = new Set<string>();
   /** The message OpenCode's staged revert cuts the conversation at, undefined when none (a prompt commits it: OpenCode removes the cut messages then). */
   private revertAt: string | undefined;
-  /** When a revert clear was seen: its empty execution that follows is no turn. */
+  /** When a revert clear was seen: the empty execution that follows it is no turn (its start is skipped once, and a resync in that time starts no turn). */
   private clearedAt = 0;
+  private clearSkipped = false;
+  private inClearWindow = () => Date.now() - this.clearedAt < CLEAR_EXECUTION_MS;
+  private markClear() {
+    this.clearedAt = Date.now();
+    this.clearSkipped = false;
+  }
   /** The bash mode command running as this session's turn: OpenCode's shell id once `session.shell.started` named it, Stop pressed before that, the output read so far. */
+  /** Shell ids of our commands moved to the background: their request still ends them (`shell: background` kept). */
+  private readonly backgrounded = new Set<string>();
   private shellRun: { command: string; shellId?: string; stop?: boolean; stdout: string; timer?: NodeJS.Timeout; /** Moved to the background: the session is free, the command runs on. */ background?: boolean } | undefined;
   private turnAt = 0;
   private aborted = false;
@@ -239,7 +247,8 @@ class OpenCode2Session implements EngineSession {
         this.apply(h);
         this.requests(h);
         const state = this.session.currentState();
-        if (h.busy && state === "idle") (this.beginTurn(), this.openTurnEnd(), this.session.setState("running"));
+        // OpenCode lists the session as active during a clear's empty execution: that is no turn.
+        if (h.busy && state === "idle" && !this.inClearWindow()) (this.beginTurn(), this.openTurnEnd(), this.session.setState("running"));
         // A prompt that is still being prepared is not in OpenCode yet: only a turn that reached it can have ended there. A bash mode command is no OpenCode turn.
         else if (!h.busy && state === "running" && !this.shellRun && this.turnPosted && this.posting.size === 0 && this.posts === posts) this.turnStop < this.stops ? this.endStopped() : this.finish();
       })
@@ -374,7 +383,7 @@ class OpenCode2Session implements EngineSession {
       const before = this.revertAt;
       // The newest undone prompt is redone: OpenCode clears the revert (files back as before it); else the revert point moves to the next undone prompt.
       this.revertAt = next?.id;
-      if (!next) this.clearedAt = Date.now();
+      if (!next) this.markClear();
       await (next ? client.session.revert.stage({ sessionID: this.id, messageID: next.id, files: true }) : client.session.revert.clear({ sessionID: this.id })).catch((err) => ((this.revertAt = before), Promise.reject(err)));
       await this.resync(); // the messages between the old and the new revert point come back
     } catch (err) {
@@ -388,6 +397,8 @@ class OpenCode2Session implements EngineSession {
     this.beginTurn();
     this.session.setState("running");
     const client = await this.server.client();
+    // The compaction's events must find the stream open (as a prompt's).
+    await this.server.streamReady();
     await client.session.compact({ sessionID: this.id }).catch((err) => {
       this.toIdle();
       return Promise.reject(err);
@@ -528,7 +539,7 @@ class OpenCode2Session implements EngineSession {
     switch (type) {
       case "session.execution.started":
         // OpenCode 2.3.0 follows a revert clear with an empty execution: no turn.
-        if (Date.now() - this.clearedAt < CLEAR_EXECUTION_MS) return void (this.clearedAt = 0);
+        if (this.inClearWindow() && !this.clearSkipped) return void (this.clearSkipped = true);
         if (this.session.currentState() === "idle") (this.beginTurn(), this.session.setState("running"));
         return;
       case "session.execution.succeeded":
@@ -564,13 +575,16 @@ class OpenCode2Session implements EngineSession {
       case "session.revert.staged": {
         // Reverted elsewhere (OpenCode's own app): cut like our own rewind.
         const at: string | undefined = d.revert?.messageID;
-        if (at && at !== this.revertAt) (this.revertAt = at, this.session.emit({ type: "rewind", id: randomUUID(), userMessageId: at }));
-        return;
+        if (!at || at === this.revertAt) return;
+        this.revertAt = at;
+        this.session.emit({ type: "rewind", id: randomUUID(), userMessageId: at });
+        // A cut moved to a later message brings back the messages between: read them again.
+        return void (this.resyncing?.then(() => this.resync()) ?? this.resync());
       }
       case "session.revert.cleared":
         // The cut messages come back; a read already in flight may predate the clear.
         this.revertAt = undefined;
-        this.clearedAt = Date.now();
+        this.markClear();
         return void (this.resyncing?.then(() => this.resync()) ?? this.resync());
       case "session.revert.committed":
         this.revertAt = undefined;
@@ -716,6 +730,7 @@ class OpenCode2Session implements EngineSession {
       .catch((err) => this.notice(`shell_failed:${messageID}`, `Could not run the command in OpenCode: ${(err as Error).message}`))
       .finally(() => {
         clearInterval(run.timer);
+        if (run.shellId) this.backgrounded.delete(run.shellId);
         if (this.shellRun !== run) return;
         this.shellRun = undefined;
         this.toIdle();
@@ -742,7 +757,7 @@ class OpenCode2Session implements EngineSession {
 
   /** A command ended: ours shows its stored message when its request answers; one run elsewhere (OpenCode's own app) shows its output now. */
   private shellEnded(sh: Shell2) {
-    if (this.shellRun?.shellId === sh.id) return;
+    if (this.shellRun?.shellId === sh.id || this.backgrounded.has(sh.id)) return;
     void this.server
       .client()
       .then((c) => c.shell.output({ id: sh.id, location: { directory: this.cwd } }))
@@ -768,6 +783,7 @@ class OpenCode2Session implements EngineSession {
     const run = this.shellRun;
     if (!run?.shellId || run.shellId !== id) return false;
     run.background = true;
+    this.backgrounded.add(id);
     clearInterval(run.timer);
     this.shellRun = undefined;
     this.session.emit({ ...bashPart({ id, command: run.command, status: "running" }, run.stdout), shell: "background" });

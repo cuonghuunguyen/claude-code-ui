@@ -5,10 +5,10 @@
 // POST /api/session, /api/session/:id/prompt, /api/session/:id/model, /api/session/:id/interrupt, /api/session/:id/permission/:rid/reply, /api/session/:id/fork;
 // PATCH /api/session/:id (permissions, title, archived); DELETE /api/session/:id.
 // Revert (as 2.3.0): POST …/revert/stage {messageID, files?} (stored messages stay listed; `session.revert` marks the cut), POST …/revert/commit, DELETE …/revert
-// (clear: `session.revert.cleared`, then an empty `execution.started`/`succeeded`, as 2.3.0 sends), a prompt while staged commits first. GET …/diff?from=&to= sums the
+// (clear: `session.revert.cleared`, then an empty `execution.started`/`succeeded`, as 2.3.0 sends; FAKE_OPENCODE2_CLEAR_ACTIVE_MS: the session active that long meanwhile), a prompt while staged commits first. GET …/diff?from=&to= sums the
 // fake `diff` lists ([{file, additions, deletions}]) of the user messages from `from` up to `to` (excluded; default the next user message).
 // POST …/compact: a compaction turn (`summary` stored; a session without messages fails "Nothing to compact yet"). POST …/shell {id, command}: answers when the
-// command ends; output `out:<command>`, `exit <n>` in the command = that exit code, `sleep` in it runs until DELETE /api/shell/:sh (killed). GET /api/shell/:sh/output.
+// command ends (FAKE_OPENCODE2_SHELL_START_MS delays `session.shell.started`); output `out:<command>`, `exit <n>` in the command = that exit code, `sleep` in it runs until DELETE /api/shell/:sh (killed). GET /api/shell/:sh/output.
 // Forms: GET …/form, GET /api/form, POST …/form/:fid/reply {answer}, DELETE …/form/:fid (cancel: the turn ends interrupted, as 2.3.0).
 // FAKE_OPENCODE2_FAIL: see the session route.
 // FAKE_OPENCODE2_DATA: JSON `{sessions: [{id, directory, title, time, permissions?, parentID?}], messages: {<id>: [v2 messages]}, models?, default?}`.
@@ -17,7 +17,7 @@
 //   {wait: "permission"}  holds the turn until `…/permission/:rid/reply` came; {when: "once"|"always"|"reject"|"allowed"} on a step skips it unless that was the reply (`allowed` = once or always); `$REJECT` is the reply's message
 //   {hold: true}    holds the turn until `…/interrupt`, which then ends it as the user's stop (`step.failed` aborted, `execution.interrupted`)
 //   {sleep: ms}
-//   {form: {fields, title?}}  asks a question form (`form.created`, metadata kind question, tool `$A1`/`$CALL`); {wait: "form"} holds until it is answered ("replied")
+//   {form: {fields, title?, sessionID?}}  asks a question form (of `sessionID`, default the turn's) (`form.created`, metadata kind question, tool `$A1`/`$CALL`); {wait: "form"} holds until it is answered ("replied")
 //     or cancelled ("cancelled": the call fails aborted and the turn ends interrupted); `$ANSWER` is the answer
 // FAKE_OPENCODE2_MODEL_DELAY / _PROMPT_DELAY / _MESSAGE_DELAY: ms the model routes / the prompt route / the message read wait. FAKE_OPENCODE2_SWALLOW_STOP: an interrupt sends no end events. POST /__drop ends the event streams; POST /__forget/<id> drops a session; POST /__stage/<id>/<message id> and /__clear/<id> revert as OpenCode's own app.
 // FAKE_OPENCODE_LOG: JSON lines of `start`, `request` (method, path, authed, body of a write) and `version`.
@@ -101,7 +101,7 @@ async function runTurn(sid, userId, steps) {
       emit("permission.replied", { sessionID: sid, requestID: vars.$PERM, reply: last }, dir);
       asked.delete(vars.$PERM);
     } else if (step.form) {
-      const form = { id: vars.$FORM, sessionID: sid, title: step.form.title ?? "Questions", metadata: { kind: "question", tool: { messageID: vars.$A1, id: vars.$CALL } }, fields: step.form.fields };
+      const form = { id: vars.$FORM, sessionID: step.form.sessionID ?? sid, title: step.form.title ?? "Questions", metadata: { kind: "question", tool: { messageID: vars.$A1, id: vars.$CALL } }, fields: step.form.fields };
       forms.set(form.id, { form, turn });
       emit("form.created", { form }, dir);
     } else if (step.wait === "form") {
@@ -141,6 +141,15 @@ function takePrompt(s, body, res) {
   json(res, 200, { data: { id: userId, sessionID: s.id, time: user.time, type: "user", payload: { text: body.text } } });
 }
 
+/** The empty execution 2.3.0 runs after a revert clear. FAKE_OPENCODE2_CLEAR_ACTIVE_MS: it runs that long, the session listed as active meanwhile. */
+function clearExecution(s) {
+  emit("session.execution.started", { sessionID: s.id });
+  const ms = Number(process.env.FAKE_OPENCODE2_CLEAR_ACTIVE_MS ?? 0);
+  if (!ms) return emit("session.execution.succeeded", { sessionID: s.id });
+  const t = { interrupt() {}, reply() {}, form() {} };
+  running.set(s.id, t);
+  setTimeout(() => (running.get(s.id) === t && running.delete(s.id), emit("session.execution.succeeded", { sessionID: s.id })), ms);
+}
 /** Drops the messages from the revert point on (`session.revert.committed`). */
 function commitRevert(s) {
   const list = messages.get(s.id) ?? [];
@@ -189,8 +198,11 @@ function shell(s, body, res) {
   const msg = { id: body.id ?? id("msg"), metadata: { background: true }, time: { created: Date.now() }, type: "shell", shellID: sh, command: body.command, status: "running" };
   messages.get(s.id).push(msg);
   const info = (status, extra = {}) => ({ id: sh, status, command: body.command, cwd: s.directory, shell: "/bin/sh", ...extra });
-  emit("shell.created", { info: info("running") }, s.directory);
-  emit("session.shell.started", { sessionID: s.id, shell: info("running") }, s.directory);
+  // FAKE_OPENCODE2_SHELL_START_MS: ms before OpenCode names the shell (`session.shell.started`).
+  const started = () => (emit("shell.created", { info: info("running") }, s.directory), emit("session.shell.started", { sessionID: s.id, shell: info("running") }, s.directory));
+  const delay = Number(process.env.FAKE_OPENCODE2_SHELL_START_MS ?? 0);
+  if (delay) setTimeout(started, delay);
+  else started();
   shellOut.set(sh, `out:${body.command}\n`);
   const end = (status, exit) => {
     shells.delete(sh);
@@ -227,8 +239,7 @@ const server = createServer((req, res) => {
       const s = sessions.get(url.pathname.slice(9));
       delete s.revert;
       emit("session.revert.cleared", { sessionID: s.id }, s.directory);
-      emit("session.execution.started", { sessionID: s.id });
-      emit("session.execution.succeeded", { sessionID: s.id });
+      clearExecution(s);
       return json(res, 200, {});
     }
     log({ type: "request", method: req.method, path: url.pathname, authed, ...(body !== undefined && { body }) });
@@ -313,8 +324,7 @@ const server = createServer((req, res) => {
       if (sub === "revert" && req.method === "DELETE") {
         delete s.revert;
         emit("session.revert.cleared", { sessionID: s.id }, s.directory);
-        emit("session.execution.started", { sessionID: s.id });
-        emit("session.execution.succeeded", { sessionID: s.id });
+        clearExecution(s);
         return (res.writeHead(204), res.end());
       }
       if (sub === "diff") {
