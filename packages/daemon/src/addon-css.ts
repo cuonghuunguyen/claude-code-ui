@@ -107,15 +107,18 @@ function splitList(sel: string): string[] {
 }
 
 /** The leading compound that names the root element (`:root`, `html`, `:scope`, `.dark`: the app puts `dark` on <html>) becomes `&`, so it still matches the root; everything else stays a descendant of it. */
-const ROOT_LEAD = /^(?::root|html|:scope)(?![\w-])|^(?=\.dark(?![\w-]))/i;
-const rootRelative = (sel: string): string => {
+const ROOT_LEAD = /^(?::root|html|:scope)(?![\w-])/i;
+const DARK_LEAD = /^(?=\.dark(?![\w-]))/; // class names are case-sensitive
+/** Deepest `:where(:is(...))` wrapping that is rewritten (each level re-scans the rest of the selector). */
+const MAX_WRAP = 4;
+const rootRelative = (sel: string, wrap = 0): string => {
   const s = sel.trim();
   if (s.startsWith("&")) return s;
-  const m = ROOT_LEAD.exec(s);
+  const m = ROOT_LEAD.exec(s) ?? DARK_LEAD.exec(s);
   if (m) return "&" + s.slice(m[0].length);
   // `:where(:root[...].dark)` / `:is(:root, .dark)` at the start: every item that names the root gets the same rewrite inside the wrapper.
   const w = /^:(?:where|is)\(/i.exec(s);
-  if (w) {
+  if (w && wrap < MAX_WRAP) {
     let depth = 1;
     let i = w[0].length;
     while (i < s.length && depth > 0) {
@@ -131,7 +134,7 @@ const rootRelative = (sel: string): string => {
     }
     if (depth === 0) {
       const items = splitList(s.slice(w[0].length, i - 1)).map((x) => x.trim());
-      const out = items.map(rootRelative);
+      const out = items.map((x) => rootRelative(x, wrap + 1));
       if (out.every((x, k) => x !== items[k])) return `${w[0]}${out.join(", ")})${s.slice(i)}`;
     }
   }

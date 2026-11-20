@@ -22,6 +22,7 @@ describe("scopeCss", () => {
     [':where(:root[data-theme="addon:reze:dusk"].dark) { --x: 1 }', ':where(&[data-theme="addon:reze:dusk"].dark) { --x: 1 }'],
     [":is(:root, .dark) .a { --x: 1 }", ":is(&, &.dark) .a { --x: 1 }"],
     [":where(.a, :root) { --x: 1 }", ":where(.a, :root) { --x: 1 }"],
+    [".Dark .a { --x: 1 }", ".Dark .a { --x: 1 }"],
     [".html-like { --x: 1 }", ".html-like { --x: 1 }"],
   ])("a token rule on the root element keeps matching it: %s", (css, rule) => {
     expect(flat(scope(css))).toBe(`${ROOT} { ${rule} }`);
@@ -68,6 +69,13 @@ describe("scopeCss", () => {
   it("refuses groups nested far deeper than real CSS, quickly", () => {
     const t = Date.now();
     expect(() => scope("@media all{".repeat(40_000) + "}".repeat(40_000))).toThrow(CssScanError);
+    expect(Date.now() - t).toBeLessThan(1000);
+  });
+
+  it("deeply wrapped :where() selectors do not stall the scan", () => {
+    const t = Date.now();
+    const rule = `${":where(".repeat(6000)}:root${")".repeat(6000)}{}`;
+    scope(rule.repeat(10));
     expect(Date.now() - t).toBeLessThan(1000);
   });
 
