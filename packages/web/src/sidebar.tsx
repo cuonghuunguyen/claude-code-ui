@@ -413,7 +413,7 @@ export function SessionList({
         <div key={day.title}>
           {/* OpenCode Home day label: 28px, muted, weight 440, aligned with the row titles. */}
           {day.title && (
-            <h4 className={cn("flex h-7 items-center font-normal text-muted-foreground text-sm", PAD[depth])} data-testid="day-header">
+            <h4 className={cn("flex h-7 items-center font-normal text-muted-foreground text-sm", PAD[depth])} data-testid="day-header" data-part="day-header">
               {day.title}
             </h4>
           )}
@@ -558,7 +558,7 @@ export function SessionList({
             placeholder={t("sidebar.searchSessions")}
             aria-label={t("sidebar.searchSessionsAria")}
             className="h-8 w-full rounded-md bg-secondary/60 pr-2 pl-8 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring max-md:h-11"
-            data-testid="session-search"
+            data-testid="session-search" data-part="session-search"
           />
         </label>
         <IconButton
@@ -608,7 +608,7 @@ export function SessionList({
                   aria-label={sideOf(g.cwd) ? `${projectName(g.cwd)} (${sideOf(g.cwd)!.label})` : undefined}
                   onClick={() => toggle(g.cwd)}
                   title={g.cwd}
-                  data-testid="group-toggle"
+                  data-testid="group-toggle" data-part="group-toggle"
                 >
                   <ProjectAvatar cwd={g.cwd} />
                   <span className="min-w-0 truncate font-medium">{projectName(g.cwd)}</span>
@@ -790,7 +790,7 @@ const SessionRow = memo(function SessionRow({
     <SessionContextMenu target={target} onAction={act}>
       <li className="group relative">
         <button
-          data-testid="session-item"
+          data-testid="session-item" data-part="session-item"
           data-session-id={s.id}
           data-state={st}
           className={cn(

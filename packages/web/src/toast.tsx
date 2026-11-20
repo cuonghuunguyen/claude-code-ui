@@ -10,7 +10,7 @@ export const TOAST_CARD = "pointer-events-auto rounded-lg bg-card p-3 text-foreg
 /** The one corner every toast stacks in (first child nearest the corner), so two at once never cover each other. Clicks pass through the gaps. */
 export function ToastRegion({ children }: { children?: ReactNode }) {
   return (
-    <div data-testid="toast-region" className="pointer-events-none fixed right-4 bottom-4 z-1000 flex w-[calc(100vw-2rem)] flex-col-reverse gap-2 min-[601px]:right-8 min-[601px]:bottom-12 min-[601px]:w-80">
+    <div data-testid="toast-region" data-part="toast-region" className="pointer-events-none fixed right-4 bottom-4 z-1000 flex w-[calc(100vw-2rem)] flex-col-reverse gap-2 min-[601px]:right-8 min-[601px]:bottom-12 min-[601px]:w-80">
       {children}
     </div>
   );

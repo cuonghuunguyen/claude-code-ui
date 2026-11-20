@@ -97,6 +97,8 @@ newer than their claude-ui.
   `varc`, `err`, `warn`, `ok`, `info`. Copy the theme of `examples/addons/example/addon.json` and
   change the values; keep text on `bg`/`card` at a 4.5:1 contrast.
 - `css`: one `.css` applied app-wide while enabled; it cannot load external images or `@import`.
+  Select app elements with `[data-part="<name>"]` (stable parts, list: `docs/site/features/addon-parts.md`),
+  never `[data-testid=...]` or Tailwind class names: those change without notice.
 - Paths are relative, without `..` or `\`, and must exist. Every view, command and renderer needs
   its capability, or install fails naming it.
 

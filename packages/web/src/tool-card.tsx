@@ -145,7 +145,7 @@ function PlainToolCard({ call, result, awaiting, plan }: { call: ToolCall; resul
     />
   );
   return (
-    <Tool data-testid="tool-card" data-status={call.status} {...useExpanded(call.id, awaiting && !stats)}>
+    <Tool data-testid="tool-card" data-part="tool-card" data-status={call.status} {...useExpanded(call.id, awaiting && !stats)}>
       {target || canBackground || canAllow ? (
         <div className="group/head flex items-center gap-1">
           {header}

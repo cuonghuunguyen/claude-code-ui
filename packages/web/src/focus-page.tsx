@@ -270,7 +270,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
   const tasks = view ? (rowTodos(view).length ? rowTodos(view) : view.lastTodos) : [];
   const n = waiting.length ? new Set(waiting.map((w) => w.sessionId)).size : 0;
   return (
-    <div ref={page} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border bg-card shadow-raised" data-testid="focus-page">
+    <div ref={page} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border bg-card shadow-raised" data-testid="focus-page" data-part="focus-page">
       <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-3">
         <div className="min-w-0 flex-1">
           <h1 ref={heading} tabIndex={-1} className="font-medium text-base outline-none">{t("app.focusPage.title")}</h1>
@@ -288,7 +288,7 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
         )}
       </header>
       <div className="grid min-h-0 flex-1 md:grid-cols-[minmax(260px,360px)_1fr]">
-        <div className={`flex min-h-0 flex-col gap-4 overflow-y-auto border-r p-3 max-md:border-r-0 ${detail && current ? "max-md:hidden" : ""}`} data-testid="focus-queue">
+        <div className={`flex min-h-0 flex-col gap-4 overflow-y-auto border-r p-3 max-md:border-r-0 ${detail && current ? "max-md:hidden" : ""}`} data-testid="focus-queue" data-part="focus-queue">
           {!needsEmpty ? (
             <section aria-labelledby="focus-needs">
               <h2 id="focus-needs" className="mb-1.5 px-1 font-medium text-muted-foreground text-xs">{t("app.focusPage.needsYou", { count: attention.filter((r) => r.kind !== "finished").length })}</h2>
@@ -458,7 +458,7 @@ function AttentionRowView({ row, title, now, selected, onSelect, onAct }: { row:
       aria-current={selected || undefined}
       className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 rounded-lg px-2.5 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11"
       onClick={onSelect}
-      data-testid="focus-row"
+      data-testid="focus-row" data-part="focus-row"
       data-row-id={row.id}
       data-kind={row.kind}
     >

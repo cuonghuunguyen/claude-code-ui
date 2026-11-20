@@ -697,7 +697,7 @@ export function ChangesPanel({
             title={r.path}
             aria-label={label(r)}
             onClick={() => setSelected(r.path)}
-            data-testid="changed-file"
+            data-testid="changed-file" data-part="changed-file"
             data-path={r.path}
           >
             {rowIcon(r)}
@@ -953,7 +953,7 @@ export function ChangesPanel({
                     title={path}
                     aria-label={label(r)}
                     onClick={() => setExpanded((x) => ({ ...x, [path]: !x[path] }))}
-                    data-testid="changed-file"
+                    data-testid="changed-file" data-part="changed-file"
                     data-path={path}
                   >
                     {rowIcon(r)}
@@ -1157,7 +1157,7 @@ function FileDiff({ row, cwd, style, onOpen, inline, git, branchMode, onShowRepo
       ref={box}
       tabIndex={-1}
       className={cn("outline-none", inline ? "flex flex-col border-t" : "flex min-h-0 min-w-0 flex-1 flex-col")}
-      data-testid="file-diff"
+      data-testid="file-diff" data-part="file-diff"
       data-diff-style={style}
       onKeyDown={(e) => {
         // `code`: Option+K types "˚" on macOS.

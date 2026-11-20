@@ -55,7 +55,7 @@ export function MarkdownToolbar({ input, disabled }: { input: RefObject<HTMLText
     refs.current[next]?.focus();
   };
   return (
-    <div role="toolbar" aria-label={t("session.markdownToolbar.label")} data-testid="markdown-toolbar" className="flex items-center gap-1 px-2 pt-2 pointer-coarse:gap-2" onKeyDown={move}>
+    <div role="toolbar" aria-label={t("session.markdownToolbar.label")} data-testid="markdown-toolbar" data-part="markdown-toolbar" className="flex items-center gap-1 px-2 pt-2 pointer-coarse:gap-2" onKeyDown={move}>
       {BUTTONS.map((b, i) => {
         const spec = b.key && FORMAT_KEYS[b.key];
         const letter = spec ? keyLabels(spec)[1]! : "";

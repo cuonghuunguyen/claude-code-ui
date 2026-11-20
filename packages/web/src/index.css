@@ -314,12 +314,12 @@ html:root[data-theme="neon"]:not(.dark) {
 /* ---------- Background scene: fixed layers behind the app (pointer-events: none). ---------- */
 :root[data-theme="neon"] body { background: var(--background); }
 /* The app root paints no colour: the scene shows through the gaps. */
-:root[data-theme="neon"] div:has(> header[data-testid="titlebar"]) { background: transparent; }
+:root[data-theme="neon"] div:has(> header[data-part="titlebar"]) { background: transparent; }
 :root[data-theme="neon"] body::before,
 :root[data-theme="neon"] #root::before,
 :root[data-theme="neon"] #root::after,
-:root[data-theme="neon"] div:has(> header[data-testid="titlebar"])::before,
-:root[data-theme="neon"] div:has(> header[data-testid="titlebar"])::after,
+:root[data-theme="neon"] div:has(> header[data-part="titlebar"])::before,
+:root[data-theme="neon"] div:has(> header[data-part="titlebar"])::after,
 :root[data-theme="neon"] body::after {
     content: "";
     position: fixed;
@@ -345,8 +345,8 @@ html:root[data-theme="neon"]:not(.dark) {
     background: var(--neon-veil);
 }
 /* Rain: far and mid layers under the panels, tilted 12deg; each layer one tile taller than the viewport and moved by one tile. */
-:root[data-theme="neon"] div:has(> header[data-testid="titlebar"])::before,
-:root[data-theme="neon"] div:has(> header[data-testid="titlebar"])::after,
+:root[data-theme="neon"] div:has(> header[data-part="titlebar"])::before,
+:root[data-theme="neon"] div:has(> header[data-part="titlebar"])::after,
 :root[data-theme="neon"] body::after {
     top: -60%;
     left: -40%;
@@ -355,23 +355,23 @@ html:root[data-theme="neon"]:not(.dark) {
     transform: rotate(12deg);
     will-change: transform;
 }
-:root[data-theme="neon"] div:has(> header[data-testid="titlebar"])::before { z-index: -2; background: var(--nx-rain2) 0 0 / 200px 300px; opacity: .6; }
-:root[data-theme="neon"] div:has(> header[data-testid="titlebar"])::after { z-index: -2; background: var(--nx-rain1) 0 0 / 260px 400px; opacity: .85; }
+:root[data-theme="neon"] div:has(> header[data-part="titlebar"])::before { z-index: -2; background: var(--nx-rain2) 0 0 / 200px 300px; opacity: .6; }
+:root[data-theme="neon"] div:has(> header[data-part="titlebar"])::after { z-index: -2; background: var(--nx-rain1) 0 0 / 260px 400px; opacity: .85; }
 /* Near rain over the panels and the sidebar (z 40): sparse, faint, below every popup (z 50). */
 :root[data-theme="neon"] body::after { z-index: 45; background: var(--nx-rain3) 0 0 / 360px 600px; opacity: .4; }
-:root[data-theme="neon"]:not(.dark) div:has(> header[data-testid="titlebar"])::before { opacity: .35; }
-:root[data-theme="neon"]:not(.dark) div:has(> header[data-testid="titlebar"])::after { opacity: .4; }
+:root[data-theme="neon"]:not(.dark) div:has(> header[data-part="titlebar"])::before { opacity: .35; }
+:root[data-theme="neon"]:not(.dark) div:has(> header[data-part="titlebar"])::after { opacity: .4; }
 :root[data-theme="neon"]:not(.dark) body::after { opacity: .16; }
 /* Scanlines over the work area. The sidebar is positioned only from md on: below md it is the fixed drawer (position: relative would put it back in the row). */
-:root[data-theme="neon"] [data-testid="work-area"] { position: relative; }
-@media (width >= 48rem) { :root[data-theme="neon"] aside[data-testid="sidebar"] { position: relative; } }
+:root[data-theme="neon"] [data-part="work-area"] { position: relative; }
+@media (width >= 48rem) { :root[data-theme="neon"] aside[data-part="sidebar"] { position: relative; } }
 /* Phone and narrow tablet: no backdrop blur on the tab chips either (GPU cost), a denser glass; far rain layer off (2 rain layers). */
 @media (width < 48rem) {
     :where(:root[data-theme="neon"]) { --neon-glass: color-mix(in srgb, var(--card) 90%, transparent); }
-    :root[data-theme="neon"] :is([data-testid="tab"], [data-testid="focus-tab"]) { backdrop-filter: none; -webkit-backdrop-filter: none; }
-    :root[data-theme="neon"] div:has(> header[data-testid="titlebar"])::before { display: none; }
+    :root[data-theme="neon"] :is([data-part="tab"], [data-part="focus-tab"]) { backdrop-filter: none; -webkit-backdrop-filter: none; }
+    :root[data-theme="neon"] div:has(> header[data-part="titlebar"])::before { display: none; }
 }
-:root[data-theme="neon"] [data-testid="work-area"]::after {
+:root[data-theme="neon"] [data-part="work-area"]::after {
     content: "";
     position: absolute;
     inset: 0;
@@ -380,10 +380,10 @@ html:root[data-theme="neon"]:not(.dark) {
     pointer-events: none;
     z-index: 1;
 }
-:root[data-theme="neon"]:not(.dark) [data-testid="work-area"]::after { background: repeating-linear-gradient(to bottom, transparent 0 2px, #0a1a2f 2px 3px); opacity: .025; }
+:root[data-theme="neon"]:not(.dark) [data-part="work-area"]::after { background: repeating-linear-gradient(to bottom, transparent 0 2px, #0a1a2f 2px 3px); opacity: .025; }
 
 /* ---------- Glass panels with cut corners (top-right, bottom-left) and corner brackets (top-left, bottom-right). ---------- */
-:root[data-theme="neon"] :where([data-testid="work-area"] .rounded-2xl.border.bg-card, aside[data-testid="sidebar"], .shadow-floating.border, [data-testid="prompt-box"], [data-testid="permission-panel"], [data-testid="question-panel"], [data-testid="user-message"] > .is-user > div) {
+:root[data-theme="neon"] :where([data-part="work-area"] .rounded-2xl.border.bg-card, aside[data-part="sidebar"], .shadow-floating.border, [data-part="prompt-box"], [data-part="permission-panel"], [data-part="question-panel"], [data-part="user-message"] > .is-user > div) {
     --nx-k: 14px;
     --nx-bl: 16px;
     --nx-d: calc(var(--nx-k) * .7071);
@@ -402,19 +402,19 @@ html:root[data-theme="neon"]:not(.dark) {
         linear-gradient(225deg, transparent var(--nx-d), var(--nx-fill) calc(var(--nx-d) + .5px), var(--nx-fill) calc(100% - var(--nx-d) - .5px), transparent calc(100% - var(--nx-d))) padding-box;
 }
 /* Work-area panels and the sidebar: glass over the city. No backdrop blur here: the rain and the drift move under these panels every frame, so a blur of them is recomputed every frame (measured: rain lag). A denser fill instead. */
-:root[data-theme="neon"] :is([data-testid="work-area"] .rounded-2xl.border.bg-card, aside[data-testid="sidebar"]) {
+:root[data-theme="neon"] :is([data-part="work-area"] .rounded-2xl.border.bg-card, aside[data-part="sidebar"]) {
     box-shadow: inset 0 0 40px -18px #00e5ff40;
     /* Cut like the edge, so the blur and the inner glow do not show in the two cut triangles (an outer shadow would be cut away: none). */
     clip-path: polygon(0 0, calc(100% - var(--nx-k)) 0, 100% var(--nx-k), 100% 100%, var(--nx-k) 100%, 0 calc(100% - var(--nx-k)));
 }
-:root[data-theme="neon"]:not(.dark) :is([data-testid="work-area"] .rounded-2xl.border.bg-card, aside[data-testid="sidebar"]) {
+:root[data-theme="neon"]:not(.dark) :is([data-part="work-area"] .rounded-2xl.border.bg-card, aside[data-part="sidebar"]) {
     box-shadow: inset 0 1px 0 #ffffffb3, inset 0 0 40px -20px #007a8f33;
 }
-:root[data-theme="neon"] [data-testid="work-area"] .rounded-2xl.border.bg-card:not(.absolute, .fixed) { position: relative; }
+:root[data-theme="neon"] [data-part="work-area"] .rounded-2xl.border.bg-card:not(.absolute, .fixed) { position: relative; }
 /* Sidebar: a border of its own (padding 12px = 11px + 1px border, so nothing moves). */
-:root[data-theme="neon"] aside[data-testid="sidebar"] { border: 1px solid transparent; padding: 11px; --nx-k: 18px; }
+:root[data-theme="neon"] aside[data-part="sidebar"] { border: 1px solid transparent; padding: 11px; --nx-k: 18px; }
 /* A panel with a running session: edge turns magenta. */
-:root[data-theme="neon"] [data-testid="work-area"] .rounded-2xl.border.bg-card:has([data-testid="thinking"], [data-testid="tool-card"][data-status="running"]) { --nx-line: color-mix(in srgb, var(--nx-pink) 55%, transparent); }
+:root[data-theme="neon"] [data-part="work-area"] .rounded-2xl.border.bg-card:has([data-part="thinking"], [data-part="tool-card"][data-status="running"]) { --nx-line: color-mix(in srgb, var(--nx-pink) 55%, transparent); }
 /* Popups, menus, dialogs, palette: opaque. */
 :root[data-theme="neon"] .shadow-floating.border { --nx-fill: var(--nx-solid); --nx-k: 16px; --nx-line: var(--nx-edge-hi); }
 :root[data-theme="neon"] .shadow-floating.border.w-\(--anchor-width\),
@@ -429,12 +429,12 @@ html:root[data-theme="neon"]:not(.dark) {
     background-repeat: no-repeat;
 }
 /* Prompt box. */
-:root[data-theme="neon"] [data-testid="prompt-box"] { --nx-k: 12px; --nx-bl: 14px; --nx-fill: color-mix(in srgb, var(--card) 92%, transparent); transition: box-shadow .25s ease; box-shadow: 0 0 18px -10px #00e5ff40; }
-:root[data-theme="neon"] [data-testid="prompt-box"]:focus-within { --nx-line: var(--nx-edge-hi); box-shadow: 0 0 22px -6px var(--nx-glow), 0 0 50px -20px var(--nx-pink); }
-:root[data-theme="neon"]:not(.dark) [data-testid="prompt-box"] { box-shadow: 0 6px 18px -10px #007a8f4d; }
-:root[data-theme="neon"]:not(.dark) [data-testid="prompt-box"]:focus-within { box-shadow: 0 10px 26px -10px #007a8f80, 0 0 0 1px #007a8f1f; }
+:root[data-theme="neon"] [data-part="prompt-box"] { --nx-k: 12px; --nx-bl: 14px; --nx-fill: color-mix(in srgb, var(--card) 92%, transparent); transition: box-shadow .25s ease; box-shadow: 0 0 18px -10px #00e5ff40; }
+:root[data-theme="neon"] [data-part="prompt-box"]:focus-within { --nx-line: var(--nx-edge-hi); box-shadow: 0 0 22px -6px var(--nx-glow), 0 0 50px -20px var(--nx-pink); }
+:root[data-theme="neon"]:not(.dark) [data-part="prompt-box"] { box-shadow: 0 6px 18px -10px #007a8f4d; }
+:root[data-theme="neon"]:not(.dark) [data-part="prompt-box"]:focus-within { box-shadow: 0 10px 26px -10px #007a8f80, 0 0 0 1px #007a8f1f; }
 /* Rotating conic border, cut like the box. */
-:root[data-theme="neon"] [data-testid="prompt-box"]::before {
+:root[data-theme="neon"] [data-part="prompt-box"]::before {
     content: "";
     position: absolute;
     inset: 0;
@@ -448,21 +448,21 @@ html:root[data-theme="neon"]:not(.dark) {
     transition: opacity .25s ease;
     pointer-events: none;
 }
-:root[data-theme="neon"] [data-testid="prompt-box"]:focus-within::before { opacity: 1; }
-:root[data-theme="neon"] [data-testid="prompt-box"] textarea { font-family: inherit; }
-:root[data-theme="neon"] [data-testid="prompt-box"] textarea::placeholder { color: var(--muted-foreground); }
-:root[data-theme="neon"] [data-testid="markdown-toolbar"] { box-shadow: inset 0 -1px 0 var(--border); padding-bottom: 0; }
-:root[data-theme="neon"] [data-testid="prompt-toolbar"] { background: linear-gradient(90deg, var(--nx-tint), transparent 60%); }
+:root[data-theme="neon"] [data-part="prompt-box"]:focus-within::before { opacity: 1; }
+:root[data-theme="neon"] [data-part="prompt-box"] textarea { font-family: inherit; }
+:root[data-theme="neon"] [data-part="prompt-box"] textarea::placeholder { color: var(--muted-foreground); }
+:root[data-theme="neon"] [data-part="markdown-toolbar"] { box-shadow: inset 0 -1px 0 var(--border); padding-bottom: 0; }
+:root[data-theme="neon"] [data-part="prompt-toolbar"] { background: linear-gradient(90deg, var(--nx-tint), transparent 60%); }
 /* Permission / question panels: magenta alert edge, transparent footer. */
-:root[data-theme="neon"] :is([data-testid="permission-panel"], [data-testid="question-panel"]) { --nx-k: 14px; --nx-line: color-mix(in srgb, var(--nx-pink) 70%, transparent); --nx-hi: var(--nx-pink); --nx-fill: color-mix(in srgb, var(--card) 94%, var(--nx-pink)); box-shadow: 0 0 26px -8px color-mix(in srgb, var(--nx-pink) 60%, transparent); }
-:root[data-theme="neon"] :is([data-testid="permission-panel"], [data-testid="question-panel"]) > div:last-child { background: color-mix(in srgb, var(--nx-pink) 7%, transparent); border-top-color: color-mix(in srgb, var(--nx-pink) 35%, transparent); }
-:root[data-theme="neon"] :is([data-testid="permission-panel"], [data-testid="question-panel"]) pre { background: color-mix(in srgb, var(--background) 70%, transparent); border-left: 2px solid var(--nx-pink); border-radius: 0; }
+:root[data-theme="neon"] :is([data-part="permission-panel"], [data-part="question-panel"]) { --nx-k: 14px; --nx-line: color-mix(in srgb, var(--nx-pink) 70%, transparent); --nx-hi: var(--nx-pink); --nx-fill: color-mix(in srgb, var(--card) 94%, var(--nx-pink)); box-shadow: 0 0 26px -8px color-mix(in srgb, var(--nx-pink) 60%, transparent); }
+:root[data-theme="neon"] :is([data-part="permission-panel"], [data-part="question-panel"]) > div:last-child { background: color-mix(in srgb, var(--nx-pink) 7%, transparent); border-top-color: color-mix(in srgb, var(--nx-pink) 35%, transparent); }
+:root[data-theme="neon"] :is([data-part="permission-panel"], [data-part="question-panel"]) pre { background: color-mix(in srgb, var(--background) 70%, transparent); border-left: 2px solid var(--nx-pink); border-radius: 0; }
 /* User bubble: holo card. */
-:root[data-theme="neon"] [data-testid="user-message"] > .is-user > div { --nx-k: 10px; --nx-bl: 10px; --nx-fill: color-mix(in srgb, var(--card) 86%, var(--nx-cyan)); --nx-line: var(--nx-edge-hi); box-shadow: 0 0 18px -6px #00e5ff66; }
-:root[data-theme="neon"]:not(.dark) [data-testid="user-message"] > .is-user > div { --nx-fill: color-mix(in srgb, var(--card) 92%, var(--nx-cyan)); box-shadow: 0 6px 16px -8px #007a8f59; }
+:root[data-theme="neon"] [data-part="user-message"] > .is-user > div { --nx-k: 10px; --nx-bl: 10px; --nx-fill: color-mix(in srgb, var(--card) 86%, var(--nx-cyan)); --nx-line: var(--nx-edge-hi); box-shadow: 0 0 18px -6px #00e5ff66; }
+:root[data-theme="neon"]:not(.dark) [data-part="user-message"] > .is-user > div { --nx-fill: color-mix(in srgb, var(--card) 92%, var(--nx-cyan)); box-shadow: 0 6px 16px -8px #007a8f59; }
 
 /* ---------- Clip-cut small controls (top-right / bottom-left): tabs, rows, inputs, buttons. ---------- */
-:root[data-theme="neon"] :where([data-testid="tab"], [data-testid="focus-tab"], [data-testid="session-item"], [data-testid="focus-row-sidebar"], [data-testid="open-settings"], [data-testid="focus-row"], [data-testid="session-search"], [data-testid="commit-message"], label:has(> [data-testid="palette-input"]), [data-slot="button"].bg-primary, [data-testid="send"], [data-slot="select-trigger"], :is([data-pane-tab], [role="tab"][data-testid^="pane-"]), [data-slot="badge"], [data-slot="tooltip-content"], div:has(> [data-testid="terminal-tab"])) {
+:root[data-theme="neon"] :where([data-part="tab"], [data-part="focus-tab"], [data-part="session-item"], [data-testid="focus-row-sidebar"], [data-testid="open-settings"], [data-part="focus-row"], [data-part="session-search"], [data-part="commit-message"], label:has(> [data-testid="palette-input"]), [data-slot="button"].bg-primary, [data-part="send"], [data-slot="select-trigger"], :is([data-pane-tab], [role="tab"][data-testid^="pane-"]), [data-slot="badge"], [data-slot="tooltip-content"], div:has(> [data-part="terminal-tab"])) {
     --nx-k: 7px;
     --nx-ce: var(--nx-edge);
     --nx-dg: linear-gradient(to top right, transparent calc(50% - .8px), var(--nx-ce) calc(50% - .8px) calc(50% + .8px), transparent calc(50% + .8px));
@@ -470,7 +470,7 @@ html:root[data-theme="neon"]:not(.dark) {
     border-radius: 0;
 }
 /* Tabs: glass chips with an edge; separators hidden. `overflow: clip` (no scroll container) so the sweep and the glitch never add scrollable overflow to the tab strip. */
-:root[data-theme="neon"] :is([data-testid="tab"], [data-testid="focus-tab"]) {
+:root[data-theme="neon"] :is([data-part="tab"], [data-part="focus-tab"]) {
     overflow: clip;
     background-color: color-mix(in srgb, var(--card) 62%, transparent);
     background-image: var(--nx-dg), var(--nx-dg);
@@ -482,9 +482,9 @@ html:root[data-theme="neon"]:not(.dark) {
     -webkit-backdrop-filter: blur(6px);
     transition: box-shadow .2s ease, background-color .2s ease;
 }
-:root[data-theme="neon"] [data-testid="tab"]::before { display: none; }
-:root[data-theme="neon"] :is([data-testid="tab"], [data-testid="focus-tab"]):hover { --nx-ce: var(--nx-edge-hi); background-color: color-mix(in srgb, var(--card) 70%, var(--nx-cyan) 10%); box-shadow: inset 0 0 0 1px var(--nx-ce), inset 0 0 14px -6px var(--nx-glow); }
-:root[data-theme="neon"] :is([data-testid="tab"][data-active], [data-testid="focus-tab"]:has([aria-selected="true"])) {
+:root[data-theme="neon"] [data-part="tab"]::before { display: none; }
+:root[data-theme="neon"] :is([data-part="tab"], [data-part="focus-tab"]):hover { --nx-ce: var(--nx-edge-hi); background-color: color-mix(in srgb, var(--card) 70%, var(--nx-cyan) 10%); box-shadow: inset 0 0 0 1px var(--nx-ce), inset 0 0 14px -6px var(--nx-glow); }
+:root[data-theme="neon"] :is([data-part="tab"][data-active], [data-part="focus-tab"]:has([aria-selected="true"])) {
     --nx-ce: var(--nx-hi);
     background-color: color-mix(in srgb, var(--card) 70%, var(--nx-cyan) 16%);
     background-image: var(--nx-dg), var(--nx-dg), linear-gradient(var(--nx-hi) 0 0), linear-gradient(to bottom, transparent, color-mix(in srgb, var(--nx-cyan) 22%, transparent));
@@ -492,10 +492,10 @@ html:root[data-theme="neon"]:not(.dark) {
     background-position: top right, bottom left, bottom, 0 0;
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--nx-hi) 70%, transparent), inset 0 -10px 16px -10px var(--nx-glow), inset 0 0 18px -8px var(--nx-glow);
 }
-:root[data-theme="neon"]:not(.dark) :is([data-testid="tab"][data-active], [data-testid="focus-tab"]:has([aria-selected="true"])) { background-color: color-mix(in srgb, var(--card) 86%, var(--nx-cyan) 14%); }
-:root[data-theme="neon"] [data-testid="tab"][data-state="running"] { --nx-ce: color-mix(in srgb, var(--nx-pink) 60%, transparent); }
-:root[data-theme="neon"]:not(.dark) [data-testid="titlebar"] { --nx-tb: 72%; }
-:root[data-theme="neon"] [data-testid="titlebar"] {
+:root[data-theme="neon"]:not(.dark) :is([data-part="tab"][data-active], [data-part="focus-tab"]:has([aria-selected="true"])) { background-color: color-mix(in srgb, var(--card) 86%, var(--nx-cyan) 14%); }
+:root[data-theme="neon"] [data-part="tab"][data-state="running"] { --nx-ce: color-mix(in srgb, var(--nx-pink) 60%, transparent); }
+:root[data-theme="neon"]:not(.dark) [data-part="titlebar"] { --nx-tb: 72%; }
+:root[data-theme="neon"] [data-part="titlebar"] {
     background: linear-gradient(90deg, transparent, var(--nx-edge-hi) 20%, color-mix(in srgb, var(--nx-pink) 60%, transparent) 60%, transparent) bottom / 100% 1px no-repeat, color-mix(in srgb, var(--background) var(--nx-tb, 62%), transparent);
 }
 /* Icon buttons (titlebar, sidebar, panes). */
@@ -511,7 +511,7 @@ html:root[data-theme="neon"]:not(.dark) {
 :root[data-theme="neon"] :is(button.grid:is(.size-7, .size-6), [data-slot="button"]:not(.bg-primary)):not(:disabled):hover svg { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--nx-glow) 70%, transparent)); }
 
 /* Sidebar rows. */
-:root[data-theme="neon"] :is([data-testid="session-item"], [data-testid="focus-row-sidebar"], [data-testid="open-settings"], [data-testid="focus-row"]) {
+:root[data-theme="neon"] :is([data-part="session-item"], [data-testid="focus-row-sidebar"], [data-testid="open-settings"], [data-part="focus-row"]) {
     --nx-k: 8px;
     --nx-ce: transparent;
     position: relative;
@@ -521,12 +521,12 @@ html:root[data-theme="neon"]:not(.dark) {
     background-repeat: no-repeat;
     transition: box-shadow .2s ease, background-color .2s ease;
 }
-:root[data-theme="neon"] :is([data-testid="session-item"], [data-testid="focus-row-sidebar"], [data-testid="open-settings"], [data-testid="focus-row"]):hover {
+:root[data-theme="neon"] :is([data-part="session-item"], [data-testid="focus-row-sidebar"], [data-testid="open-settings"], [data-part="focus-row"]):hover {
     --nx-ce: var(--nx-edge);
     background-color: var(--nx-tint);
     box-shadow: inset 0 0 0 1px var(--nx-edge);
 }
-:root[data-theme="neon"] :is([data-testid="session-item"][aria-current="page"], [data-testid="focus-row"][aria-current="true"]) {
+:root[data-theme="neon"] :is([data-part="session-item"][aria-current="page"], [data-part="focus-row"][aria-current="true"]) {
     --nx-ce: var(--nx-hi);
     background-color: transparent;
     background-image: var(--nx-dg), var(--nx-dg), linear-gradient(90deg, color-mix(in srgb, var(--nx-cyan) 14%, transparent), color-mix(in srgb, var(--nx-cyan) 4%, transparent) 70%, transparent);
@@ -534,7 +534,7 @@ html:root[data-theme="neon"]:not(.dark) {
     background-position: top right, bottom left, 0 0;
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--nx-hi) 60%, transparent), inset 0 0 18px -8px var(--nx-glow);
 }
-:root[data-theme="neon"] :is([data-testid="session-item"][aria-current="page"], [data-testid="focus-row"][aria-current="true"])::before {
+:root[data-theme="neon"] :is([data-part="session-item"][aria-current="page"], [data-part="focus-row"][aria-current="true"])::before {
     content: "";
     position: absolute;
     left: 0;
@@ -545,12 +545,12 @@ html:root[data-theme="neon"]:not(.dark) {
     box-shadow: 0 0 8px var(--nx-glow), 0 0 2px var(--nx-glow);
     pointer-events: none;
 }
-:root[data-theme="neon"].dark [data-testid="session-item"][data-state="running"] > span.truncate,
-:root[data-theme="neon"].dark [data-testid="session-item"][data-state="needs_input"] > span.truncate { text-shadow: 0 0 10px color-mix(in srgb, var(--nx-pink) 55%, transparent); }
-:root[data-theme="neon"] [data-testid="group-toggle"] { border-radius: 0; background: linear-gradient(90deg, var(--nx-edge), transparent 80%) bottom / 100% 1px no-repeat; }
-:root[data-theme="neon"] [data-testid="group-toggle"] > span:first-child { border-radius: 0; box-shadow: 0 0 0 1px var(--nx-edge-hi), 0 0 8px -2px var(--nx-glow); }
+:root[data-theme="neon"].dark [data-part="session-item"][data-state="running"] > span.truncate,
+:root[data-theme="neon"].dark [data-part="session-item"][data-state="needs_input"] > span.truncate { text-shadow: 0 0 10px color-mix(in srgb, var(--nx-pink) 55%, transparent); }
+:root[data-theme="neon"] [data-part="group-toggle"] { border-radius: 0; background: linear-gradient(90deg, var(--nx-edge), transparent 80%) bottom / 100% 1px no-repeat; }
+:root[data-theme="neon"] [data-part="group-toggle"] > span:first-child { border-radius: 0; box-shadow: 0 0 0 1px var(--nx-edge-hi), 0 0 8px -2px var(--nx-glow); }
 /* Inputs: cut corners, cyan edge, glow on focus. */
-:root[data-theme="neon"] :is([data-testid="session-search"], [data-testid="commit-message"], label:has(> [data-testid="palette-input"])) {
+:root[data-theme="neon"] :is([data-part="session-search"], [data-part="commit-message"], label:has(> [data-testid="palette-input"])) {
     --nx-ce: var(--nx-edge);
     background-color: color-mix(in srgb, var(--background) 55%, transparent);
     background-image: var(--nx-dg), var(--nx-dg);
@@ -559,7 +559,7 @@ html:root[data-theme="neon"]:not(.dark) {
     background-repeat: no-repeat;
     box-shadow: inset 0 0 0 1px var(--nx-ce);
 }
-:root[data-theme="neon"] :is([data-testid="session-search"], [data-testid="commit-message"], label:has(> [data-testid="palette-input"])):is(:focus, :focus-within) { --nx-ce: var(--nx-hi); box-shadow: inset 0 0 0 1px var(--nx-hi), inset 0 0 14px -6px var(--nx-glow); }
+:root[data-theme="neon"] :is([data-part="session-search"], [data-part="commit-message"], label:has(> [data-testid="palette-input"])):is(:focus, :focus-within) { --nx-ce: var(--nx-hi); box-shadow: inset 0 0 0 1px var(--nx-hi), inset 0 0 14px -6px var(--nx-glow); }
 :root[data-theme="neon"] :is(input:not([type="checkbox"], [type="radio"], [type="range"]), textarea, select):focus-visible { outline-color: var(--nx-hi); }
 :root[data-theme="neon"] :is(input:not([type]), input[type="text"], input[type="search"], input[type="number"], input[type="url"], input[type="password"], textarea).border { border-radius: 0; border-color: var(--nx-edge); background-color: color-mix(in srgb, var(--background) 45%, transparent); }
 :root[data-theme="neon"] :is(input:not([type]), input[type="text"], input[type="search"], input[type="number"], input[type="url"], input[type="password"], textarea).border:focus { border-color: var(--nx-hi); box-shadow: 0 0 0 1px var(--nx-edge), 0 0 12px -4px var(--nx-glow); }
@@ -570,7 +570,7 @@ html:root[data-theme="neon"]:not(.dark) {
 :root[data-theme="neon"] [data-slot="button"].dark\:border-input { border-color: var(--nx-edge); background-color: color-mix(in srgb, var(--nx-cyan) 6%, transparent); }
 :root[data-theme="neon"] [data-slot="button"].border-border:not(:disabled):hover,
 :root[data-theme="neon"] [data-slot="button"].dark\:border-input:not(:disabled):hover { border-color: var(--nx-hi); background-color: var(--nx-tint-hi); box-shadow: 0 0 14px -4px var(--nx-glow); }
-:root[data-theme="neon"] :is([data-slot="button"].bg-primary, [data-testid="send"]) {
+:root[data-theme="neon"] :is([data-slot="button"].bg-primary, [data-part="send"]) {
     --nx-k: 6px;
     --nx-ce: transparent;
     background-clip: border-box;
@@ -583,12 +583,12 @@ html:root[data-theme="neon"]:not(.dark) {
     font-weight: 600;
     box-shadow: inset 0 0 0 1px #ffffff40, inset 0 -6px 12px -6px #00000059;
 }
-:root[data-theme="neon"] :is([data-slot="button"].bg-primary, [data-testid="send"]):not(:disabled):hover { background-color: color-mix(in srgb, var(--primary) 85%, #ffffff); }
-:root[data-theme="neon"]:not(.dark) :is([data-slot="button"].bg-primary, [data-testid="send"]):not(:disabled):hover { background-color: color-mix(in srgb, var(--primary) 88%, #000000); }
+:root[data-theme="neon"] :is([data-slot="button"].bg-primary, [data-part="send"]):not(:disabled):hover { background-color: color-mix(in srgb, var(--primary) 85%, #ffffff); }
+:root[data-theme="neon"]:not(.dark) :is([data-slot="button"].bg-primary, [data-part="send"]):not(:disabled):hover { background-color: color-mix(in srgb, var(--primary) 88%, #000000); }
 /* Glow around the cut send / primary buttons: drop-shadow on the wrapper (clip-path would clip a box-shadow). */
-:root[data-theme="neon"] [data-testid="prompt-toolbar"] > div:last-child,
+:root[data-theme="neon"] [data-part="prompt-toolbar"] > div:last-child,
 :root[data-theme="neon"] :has(> [data-slot="button"].bg-primary) { filter: drop-shadow(0 0 6px color-mix(in srgb, var(--nx-glow) 55%, transparent)); }
-:root[data-theme="neon"]:not(.dark) [data-testid="prompt-toolbar"] > div:last-child,
+:root[data-theme="neon"]:not(.dark) [data-part="prompt-toolbar"] > div:last-child,
 :root[data-theme="neon"]:not(.dark) :has(> [data-slot="button"].bg-primary) { filter: drop-shadow(0 3px 5px color-mix(in srgb, var(--nx-glow) 40%, transparent)); }
 :root[data-theme="neon"] [data-slot="button"].bg-destructive\/10 { border-color: color-mix(in srgb, var(--destructive) 40%, transparent); }
 /* Selects: mode / model / diff mode. */
@@ -629,20 +629,20 @@ html:root[data-theme="neon"]:not(.dark) {
 :root[data-theme="neon"] [role="tablist"][aria-label] > button[role="tab"]:not([data-testid]) { border-radius: 0; }
 
 /* ---------- HUD labels: uppercase mono, letter-spaced. ---------- */
-:root[data-theme="neon"] :is(aside[data-testid="sidebar"] h2, [data-testid="day-header"], [data-testid="connection-status"], [data-testid="status-bar"], section[data-testid^="settings-"] > h3, [data-slot="select-label"], [data-testid="focus-subtitle"], [data-testid="commit-count"], [data-testid="file-position"], [data-testid="palette-meta"], [role="group"] > [role="presentation"], [id^="settings-category-"]) {
+:root[data-theme="neon"] :is(aside[data-part="sidebar"] h2, [data-part="day-header"], [data-testid="connection-status"], [data-part="status-bar"], section[data-testid^="settings-"] > h3, [data-slot="select-label"], [data-testid="focus-subtitle"], [data-testid="commit-count"], [data-testid="file-position"], [data-testid="palette-meta"], [role="group"] > [role="presentation"], [id^="settings-category-"]) {
     font-family: var(--nx-mono);
     text-transform: uppercase;
     letter-spacing: .14em;
     font-size: 10.5px;
 }
-:root[data-theme="neon"] aside[data-testid="sidebar"] h2 { color: var(--primary); text-shadow: 0 0 8px color-mix(in srgb, var(--nx-glow) 55%, transparent); }
-:root[data-theme="neon"] aside[data-testid="sidebar"] h2::before,
+:root[data-theme="neon"] aside[data-part="sidebar"] h2 { color: var(--primary); text-shadow: 0 0 8px color-mix(in srgb, var(--nx-glow) 55%, transparent); }
+:root[data-theme="neon"] aside[data-part="sidebar"] h2::before,
 :root[data-theme="neon"] section[data-testid^="settings-"] > h3::before { content: "// "; color: var(--nx-pink); }
-:root[data-theme="neon"] [data-testid="day-header"] { color: var(--muted-foreground); }
-:root[data-theme="neon"] [data-testid="day-header"]::after { content: ""; flex: 1; height: 1px; margin-left: 8px; background: linear-gradient(90deg, var(--nx-edge), transparent); }
+:root[data-theme="neon"] [data-part="day-header"] { color: var(--muted-foreground); }
+:root[data-theme="neon"] [data-part="day-header"]::after { content: ""; flex: 1; height: 1px; margin-left: 8px; background: linear-gradient(90deg, var(--nx-edge), transparent); }
 :root[data-theme="neon"] section[data-testid^="settings-"] > h3 { color: var(--primary); }
-:root[data-theme="neon"] [data-testid="session-header"] { background: linear-gradient(90deg, var(--nx-tint-hi), transparent 50%); border-bottom-color: var(--nx-edge); }
-:root[data-theme="neon"] [data-testid="session-header"] > span:last-child { font-family: var(--nx-mono); font-size: 11px; letter-spacing: .06em; }
+:root[data-theme="neon"] [data-part="session-header"] { background: linear-gradient(90deg, var(--nx-tint-hi), transparent 50%); border-bottom-color: var(--nx-edge); }
+:root[data-theme="neon"] [data-part="session-header"] > span:last-child { font-family: var(--nx-mono); font-size: 11px; letter-spacing: .06em; }
 :root[data-theme="neon"] [data-testid="session-project"] { font-family: var(--nx-mono); text-transform: uppercase; letter-spacing: .12em; font-size: 12px; color: var(--primary); }
 :root[data-theme="neon"].dark :is([data-testid="session-project"], .shadow-floating h2, [data-testid="focus-title"], h1) {
     text-shadow: -1px 0 color-mix(in srgb, var(--nx-pink) 65%, transparent), 1px 0 color-mix(in srgb, var(--nx-cyan) 65%, transparent), 0 0 12px color-mix(in srgb, var(--nx-cyan) 45%, transparent);
@@ -653,8 +653,8 @@ html:root[data-theme="neon"]:not(.dark) {
 :root[data-theme="neon"] [data-testid="connection-status"] > span[aria-hidden] { border-radius: 0; transform: rotate(45deg) scale(.85); box-shadow: 0 0 6px var(--success); }
 
 /* ---------- Timeline. ---------- */
-:root[data-theme="neon"] [data-testid="assistant-text"] { position: relative; }
-:root[data-theme="neon"] [data-testid="assistant-text"]::before {
+:root[data-theme="neon"] [data-part="assistant-text"] { position: relative; }
+:root[data-theme="neon"] [data-part="assistant-text"]::before {
     content: "";
     position: absolute;
     left: -12px;
@@ -665,9 +665,9 @@ html:root[data-theme="neon"]:not(.dark) {
     box-shadow: 0 0 8px color-mix(in srgb, var(--nx-pink) 50%, transparent);
     pointer-events: none;
 }
-:root[data-theme="neon"] [data-testid="assistant-text"] strong,
-:root[data-theme="neon"] [data-testid="assistant-text"] [data-streamdown="strong"] { color: var(--primary); }
-:root[data-theme="neon"] [data-testid="assistant-text"] a { color: var(--primary); text-shadow: 0 0 8px color-mix(in srgb, var(--nx-glow) 40%, transparent); }
+:root[data-theme="neon"] [data-part="assistant-text"] strong,
+:root[data-theme="neon"] [data-part="assistant-text"] [data-streamdown="strong"] { color: var(--primary); }
+:root[data-theme="neon"] [data-part="assistant-text"] a { color: var(--primary); text-shadow: 0 0 8px color-mix(in srgb, var(--nx-glow) 40%, transparent); }
 :root[data-theme="neon"] .timeline :is(h1, h2, h3, h4) { font-family: var(--nx-mono); text-transform: uppercase; letter-spacing: .1em; color: var(--primary); }
 :root[data-theme="neon"] .timeline :is(code, button.font-mono).bg-muted,
 :root[data-theme="neon"] .timeline :not(pre) > code { border-radius: 0; background: var(--nx-tint); box-shadow: inset 0 0 0 1px var(--nx-edge); color: var(--primary); }
@@ -703,8 +703,8 @@ html:root[data-theme="neon"]:not(.dark) {
 :root[data-theme="neon"] [data-streamdown="code-block"] code span[style*="#586069" i] { --sdm-c: var(--muted-foreground) !important; --shiki-dark: var(--muted-foreground) !important; }
 :root[data-theme="neon"] [data-streamdown="code-block"] code span[style*="#735c0f" i] { --sdm-c: var(--warning) !important; --shiki-dark: var(--warning) !important; }
 /* Tool rows: left accent line; tool name as a HUD tag. */
-:root[data-theme="neon"] [data-testid="tool-card"] { position: relative; }
-:root[data-theme="neon"] [data-testid="tool-card"]::before {
+:root[data-theme="neon"] [data-part="tool-card"] { position: relative; }
+:root[data-theme="neon"] [data-part="tool-card"]::before {
     content: "";
     position: absolute;
     left: -12px;
@@ -716,21 +716,21 @@ html:root[data-theme="neon"]:not(.dark) {
     opacity: .75;
     pointer-events: none;
 }
-:root[data-theme="neon"] [data-testid="tool-card"][data-status="running"]::before { background: var(--nx-pink); box-shadow: 0 0 8px var(--nx-pink); }
-:root[data-theme="neon"] [data-testid="tool-card"][data-status="error"]::before { background: var(--destructive); box-shadow: 0 0 8px var(--destructive); }
-:root[data-theme="neon"] [data-testid="tool-card"] [data-slot="collapsible-trigger"] { border-radius: 0; }
-:root[data-theme="neon"] [data-testid="tool-card"] [data-slot="collapsible-trigger"]:hover { background: linear-gradient(90deg, var(--nx-tint-hi), transparent 80%); }
-:root[data-theme="neon"] [data-testid="tool-card"] [data-slot="collapsible-trigger"] > span.font-medium:first-child {
+:root[data-theme="neon"] [data-part="tool-card"][data-status="running"]::before { background: var(--nx-pink); box-shadow: 0 0 8px var(--nx-pink); }
+:root[data-theme="neon"] [data-part="tool-card"][data-status="error"]::before { background: var(--destructive); box-shadow: 0 0 8px var(--destructive); }
+:root[data-theme="neon"] [data-part="tool-card"] [data-slot="collapsible-trigger"] { border-radius: 0; }
+:root[data-theme="neon"] [data-part="tool-card"] [data-slot="collapsible-trigger"]:hover { background: linear-gradient(90deg, var(--nx-tint-hi), transparent 80%); }
+:root[data-theme="neon"] [data-part="tool-card"] [data-slot="collapsible-trigger"] > span.font-medium:first-child {
     font-family: var(--nx-mono);
     text-transform: uppercase;
     letter-spacing: .12em;
     font-size: 11px;
     color: var(--primary);
 }
-:root[data-theme="neon"] [data-testid="tool-card"] [data-state="output-available"] { color: var(--success); filter: drop-shadow(0 0 4px color-mix(in srgb, var(--success) 60%, transparent)); }
+:root[data-theme="neon"] [data-part="tool-card"] [data-state="output-available"] { color: var(--success); filter: drop-shadow(0 0 4px color-mix(in srgb, var(--success) 60%, transparent)); }
 /* Thinking. */
-:root[data-theme="neon"] [data-testid="thinking"] { position: relative; width: fit-content; padding-right: 14px; background: linear-gradient(90deg, color-mix(in srgb, var(--nx-pink) 12%, transparent), transparent 40%); }
-:root[data-theme="neon"] [data-testid="thinking"]::before {
+:root[data-theme="neon"] [data-part="thinking"] { position: relative; width: fit-content; padding-right: 14px; background: linear-gradient(90deg, color-mix(in srgb, var(--nx-pink) 12%, transparent), transparent 40%); }
+:root[data-theme="neon"] [data-part="thinking"]::before {
     content: "";
     position: absolute;
     left: -12px;
@@ -741,7 +741,7 @@ html:root[data-theme="neon"]:not(.dark) {
     box-shadow: 0 0 8px var(--nx-pink);
     pointer-events: none;
 }
-:root[data-theme="neon"] [data-testid="thinking"] > span { font-family: var(--nx-mono); text-transform: uppercase; letter-spacing: .14em; font-size: 11px; }
+:root[data-theme="neon"] [data-part="thinking"] > span { font-family: var(--nx-mono); text-transform: uppercase; letter-spacing: .14em; font-size: 11px; }
 /* ---------- Loading indicator: Chrome HUD target. ---------- */
 /* Every spinner (lucide loader / any spinning svg): amber corner brackets that breathe and turn (2.8 s) around a pulsing core ring and dot (SMIL inside the
    image: an svg has no ::before). Icon sizes (12-22 px): no dashed outer ring, strokes thickened so the glyph reads. The svg keeps its box (no layout shift),
@@ -769,13 +769,13 @@ html:root[data-theme="neon"]:not(.dark) {
 :root[data-theme="neon"] svg:is([class*="animate-spin"], .lucide-loader-circle) > * { display: none; }
 :root[data-theme="neon"] svg:is([class*="animate-spin"], .lucide-loader-circle).absolute { background-image: var(--nx-target-frame); }
 /* Done (a tool row's spinner turns into its check): green brackets at rest around a diamond with the check; it pops in once with a shockwave ring. */
-:root[data-theme="neon"] [data-testid="tool-card"] span[data-state="output-available"] { position: relative; }
-:root[data-theme="neon"] [data-testid="tool-card"] span[data-state="output-available"] > svg.lucide-check { background: var(--nx-target-done) center / contain no-repeat; }
-:root[data-theme="neon"] [data-testid="tool-card"] span[data-state="output-available"] > svg.lucide-check > * { display: none; }
+:root[data-theme="neon"] [data-part="tool-card"] span[data-state="output-available"] { position: relative; }
+:root[data-theme="neon"] [data-part="tool-card"] span[data-state="output-available"] > svg.lucide-check { background: var(--nx-target-done) center / contain no-repeat; }
+:root[data-theme="neon"] [data-part="tool-card"] span[data-state="output-available"] > svg.lucide-check > * { display: none; }
 /* Thinking chip: the target before the label; the label rotates through HUD phrases (CSS content; the element keeps its own text), amber, mono, bold. */
-:root[data-theme="neon"] [data-testid="thinking"] { padding-left: 24px; background: var(--nx-target) 5px center / 15px 15px no-repeat, linear-gradient(90deg, color-mix(in srgb, var(--nx-pink) 12%, transparent), transparent 40%); }
-:root[data-theme="neon"] [data-testid="thinking"] > span { --color-muted-foreground: var(--nx-load); --muted-foreground: var(--nx-load); font-size: 0 !important; }
-:root[data-theme="neon"] [data-testid="thinking"] > span::after { content: "SYNCING NEURAL CORTEX..."; font-family: var(--nx-mono); font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+:root[data-theme="neon"] [data-part="thinking"] { padding-left: 24px; background: var(--nx-target) 5px center / 15px 15px no-repeat, linear-gradient(90deg, color-mix(in srgb, var(--nx-pink) 12%, transparent), transparent 40%); }
+:root[data-theme="neon"] [data-part="thinking"] > span { --color-muted-foreground: var(--nx-load); --muted-foreground: var(--nx-load); font-size: 0 !important; }
+:root[data-theme="neon"] [data-part="thinking"] > span::after { content: "SYNCING NEURAL CORTEX..."; font-family: var(--nx-mono); font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
 @media (prefers-reduced-motion: no-preference) {
     @keyframes nx-words {
         0%, 9.99% { content: "SYNCING NEURAL CORTEX..."; }
@@ -791,9 +791,9 @@ html:root[data-theme="neon"]:not(.dark) {
     }
     @keyframes nx-done-pop { from { transform: scale(.4); opacity: 0; } to { transform: none; opacity: 1; } }
     @keyframes nx-shock { from { transform: scale(.35); opacity: .95; } to { transform: scale(1.42); opacity: 0; } }
-    :root[data-theme="neon"] [data-testid="thinking"] > span::after { animation: nx-words 30s steps(1, end) infinite; }
-    :root[data-theme="neon"] [data-testid="tool-card"] span[data-state="output-available"] > svg.lucide-check { animation: nx-done-pop .45s cubic-bezier(.175, .885, .32, 1.275) both; }
-    :root[data-theme="neon"] [data-testid="tool-card"] span[data-state="output-available"]::after {
+    :root[data-theme="neon"] [data-part="thinking"] > span::after { animation: nx-words 30s steps(1, end) infinite; }
+    :root[data-theme="neon"] [data-part="tool-card"] span[data-state="output-available"] > svg.lucide-check { animation: nx-done-pop .45s cubic-bezier(.175, .885, .32, 1.275) both; }
+    :root[data-theme="neon"] [data-part="tool-card"] span[data-state="output-available"]::after {
         content: "";
         position: absolute;
         inset: 0;
@@ -809,11 +809,11 @@ html:root[data-theme="neon"]:not(.dark) {
 @media (prefers-reduced-motion: reduce) {
     :root[data-theme="neon"] svg:is([class*="animate-spin"], .lucide-loader-circle) { background-image: var(--nx-target-still); }
     :root[data-theme="neon"] svg:is([class*="animate-spin"], .lucide-loader-circle).absolute { background-image: var(--nx-target-frame-still); }
-    :root[data-theme="neon"] [data-testid="thinking"] { background-image: var(--nx-target-still), linear-gradient(90deg, color-mix(in srgb, var(--nx-pink) 12%, transparent), transparent 40%); }
+    :root[data-theme="neon"] [data-part="thinking"] { background-image: var(--nx-target-still), linear-gradient(90deg, color-mix(in srgb, var(--nx-pink) 12%, transparent), transparent 40%); }
 }
 
 /* Jump-to-latest chip, day chip. */
-:root[data-theme="neon"] [data-testid="scroll-to-bottom"] { border-radius: 0; color: var(--primary); --tw-ring-color: var(--nx-edge-hi); box-shadow: 0 0 0 1px var(--nx-edge-hi), 0 0 12px -2px var(--nx-glow); }
+:root[data-theme="neon"] [data-part="scroll-to-bottom"] { border-radius: 0; color: var(--primary); --tw-ring-color: var(--nx-edge-hi); box-shadow: 0 0 0 1px var(--nx-edge-hi), 0 0 12px -2px var(--nx-glow); }
 
 /* ---------- Popups: items, overlay, tooltips, toasts, kbd, badges. ---------- */
 :root[data-theme="neon"] :is([role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], [data-slot="select-item"]) { border-radius: 0; }
@@ -824,12 +824,12 @@ html:root[data-theme="neon"]:not(.dark) {
 }
 :root[data-theme="neon"] [data-testid="commit-row"][aria-selected="true"],
 :root[data-theme="neon"] [data-testid="tree-entry"][aria-selected="true"],
-:root[data-theme="neon"] [data-testid="changed-file"][aria-selected="true"],
-:root[data-theme="neon"] [data-testid="changed-file"]:is([aria-current="true"], [aria-current="page"]) {
+:root[data-theme="neon"] [data-part="changed-file"][aria-selected="true"],
+:root[data-theme="neon"] [data-part="changed-file"]:is([aria-current="true"], [aria-current="page"]) {
     background: linear-gradient(90deg, color-mix(in srgb, var(--nx-cyan) 20%, transparent), transparent);
     box-shadow: inset 2px 0 0 var(--nx-hi);
 }
-:root[data-theme="neon"] :is([data-testid="tree-entry"], [data-testid="commit-row"], [data-testid="changed-file"]):hover { background: linear-gradient(90deg, var(--nx-tint-hi), transparent 85%); }
+:root[data-theme="neon"] :is([data-testid="tree-entry"], [data-testid="commit-row"], [data-part="changed-file"]):hover { background: linear-gradient(90deg, var(--nx-tint-hi), transparent 85%); }
 :root[data-theme="neon"] .bg-overlay {
     background-color: var(--overlay);
     background-image: linear-gradient(var(--nx-tint) 1px, transparent 1px), linear-gradient(90deg, var(--nx-tint) 1px, transparent 1px);
@@ -854,7 +854,7 @@ html:root[data-theme="neon"]:not(.dark) {
 :root[data-theme="neon"] :has(> [data-slot="tooltip-content"]) { filter: drop-shadow(0 0 6px color-mix(in srgb, var(--nx-glow) 45%, transparent)); }
 /* The arrow sits outside the cut box: hidden. */
 :root[data-theme="neon"] [data-slot="tooltip-content"] > [class*="rotate-45"] { display: none; }
-:root[data-theme="neon"] [data-testid="toast-region"] > * { box-shadow: inset 3px 0 0 var(--nx-hi), var(--elevation-floating); }
+:root[data-theme="neon"] [data-part="toast-region"] > * { box-shadow: inset 3px 0 0 var(--nx-hi), var(--elevation-floating); }
 :root[data-theme="neon"] kbd {
     border-radius: 0;
     font-family: var(--nx-mono);
@@ -890,30 +890,30 @@ html:root[data-theme="neon"]:not(.dark) {
 :root[data-theme="neon"] :focus-visible { outline-color: var(--nx-hi); }
 
 /* ---------- Side panes: changes, files, graph, focus, terminal, diffs, editor. ---------- */
-:root[data-theme="neon"] [data-testid="side-panel"] > div:first-child { background: linear-gradient(90deg, var(--nx-tint-hi), transparent 70%); border-bottom-color: var(--nx-edge); }
-:root[data-theme="neon"] :is([data-testid="changes-panel"], [data-testid="graph-panel"], [data-testid="files-panel"]) .border-b { border-bottom-color: var(--nx-edge); }
+:root[data-theme="neon"] [data-part="side-panel"] > div:first-child { background: linear-gradient(90deg, var(--nx-tint-hi), transparent 70%); border-bottom-color: var(--nx-edge); }
+:root[data-theme="neon"] :is([data-testid="changes-panel"], [data-part="graph-panel"], [data-part="files-panel"]) .border-b { border-bottom-color: var(--nx-edge); }
 :root[data-theme="neon"] [data-testid="file-diff-header"] { font-family: var(--nx-mono); font-size: 11.5px; background: linear-gradient(90deg, var(--nx-tint-hi), color-mix(in srgb, var(--card) 85%, transparent) 60%); border-color: var(--nx-edge); }
-:root[data-theme="neon"] [data-testid="file-diff"] { border-color: var(--nx-edge); border-radius: 0; }
+:root[data-theme="neon"] [data-part="file-diff"] { border-color: var(--nx-edge); border-radius: 0; }
 :root[data-theme="neon"] [data-testid="changes-list-view"] { font-family: var(--nx-mono); }
 :root[data-theme="neon"] [role="group"].bg-secondary { border-radius: 0; background: var(--nx-tint); box-shadow: inset 0 0 0 1px var(--nx-edge); }
 :root[data-theme="neon"] [role="group"].bg-secondary > [aria-pressed="true"] { background: var(--nx-tint-hi); color: var(--primary); box-shadow: inset 0 0 0 1px var(--nx-hi), 0 0 10px -3px var(--nx-glow); }
-:root[data-theme="neon"] [data-testid="file-tree"] [data-testid="tree-entry"] { border-radius: 0; }
+:root[data-theme="neon"] [data-part="file-tree"] [data-testid="tree-entry"] { border-radius: 0; }
 :root[data-theme="neon"] [data-testid="commit-graph"] svg,
 :root[data-theme="neon"] [data-testid="commit-list"] svg :is(path, circle) { filter: drop-shadow(0 0 2px currentColor); }
-:root[data-theme="neon"] [data-testid="focus-queue"] { border-right-color: var(--nx-edge); background: linear-gradient(to bottom, var(--nx-tint), transparent 40%); }
-:root[data-theme="neon"] [data-testid="focus-page"] > div:first-child { background: linear-gradient(90deg, var(--nx-tint-hi), transparent 60%); }
+:root[data-theme="neon"] [data-part="focus-queue"] { border-right-color: var(--nx-edge); background: linear-gradient(to bottom, var(--nx-tint), transparent 40%); }
+:root[data-theme="neon"] [data-part="focus-page"] > div:first-child { background: linear-gradient(90deg, var(--nx-tint-hi), transparent 60%); }
 :root[data-theme="neon"] [data-testid="focus-title"] { font-family: var(--nx-mono); text-transform: uppercase; letter-spacing: .12em; color: var(--primary); }
 :root[data-theme="neon"] [data-testid="bottom-panel"] { border-color: var(--nx-edge); }
 :root[data-theme="neon"] :is(.cm-editor .cm-gutters) { border-right: 1px solid var(--nx-edge); background: color-mix(in srgb, var(--background) 40%, transparent); }
 :root[data-theme="neon"] .cm-editor .cm-cursor { border-left-color: var(--nx-hi); }
 :root[data-theme="neon"] .xterm { padding-left: 2px; }
-:root[data-theme="neon"] [data-testid="context-meter"] svg { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--nx-glow) 70%, transparent)); }
+:root[data-theme="neon"] [data-part="context-meter"] svg { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--nx-glow) 70%, transparent)); }
 
 /* ---------- Terminal, diffs, visualization frame. ---------- */
 /* Terminal: xterm draws on the panel glass (its own surface colour off); HUD tab chips and toolbar. */
 :root[data-theme="neon"] .xterm :is(.xterm-viewport, .xterm-scrollable-element) { background-color: transparent !important; }
-:root[data-theme="neon"] [data-testid="terminal"] > div:first-child { background: linear-gradient(90deg, var(--nx-tint-hi), transparent 70%); border-bottom-color: var(--nx-edge); }
-:root[data-theme="neon"] div:has(> [data-testid="terminal-tab"]) {
+:root[data-theme="neon"] [data-part="terminal"] > div:first-child { background: linear-gradient(90deg, var(--nx-tint-hi), transparent 70%); border-bottom-color: var(--nx-edge); }
+:root[data-theme="neon"] div:has(> [data-part="terminal-tab"]) {
     --nx-k: 6px;
     --nx-ce: transparent;
     font-family: var(--nx-mono);
@@ -924,16 +924,16 @@ html:root[data-theme="neon"]:not(.dark) {
     background-position: top right, bottom left;
     background-repeat: no-repeat;
 }
-:root[data-theme="neon"] div:has(> [data-testid="terminal-tab"]):hover { --nx-ce: var(--nx-edge); background-color: var(--nx-tint); box-shadow: inset 0 0 0 1px var(--nx-edge); }
-:root[data-theme="neon"] div:has(> [data-testid="terminal-tab"][aria-selected="true"]) {
+:root[data-theme="neon"] div:has(> [data-part="terminal-tab"]):hover { --nx-ce: var(--nx-edge); background-color: var(--nx-tint); box-shadow: inset 0 0 0 1px var(--nx-edge); }
+:root[data-theme="neon"] div:has(> [data-part="terminal-tab"][aria-selected="true"]) {
     --nx-ce: var(--nx-hi);
     color: var(--primary);
     background-color: var(--nx-tint);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--nx-hi) 60%, transparent), inset 0 -2px 0 var(--nx-hi);
 }
-:root[data-theme="neon"] [data-testid="terminal-tab"] { border-radius: 0; }
+:root[data-theme="neon"] [data-part="terminal-tab"] { border-radius: 0; }
 /* Light: the selected pane / terminal tab text darker than the primary (4.5:1 over the tint and the bright day scene). */
-:root[data-theme="neon"]:not(.dark) :is(:is([data-pane-tab], [role="tab"][data-testid^="pane-"])[aria-selected="true"], div:has(> [data-testid="terminal-tab"][aria-selected="true"])) { color: color-mix(in srgb, var(--primary) 75%, #000); }
+:root[data-theme="neon"]:not(.dark) :is(:is([data-pane-tab], [role="tab"][data-testid^="pane-"])[aria-selected="true"], div:has(> [data-part="terminal-tab"][aria-selected="true"])) { color: color-mix(in srgb, var(--primary) 75%, #000); }
 /* Below lg the pane tabs row sits over the scene (outside the panels): each tab gets a glass chip. */
 @media (width < 64rem) {
     :root[data-theme="neon"] :is([data-pane-tab], [role="tab"][data-testid^="pane-"]):not([aria-selected="true"]) { background-color: color-mix(in srgb, var(--card) 80%, transparent); }
@@ -977,8 +977,8 @@ html:root[data-theme="neon"]:not(.dark) {
 :root[data-theme="neon"] [data-testid^="settings-group-"]:hover { background: linear-gradient(90deg, var(--nx-tint-hi), transparent); }
 :root[data-theme="neon"] [data-testid^="settings-group-"][aria-selected="true"] { background: linear-gradient(90deg, color-mix(in srgb, var(--nx-cyan) 22%, transparent), transparent); box-shadow: inset 2px 0 0 var(--nx-hi); color: var(--foreground); }
 :root[data-theme="neon"] [data-testid="keybind"] > span { border-radius: 0; background: var(--nx-tint); box-shadow: inset 0 0 0 1px var(--nx-edge); color: var(--foreground); font-family: var(--nx-mono); }
-:root[data-theme="neon"] :is([data-testid="focus-page"] h1, [data-testid="focus-page"] h2) { font-family: var(--nx-mono); text-transform: uppercase; letter-spacing: .14em; color: var(--primary); }
-:root[data-theme="neon"] [data-testid="focus-queue"] :is(h2, h3, [data-testid="focus-group"] > :first-child) { font-family: var(--nx-mono); text-transform: uppercase; letter-spacing: .12em; font-size: 10.5px; }
+:root[data-theme="neon"] :is([data-part="focus-page"] h1, [data-part="focus-page"] h2) { font-family: var(--nx-mono); text-transform: uppercase; letter-spacing: .14em; color: var(--primary); }
+:root[data-theme="neon"] [data-part="focus-queue"] :is(h2, h3, [data-testid="focus-group"] > :first-child) { font-family: var(--nx-mono); text-transform: uppercase; letter-spacing: .12em; font-size: 10.5px; }
 /* Streamdown tables and code block inner frames. */
 :root[data-theme="neon"] .timeline [data-streamdown="table-wrapper"],
 :root[data-theme="neon"] .timeline [data-streamdown="table-wrapper"] *,
@@ -987,8 +987,8 @@ html:root[data-theme="neon"]:not(.dark) {
 :root[data-theme="neon"] .timeline [data-streamdown="table-wrapper"] { border-color: var(--nx-edge); background: color-mix(in srgb, var(--card) 70%, transparent); }
 :root[data-theme="neon"] [data-streamdown="code-block"] > div:last-child { border-color: var(--nx-edge); }
 
-:root[data-theme="neon"] :has(> [data-testid="focus-row"]) { border-radius: 0; }
-:root[data-theme="neon"] .ring-foreground:has(> [data-testid="focus-row"]) { --tw-ring-color: var(--nx-hi); background-color: transparent; box-shadow: 0 0 0 1px var(--nx-hi), 0 0 14px -3px var(--nx-glow); }
+:root[data-theme="neon"] :has(> [data-part="focus-row"]) { border-radius: 0; }
+:root[data-theme="neon"] .ring-foreground:has(> [data-part="focus-row"]) { --tw-ring-color: var(--nx-hi); background-color: transparent; box-shadow: 0 0 0 1px var(--nx-hi), 0 0 14px -3px var(--nx-glow); }
 
 /* Text selection, scrollbars. */
 :root[data-theme="neon"] ::selection { background: color-mix(in srgb, var(--nx-cyan) 32%, transparent); }
@@ -1035,13 +1035,13 @@ html:root[data-theme="neon"]:not(.dark) {
     :root[data-theme="neon"] body::before { animation: neon-drift 60s ease-in-out infinite; }
     :root[data-theme="neon"] #root::before { animation: neon-flicker 7s steps(1, end) infinite; }
     :root[data-theme="neon"] #root::after { animation: neon-shimmer 5s ease-in-out infinite; }
-    :root[data-theme="neon"] div:has(> header[data-testid="titlebar"])::before { animation: neon-rain-b 1.3s linear infinite; }
-    :root[data-theme="neon"] div:has(> header[data-testid="titlebar"])::after { animation: neon-rain-a .85s linear infinite; }
+    :root[data-theme="neon"] div:has(> header[data-part="titlebar"])::before { animation: neon-rain-b 1.3s linear infinite; }
+    :root[data-theme="neon"] div:has(> header[data-part="titlebar"])::after { animation: neon-rain-a .85s linear infinite; }
     :root[data-theme="neon"] body::after { animation: neon-rain-c .7s linear infinite; }
-    :root[data-theme="neon"] [data-testid="prompt-box"]:focus-within::before { animation: neon-spin 4s linear infinite; }
-    :root[data-theme="neon"] [data-testid="thinking"] { animation: neon-breathe 2.6s ease-in-out infinite; }
+    :root[data-theme="neon"] [data-part="prompt-box"]:focus-within::before { animation: neon-spin 4s linear infinite; }
+    :root[data-theme="neon"] [data-part="thinking"] { animation: neon-breathe 2.6s ease-in-out infinite; }
     :root[data-theme="neon"] [data-testid="connection-status"][data-status="connected"] > span[aria-hidden] { animation: neon-pulse 2s ease-in-out infinite; }
-    :root[data-theme="neon"] [data-testid="tab"][data-state="running"]::after {
+    :root[data-theme="neon"] [data-part="tab"][data-state="running"]::after {
         content: "";
         position: absolute;
         top: 0;
@@ -1052,34 +1052,34 @@ html:root[data-theme="neon"]:not(.dark) {
         pointer-events: none;
         animation: neon-sweep 2.4s ease-in-out infinite;
     }
-    :root[data-theme="neon"] [data-testid="tab"][data-state="running"] button[role="tab"] > span.truncate { animation: neon-glitch 2s steps(1, end) infinite; }
-    :root[data-theme="neon"] [data-testid="user-message"] { animation: neon-in 220ms ease-out both; }
-    :root[data-theme="neon"] [data-testid="prompt-box"] textarea:placeholder-shown:focus::placeholder { animation: neon-blink 1.6s ease-in-out infinite; }
+    :root[data-theme="neon"] [data-part="tab"][data-state="running"] button[role="tab"] > span.truncate { animation: neon-glitch 2s steps(1, end) infinite; }
+    :root[data-theme="neon"] [data-part="user-message"] { animation: neon-in 220ms ease-out both; }
+    :root[data-theme="neon"] [data-part="prompt-box"] textarea:placeholder-shown:focus::placeholder { animation: neon-blink 1.6s ease-in-out infinite; }
 }
 
 /* Reduced motion: the rain stands still, so its streaks are fainter and the near layer (over the panels and their text) is off. */
 @media (prefers-reduced-motion: reduce) {
-    :root[data-theme="neon"] div:has(> header[data-testid="titlebar"])::before { opacity: .28; }
-    :root[data-theme="neon"] div:has(> header[data-testid="titlebar"])::after { opacity: .35; }
-    :root[data-theme="neon"]:not(.dark) div:has(> header[data-testid="titlebar"])::before { opacity: .16; }
-    :root[data-theme="neon"]:not(.dark) div:has(> header[data-testid="titlebar"])::after { opacity: .18; }
+    :root[data-theme="neon"] div:has(> header[data-part="titlebar"])::before { opacity: .28; }
+    :root[data-theme="neon"] div:has(> header[data-part="titlebar"])::after { opacity: .35; }
+    :root[data-theme="neon"]:not(.dark) div:has(> header[data-part="titlebar"])::before { opacity: .16; }
+    :root[data-theme="neon"]:not(.dark) div:has(> header[data-part="titlebar"])::after { opacity: .18; }
     :root[data-theme="neon"] body::after { display: none; }
 }
 
 /* Light rain option (data-opt-rain-light, default off): one far layer only, slower and about a third as visible. Rain off still hides everything. */
-:root[data-theme="neon"][data-opt-rain-light="on"] div:has(> header[data-testid="titlebar"])::after,
+:root[data-theme="neon"][data-opt-rain-light="on"] div:has(> header[data-part="titlebar"])::after,
 :root[data-theme="neon"][data-opt-rain-light="on"] body::after { display: none; }
-:root[data-theme="neon"][data-opt-rain-light="on"] div:has(> header[data-testid="titlebar"])::before { display: block; opacity: .2; animation-duration: 2.4s; }
-:root[data-theme="neon"][data-opt-rain-light="on"]:not(.dark) div:has(> header[data-testid="titlebar"])::before { opacity: .12; }
+:root[data-theme="neon"][data-opt-rain-light="on"] div:has(> header[data-part="titlebar"])::before { display: block; opacity: .2; animation-duration: 2.4s; }
+:root[data-theme="neon"][data-opt-rain-light="on"]:not(.dark) div:has(> header[data-part="titlebar"])::before { opacity: .12; }
 @media (prefers-reduced-motion: reduce) {
-    :root[data-theme="neon"][data-opt-rain-light="on"] div:has(> header[data-testid="titlebar"])::before { opacity: .1; }
-    :root[data-theme="neon"][data-opt-rain-light="on"]:not(.dark) div:has(> header[data-testid="titlebar"])::before { opacity: .06; }
+    :root[data-theme="neon"][data-opt-rain-light="on"] div:has(> header[data-part="titlebar"])::before { opacity: .1; }
+    :root[data-theme="neon"][data-opt-rain-light="on"]:not(.dark) div:has(> header[data-part="titlebar"])::before { opacity: .06; }
 }
 
 /* Rain option off (data-opt-rain, theme option "rain"): every rain layer goes (animations with them) and the wet-street glow and shimmer of the veil;
    the city, the veil's darkening and the HUD stay. */
-:root[data-theme="neon"][data-opt-rain="off"] div:has(> header[data-testid="titlebar"])::before,
-:root[data-theme="neon"][data-opt-rain="off"] div:has(> header[data-testid="titlebar"])::after,
+:root[data-theme="neon"][data-opt-rain="off"] div:has(> header[data-part="titlebar"])::before,
+:root[data-theme="neon"][data-opt-rain="off"] div:has(> header[data-part="titlebar"])::after,
 :root[data-theme="neon"][data-opt-rain="off"] body::after { display: none; }
 :root[data-theme="neon"][data-opt-rain="off"] #root::after { animation: none; }
 :where(:root[data-theme="neon"][data-opt-rain="off"].dark) { --neon-veil: radial-gradient(120% 80% at 50% 35%, transparent 40%, #05070d80 100%); }

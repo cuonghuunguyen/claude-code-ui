@@ -3706,7 +3706,7 @@ export function App() {
       className={`flex min-h-0 min-w-0 flex-1 flex-col lg:w-(--panel-w) lg:flex-none ${!panelHost ? "hidden" : pane === "session" ? "hidden lg:flex" : ""} ${sideShown ? "" : "lg:hidden"}`}
       style={{ "--panel-w": `${panelWidth}px` } as CSSProperties}
     >
-      <section className={`${card} flex-1 ${dropCls("side")}`} id="side-panel" data-testid="side-panel" aria-label={tr("app.main.sidePanel")} data-drop-target={dragging("side") && dropAt?.area === "side" ? "" : undefined} ref={sideDropRef}>
+      <section className={`${card} flex-1 ${dropCls("side")}`} id="side-panel" data-testid="side-panel" data-part="side-panel" aria-label={tr("app.main.sidePanel")} data-drop-target={dragging("side") && dropAt?.area === "side" ? "" : undefined} ref={sideDropRef}>
         <DockHeader
           area="side"
           panes={areaPanes("side")}
@@ -3742,7 +3742,7 @@ export function App() {
     <SideLabel value={sideOf.badge}>
     <SideState value={sideState}>
     <div className="flex h-dvh flex-col bg-background text-foreground">
-      <header className="flex h-9 shrink-0 items-center gap-1.5 px-2 max-md:h-11 max-md:gap-2 md:pr-3 md:pl-4" data-testid="titlebar">
+      <header className="flex h-9 shrink-0 items-center gap-1.5 px-2 max-md:h-11 max-md:gap-2 md:pr-3 md:pl-4" data-testid="titlebar" data-part="titlebar">
         <IconButton className="md:hidden" label={tr("app.main.sessions")} onClick={() => setDrawer(true)} testId="open-drawer">
           <MenuIcon />
         </IconButton>
@@ -3998,7 +3998,7 @@ export function App() {
       <div className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
         {drawer && <div className="fixed inset-0 z-30 bg-overlay md:hidden" onClick={() => setDrawer(false)} aria-hidden />}
         <aside
-          data-testid="sidebar"
+          data-testid="sidebar" data-part="sidebar"
           style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
           className={`fixed inset-y-0 left-0 z-40 flex w-[min(85vw,360px)] shrink-0 md:w-(--sidebar-w) flex-col gap-3 bg-card p-3 shadow-floating ring-[0.5px] ring-foreground/15 md:ring-0 transition-transform md:static md:translate-x-0 md:bg-transparent md:p-1 md:shadow-none ${sidebar ? "" : "md:hidden"} ${drawer ? "translate-x-0" : "-translate-x-full"}`}
         >
@@ -4063,7 +4063,7 @@ export function App() {
           </button>
         </aside>
         {sidebar && <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col" style={{ "--terminal-h": `${terminalHeight}px` } as CSSProperties} data-testid="work-area">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col" style={{ "--terminal-h": `${terminalHeight}px` } as CSSProperties} data-testid="work-area" data-part="work-area">
         <main className={`flex min-h-0 min-w-0 flex-1 flex-col gap-2 lg:flex-row lg:gap-0 ${bottomMax && panelHost ? "hidden" : ""}`}>
           {status === "unauthorized" ? (
             // Also over an open session: nothing works until the browser is paired again (e.g. the token was rotated).
@@ -4090,7 +4090,7 @@ export function App() {
               <div
                 ref={areaRef}
                 className={`relative ${splitShown ? `flex min-h-0 min-w-0 flex-1 ${split!.dir === "row" ? "flex-row" : "flex-col"}` : `${card} flex-1`} ${mainShown && pane === "session" ? "" : mainShown ? "hidden lg:flex" : "hidden"}`}
-                data-testid="session-area"
+                data-testid="session-area" data-part="session-area"
                 data-split={splitShown ? split!.dir : undefined}
               >
                 <ViewerContext value={openViewer}>
@@ -5609,7 +5609,7 @@ export function SessionPane({
       ) : (
       phone ? null : (
       // From sm up: where the session is (project, side, cwd). Below sm the tab switcher says it, so the reading space starts at the top (GH-165).
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4" data-testid="session-header">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4" data-testid="session-header" data-part="session-header">
         <ProjectAvatar cwd={session.cwd} />
         <span className="min-w-0 truncate font-medium" title={session.cwd} data-testid="session-project">
           {place ?? projectName(session.cwd)}
@@ -6523,7 +6523,7 @@ function PromptBox({
     )}
     <div
       className={`relative flex flex-col rounded-xl border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring/50 ${treeOver || treeRing ? "ring-2 ring-ring" : ""} ${lift ? "-mt-11" : ""}`}
-      data-testid="prompt-box"
+      data-testid="prompt-box" data-part="prompt-box"
     >
       {!bash && <MarkdownToolbar input={input} disabled={disabled} />}
       {bash && (
@@ -6704,7 +6704,7 @@ function UserMessage({ part, view, index, pending, actions, children }: { part: 
   useLanding(ref, part.text);
   return (
     // 12px item gap + 12px = OpenCode 24px turn gap.
-    <div ref={ref} className={`group flex flex-col gap-1 ${index ? "mt-3" : ""}`} data-testid="user-message" data-pending={pending ? "" : undefined}>
+    <div ref={ref} className={`group flex flex-col gap-1 ${index ? "mt-3" : ""}`} data-testid="user-message" data-part="user-message" data-pending={pending ? "" : undefined}>
       <PartView part={part} view={view} />
       {/* Shown on hover or keyboard focus (OpenCode user bubble). */}
       <MessageActions
@@ -6746,7 +6746,7 @@ function PendingMessage({ p, view, index }: { p: Pending; view: SessionView; ind
 function ThinkingRow({ className }: { className?: string }) {
   const tr = useT();
   return (
-    <div data-testid="thinking" className={className}>
+    <div data-testid="thinking" data-part="thinking" className={className}>
       <Shimmer as="span" className="font-medium text-sm">
         {tr("app.timeline.thinking")}
       </Shimmer>
@@ -6904,7 +6904,7 @@ function AssistantText({ text, streaming }: { text: string; streaming: boolean }
   const revealing = streaming || shown.length < text.length;
   return (
     // OpenCode text part margin-top 24px, on top of the 12px timeline gap.
-    <Message from="assistant" className="relative mt-6" data-testid="assistant-text">
+    <Message from="assistant" className="relative mt-6" data-testid="assistant-text" data-part="assistant-text">
       <MessageContent>
         <MessageResponse mode={revealing ? "streaming" : "static"} isAnimating={revealing} {...FILE_LINK_PROPS}>
           {shown}

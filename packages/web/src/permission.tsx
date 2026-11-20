@@ -82,7 +82,7 @@ export function PermissionPanel({ part, onRespond, mode, onStop, tier }: { part:
   const always = part.suggestions.length > 0 && tier !== "high";
   const noLabel = plan !== undefined ? t("session.permission.noKeepPlanningHint") : t("session.permission.noHint");
   return (
-    <form onSubmit={deny} className={`${DOCK} max-h-[60dvh]`} data-testid="permission-panel" aria-label={t("session.permission.label")}>
+    <form onSubmit={deny} className={`${DOCK} max-h-[60dvh]`} data-testid="permission-panel" data-part="permission-panel" aria-label={t("session.permission.label")}>
       {/* The body scrolls inside the bounded panel; the tray below stays in view (same as the question panel). */}
       <div className="flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain p-3">
         <div className="flex items-center gap-2">

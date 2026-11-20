@@ -11,7 +11,7 @@ import { projectName } from "./tabs.ts";
 /** The header row of SessionPane (GH-774): where the session is. No `cwd` yet (the session list is not there): bars of the same size. */
 export function SkeletonHeader({ cwd, place, engine }: { cwd?: string; place?: string; engine?: SessionInfo["engine"] }) {
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4" data-testid="session-header">
+    <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4" data-testid="session-header" data-part="session-header">
       {cwd ? (
         <>
           <ProjectAvatar cwd={cwd} />
