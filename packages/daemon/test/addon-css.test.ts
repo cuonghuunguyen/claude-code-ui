@@ -22,6 +22,8 @@ describe("scopeCss", () => {
     [':where(:root[data-theme="addon:reze:dusk"].dark) { --x: 1 }', ':where(&[data-theme="addon:reze:dusk"].dark) { --x: 1 }'],
     [":is(:root, .dark) .a { --x: 1 }", ":is(&, &.dark) .a { --x: 1 }"],
     [":where(.a, :root) { --x: 1 }", ":where(.a, :root) { --x: 1 }"],
+    [".a, .b, .c, .d, :where(:root) { --x: 1 }", ".a, .b, .c, .d, :where(&) { --x: 1 }"],
+    [".a, .b, .c, .d, :is(:root, .dark) .x { --x: 1 }", ".a, .b, .c, .d, :is(&, &.dark) .x { --x: 1 }"],
     [".Dark .a { --x: 1 }", ".Dark .a { --x: 1 }"],
     [".html-like { --x: 1 }", ".html-like { --x: 1 }"],
   ])("a token rule on the root element keeps matching it: %s", (css, rule) => {

@@ -157,7 +157,7 @@ function scopeRules(css: string, hoist: string[], depth = 0): string {
       if (HOISTED.has(name) || (name === "layer" && st.block === undefined)) hoist.push(text);
       else if (GROUPS.has(name) && st.block !== undefined) out.push(`${p} {\n${scopeRules(st.block, hoist, depth + 1)}\n}`);
       else out.push(text);
-    } else if (st.block !== undefined) out.push(`${splitList(p).map(rootRelative).join(", ")} {${st.block}}`);
+    } else if (st.block !== undefined) out.push(`${splitList(p).map((x) => rootRelative(x)).join(", ")} {${st.block}}`);
   }
   return out.join("\n");
 }
