@@ -17,6 +17,7 @@ import { assetKey, assetType, ARTIFACT_ASSET_HEADERS } from "./artifact-preview.
 import { BATCH_SSH, runGit, type GitRunner } from "./git-runner.ts";
 import { redactUrls, tidy } from "./git-remote.ts";
 import { createJsonFile } from "./json-file.ts";
+import { themeRoot } from "./addon-css.ts";
 
 export type AddonsRequest = Extract<ClientMessage, { type: `addons.${string}` }>;
 
@@ -139,7 +140,8 @@ export function parseManifest(raw: unknown, root: string): AddonManifest {
       if (o.default !== undefined && typeof o.default !== "boolean") throw bad(`themes[${tid}].options[${oid}].default: must be true or false`);
       return { id: oid, label: str(o.label, `themes[${tid}].options[${oid}].label`, 40), ...(o.default !== undefined && { default: o.default }) };
     });
-    return { id: tid, name: str(t.name, `themes[${tid}].name`, 64), ...(light && { light }), ...(dark && { dark }), ...(options.length && { options }) };
+    const css = t.css === undefined ? undefined : pathOk(root, t.css, ".css", `themes[${tid}].css`);
+    return { id: tid, name: str(t.name, `themes[${tid}].name`, 64), ...(light && { light }), ...(dark && { dark }), ...(options.length && { options }), ...(css && { css }) };
   });
   const viewIds = new Set<string>();
   const views: AddonManifest["views"] = list(raw.views, "views").map((v, i) => {
@@ -540,8 +542,8 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
     }
   }
 
-  /** The file of an enabled addon (a local folder is re-read: an edit that needs approval stops serving), else undefined. `net`: approved origins for connect-src. */
-  function serve(name: string, rest: string): { root: string; path: string; type: string; net: string[]; html: boolean } | undefined {
+  /** The file of an enabled addon (a local folder is re-read: an edit that needs approval stops serving), else undefined. `net`: approved origins for connect-src. `theme` (query `?theme=<id>`): when it is a theme of this addon whose `css` is this file, `scope` is the root selector to scope the file under (addon-css.ts). */
+  function serve(name: string, rest: string, theme?: string): { root: string; path: string; type: string; net: string[]; html: boolean; scope?: string } | undefined {
     const r = store.get().addons[name];
     if (!r) return undefined;
     const root = rootOf(dir, name, r);
@@ -555,7 +557,11 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
       ok ? valid.add(name) : valid.delete(name);
       if (!ok) return undefined;
     } else if (!r.enabled) return undefined;
-    return { root, ...f, net: r.approved.filter((c) => c.startsWith("net:")).map((c) => c.slice(4)), html };
+    const scoped = theme !== undefined && !html && f.type.startsWith("text/css") && (() => {
+      const l = load(root, name);
+      return "manifest" in l && l.manifest.themes.some((t) => t.id === theme && t.css === assetKey(rest));
+    })();
+    return { root, ...f, net: r.approved.filter((c) => c.startsWith("net:")).map((c) => c.slice(4)), html, ...(scoped && { scope: themeRoot(name, theme) }) };
   }
 
   return { handle, serve, nonce };

@@ -54,6 +54,7 @@ import { createTerminals } from "./terminals.ts";
 import { ConfigError, createConfig, runCli, timed, type CliRunner} from "./config.ts";
 import { createPlugins } from "./plugins.ts";
 import { addonAssetHeaders, addonHeaders, createAddons } from "./addons.ts";
+import { MAX_THEME_CSS, scopeCss } from "./addon-css.ts";
 import { cliTurnRunning, JsonlTail, parseJsonl, transcriptEnd, withoutForkPrefix } from "./transcript.ts";
 import type { KeepAwake } from "./keep-awake.ts";
 import { EDITORS, type Launcher, type OpenCommand } from "./open-external.ts";
@@ -1810,10 +1811,40 @@ export function createDaemon(opts: {
     const base = src.assets.size ? `http://${new URL("http://" + req.headers.host).host}/artifact/${nonce}/` : undefined;
     streamFile(req, res, f.fd, f.size, artifactHeaders(base));
   };
+  /** A theme's CSS file rewritten under its theme root (addon-css.ts). A file that does not scan (broken CSS, over the cap) goes out as it is: the web app loads it into the addon's cascade layer, so it cannot leak out of it. Cached per file version. */
+  const scopedCss = new Map<string, Buffer>();
+  const serveScopedCss = (req: IncomingMessage, res: ServerResponse, o: { fd: number; size: number }, path: string, scope: string) => {
+    let body: Buffer;
+    try {
+      const st = fstatSync(o.fd);
+      if (st.size > MAX_THEME_CSS) return streamFile(req, res, o.fd, o.size, { ...addonAssetHeaders, "content-type": "text/css; charset=utf-8" }); // over the cap: not read into memory, not scoped
+      const key = `${path}\0${scope}\0${st.mtimeMs}\0${st.size}`;
+      let hit = scopedCss.get(key);
+      if (!hit) {
+        const raw = readFileSync(o.fd);
+        try {
+          hit = Buffer.from(scopeCss(raw.toString("utf8"), scope));
+        } catch {
+          hit = raw; // CssScanError, or any other failure of the scan: the file as it is, and cached so a bad file costs one scan per version
+        }
+        for (const k of scopedCss.keys()) if (k.startsWith(`${path}\0${scope}\0`)) scopedCss.delete(k);
+        scopedCss.set(key, hit);
+        if (scopedCss.size > 64) scopedCss.delete(scopedCss.keys().next().value!);
+      }
+      body = hit;
+    } catch {
+      closeSync(o.fd);
+      return void res.writeHead(500).end();
+    }
+    closeSync(o.fd);
+    res.writeHead(200, { ...addonAssetHeaders, "content-type": "text/css; charset=utf-8", "content-length": body.length });
+    res.end(req.method === "HEAD" ? undefined : body);
+  };
   /** GET /addon/<nonce>/<name>/<path> (GH-516): a file of an enabled addon. HTML only as a frame (addon CSP); other files as subresources. */
   const serveAddon = (req: IncomingMessage, res: ServerResponse, nonce: string, name: string, rest: string) => {
     if (req.method !== "GET" && req.method !== "HEAD") return void res.writeHead(405, { allow: "GET, HEAD" }).end();
-    const f = addons && nonce === addons.nonce ? addons.serve(name, rest) : undefined;
+    const theme = /^[a-z0-9]+(-[a-z0-9]+)*$/.exec(new URL(req.url ?? "/", "http://x").searchParams.get("theme") ?? "")?.[0];
+    const f = addons && nonce === addons.nonce ? addons.serve(name, rest, theme) : undefined;
     if (!f) return void res.writeHead(404).end();
     const h = req.headers;
     const dest = h["sec-fetch-dest"] as string | undefined;
@@ -1822,6 +1853,7 @@ export function createDaemon(opts: {
     } else if (!hostOk(req) || !assetRequestAllowed({ origin: h.origin, dest, mode: h["sec-fetch-mode"] as string | undefined }, isOwnOrigin(req, hostnames))) return void res.writeHead(403).end();
     const o = openArtifact(f.path, !f.html);
     if (!o) return void res.writeHead(404).end();
+    if (f.scope) return serveScopedCss(req, res, o, f.path, f.scope);
     const base = `http://${new URL("http://" + h.host).host}/addon/${nonce}/${name}/`;
     streamFile(req, res, o.fd, o.size, f.html ? addonHeaders(base, f.net) : { ...addonAssetHeaders, "content-type": f.type, ...(f.type === "image/svg+xml" && { "content-disposition": "attachment" }) });
   };

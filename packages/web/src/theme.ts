@@ -120,10 +120,19 @@ export function applyAddonThemes(themes: readonly Theme[]) {
 /** CSS identifier for an addon name (`[a-z0-9-]`): a leading digit is escaped (`\31 `), else the layer name would be invalid and the whole import dropped. */
 const identOf = (name: string) => name.replace(/^[0-9]/, (d) => `\\3${d} `);
 
-/** One `<style>` per enabled addon with `css`: `@import ... layer(addon.<name>)`, so its rules sit in a layer after `host` and win without `!important`; styles of addons no longer enabled (or with another file) go (GH-516, GH-868). Same-origin, so the app CSP allows it and blocks what the sheet loads from elsewhere. */
+/** The stylesheets of the enabled addons, each a `<style>` that imports a file into the addon's cascade layer (`layer(addon.<name>)`: after `host`, so it wins without `!important`, and a broken file cannot leave the layer). Per addon: the legacy top-level `css` (every theme, unscoped). Per theme with `css`: the same file scoped by the daemon to that theme (`?theme=<id>`), loaded for every enabled theme so a switch shows no unstyled flash. Styles of addons or themes no longer there go (GH-516, GH-868). Same-origin, so the app CSP allows it and blocks what a sheet loads from elsewhere. */
 export function applyAddonCss(addons: readonly AddonInfo[]) {
+  const imp = (a: AddonInfo, path: string, query = "") => `@import url("${a.base + path.split("/").map(encodeURIComponent).join("/") + query}") layer(addon.${identOf(a.name)});`;
   const want = new Map<string, string>(
-    addons.flatMap((a) => (a.base && a.manifest?.css ? [[`addon-css-${a.name}`, `@import url("${a.base + a.manifest.css.split("/").map(encodeURIComponent).join("/")}") layer(addon.${identOf(a.name)});`] as const] : [])),
+    addons.flatMap((a) =>
+      !a.base || !a.manifest
+        ? []
+        : [
+            ...(a.manifest.css ? [[`addon-css-${a.name}`, imp(a, a.manifest.css)] as const] : []),
+            // An addon name has no `--`, so these ids cannot collide with the legacy one or another addon's.
+            ...a.manifest.themes.flatMap((t) => (t.css ? [[`addon-css-${a.name}--${t.id}`, imp(a, t.css, `?theme=${t.id}`)] as const] : [])),
+          ],
+    ),
   );
   for (const l of document.querySelectorAll<HTMLElement>('style[id^="addon-css-"], link[id^="addon-css-"]')) if (want.get(l.id) !== l.textContent) l.remove();
   for (const [id, text] of want)

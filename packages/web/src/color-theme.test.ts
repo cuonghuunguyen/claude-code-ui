@@ -130,6 +130,23 @@ describe("addon themes and CSS (GH-516)", () => {
     expect(sheets()).toEqual([]);
   });
 
+  it("a theme with css gets its own layered import of the file scoped to that theme; it is removed with the addon", () => {
+    const a = addon("example");
+    a.manifest!.themes = [
+      { id: "dusk", name: "Dusk", css: "themes/dusk light.css" },
+      { id: "dawn", name: "Dawn", css: "dawn.css" },
+      { id: "plain", name: "Plain" },
+    ];
+    applyAddonCss([a]);
+    const base = `/addon/${"0".repeat(32)}/example`;
+    expect(sheets()).toEqual([
+      ["addon-css-example--dusk", `@import url("${base}/themes/dusk%20light.css?theme=dusk") layer(addon.example);`],
+      ["addon-css-example--dawn", `@import url("${base}/dawn.css?theme=dawn") layer(addon.example);`],
+    ]);
+    applyAddonCss([]);
+    expect(sheets()).toEqual([]);
+  });
+
   it("an addon name that starts with a digit still gets a valid layer name", () => {
     applyAddonCss([addon("1st-theme", "t.css")]);
     expect(sheets()[0]![1]).toContain("layer(addon.\\31 st-theme)");
