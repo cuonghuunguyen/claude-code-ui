@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test as base, createBdd } from "playwright-bdd";
-import { startDaemon, type Daemon } from "../support/daemon.ts";
+import { forgetEngine, startDaemon, type Daemon } from "../support/daemon.ts";
 import { startSshHost, type SshHost } from "../support/ssh-host.ts";
 import { projectsRoot, runDir, slug, testSlugs } from "../support/paths.ts";
 
@@ -56,4 +56,7 @@ export const test = base.extend<{ project: Project; evidence: Evidence; memo: Me
   },
 });
 
-export const { Given, When, Then, After } = createBdd(test);
+export const { Given, When, Then, Before, After } = createBdd(test);
+
+// The run's settings are shared by its scenarios: an OpenCode scenario's engine would otherwise become the next scenario's new-session engine.
+Before({ name: "reset the remembered engine" }, async () => forgetEngine(runDir()));

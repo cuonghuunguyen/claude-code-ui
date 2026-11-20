@@ -293,3 +293,15 @@ export async function startDaemon(run: string, worker: number, opts: { port?: nu
     },
   };
 }
+
+/** Forgets the engine the daemon remembers for a new session (Settings `sessions.engine`), so a scenario starts on the default, Claude. The file is shared by every daemon of the run. */
+export function forgetEngine(run: string): void {
+  const file = join(daemonConfigDir(run), "settings.json");
+  try {
+    const settings = JSON.parse(readFileSync(file, "utf8"));
+    if (!settings?.sessions || !("engine" in settings.sessions)) return;
+    delete settings.sessions.engine;
+    if (Object.keys(settings.sessions).length === 0) delete settings.sessions;
+    writeFileSync(file, JSON.stringify(settings));
+  } catch {}
+}
