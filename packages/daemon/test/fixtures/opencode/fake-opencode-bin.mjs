@@ -13,8 +13,8 @@
 // Env: FAKE_OPENCODE_SCRIPT (comma separated turn files), FAKE_OPENCODE_STREAM_DELAY_MS (the event stream answers late), FAKE_OPENCODE_VERSION, FAKE_OPENCODE_VERSION_DELAY_MS (`--version` answers that late), FAKE_OPENCODE_LOG (JSON lines of `--version` runs, starts and requests), FAKE_OPENCODE_DATA (JSON {sessions, messages, busy?, asks?, statuses?: session id -> status}), FAKE_OPENCODE_CRASH=1 (exit right after the listening line), FAKE_OPENCODE_HANG=1 (`serve` prints nothing and stays alive), FAKE_OPENCODE_BROKEN (comma separated directories that are broken from the start), FAKE_OPENCODE_MCP_LOAD_MS (see MCP load), FAKE_OPENCODE_PROMPT_DELAY_MS (POST /session/:id/prompt_async plays its turn at once but answers that late), FAKE_OPENCODE_DISCONNECT_DELAY_MS (POST /mcp/:name/disconnect answers that late; a client that leaves meanwhile breaks the directory like any cut-off MCP request), FAKE_OPENCODE_SESSION_DELAY_MS (the first GET /session and the first POST /session of a directory answer that late: a cold folder), FAKE_OPENCODE_MESSAGE_DELAY_MS (GET /session/:id/message answers that late; the session row does not), FAKE_OPENCODE_PROMPT_LATE_MS (prompt_async reaches the session that late: its turn plays after it), FAKE_OPENCODE_ABORT_DELAY_MS (an abort answers at once, the aborted turn ends that late; logged as `aborted`), FAKE_OPENCODE_ABORT_ANSWER_MS (the abort ends the turn at once, or nothing, and answers that late), FAKE_OPENCODE_PROVIDERS_DELAY_MS (GET /config/providers answers that late), FAKE_OPENCODE_PATCH_DELAY_MS (a PATCH of a session's permission block answers that late).
 import { createServer } from "node:http";
 import { Server } from "node:net";
-import { appendFileSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 const log = (o) => process.env.FAKE_OPENCODE_LOG && appendFileSync(process.env.FAKE_OPENCODE_LOG, `${JSON.stringify(o)}\n`);
 const args = process.argv.slice(2);
@@ -87,6 +87,27 @@ const AUTH_METHODS = {
 };
 const waiting = new Map(); // provider -> resolve of an auto callback
 const mcp = {}; // directory -> MCP server name -> {status}
+// The project config files OpenCode 1.19.5 reads, lowest precedence first (comments allowed); merged one level deep, like the real server for the keys the tests use.
+const CONFIG_FILES = ["opencode.json", "opencode.jsonc", ".opencode/opencode.json", ".opencode/opencode.jsonc"];
+function projectConfig(dir) {
+  const out = {};
+  for (const f of CONFIG_FILES) {
+    const file = join(dir ?? "", f);
+    if (!dir || !existsSync(file)) continue;
+    const cfg = JSON.parse(readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""));
+    for (const [k, v] of Object.entries(cfg)) out[k] = v && typeof v === "object" && !Array.isArray(v) ? { ...out[k], ...v } : v;
+  }
+  return out;
+}
+/** The status map of a directory, seeded from its config on first use and again after a dispose: enabled false = disabled, a missing binary = failed, a remote server whose url holds "oauth" = needs_auth. */
+function mcpMap(dir) {
+  const key = dir ?? "";
+  if (mcp[key]) return mcp[key];
+  const seed = {};
+  for (const [name, c] of Object.entries(projectConfig(dir).mcp ?? {}))
+    seed[name] = c.enabled === false ? { status: "disabled" } : c.type === "remote" && /oauth/.test(c.url ?? "") ? { status: "needs_auth" } : c.type === "local" && /nonexistent/.test(c.command?.[0] ?? "") ? { status: "failed", error: "spawn failed" } : { status: "connected" };
+  return (mcp[key] = seed);
+}
 const broken = new Set((process.env.FAKE_OPENCODE_BROKEN ?? "").split(",").filter(Boolean)); // directories in OpenCode's broken MCP state
 const MCP_LOAD_MS = Number(process.env.FAKE_OPENCODE_MCP_LOAD_MS ?? 0);
 const loads = new Map(); // directory -> its MCP load (a wait)
@@ -258,16 +279,34 @@ const server = createServer(async (req, res) => {
   if (url.pathname === "/instance/dispose" && req.method === "POST") return (broken.delete(dir ?? ""), provBroken.delete(dir ?? ""), loads.delete(dir ?? ""), delete mcp[dir ?? ""], json(200, true));
   if (url.pathname === "/mcp") {
     if (!(await mcpGate(dir, res))) return;
-    const map = (mcp[dir ?? ""] ??= {});
+    const map = mcpMap(dir);
     if (req.method === "POST") map[body.name] = { status: "connected" };
     return json(200, map);
+  }
+  if (url.pathname === "/config" && req.method === "GET") return json(200, projectConfig(dir));
+  // OAuth: /auth gives the page and keeps the flow for /auth/callback {code}; /auth/authenticate answers after FAKE_OPENCODE_AUTH_MS (the redirect reached the listener) with connected; DELETE /auth keeps the status until a dispose.
+  const oauth = /^\/mcp\/([^/]+)\/auth(\/authenticate|\/callback)?$/.exec(url.pathname);
+  if (oauth) {
+    const c = (projectConfig(dir).mcp ?? {})[oauth[1]];
+    if (req.method === "DELETE") return json(200, { success: true });
+    if (!c || c.type !== "remote") return json(400, { name: "UnknownError", data: { message: `MCP server ${oauth[1]} does not support OAuth` } });
+    if (!oauth[2]) return json(200, { authorizationUrl: `${c.url}/authorize?state=fake`, oauthState: "fake" });
+    if (oauth[2] === "/authenticate") await sleep(Number(process.env.FAKE_OPENCODE_AUTH_MS ?? 0));
+    mcpMap(dir)[oauth[1]] = { status: "connected" };
+    return json(200, { status: "connected" });
   }
   m3 = /^\/mcp\/([^/]+)\/disconnect$/.exec(url.pathname);
   if (m3 && req.method === "POST" && process.env.FAKE_OPENCODE_DISCONNECT_DELAY_MS && (await mcpGate(dir, res))) {
     const left = new Promise((r) => res.on("close", () => r(!res.writableEnded)));
     if (await Promise.race([sleep(Number(process.env.FAKE_OPENCODE_DISCONNECT_DELAY_MS)).then(() => false), left])) return broken.add(dir ?? "");
   }
-  if (m3 && req.method === "POST") return (await mcpGate(dir, res)) ? (((mcp[dir ?? ""] ??= {})[m3[1]] = { status: "disabled" }), json(200, true)) : undefined;
+  if (m3 && req.method === "POST") return (await mcpGate(dir, res)) ? ((mcpMap(dir)[m3[1]] = { status: "disabled" }), json(200, true)) : undefined;
+  m3 = /^\/mcp\/([^/]+)\/connect$/.exec(url.pathname);
+  if (m3 && req.method === "POST") {
+    if (!(await mcpGate(dir, res))) return;
+    if (!(m3[1] in mcpMap(dir))) return json(404, { name: "McpServerNotFoundError", data: { message: m3[1] } });
+    return ((mcpMap(dir)[m3[1]] = { status: "connected" }), json(200, true));
+  }
   if (url.pathname === "/command" && !(await mcpGate(dir, res))) return;
   if (url.pathname === "/command") return json(200, [{ name: "init", description: "guided AGENTS.md setup", source: "command", template: "t", hints: ["$ARGUMENTS"] }, { name: "review", source: "command", template: "t", hints: [] }, { name: "fail", source: "command", template: "t", hints: [] }, ...(process.env.FAKE_OPENCODE_OWN_VISUALIZE ? [{ name: "visualize", description: "own", source: "command", template: "t", hints: [] }] : [])]);
   if (url.pathname === "/config" && req.method === "GET") return json(200, config);

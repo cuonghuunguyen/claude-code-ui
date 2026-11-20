@@ -2,7 +2,7 @@
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import type { McpServerInfo } from "@claude-ui/protocol";
+import type { ConfigCapabilities, Engine, McpServerInfo } from "@claude-ui/protocol";
 import type { Request } from "./client.ts";
 import { McpDialog } from "./mcp-dialog.tsx";
 
@@ -22,8 +22,8 @@ afterEach(() => {
 });
 
 type Handler = (msg: Request) => unknown;
-async function render(handlers: Record<string, Handler> = {}, props: { server?: string } = {}) {
-  let servers = structuredClone(SERVERS);
+async function render(handlers: Record<string, Handler> = {}, props: { server?: string; engine?: Engine; config?: ConfigCapabilities; servers?: McpServerInfo[] } = {}) {
+  let servers = structuredClone(props.servers ?? SERVERS);
   const calls: Request[] = [];
   const request = vi.fn(async (msg: Request) => {
     calls.push(msg);
@@ -44,7 +44,7 @@ async function render(handlers: Record<string, Handler> = {}, props: { server?: 
   function Host() {
     const [open, set] = useState(true);
     setOpen = set;
-    return <McpDialog open={open} cwd="/p" sessionId="s1" server={props.server} request={request as never} onClose={() => set(false)} />;
+    return <McpDialog open={open} cwd="/p" sessionId="s1" server={props.server} engine={props.engine} config={props.config} request={request as never} onClose={() => set(false)} />;
   }
   root = createRoot(el);
   await act(async () => root!.render(<Host />));
@@ -284,4 +284,29 @@ it("Esc closes the dialog and returns the focus to the prompt box", async () => 
   await act(async () => new Promise((r) => setTimeout(r, 50)));
   expect(d.q("mcp-dialog")).toBeNull();
   expect(document.activeElement).toBe(d.prompt);
+});
+
+const OPENCODE: ConfigCapabilities = { mcpScopes: ["project"], mcpTransports: ["stdio", "http"], skillStates: ["on", "off"], gaps: { mcpTools: "OpenCode does not list the tools of a server.", mcpRemoveScope: "Remove it from ~/.config/opencode/opencode.json." } };
+
+it("with OpenCode flags the add form offers only Project scope, a user server shows the reason instead of Remove, tools show the reason", { timeout: 20_000 }, async () => {
+  const servers: McpServerInfo[] = [
+    { name: "mine", status: "connected", scope: "project", config: { type: "stdio", command: "node" } },
+    { name: "global", status: "connected", scope: "user", config: { type: "http", url: "https://x/mcp" } },
+  ];
+  const d = await render({}, { engine: "opencode", config: OPENCODE, servers });
+  expect(d.calls[0]).toEqual({ type: "mcp.list", cwd: "/p", sessionId: "s1", engine: "opencode" });
+  await d.click(d.all("mcp-row").find((r) => r.textContent?.startsWith("global")));
+  expect(d.q("mcp-remove")).toBeNull();
+  expect(d.q("mcp-remove-gap")?.textContent).toBe(OPENCODE.gaps.mcpRemoveScope);
+  expect(d.q("mcp-tools-gap")?.textContent).toBe(OPENCODE.gaps.mcpTools);
+  await d.click(d.button("← Back to list"));
+  await d.click(d.all("mcp-row").find((r) => r.textContent?.startsWith("mine")));
+  expect(d.q("mcp-remove")).not.toBeNull();
+  await d.click(d.button("← Back to list"));
+  await d.click(d.q("mcp-add"));
+  const group = (name: string) => [...document.querySelectorAll<HTMLElement>(`[role="group"][aria-label="${name}"] button`)].map((b) => b.textContent ?? "");
+  expect(group("Scope")).toHaveLength(1);
+  expect(group("Scope")[0]).toMatch(/^Project/);
+  expect(group("Transport").some((t) => t.startsWith("SSE"))).toBe(false);
+  expect(group("Transport")).toHaveLength(2);
 });

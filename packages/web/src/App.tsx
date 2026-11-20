@@ -4552,6 +4552,8 @@ export function App() {
           sessionId={mcp.sessionId}
           server={mcp.server}
           changed={configChanged[mcp.cwd]}
+          engine={shownEngine}
+          config={shownCaps.config}
           request={(m) => client.current!.request(m)}
           onClose={() => setMcp({ ...mcp, open: false })}
         /></OnFirstOpen>

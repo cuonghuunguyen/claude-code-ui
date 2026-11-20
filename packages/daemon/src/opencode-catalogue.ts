@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { EFFORTS, type ClientMessage, type ModelInfo, type PermissionMode, type SessionListItem } from "@claude-ui/protocol";
 import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx, type SavedSession, type Settings } from "./engine-catalogue.ts";
 import { brokenState, createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels, primaryAgents, ProviderStateBroken, type OpenCodeMcpRoute } from "./opencode-engine.ts";
+import { createOpenCodeMcpConfig } from "./opencode-config-mcp.ts";
 import { checkLogin, listProviders, loginError } from "./opencode-providers.ts";
 import { createOpenCodeServer, OpenCodeError, type OpenCodeServer } from "./opencode-server.ts";
 import { mapLimit } from "./session-scan.ts";
@@ -20,7 +21,7 @@ const PROVIDERS_BROKEN_BUSY = "OpenCode's provider list is broken. It is reloade
 
 export type OpenCodeCatalogueOpts = {
   /** Test seam: `command` replaces the PATH lookup of `opencode` (argv prefix), `env` is added to the OpenCode child's environment. */
-  server?: { command?: string[]; env?: () => NodeJS.ProcessEnv; startTimeoutMs?: number; /** The server to use instead of a new one (opencode-catalogues.ts shares one between both adapters). */ instance?: OpenCodeServer; /** How long `session.list` waits for OpenCode (default 3 s). */ listWaitMs?: number };
+  server?: { command?: string[]; env?: () => NodeJS.ProcessEnv; startTimeoutMs?: number; /** The server to use instead of a new one (opencode-catalogues.ts shares one between both adapters). */ instance?: OpenCodeServer; /** How long `session.list` waits for OpenCode (default 3 s). */ listWaitMs?: number; /** How long the MCP servers dialog waits for OpenCode before it shows the servers as pending (default 3 s). */ mcpWaitMs?: number };
   /** How OpenCode reaches the daemon's MCP route (the route itself stays in server.ts). */
   mcp: OpenCodeMcpRoute;
 };
@@ -266,6 +267,7 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
 
   return {
     engine: openCodeEngine,
+    config: { mcp: createOpenCodeMcpConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), hidden: (name) => openCodeEngine.attached.has(name), waitMs: o.server?.mcpWaitMs }) },
     listScope: "folders",
     ownsId,
     // Listed, created or opened here: not a UUID (the transcript scan's shape), so it is not found by one.

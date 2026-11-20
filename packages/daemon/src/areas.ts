@@ -30,7 +30,7 @@ export function connectAreas(ctx: DaemonContext, conn: Connection) {
   const worktree = createWorktreeArea(ctx);
   const files = createFilesArea(ctx, conn);
   const terminal = createTerminalArea(ctx, conn);
-  const config = createConfigArea(ctx);
+  const config = createConfigArea(ctx, conn);
   const sessions = createSessionsArea(ctx, conn);
   // Every dispatched type has a handler: a missing key is a typecheck error.
   ({ ...engine.handlers, ...settings.handlers, ...git.handlers, ...worktree.handlers, ...files.handlers, ...terminal.handlers, ...config.handlers, ...sessions.handlers }) satisfies Handlers<DispatchedType>;

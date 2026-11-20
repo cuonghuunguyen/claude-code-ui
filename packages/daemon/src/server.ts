@@ -263,7 +263,7 @@ export function createDaemon(opts: {
   /** Write-only secrets (secrets.json, GH-447: the Jira token); in memory when omitted. */
   secrets?: Secrets;
   /** Test seam: `command` replaces the PATH lookup of `opencode` (argv prefix), `env` is added to the OpenCode child's environment. */
-  opencode?: { command?: string[]; env?: () => NodeJS.ProcessEnv; startTimeoutMs?: number; /** How long `session.list` waits for OpenCode (default 3 s). */ listWaitMs?: number };
+  opencode?: { command?: string[]; env?: () => NodeJS.ProcessEnv; startTimeoutMs?: number; /** How long `session.list` waits for OpenCode (default 3 s). */ listWaitMs?: number; /** How long the MCP servers dialog waits for OpenCode before it shows the servers as pending (default 3 s). */ mcpWaitMs?: number };
   /** Test seam: replaces the built-in Claude and OpenCode catalogues (fake Engines need no process). */
   catalogues?: (ctx: CatalogueContext) => EngineCatalogue[];
   /** Test seam (GH-447): the fetch of the Jira client. */

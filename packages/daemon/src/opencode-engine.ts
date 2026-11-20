@@ -22,7 +22,7 @@ import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 export const OPENCODE_MODES: PermissionMode[] = ["config", "default", "acceptEdits", "dontAsk", "plan", "bypassPermissions"];
 /** Modes offered: config first (the default, GH-705); plan is the plan agent (GH-684). */
 export const OPENCODE_PERMISSION_MODES: PermissionMode[] = ["config", "default", "acceptEdits", "dontAsk", "bypassPermissions"];
-export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_PERMISSION_MODES, agents: true, providers: true, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true, shell: true };
+export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_PERMISSION_MODES, agents: true, providers: true, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true, shell: true, config: { mcpScopes: ["project"], mcpTransports: ["stdio", "http"], skillStates: ["on", "off"], gaps: { mcpTools: "OpenCode does not list the tools of a server.", mcpRemoveScope: "Remove it from ~/.config/opencode/opencode.json." } } };
 
 export type Rule = { permission: string; pattern: string; action: "allow" | "ask" | "deny" };
 /** An entry of `GET /agent`. */
@@ -514,6 +514,7 @@ class OpenCodeSession implements EngineSession {
       for (const key of keys) {
         attaching = key;
         const name = mcpName(this.id, key);
+        this.engine.attached.add(name);
         if (status[name]?.status === "connected") continue;
         const timeout = key === "orchestration" ? MAX_WAIT_MS + 60_000 : (this.opts.daemonMcp?.timeoutMs() ?? 120_000);
         const config = { type: "remote", url, headers: { authorization: `Bearer ${route!.token(this.id, key)}` }, oauth: false, timeout };
@@ -1287,6 +1288,8 @@ class OpenCodeEngineImpl implements Engine {
   private readonly sessions = new Set<OpenCodeSession>();
   private unsubscribe: (() => void) | undefined;
   private readonly providerLists = new Map<string, Promise<ProviderList>>();
+  /** Names of the daemon's own MCP servers attached to OpenCode (`mcpName()`): the MCP servers dialog leaves them out. */
+  readonly attached = new Set<string>();
 
   constructor(
     readonly server: OpenCodeServer,

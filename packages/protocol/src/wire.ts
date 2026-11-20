@@ -32,6 +32,17 @@ export const OPENCODE_MIN = "1.18.0";
 /** Oldest OpenCode 2 this daemon works with: its API was checked against 2.3.0. */
 export const OPENCODE2_MIN = "2.3.0";
 /** What an Engine supports for its sessions (ADR 0012); web hides or disables a control by these, never by engine name. */
+/** Config dialog controls an Engine lacks (ADR 0012): each gap hides its control and shows the reason text in its place. */
+export type ConfigGap = "mcpTools" | "mcpRemoveScope" | "skillTokens" | "pluginSwitch" | "pluginUpdate" | "pluginCatalog" | "marketplaces";
+export type ConfigCapabilities = {
+  /** Scopes `mcp.add` and `mcp.remove` write. */
+  mcpScopes: ConfigScope[];
+  /** Transports `mcp.add` takes. */
+  mcpTransports: ("stdio" | "http" | "sse")[];
+  /** States the skill button cycles through. */
+  skillStates: SkillState[];
+  gaps: Partial<Record<ConfigGap, string>>;
+};
 export type EngineCapabilities = {
   /** Every permission mode the Engine has; SessionInfo.permissionModes is the subset offered now. */
   permissionModes: PermissionMode[];
@@ -49,6 +60,8 @@ export type EngineCapabilities = {
   agents?: boolean;
   /** The Engine's models come from providers the user connects in Settings: the model list is fetched per Side when a session shows, dropped on a provider change, and the picker offers Connect. Absent = false. */
   providers?: boolean;
+  /** What the config dialogs (MCP servers, skills, plugins) can do on this Engine. Absent = Claude's full set. */
+  config?: ConfigCapabilities;
 };
 export const ALL_CAPABILITIES: EngineCapabilities = { permissionModes: PERMISSION_MODES, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: true, account: true, contextUsage: true, shell: true };
 /** The session's flags; absent (a daemon before Engines) = ALL_CAPABILITIES. */
@@ -446,23 +459,23 @@ export type ClientMessage = { reqId: string; side?: string } & (
    * Reply WorktreeRemoveResult. Broadcasts `sessions.changed`.
    */
   | { type: "worktree.remove"; cwd: string; path: string; expectSafe?: boolean; expect?: { uncommitted: number; ahead: number; ignored?: number }; deleteBranch?: boolean }
-  // MCP servers dialog (docs/spec.md "Config dialogs"): the live query of `sessionId` when it has one, else the config query of `cwd`.
+  // MCP servers dialog (docs/spec.md "Config dialogs"): the live query of `sessionId` when it has one, else the config query of `cwd`. `engine`: the Engine of the shown session or new-session tab (absent = the session's own, else claude).
   /** Reply McpListResult. */
   | { type: "mcp.list"; cwd: string; sessionId?: string }
   /** `toggleMcpServer()`: persists for new sessions of the project; reply McpListResult. */
-  | { type: "mcp.toggle"; cwd: string; sessionId?: string; name: string; enabled: boolean }
+  | { type: "mcp.toggle"; cwd: string; sessionId?: string; engine?: Engine; name: string; enabled: boolean }
   /** Reply McpListResult. */
-  | { type: "mcp.reconnect"; cwd: string; sessionId?: string; name: string }
+  | { type: "mcp.reconnect"; cwd: string; sessionId?: string; engine?: Engine; name: string }
   /** Reply McpAuthResult; the CLI then waits for the OAuth redirect on its callback port. */
-  | { type: "mcp.authenticate"; cwd: string; sessionId?: string; name: string }
+  | { type: "mcp.authenticate"; cwd: string; sessionId?: string; engine?: Engine; name: string }
   /** The redirect URL pasted from a browser that could not reach the CLI's callback port. */
-  | { type: "mcp.oauthCallback"; cwd: string; sessionId?: string; name: string; callbackUrl: string }
+  | { type: "mcp.oauthCallback"; cwd: string; sessionId?: string; engine?: Engine; name: string; callbackUrl: string }
   /** HTTP/SSE servers only. */
-  | { type: "mcp.clearAuth"; cwd: string; sessionId?: string; name: string }
+  | { type: "mcp.clearAuth"; cwd: string; sessionId?: string; engine?: Engine; name: string }
   /** `claude mcp add --scope <scope>`; running sessions do not get it. Broadcasts `config.changed`. */
-  | { type: "mcp.add"; cwd: string; name: string; scope: ConfigScope; config: McpAddConfig }
+  | { type: "mcp.add"; cwd: string; engine?: Engine; name: string; scope: ConfigScope; config: McpAddConfig }
   /** `claude mcp remove --scope <scope>`; running sessions keep it until restarted. Broadcasts `config.changed`. */
-  | { type: "mcp.remove"; cwd: string; name: string; scope: ConfigScope }
+  | { type: "mcp.remove"; cwd: string; engine?: Engine; name: string; scope: ConfigScope }
   // "Slash commands" dialog (docs/spec.md "Config dialogs"): the live query of `sessionId` when it has one, else the config query of `cwd`.
   /** `getSkillsDialog()`; reply SkillsResult (empty when the CLI does not support it). */
   | { type: "skills.list"; cwd: string; sessionId?: string }
@@ -1217,9 +1230,10 @@ export type McpServerInfo = {
   config?: { type: string; command?: string; url?: string };
   tools?: { name: string; readOnly?: boolean; destructive?: boolean }[];
 };
-export type McpListResult = { servers: McpServerInfo[] };
+/** `applied` false: saved, but the Engine loads it when the sessions of the folder are idle (OpenCode). Absent = applied. */
+export type McpListResult = { servers: McpServerInfo[]; applied?: boolean };
 /** `requiresUserAction`: the user signs in at `authUrl`; the server connects once the CLI got the redirect. */
-export type McpAuthResult = { authUrl?: string; requiresUserAction: boolean };
+export type McpAuthResult = { authUrl?: string; requiresUserAction: boolean; /** OpenCode on a browser from the daemon machine: OpenCode opened the sign-in tab itself (no `authUrl`, nothing to paste). */ opened?: boolean };
 /** Add form values as `claude mcp add` takes them: `env` "KEY=value", `headers` "Header-Name: value". */
 export type McpAddConfig =
   | { transport: "stdio"; command: string; args: string[]; env: string[] }
