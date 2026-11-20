@@ -715,7 +715,6 @@ export function App() {
   // A merged group's Remove: every project of the repository (the confirmation names the count).
   const [removingAll, setRemovingAll] = useState<string[]>();
   const lastRemovingAll = useRef<string[]>(undefined);
-  if (removingAll) lastRemovingAll.current = removingAll;
   const [closingGroup, setClosingGroup] = useState<{ ids: string[]; name: string }>();
   const lastClosingGroup = useRef({ ids: [] as string[], name: "" });
   if (closingGroup) lastClosingGroup.current = closingGroup;
@@ -1803,7 +1802,7 @@ export function App() {
       // Gone at once; the list refresh below scans every transcript and can take seconds.
       setProjects((p) => p.filter((x) => !gone.includes(x) && !roots.includes(x)));
       closeTabs(new Set(list.filter((s) => roots.some((r) => inProject(r)(s))).map((s) => s.id)));
-      if (draftCwd === cwd) setDraftCwd(undefined);
+      if (draftCwd && roots.includes(draftCwd)) setDraftCwd(undefined);
       await refreshList();
     } catch (e) {
       setError((e as Error).message);
@@ -4086,7 +4085,7 @@ export function App() {
               activeId={currentId}
               onOpen={open}
               onNew={newSession}
-              onRemove={(cwd, all) => (setRemoving(cwd), setRemovingAll(all))}
+              onRemove={(cwd, all) => ((lastRemovingAll.current = all), setRemoving(cwd), setRemovingAll(all))}
               onNewWorktree={(cwd, quick) => (setDrawer(false), quick ? void newWorktree(cwd) : setCreatingWt(cwd))}
               onRemoveWorktree={askRemoveWorktree}
               onWarmWorktree={warmWorktree}

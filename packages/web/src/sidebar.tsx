@@ -672,7 +672,8 @@ export function SessionList({
                 </span>
               </h3>
               </RowContextMenu>
-              {(statusAt.get(groupKey(g)) ?? []).map((cwd) => <SideStatusLine key={cwd} cwd={cwd} />)}
+              {/* A collapsed merged group renders no rows: the lines meant for its rows show under the header then. */}
+              {[...(statusAt.get(groupKey(g)) ?? []), ...(open ? [] : g.worktrees.filter((r) => statusRows.has(r.path)).map((r) => r.project ?? r.path))].map((cwd) => <SideStatusLine key={cwd} cwd={cwd} />)}
               {open && !g.sessions.length && !g.worktrees.length && <p className="py-1 pl-7 text-muted-foreground text-sm">{emptyText}</p>}
               {open && days(g.sessions, 0, g.cwd, projectName(g.cwd))}
               {open &&

@@ -744,6 +744,15 @@ describe("one repository on several Sides is one group (GH-591)", () => {
     expect(onNew).not.toHaveBeenCalled();
   });
 
+  it("a collapsed merged group still shows the status line and Retry of a Side that is not ready, under its header", async () => {
+    const sideState = { act: vi.fn(), of: (cwd: string) => ({ id: sideIds[cwd] ?? "local", label: titles[cwd]!.label, state: cwd === ssh ? "error" : "ready", ...(cwd === ssh && { message: "SSH: dev stopped. Retry to start it again." }) }) as never };
+    localStorage.setItem("claude-ui.collapsed", JSON.stringify([`repo:${KEY}`]));
+    const { el } = await render({ ...props, sideState });
+    expect(wtRows(el)).toEqual([]);
+    expect(el.querySelectorAll('[data-testid="sidebar-side-status"]')).toHaveLength(1);
+    expect(el.querySelectorAll('[data-testid="sidebar-side-action"]')).toHaveLength(1);
+  });
+
   it("workers keep today's indent below a merged row (no new level)", async () => {
     const withWorker = [...list, { ...item("c", mac, "Coordinator", 1), }, { ...item("w1", mac, "Impl", 2), coordinatorId: "c", workerName: "impl" }];
     openWorkers("coordinator:c");
