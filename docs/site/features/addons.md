@@ -56,7 +56,7 @@ The card lists what the addon asks for, one plain line each, and the themes, vie
 | `version`, `description` | Shown in the dialog |
 | `capabilities` | The list above; every entry that needs one must be covered |
 | `themes` | `[{id, name, light?, dark?, options?}]`, see [themes](#themes) |
-| `css` | A `.css` file applied app-wide while the addon is enabled |
+| `css` | A `.css` file applied app-wide while the addon is enabled, in the [`addon` cascade layer](addon-parts#cascade) |
 | `views` | `[{id, title, entry, kind: "pane" \| "band", phone?}]`. `phone: false` hides the view below 640 px |
 | `commands` | `[{name, description, argumentHint?}]` |
 | `commandsEntry` | The `.html` that handles commands; the first view's entry when absent |

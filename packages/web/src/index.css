@@ -1,3 +1,5 @@
+/* Cascade (GH-868): Tailwind layers, then `host` (this file's rules and the generated colour themes: they still beat utilities), then `addon` (`addon.<name>`: addon CSS beats every host rule without !important). A host rule outside a layer would beat every addon rule; theme.test.ts keeps them in. */
+@layer theme, base, components, utilities, host, addon;
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
@@ -63,6 +65,7 @@
     --shadow-button-contrast: var(--elevation-button-contrast);
 }
 
+@layer host {
 /* Guided tour popover fade-in (guide-tour.tsx). */
 @keyframes guide-in {
     from {
@@ -208,6 +211,7 @@
     --avatar-gray: #5c5c5c; --avatar-gray-fg: #ffffff;
 }
 
+}
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -220,6 +224,7 @@
     @apply font-sans;
     }
 }
+@layer host {
 
 /* Session timeline text (OpenCode markdown.css): system sans 14px / 160%. */
 .timeline {
@@ -904,8 +909,8 @@ html:root[data-theme="neon"]:not(.dark) {
 :root[data-theme="neon"] [data-part="focus-page"] > div:first-child { background: linear-gradient(90deg, var(--nx-tint-hi), transparent 60%); }
 :root[data-theme="neon"] [data-testid="focus-title"] { font-family: var(--nx-mono); text-transform: uppercase; letter-spacing: .12em; color: var(--primary); }
 :root[data-theme="neon"] [data-testid="bottom-panel"] { border-color: var(--nx-edge); }
-:root[data-theme="neon"] :is(.cm-editor .cm-gutters) { border-right: 1px solid var(--nx-edge); background: color-mix(in srgb, var(--background) 40%, transparent); }
-:root[data-theme="neon"] .cm-editor .cm-cursor { border-left-color: var(--nx-hi); }
+:root[data-theme="neon"] :is(.cm-editor .cm-gutters) { border-right: 1px solid var(--nx-edge) !important; background: color-mix(in srgb, var(--background) 40%, transparent) !important; } /* !important: the CodeMirror theme is injected unlayered and beats any layer */
+:root[data-theme="neon"] .cm-editor .cm-cursor { border-left-color: var(--nx-hi) !important; }
 :root[data-theme="neon"] .xterm { padding-left: 2px; }
 :root[data-theme="neon"] [data-part="context-meter"] svg { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--nx-glow) 70%, transparent)); }
 
@@ -999,11 +1004,13 @@ html:root[data-theme="neon"]:not(.dark) {
 :root[data-theme="neon"] ::-webkit-scrollbar-thumb:hover { background: var(--nx-cyan); box-shadow: 0 0 8px var(--nx-glow); }
 :root[data-theme="neon"] ::-webkit-scrollbar-track { background: transparent; }
 
+}
 @property --neon-a {
     syntax: "<angle>";
     inherits: false;
     initial-value: 0deg;
 }
+@layer host {
 
 /* ---------- Motion (transform / opacity only, reduced motion: none). ---------- */
 @media (prefers-reduced-motion: no-preference) {
@@ -1103,3 +1110,4 @@ html:root[data-theme="neon"]:not(.dark) {
     --nx-light-rain3: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 360 600' preserveAspectRatio='none'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%233f6a8f' stop-opacity='0'/%3E%3Cstop offset='1' stop-color='%233f6a8f'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='85.7' y='326.5' width='1.6' height='120' fill='url(%23g)' opacity='0.76'/%3E%3Crect x='225.3' y='39.3' width='1.6' height='91' fill='url(%23g)' opacity='0.90'/%3E%3Crect x='93.4' y='140.6' width='1.6' height='170' fill='url(%23g)' opacity='0.68'/%3E%3Crect x='301.1' y='285.8' width='1.6' height='141' fill='url(%23g)' opacity='0.49'/%3E%3Crect x='228.5' y='520.8' width='1.6' height='132' fill='url(%23g)' opacity='0.84'/%3E%3Crect x='228.5' y='-79.2' width='1.6' height='132' fill='url(%23g)' opacity='0.84'/%3E%3Crect x='241.7' y='38.4' width='1.6' height='151' fill='url(%23g)' opacity='0.75'/%3E%3Crect x='108.5' y='18.6' width='1.6' height='159' fill='url(%23g)' opacity='0.68'/%3E%3Crect x='258.8' y='527.3' width='1.6' height='147' fill='url(%23g)' opacity='0.95'/%3E%3Crect x='258.8' y='-72.7' width='1.6' height='147' fill='url(%23g)' opacity='0.95'/%3E%3Crect x='142.2' y='480.5' width='1.6' height='126' fill='url(%23g)' opacity='0.96'/%3E%3Crect x='142.2' y='-119.5' width='1.6' height='126' fill='url(%23g)' opacity='0.96'/%3E%3Crect x='316.4' y='58.5' width='1.6' height='101' fill='url(%23g)' opacity='0.53'/%3E%3Crect x='347.6' y='261.7' width='1.6' height='140' fill='url(%23g)' opacity='0.58'/%3E%3Crect x='182.6' y='231.5' width='1.6' height='118' fill='url(%23g)' opacity='0.75'/%3E%3Crect x='210.3' y='542.5' width='1.6' height='145' fill='url(%23g)' opacity='0.96'/%3E%3Crect x='210.3' y='-57.5' width='1.6' height='145' fill='url(%23g)' opacity='0.96'/%3E%3Crect x='308.3' y='594.6' width='1.6' height='144' fill='url(%23g)' opacity='0.50'/%3E%3Crect x='308.3' y='-5.4' width='1.6' height='144' fill='url(%23g)' opacity='0.50'/%3E%3Crect x='309.8' y='578.8' width='1.6' height='162' fill='url(%23g)' opacity='0.74'/%3E%3Crect x='309.8' y='-21.2' width='1.6' height='162' fill='url(%23g)' opacity='0.74'/%3E%3Crect x='257.0' y='126.7' width='1.6' height='157' fill='url(%23g)' opacity='0.74'/%3E%3C/svg%3E");
 }
 /* neon-scene:end */
+}
