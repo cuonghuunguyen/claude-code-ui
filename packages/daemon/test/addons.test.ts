@@ -284,7 +284,7 @@ describe("serving", () => {
       expect(r.body).toBe(".a { color: red");
     });
 
-    it("a file over the size cap is served as it is; HEAD answers with the headers only", async () => {
+    it("a file over the size cap reaches the client as it is; HEAD answers with the headers only", async () => {
       const big = ":root { --a: 1 }" + " ".repeat(512 * 1024);
       const base = await themed({ "dusk.css": big, "dawn.css": "" });
       const r = await fetchAddon(`${base}dusk.css?theme=dusk`, "style");
