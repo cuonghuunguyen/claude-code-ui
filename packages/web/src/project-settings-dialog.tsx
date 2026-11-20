@@ -112,6 +112,13 @@ function TextField({ ui, id, value, globalValue, onSave, p }: { ui: Ui; id: stri
   const [text, setText] = useState<string>();
   // A refused value stays in the input next to the daemon's message, so the user can correct it instead of retyping.
   const placeholder = t("projectSettings.globalValue", { value: globalValue || t("projectSettings.none") });
+  // The kept text goes when its message does (another field's save took the error away): the input then shows what is saved.
+  const mine = ui.error?.id === id;
+  const was = useRef(false);
+  useEffect(() => {
+    if (was.current && !mine) setText(undefined);
+    was.current = mine;
+  }, [mine]);
   const commit = async () => {
     if (text === undefined) return;
     const next = text.trim();

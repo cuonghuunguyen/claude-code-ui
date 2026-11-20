@@ -467,6 +467,7 @@ it("projects.overrides: a patch with an invalid override is refused with the fie
   for (const [overrides, message] of bad) expect(() => s.set({ projects: { overrides: overrides as never } })).toThrow(message);
   // A refused Jira URL says so (the https rule), not the whole-map rule.
   expect(() => s.set({ projects: { overrides: { local: { "/p": { jira: { url: "http://jira.example.com" } } } } } })).toThrow(/^Jira URL must be an https address/);
+  expect(checkPatch({ projects: { overrides: { local: { "/p": { jira: { url: "https://user:pw@jira.example.com" } } } } } })).toMatch(/^Jira URL must be .*without user name or password/);
   expect(checkPatch({ projects: { overrides: { local: { "/p": { mode: "plan", jira: { url: "ftp://x" } } } } } })).toMatch(/^Jira URL must be/);
   const next = s.set({ projects: { overrides: { local: { "/p": { mode: "plan", account: "", history: { enabled: false } }, "/empty": { history: {} } }, "ssh:box": {} } } });
   expect(next.projects.overrides).toEqual({ local: { "/p": { mode: "plan", account: "", history: { enabled: false } } } });

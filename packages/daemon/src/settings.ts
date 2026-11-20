@@ -112,7 +112,7 @@ const overrides = (label: string): Check => ({
   // The whole map is one value: name the first Jira URL it refuses instead of the whole-map rule.
   problem: (v) => {
     const url = Object.values(isObj(v) ? v : {}).flatMap((projects) => Object.values(isObj(projects) ? projects : {})).map((o) => (isObj(o) && isObj(o.jira) ? o.jira.url : undefined)).find((u) => typeof u === "string" && u !== "" && !CHECKS.jira.url.patch!(u));
-    return url === undefined ? undefined : JIRA_HTTPS_RULE;
+    return url === undefined ? undefined : (jiraUrlProblem(url as string) ?? `${CHECKS.jira.url.label} must be ${CHECKS.jira.url.patchRule}`);
   },
   rule: `at most ${PROJECT_OVERRIDES_SIDES_MAX} machines with at most ${LABEL_ENTRIES_MAX} projects each, a project holding only known fields of valid values`,
   // A hand-edited entry that fails drops alone; the others stay.

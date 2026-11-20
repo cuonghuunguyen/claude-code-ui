@@ -18,7 +18,7 @@ const MODELS: ModelInfo[] = [
   { value: "opus", displayName: "Opus", description: "" },
 ];
 
-async function render({ side = "local", overrides = {}, refuse, tokens, hold }: { side?: string; overrides?: Settings["projects"]["overrides"]; refuse?: string; tokens?: string[]; hold?: string } = {}) {
+async function render({ side = "local", overrides = {}, refuse, tokens, hold, refuseWhen }: { side?: string; overrides?: Settings["projects"]["overrides"]; refuse?: string; tokens?: string[]; hold?: string; refuseWhen?: string } = {}) {
   let release = () => {};
   const held = new Promise<void>((r) => (release = r));
   let saved = tokens;
@@ -28,7 +28,7 @@ async function render({ side = "local", overrides = {}, refuse, tokens, hold }: 
     calls.push(msg);
     if (msg.type === hold) await held;
     if (msg.type === "settings.set") {
-      if (refuse) throw new Error(refuse);
+      if (refuse && (!refuseWhen || JSON.stringify(msg).includes(refuseWhen))) throw new Error(refuse);
       settings = { ...settings, projects: { overrides: (msg.patch as { projects: Settings["projects"] }).projects.overrides } };
     }
     if (msg.type === "jira.token") {
@@ -228,6 +228,17 @@ it("Jira: the refused URL stays in the input and the message names the field", a
   await enter("project-jira-url-input");
   expect(q("project-jira-url-error")!.textContent).toContain("Jira URL must be an https address");
   expect((q("project-jira-url-input") as HTMLInputElement).value).toBe("http://jira.example.com");
+});
+
+it("Jira: a refused URL does not stay in the input once another field's save took the message away", async () => {
+  const { q } = await render({ tokens: [], refuse: "Jira URL must be an https address", refuseWhen: "http://jira.example.com" });
+  await typeInto("project-jira-url-input", "http://jira.example.com");
+  await enter("project-jira-url-input");
+  expect(q("project-jira-url-error")).not.toBeNull();
+  await click(q("project-mode-select"));
+  await click(q("project-mode-plan"));
+  expect(q("project-jira-url-error")).toBeNull();
+  expect((q("project-jira-url-input") as HTMLInputElement).value).toBe("");
 });
 
 it("Jira: clearing a token that others use asks first and names who loses it; an unshared token clears at once", async () => {
