@@ -128,7 +128,7 @@ describe("runInlineClaude options", () => {
     expect(optionsSeen[0]!.settings).toEqual({ permissions: { allow: ["Read(*)"], deny: ["Bash(rm:*)"], ask: ["Edit"] }, hooks: { PreToolUse: HOOKS }, disableAllHooks: false });
   });
   it("without usable parent permissions or PreToolUse hooks all hooks are off (grants and mode still pass)", async () => {
-    for (const s of [{ settingsError: true }, { settings: {} }, { settings: { effective: { permissions: "x" } } }, { settings: { effective: { hooks: { SessionStart: HOOKS, PreToolUse: [] } } } }, { noParent: true }]) {
+    for (const s of [{ settingsError: true }, { settings: {} }, { settings: { effective: { permissions: "x" } } }, { settings: { effective: { hooks: { SessionStart: HOOKS, PreToolUse: [] } } } }, { settings: { effective: { disableAllHooks: true, hooks: { PreToolUse: HOOKS } } } }, { noParent: true }]) {
       const { done, optionsSeen } = run({ messages: [result()], ...s });
       await done;
       expect(optionsSeen[0]!.settings).toEqual({ disableAllHooks: true });

@@ -112,7 +112,7 @@ async function grantServers(parent: Query | undefined, grants: string[]): Promis
 async function parentSettings(parent: Query | undefined): Promise<{ permissions?: { allow?: string[]; deny?: string[]; ask?: string[] }; preToolUse?: unknown[] }> {
   if (!parent) return {};
   try {
-    const s = (await (parent as Query & { getSettings(): Promise<unknown> }).getSettings()) as { effective?: { permissions?: unknown; hooks?: { PreToolUse?: unknown } } } | undefined;
+    const s = (await (parent as Query & { getSettings(): Promise<unknown> }).getSettings()) as { effective?: { permissions?: unknown; disableAllHooks?: unknown; hooks?: { PreToolUse?: unknown } } } | undefined;
     const out: Awaited<ReturnType<typeof parentSettings>> = {};
     const p = s?.effective?.permissions;
     if (p && typeof p === "object") {
@@ -124,7 +124,8 @@ async function parentSettings(parent: Query | undefined): Promise<{ permissions?
       if (Object.keys(perms).length) out.permissions = perms;
     }
     const h = s?.effective?.hooks?.PreToolUse;
-    if (Array.isArray(h) && h.length) out.preToolUse = h;
+    // A parent that turned hooks off (disableAllHooks) runs none; the inline run must not run them either.
+    if (Array.isArray(h) && h.length && s?.effective?.disableAllHooks !== true) out.preToolUse = h;
     return out;
   } catch {
     return {};
