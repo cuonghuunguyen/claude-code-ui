@@ -1361,7 +1361,7 @@ type Router = { attach(id: string): void; detach(id: string): void };
 /** The local daemon's answer to one message: its reply or error. */
 type LocalCall = (msg: ClientMessage) => Promise<ServerMessage>;
 
-type ListLike = { engines?: unknown[]; sessions: { id: string; cwd: string; lastActivity: number }[]; projects: string[]; recentProjects: { cwd: string; lastActivity: number }[]; worktrees?: Record<string, { path: string }[]> };
+type ListLike = { engines?: unknown[]; sessions: { id: string; cwd: string; lastActivity: number }[]; projects: string[]; recentProjects: { cwd: string; lastActivity: number }[]; worktrees?: Record<string, { path: string }[]>; origins?: Record<string, string> };
 
 /**
  * Per browser connection: forwards each request to its side and merges the answers that span sides. `local` handles a
@@ -1640,6 +1640,7 @@ export function createRouter(opts: {
       if (r.engines) sideEngines[id] = r.engines;
       for (const p of [...r.sessions.map((s) => s.cwd), ...r.projects, ...r.recentProjects.map((x) => x.cwd), ...Object.values(r.worktrees ?? {}).flatMap((w) => w.map((x) => x.path))]) if (sides.claimCwd(id, p)) cwdSides[p] = id;
       merged.worktrees = { ...merged.worktrees, ...r.worktrees };
+      merged.origins = { ...merged.origins, ...r.origins };
       merged.sessions = [...merged.sessions, ...r.sessions];
       merged.projects = [...merged.projects, ...r.projects];
       perSide.push(r.projects);

@@ -33,7 +33,7 @@ import type { DaemonContext, MediaEntry, MediaRead } from "./daemon-context.ts";
 import type { Connection } from "./dispatch.ts";
 import { createJira, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
-import { createWorktree, gitDirsOf, gitEscapes, gitStatus, gitTopOf, limiter, listRepos, listWorktrees, removeWorktree, WorktreeError, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
+import { createWorktree, gitDirsOf, gitEscapes, gitStatus, gitTopOf, limiter, listRepos, listWorktrees, originKeyOf, removeWorktree, WorktreeError, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
 import { createWarmCommitMessage } from "./commit-message.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
@@ -702,6 +702,27 @@ export function createDaemon(opts: {
     // A failed read of a git folder (spawn error, killed process) is not kept: the next list reads again.
     void entry.list.then((l) => l === null && stamp !== "-" && worktreeLists.get(cwd) === entry && worktreeLists.delete(cwd));
     return entry.list;
+  };
+
+  /**
+   * The origin key of each repository, read once per git common dir and again when `<common>/config` changes (file stats only on a hit:
+   * a list runs on every turn start and end, and a git process blocks the event loop on Windows).
+   */
+  const originKeys = new Map<string, { stamp: string; key: Promise<string | undefined> }>();
+  const originOf = (main: string) => {
+    const common = gitDirsOf(main)?.common;
+    if (!common) return Promise.resolve(undefined);
+    const config = join(common, "config");
+    let stamp = "-";
+    try {
+      const st = statSync(config);
+      stamp = `${st.mtimeMs}:${st.size}:${st.ino}`;
+    } catch {}
+    const hit = originKeys.get(common);
+    if (hit?.stamp === stamp) return hit.key;
+    const entry = { stamp, key: originKeyOf(main) };
+    originKeys.set(common, entry);
+    return entry.key;
   };
 
   /**
@@ -1376,6 +1397,14 @@ export function createDaemon(opts: {
         if (l) worktrees[cwd] = l;
       }),
     );
+    const origins: Record<string, string> = {};
+    await Promise.all(
+      open.map(async (cwd) => {
+        const main = worktrees[cwd]?.find((w) => w.main)?.path;
+        const key = main && (await originOf(main));
+        if (key) origins[cwd] = key;
+      }),
+    );
     worktreePaths = new Set(Object.values(worktrees).flatMap((l) => l.filter((w) => !w.outsideRoots).map((w) => w.path)));
     // Sessions of a project's worktrees show under the project (outside the roots there are none: `listed` has only allowed cwds).
     const shown = new Set([...open, ...worktreePaths]);
@@ -1397,6 +1426,7 @@ export function createDaemon(opts: {
       projects: open,
       recentProjects: projects.recent(listed).filter((r) => !shown.has(r.cwd)),
       worktrees,
+      origins,
       // A worker of a listed coordinator shows under it, also when the user removed the worker's project.
       sessions: all2.filter((s) => topIds.has(s.id) || (s.coordinatorId && topIds.has(s.coordinatorId))).sort((a, b) => b.lastActivity - a.lastActivity),
       permissionModes: catalogues.byName(DEFAULT_ENGINE)?.entry().permissionModes ?? [],

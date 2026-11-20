@@ -720,6 +720,12 @@ export type ListResult = {
   cwdSides?: Record<string, string>;
   /** Git worktrees of each listed project that is in a git repository (docs/spec.md "Projects"), the main worktree first. */
   worktrees?: Record<string, Worktree[]>;
+  /**
+   * Repository of each listed project that is in a git repository with an `origin` remote: host and path of the URL, lower case, without
+   * scheme, user, credentials, port and `.git` (`github.com/acme/repo`). The sidebar groups the projects with one key (docs/spec.md "Projects").
+   * Absent: no such project, or an older daemon.
+   */
+  origins?: Record<string, string>;
   /** Names this list for `session.list {since}` (docs/spec.md "Session list versions"). Absent: an older daemon, never a delta. */
   version?: string;
   /** A reply to `since`: `sessions` holds only the rows added or changed since that version, `ids` every listed session id in list order. The other fields are whole. */
