@@ -2,7 +2,7 @@
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import type { PluginsListResult } from "@claude-ui/protocol";
+import type { ConfigCapabilities, PluginsListResult } from "@claude-ui/protocol";
 import type { Request } from "./client.ts";
 import { PluginsDialog } from "./plugins-dialog.tsx";
 
@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 type Handler = (msg: Request) => unknown;
-async function render(handlers: Record<string, Handler> = {}, props: { reloadFailed?: boolean; sessionId?: string } = { sessionId: "s1" }) {
+async function render(handlers: Record<string, Handler> = {}, props: { reloadFailed?: boolean; sessionId?: string; engine?: "opencode"; config?: ConfigCapabilities } = { sessionId: "s1" }) {
   const calls: Request[] = [];
   const request = vi.fn(async (msg: Request) => {
     calls.push(msg);
@@ -46,7 +46,7 @@ async function render(handlers: Record<string, Handler> = {}, props: { reloadFai
   document.body.append(el);
   function Host() {
     const [open, set] = useState(true);
-    return <PluginsDialog open={open} cwd="/p" sessionId={props.sessionId} reloadFailed={props.reloadFailed} request={request as never} onRestarted={onRestarted} onClose={() => (onClose(), set(false))} />;
+    return <PluginsDialog open={open} cwd="/p" engine={props.engine} config={props.config} sessionId={props.sessionId} reloadFailed={props.reloadFailed} request={request as never} onRestarted={onRestarted} onClose={() => (onClose(), set(false))} />;
   }
   root = createRoot(el);
   await act(async () => root!.render(<Host />));
@@ -266,4 +266,65 @@ it("manages marketplaces: source text, add with Enter and its error, refresh, re
   expect(d.calls.some((c) => c.type === "marketplace.remove")).toBe(false);
   await d.click(d.button("Remove"));
   expect(d.calls).toContainEqual({ type: "marketplace.remove", cwd: "/p", name: "local" });
+});
+
+const OPENCODE: ConfigCapabilities = {
+  mcpScopes: ["project"],
+  mcpTransports: ["stdio", "http"],
+  skillStates: ["on", "off"],
+  gaps: {
+    pluginSwitch: "OpenCode has no switch for a plugin. Uninstall removes it from opencode.json.",
+    pluginUpdate: "OpenCode has no update for a plugin.",
+    pluginCatalog: "OpenCode has no plugin catalog. Type an npm package or a path.",
+    pluginRemoveScope: "Only a plugin listed in the project's opencode.json is removed here.",
+    pluginStatus: "OpenCode reports no load result or error for a plugin.",
+    marketplaces: "OpenCode has no marketplaces.",
+  },
+};
+
+it("with OpenCode flags the dialog has no marketplaces tab, no switch, and an install box; only a project plugin has Uninstall", async () => {
+  const list: PluginsListResult = {
+    installed: [
+      { id: "mine", scope: "project", enabled: true, updatable: false },
+      { id: "global-one", scope: "user", enabled: true, updatable: false },
+      { id: "file:///p/.opencode/plugins/auto.js", scope: "folder", enabled: true, updatable: false },
+    ],
+    available: [],
+    marketplaces: [],
+  };
+  let applied = false;
+  let fails = false;
+  const d = await render(
+    { "plugins.list": () => structuredClone(list), "plugins.install": () => (fails ? Promise.reject(new Error("is already in the plugin list")) : applied ? { reload: { reloaded: 0, failed: [], errorCount: 0 }, applied: false } : OK) },
+    { engine: "opencode", config: OPENCODE, sessionId: "s1" },
+  );
+  expect(d.calls.find((c) => c.type === "plugins.list")).toEqual({ type: "plugins.list", cwd: "/p", engine: "opencode" });
+  // The chips of Claude plugins are not asked for: OpenCode has none.
+  expect(d.calls.some((c) => c.type === "mcp.list")).toBe(false);
+  expect(d.q("plugins-tab-marketplaces")).toBeNull();
+  expect(d.all("plugin-switch")).toHaveLength(0);
+  expect(d.all("plugin-dot")).toHaveLength(0);
+  expect(d.q("plugins-search")).toBeNull();
+  expect(d.q("plugins-gaps")!.textContent).toContain(OPENCODE.gaps.pluginSwitch);
+  expect(d.q("plugins-gaps")!.textContent).toContain(OPENCODE.gaps.marketplaces);
+  const [mine, global, folder] = d.all("plugin-installed");
+  expect(mine!.querySelector('[aria-label="Uninstall mine"]')).not.toBeNull();
+  expect(global!.querySelector('[aria-label="Uninstall global-one"]')).toBeNull();
+  expect(folder!.querySelector("button")).toBeNull();
+  expect(global!.textContent).toContain(OPENCODE.gaps.pluginRemoveScope);
+  await d.click(d.button("Uninstall mine"));
+  expect(d.calls).toContainEqual({ type: "plugins.uninstall", cwd: "/p", engine: "opencode", pluginId: "mine", scope: "project" });
+  const input = d.q("plugins-spec") as HTMLInputElement;
+  await d.type(input, "file:///p/listed.js");
+  applied = true;
+  await d.click(d.button("Add plugin"));
+  expect(d.calls).toContainEqual({ type: "plugins.install", cwd: "/p", engine: "opencode", pluginId: "file:///p/listed.js", scope: "project" });
+  expect(d.q("banner-success")!.textContent).toBe("Saved. It applies when the sessions of this folder are idle.");
+  expect(input.value).toBe("");
+  // A refused entry stays typed.
+  await d.type(input, "dup");
+  fails = true;
+  await d.click(d.button("Add plugin"));
+  expect(d.q("banner-error")).not.toBeNull();
+  expect(input.value).toBe("dup");
 });

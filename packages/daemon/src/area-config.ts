@@ -16,7 +16,22 @@ export function createConfigArea(ctx: ConfigAreaContext, conn: Pick<Connection, 
       return res.fail("bad_cwd", `Working directory not found: ${msg.cwd}. If this session's folder was deleted, re-open the project and try again.`);
     const cwd = allowed(msg.cwd);
     if (!cwd || !statSync(cwd).isDirectory()) return res.fail("cwd_not_allowed", `not a directory inside the allowlisted roots: ${msg.cwd}`);
-    if (!msg.type.startsWith("mcp.") && !msg.type.startsWith("skills."))
+    // The session's running query when it runs in that project; otherwise the project's config query.
+    const s = "sessionId" in msg && typeof msg.sessionId === "string" ? sessions.get(msg.sessionId) : undefined;
+    // The Engine of the request: the live session's, else the one the client shows, else Claude (an older client). Only OpenCode answers config requests besides Claude.
+    const engine = (s ? s.info().engine : undefined) ?? ("engine" in msg ? msg.engine : undefined) ?? "claude";
+    const plugin = !msg.type.startsWith("mcp.") && !msg.type.startsWith("skills.");
+    if (plugin && engine !== "claude")
+      try {
+        const c = catalogues.byName(engine)?.config;
+        if (!c) return res.fail("config_unsupported", `The ${engine} engine has no Plugins dialog.`);
+        const r = await c.plugins(msg as Parameters<typeof c.plugins>[0], cwd);
+        if (!msg.type.endsWith(".list")) commandCache.clear();
+        return res.reply(r);
+      } catch (e) {
+        return res.fail(e instanceof EngineError || e instanceof ConfigError ? e.code : "plugins_failed", (e as Error).message);
+      }
+    if (plugin)
       try {
         const r = await plugins.handle(msg as PluginsRequest, cwd);
         if (!msg.type.endsWith(".list")) commandCache.clear();
@@ -24,10 +39,6 @@ export function createConfigArea(ctx: ConfigAreaContext, conn: Pick<Connection, 
       } catch (e) {
         return res.fail(e instanceof ConfigError ? e.code : "plugins_failed", (e as Error).message);
       }
-    // The session's running query when it runs in that project; otherwise the project's config query.
-    const s = "sessionId" in msg && typeof msg.sessionId === "string" ? sessions.get(msg.sessionId) : undefined;
-    // The Engine of the request: the live session's, else the one the client shows, else Claude (an older client). Only OpenCode answers config requests besides Claude.
-    const engine = (s ? s.info().engine : undefined) ?? ("engine" in msg ? msg.engine : undefined) ?? "claude";
     if (engine !== "claude")
       try {
         const c = catalogues.byName(engine)?.config;

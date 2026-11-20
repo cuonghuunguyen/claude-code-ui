@@ -40,6 +40,8 @@ export type EngineConfig = {
   mcp(msg: Extract<ClientMessage, { type: `mcp.${string}` }>, cwd: string, ctx: { /** The request comes from a browser on the daemon machine (ADR 0011). */ local: boolean }): Promise<unknown>;
   /** `skills.list` replies SkillsResult, `skills.setState` SkillsSetStateResult. */
   skills(msg: Extract<ClientMessage, { type: `skills.${string}` }>, cwd: string): Promise<unknown>;
+  /** Takes every `plugins.*` and `marketplace.*` request; replies PluginsListResult or PluginWriteResult. */
+  plugins(msg: Extract<ClientMessage, { type: `plugins.${string}` | `marketplace.${string}` }>, cwd: string): Promise<unknown>;
 };
 
 export interface EngineCatalogue {

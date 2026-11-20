@@ -4594,6 +4594,8 @@ export function App() {
         <OnFirstOpen open={plugins.open}><PluginsDialog
           open={plugins.open}
           cwd={plugins.cwd}
+          engine={shownEngine}
+          config={shownCaps.config}
           sessionId={plugins.sessionId}
           changed={configChanged[plugins.cwd]}
           reloadFailed={!!plugins.sessionId && reloadFailed.has(plugins.sessionId)}

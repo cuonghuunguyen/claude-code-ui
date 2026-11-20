@@ -15,7 +15,8 @@
 import { createServer } from "node:http";
 import { Server } from "node:net";
 import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { dirname, join, resolve } from "node:path";
 
 const log = (o) => process.env.FAKE_OPENCODE_LOG && appendFileSync(process.env.FAKE_OPENCODE_LOG, `${JSON.stringify(o)}\n`);
 const args = process.argv.slice(2);
@@ -102,8 +103,20 @@ function projectConfig(dir) {
     const file = join(dir ?? "", f);
     if (!dir || !existsSync(file)) continue;
     const cfg = JSON.parse(readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""));
-    for (const [k, v] of Object.entries(cfg)) out[k] = v && typeof v === "object" && !Array.isArray(v) ? { ...out[k], ...v } : v;
+    // Like the real server: `plugin` lists of the files are joined (without duplicates), other keys override.
+    for (const [k, v] of Object.entries(cfg)) out[k] = k === "plugin" && Array.isArray(v) ? [...new Set([...(out[k] ?? []), ...v.map((x) => (/^\.\.?\//.test(typeof x === "string" ? x : x[0]) ? pathToFileURL(resolve(dirname(file), typeof x === "string" ? x : x[0])).href : x))])] : v && typeof v === "object" && !Array.isArray(v) ? { ...out[k], ...v } : v;
   }
+  // Plugin files of .opencode/plugin(s)/ are found by OpenCode and listed as file:// URLs.
+  for (const d of ["plugin", "plugins"]) {
+    const folder = join(dir ?? "", ".opencode", d);
+    if (dir && existsSync(folder)) out.plugin = [...new Set([...(out.plugin ?? []), ...readdirSync(folder).sort().map((f) => pathToFileURL(join(folder, f)).href)])];
+  }
+  return out;
+}
+/** What GET /config answers: the global config (data.config / POST /__config) under the project's; the `plugin` lists of both are joined. */
+function mergedConfig(dir, project = projectConfig(dir)) {
+  const out = { ...config, ...project };
+  if (config.plugin || project.plugin) out.plugin = [...new Set([...(config.plugin ?? []), ...(project.plugin ?? [])])];
   return out;
 }
 /** The status map of a directory, seeded from its config on first use and again after a dispose: enabled false = disabled, a missing binary = failed, a remote server whose url holds "oauth" = needs_auth. */
@@ -323,8 +336,8 @@ const server = createServer(async (req, res) => {
   // The scripted config (default_agent, small_model) under the project files' keys (mcp).
   // FAKE_OPENCODE_CONFIG_CACHE=1: the project files are read once per directory and again after POST /instance/dispose, like the real server (a hand edit shows only then).
   if (url.pathname === "/config" && req.method === "GET") {
-    if (process.env.FAKE_OPENCODE_CONFIG_CACHE !== "1") return json(200, { ...config, ...projectConfig(dir) });
-    return json(200, { ...config, ...(configCache.get(dir ?? "") ?? (configCache.set(dir ?? "", projectConfig(dir)), configCache.get(dir ?? ""))) });
+    if (process.env.FAKE_OPENCODE_CONFIG_CACHE !== "1") return json(200, mergedConfig(dir));
+    return json(200, mergedConfig(dir, configCache.get(dir ?? "") ?? (configCache.set(dir ?? "", projectConfig(dir)), configCache.get(dir ?? ""))));
   }
   if (url.pathname === "/agent") return json(200, agents ?? [{ name: "build", mode: "primary", permission: [] }, { name: "docs", mode: "primary", description: "Writes docs", permission: [{ permission: "edit", pattern: "*", action: "deny" }] }, { name: "general", mode: "subagent", permission: [] }, { name: "title", mode: "primary", hidden: true, permission: [] }, { name: "plan", mode: "primary", permission: [{ permission: "edit", pattern: "*", action: "deny" }, { permission: "edit", pattern: ".opencode/plans/*.md", action: "allow" }] }]);
   if (url.pathname === "/session/status") return json(200, { ...Object.fromEntries([...busy].map((id) => [id, { type: "busy" }])), ...Object.fromEntries(statuses) });

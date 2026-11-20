@@ -7,6 +7,8 @@ import type {
   AvailablePlugin,
   InstalledPlugin,
   MarketplaceInfo,
+  ConfigCapabilities,
+  Engine,
   McpListResult,
   McpServerInfo,
   PluginsListResult,
@@ -34,6 +36,8 @@ type Failure = { plugin: InstalledPlugin; kind: PluginUpdateFailure; message: st
 export function PluginsDialog({
   open,
   cwd,
+  engine,
+  config,
   sessionId,
   changed = 0,
   reloadFailed,
@@ -43,6 +47,10 @@ export function PluginsDialog({
 }: {
   open: boolean;
   cwd: string;
+  /** The Engine of the shown session or new-session tab; sent with every request. */
+  engine?: Engine;
+  /** What the Engine's Plugins dialog can do (`capabilities.config`); absent = Claude's full set. */
+  config?: ConfigCapabilities;
   sessionId?: string;
   changed?: number;
   reloadFailed?: boolean;
@@ -72,6 +80,10 @@ export function PluginsDialog({
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<string>();
   const [confirmRemove, setConfirmRemove] = useState<string>();
+  const [spec, setSpec] = useState("");
+  const [typing, setTyping] = useState(false);
+  const eng = engine && { engine };
+  const gaps = config?.gaps ?? {};
 
   const ask = useRef(request);
   ask.current = request;
@@ -82,9 +94,10 @@ export function PluginsDialog({
   const load = async () => {
     const n = ++sent.current;
     const { cwd, sessionId } = where.current;
-    const mcp = ask.current<McpListResult>({ type: "mcp.list", cwd, ...(sessionId && { sessionId }) }).catch(() => undefined);
+    // The chips need the servers of Claude plugins; an Engine with its own dialog lists none.
+    const mcp = config ? Promise.resolve(undefined) : ask.current<McpListResult>({ type: "mcp.list", cwd, ...(sessionId && { sessionId }) }).catch(() => undefined);
     try {
-      const r = await ask.current<PluginsListResult>({ type: "plugins.list", cwd });
+      const r = await ask.current<PluginsListResult>({ type: "plugins.list", cwd, ...eng });
       if (n !== sent.current) return;
       setInstalled(r.installed);
       setAvailable(r.available);
@@ -125,20 +138,37 @@ export function PluginsDialog({
   const clear = () => (setError(undefined), setNotice(undefined));
   const afterReload = (reload?: ReloadResult) => reload?.failed.length && setFailedReload(reload.failed);
   /** A write that answers PluginWriteResult: the error line on failure, the reload-failed dialog, then a fresh list. */
-  const write = async (msg: Request) => {
+  const write = async (msg: Request): Promise<boolean> => {
     clear();
+    let done = false;
     try {
-      afterReload((await request<PluginWriteResult>(msg)).reload);
+      const r = await request<PluginWriteResult>(msg);
+      afterReload(r.reload);
+      if (r.applied === false) setNotice(t("session.pluginsDialog.savedLater"));
+      done = true;
     } catch (e) {
       setError((e as Error).message);
     }
     await refresh();
+    return done;
   };
+  /** The install box of an Engine without a catalog: the typed npm package or path goes into the project's plugin list. */
+  async function addSpec() {
+    const v = spec.trim();
+    if (!v || typing) return;
+    setTyping(true);
+    try {
+      // A refused entry stays typed, so it can be corrected.
+      if (await write({ type: "plugins.install", cwd, ...eng, pluginId: v, scope: "project" })) setSpec("");
+    } finally {
+      setTyping(false);
+    }
+  }
   const install = async (p: AvailablePlugin, scope: string) => {
     setPicking(undefined);
     setInstalling(p.pluginId);
     try {
-      await write({ type: "plugins.install", cwd, pluginId: p.pluginId, scope: scope as never });
+      await write({ type: "plugins.install", cwd, ...eng, pluginId: p.pluginId, scope: scope as never });
     } finally {
       setInstalling(undefined);
     }
@@ -160,8 +190,8 @@ export function PluginsDialog({
       setPending((all) => all.filter((x) => x.id !== id));
     }
   };
-  const setEnabled = (id: string, enabled: boolean) => pend(id, enabled ? "enabling" : "disabling", { type: "plugins.setEnabled", cwd, pluginId: id, enabled });
-  const uninstall = (p: InstalledPlugin) => pend(p.id, "uninstalling", { type: "plugins.uninstall", cwd, pluginId: p.id, scope: p.scope });
+  const setEnabled = (id: string, enabled: boolean) => pend(id, enabled ? "enabling" : "disabling", { type: "plugins.setEnabled", cwd, ...eng, pluginId: id, enabled });
+  const uninstall = (p: InstalledPlugin) => pend(p.id, "uninstalling", { type: "plugins.uninstall", cwd, ...eng, pluginId: p.id, scope: p.scope });
 
   async function update(p: InstalledPlugin) {
     if (updating) return;
@@ -248,14 +278,16 @@ export function PluginsDialog({
     await refresh();
   };
 
+  /** An Engine with its own dialog removes only the rows of the scope its Uninstall writes (the project's plugin list). */
+  const removable = (p: InstalledPlugin) => !config || p.scope === "project";
   const shown = filterAvailable(available, search);
   // Install and update clone from git and can take minutes: the dialog says what it waits for and holds the other writes.
-  const working = !!(installing || updating);
+  const working = !!(installing || updating || typing);
   const lines = (
     <>
       {working && (
         <p role="status" className="text-muted-foreground text-sm" data-testid="plugins-installing">
-          {installing ? t("session.pluginsDialog.installing", { name: installing }) : t("session.pluginsDialog.updating", { name: updating! })}
+          {installing ? t("session.pluginsDialog.installing", { name: installing }) : typing ? t("session.pluginsDialog.installing", { name: spec.trim() }) : t("session.pluginsDialog.updating", { name: updating! })}
         </p>
       )}
       {error && <Banner kind="error">{error}</Banner>}
@@ -267,11 +299,37 @@ export function PluginsDialog({
     if (loading) return <Status>{t("session.pluginsDialog.loading")}</Status>;
     if (adding) return <Status>{t("session.pluginsDialog.addingMarketplace")}</Status>;
     if (loadError) return <Banner kind="error">{t("session.pluginsDialog.loadFailed", { error: loadError })}</Banner>;
-    if (!installed.length && !shown.length && !search) return <Status>{t("session.pluginsDialog.none")}</Status>;
+    if (!config && !installed.length && !shown.length && !search) return <Status>{t("session.pluginsDialog.none")}</Status>;
     return (
       <>
         {lines}
-        <label className="relative flex items-center">
+        {config && (
+          <div className="flex flex-col gap-1.5">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={spec}
+                onChange={(e) => setSpec(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && !isImeKey(e.nativeEvent) && void addSpec()}
+                placeholder={t("session.pluginsDialog.specPlaceholder")}
+                aria-label={t("session.pluginsDialog.specPlaceholder")}
+                autoComplete="off"
+                spellCheck={false}
+                className="h-9 min-w-0 flex-1 rounded-md bg-secondary/60 px-3 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary max-md:h-11 max-md:text-base"
+                data-testid="plugins-spec"
+              />
+              <Button className="h-9 max-md:h-11" disabled={!spec.trim() || working} onClick={() => void addSpec()}>
+                {t("session.pluginsDialog.specAdd")}
+              </Button>
+            </div>
+            <p className="text-muted-foreground text-xs leading-4" data-testid="plugins-gaps">
+              {[gaps.pluginCatalog, gaps.pluginSwitch, gaps.pluginUpdate, gaps.pluginStatus, gaps.marketplaces].filter(Boolean).join(" ")}
+            </p>
+            <p className="text-muted-foreground text-xs leading-4">{t("session.pluginsDialog.specHint")}</p>
+          </div>
+        )}
+        {config && !installed.length && <Status>{t("session.pluginsDialog.noneOpenCode")}</Status>}
+        {!config && <label className="relative flex items-center">
           <SearchIcon className="pointer-events-none absolute left-3 size-4 text-faint" aria-hidden />
           <input
             type="text"
@@ -284,14 +342,14 @@ export function PluginsDialog({
             className="h-9 w-full rounded-md bg-secondary/60 pr-3 pl-9 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary max-md:h-11 max-md:text-base"
             data-testid="plugins-search"
           />
-        </label>
+        </label>}
         {installed.length > 0 && (
           <Section title={t("session.pluginsDialog.installed")}>
             {installed.map((p) => (
               <li key={`${p.id}:${p.scope}`} className="flex min-h-11 items-start gap-3 rounded-md px-3 py-2 hover:bg-secondary/50" data-testid="plugin-installed">
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <div className="flex min-w-0 items-center gap-2 font-medium text-[13px]">
-                    <span aria-hidden className={cn("size-2 shrink-0 rounded-full", p.enabled ? "bg-success" : "bg-faint/50")} data-testid="plugin-dot" />
+                    {!gaps.pluginStatus && <span aria-hidden className={cn("size-2 shrink-0 rounded-full", p.enabled ? "bg-success" : "bg-faint/50")} data-testid="plugin-dot" />}
                     <span className="min-w-0 [overflow-wrap:anywhere]">{p.id}</span>
                   </div>
                   {p.description && <p className="text-muted-foreground text-xs leading-4">{p.description}</p>}
@@ -308,6 +366,7 @@ export function PluginsDialog({
                       })}
                     </div>
                   )}
+                  {config && !removable(p) && gaps.pluginRemoveScope && <p className="text-muted-foreground text-xs leading-4" data-testid="plugin-remove-gap">{gaps.pluginRemoveScope}</p>}
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
                   {pendingOf(p.id) && (
@@ -315,15 +374,15 @@ export function PluginsDialog({
                       {PENDING_TEXT[pendingOf(p.id)!]}
                     </span>
                   )}
-                  <Switch on={p.enabled} label={pendingOf(p.id) && pendingOf(p.id) !== "uninstalling" ? PENDING_TEXT[pendingOf(p.id)!] : t("session.pluginsDialog.enable", { name: p.id })} held={working || !!pendingOf(p.id)} onToggle={(on) => void setEnabled(p.id, on)} />
+                  {!gaps.pluginSwitch && <Switch on={p.enabled} label={pendingOf(p.id) && pendingOf(p.id) !== "uninstalling" ? PENDING_TEXT[pendingOf(p.id)!] : t("session.pluginsDialog.enable", { name: p.id })} held={working || !!pendingOf(p.id)} onToggle={(on) => void setEnabled(p.id, on)} />}
                   {p.updatable && (
                     <IconButton label={updating === p.id ? t("session.pluginsDialog.updatingShort") : t("session.pluginsDialog.update")} title={updating === p.id ? t("session.pluginsDialog.updatingShort") : t("session.pluginsDialog.updateTitle")} disabled={working} onClick={() => void update(p)}>
                       <RefreshCwIcon className={cn(updating === p.id && "motion-safe:animate-spin")} />
                     </IconButton>
                   )}
-                  <IconButton label={pendingOf(p.id) === "uninstalling" ? t("session.pluginsDialog.uninstalling") : t("session.pluginsDialog.uninstallLabel", { name: p.id })} title={pendingOf(p.id) === "uninstalling" ? t("session.pluginsDialog.uninstalling") : t("session.pluginsDialog.uninstall")} disabled={working || !!pendingOf(p.id)} onClick={() => void uninstall(p)}>
+                  {removable(p) && <IconButton label={pendingOf(p.id) === "uninstalling" ? t("session.pluginsDialog.uninstalling") : t("session.pluginsDialog.uninstallLabel", { name: p.id })} title={pendingOf(p.id) === "uninstalling" ? t("session.pluginsDialog.uninstalling") : t("session.pluginsDialog.uninstall")} disabled={working || !!pendingOf(p.id)} onClick={() => void uninstall(p)}>
                     <Trash2Icon />
-                  </IconButton>
+                  </IconButton>}
                 </div>
               </li>
             ))}
@@ -478,7 +537,9 @@ export function PluginsDialog({
             ["plugins", t("session.pluginsDialog.tabPlugins"), installed.length],
             ["marketplaces", t("session.pluginsDialog.tabMarketplaces"), marketplaces.length],
           ] as const
-        ).map(([id, label, count]) => (
+        )
+          .filter(([id]) => id === "plugins" || !gaps.marketplaces)
+          .map(([id, label, count]) => (
           <button
             key={id}
             type="button"
@@ -497,7 +558,7 @@ export function PluginsDialog({
         ))}
       </div>
       <div role="tabpanel" className="flex flex-col gap-3">
-        {tab === "plugins" ? pluginsTab() : marketplacesTab()}
+        {tab === "plugins" || gaps.marketplaces ? pluginsTab() : marketplacesTab()}
       </div>
       {failure && failureView && (
         <SmallDialog title={failureView.title} message={failureView.message} close={failureView.close} closePrimary={!failureView.actions.length} onClose={() => setFailure(undefined)} testId="plugins-update-failure">

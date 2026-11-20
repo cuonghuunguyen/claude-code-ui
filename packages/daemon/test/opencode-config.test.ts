@@ -10,7 +10,7 @@ import { createProjects } from "../src/projects.ts";
 import { createSettings } from "../src/settings.ts";
 import { createDaemon } from "../src/server.ts";
 import { fakeQuery } from "./fake-query.ts";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const BIN = fileURLToPath(new URL("./fixtures/opencode/fake-opencode-bin.mjs", import.meta.url));
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
@@ -35,14 +35,14 @@ const FILE = `{
 }
 `;
 
-async function boot(o: { file?: string; fileName?: string; env?: Record<string, string>; mcpWaitMs?: number; orchestration?: boolean } = {}) {
+async function boot(o: { config?: object; file?: string; fileName?: string; env?: Record<string, string>; mcpWaitMs?: number; orchestration?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "occ-")));
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
   if (o.file !== undefined) writeFileSync(join(project, o.fileName ?? "opencode.jsonc"), o.file);
   const logFile = join(root, "fake.log");
   const dataFile = join(root, "data.json");
-  writeFileSync(dataFile, JSON.stringify({ sessions: [], messages: {} }));
+  writeFileSync(dataFile, JSON.stringify({ sessions: [], messages: {}, ...(o.config && { config: o.config }) }));
   const env: Record<string, string> = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_DATA: dataFile, FAKE_OPENCODE_SCRIPT: "", XDG_CONFIG_HOME: join(root, "xdg"), ...o.env };
   const appSettings = createSettings();
   appSettings.set({ terminalAccess: { enabled: false }, inlineTask: { enabled: false }, fork: { enabled: false }, ...(o.orchestration && { orchestration: { enabled: true, workerCap: 20 } }) } as never);
@@ -92,8 +92,10 @@ async function boot(o: { file?: string; fileName?: string; env?: Record<string, 
   const requests = (method: string, path: RegExp | string) => log().filter((l) => l.type === "request" && l.method === method && (typeof path === "string" ? l.path === path : path.test(l.path)));
   cleanups.push(() => (ws.close(), http.close()));
   const mcp = (msg: object) => ok({ cwd: project, engine: "opencode", ...msg });
+  const plugins = (msg: object) => ok({ cwd: project, engine: "opencode", ...msg });
+  const serverPort = () => log().find((l) => l.type === "start")!.port as number;
   const names = (r: { servers: { name: string }[] }) => r.servers.map((s) => s.name).sort();
-  return { root, project, ok, request, requests, log, mcp, names, file: (f = "opencode.jsonc") => readFileSync(join(project, f), "utf8") };
+  return { root, project, ok, request, requests, log, mcp, plugins, port: serverPort, names, file: (f = "opencode.jsonc") => readFileSync(join(project, f), "utf8") };
 }
 
 describe("OpenCode MCP servers dialog", { timeout: TEST_MS }, () => {
@@ -332,5 +334,135 @@ describe("OpenCode skills dialog", { timeout: TEST_MS }, () => {
     await new Promise((r) => setTimeout(r, 900));
     expect(d.states(await d.skills()).review).toBe("on");
     expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+  });
+});
+
+const PLUGIN_FILE = `{
+  // keep this comment
+  "theme": "x",
+  "plugin": [
+    "listed-one",
+    ["opts-plugin", { "k": 1 }],
+    "listed-two"
+  ]
+}
+`;
+const strip = (text: string) => JSON.parse(text.replace(/^\s*\/\/.*$/gm, ""));
+
+describe("OpenCode Plugins dialog", { timeout: TEST_MS }, () => {
+  it("plugins.install on OpenCode appends the spec to the project plugin list and plugins.uninstall removes only that entry", async () => {
+    const d = await boot({ file: PLUGIN_FILE, fileName: "opencode.json" });
+    const added = await d.plugins({ type: "plugins.install", pluginId: " new-plugin ", scope: "project" });
+    expect(added.reload).toEqual({ reloaded: 0, failed: [], errorCount: 0 });
+    expect(d.file("opencode.json")).toContain("// keep this comment");
+    expect(strip(d.file("opencode.json")).plugin).toEqual(["listed-one", ["opts-plugin", { k: 1 }], "listed-two", "new-plugin"]);
+    // Idle folder: disposed so OpenCode loads the new list.
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(1);
+    expect((await d.plugins({ type: "plugins.list" })).installed.map((p: any) => p.id)).toContain("new-plugin");
+    await d.plugins({ type: "plugins.uninstall", pluginId: "opts-plugin", scope: "project" });
+    expect(strip(d.file("opencode.json")).plugin).toEqual(["listed-one", "listed-two", "new-plugin"]);
+    expect(d.file("opencode.json")).toContain("// keep this comment");
+  });
+
+  it("plugins.install while a session of the folder is busy saves without a dispose and says so", async () => {
+    const d = await boot({ file: PLUGIN_FILE, fileName: "opencode.json" });
+    const id: string = (await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" })).session.id;
+    await fetch(`http://127.0.0.1:${d.port()}/__status`, { method: "POST", body: JSON.stringify({ sessionId: id, status: { type: "busy" } }) });
+    const r = await d.plugins({ type: "plugins.install", pluginId: "later", scope: "project" });
+    expect(r.applied).toBe(false);
+    expect(strip(d.file("opencode.json")).plugin).toContain("later");
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+  });
+
+  it("plugins.list on OpenCode marks folder plugins and global plugins as not removable", async () => {
+    const d = await boot({ file: PLUGIN_FILE, fileName: "opencode.json", config: { plugin: ["global-one"] } });
+    mkdirSync(join(d.project, ".opencode", "plugins"), { recursive: true });
+    writeFileSync(join(d.project, ".opencode", "plugins", "auto.js"), "export default {};\n");
+    const { installed, available, marketplaces } = await d.plugins({ type: "plugins.list" });
+    const by = Object.fromEntries(installed.map((p: any) => [p.id, p.scope]));
+    expect(by["listed-one"]).toBe("project");
+    expect(by["opts-plugin"]).toBe("project");
+    expect(by["global-one"]).toBe("user");
+    expect(Object.entries(by).find(([id]) => id.startsWith("file://") && id.endsWith("/auto.js"))?.[1]).toBe("folder");
+    expect([available, marketplaces]).toEqual([[], []]);
+    const before = d.file("opencode.json");
+    for (const [pluginId, scope] of [["global-one", "user"], [Object.keys(by).find((id) => id.startsWith("file://"))!, "folder"]] as const) {
+      expect(await d.request({ type: "plugins.uninstall", cwd: d.project, engine: "opencode", pluginId, scope })).toMatchObject({ type: "error", code: "invalid_input" });
+    }
+    expect(d.file("opencode.json")).toBe(before);
+  });
+
+  it("plugins.list still answers from the config files when GET /config fails", async () => {
+    const d = await boot({ file: PLUGIN_FILE, fileName: "opencode.json" });
+    await d.plugins({ type: "plugins.list" });
+    await fetch(`http://127.0.0.1:${d.port()}/__fail`, { method: "POST", body: JSON.stringify({ path: "/config" }) });
+    const r = await d.plugins({ type: "plugins.list" });
+    expect(r.installed.map((p: any) => p.id)).toEqual(["listed-one", "opts-plugin", "listed-two"]);
+  });
+
+  it("plugins.uninstall removes every occurrence of the plugin from every project file, whatever its position", async () => {
+    const d = await boot({ file: `{ "plugin": ["a", "x", "b", ["x", { "k": 1 }], "c"] }\n`, fileName: "opencode.json" });
+    writeFileSync(join(d.project, "opencode.jsonc"), `{\n  // second file\n  "plugin": ["x", "d"]\n}\n`);
+    await d.plugins({ type: "plugins.uninstall", pluginId: "x", scope: "project" });
+    expect(strip(d.file("opencode.json")).plugin).toEqual(["a", "b", "c"]);
+    expect(strip(d.file("opencode.jsonc")).plugin).toEqual(["d"]);
+    expect(d.file("opencode.jsonc")).toContain("// second file");
+  });
+
+  it("plugins.install refuses an empty, spaced or listed spec and turns a path into a file URL", async () => {
+    const d = await boot({ file: PLUGIN_FILE, fileName: "opencode.json" });
+    const before = d.file("opencode.json");
+    for (const pluginId of ["   ", "two words", "listed-one"]) expect(await d.request({ type: "plugins.install", cwd: d.project, engine: "opencode", pluginId, scope: "project" })).toMatchObject({ type: "error" });
+    expect(d.file("opencode.json")).toBe(before);
+    // A relative path stays as typed (the repo works in another folder); an absolute one becomes the file URL OpenCode takes.
+    await d.plugins({ type: "plugins.install", pluginId: "./plugins/mine.js", scope: "project" });
+    await d.plugins({ type: "plugins.install", pluginId: join(d.project, "abs.js"), scope: "project" });
+    expect(strip(d.file("opencode.json")).plugin.slice(-2)).toEqual(["./plugins/mine.js", pathToFileURL(join(d.project, "abs.js")).href]);
+    expect(await d.request({ type: "plugins.install", cwd: d.project, engine: "opencode", pluginId: "./plugins/mine.js", scope: "project" })).toMatchObject({ type: "error", code: "already_exists" });
+  });
+
+  it("a relative path is saved relative to the config file that wins, and a listed one is refused as a duplicate", async () => {
+    const d = await boot({ file: `{ "plugin": ["./plugins/rel.js"] }\n`, fileName: "opencode.json" });
+    expect(await d.request({ type: "plugins.install", cwd: d.project, engine: "opencode", pluginId: "./plugins/../plugins/rel.js", scope: "project" })).toMatchObject({ type: "error", code: "already_exists" });
+    mkdirSync(join(d.project, ".opencode"));
+    writeFileSync(join(d.project, ".opencode", "opencode.json"), "{}\n");
+    await d.plugins({ type: "plugins.install", pluginId: "./plugins/mine.js", scope: "project" });
+    // OpenCode resolves the entry against `.opencode/`: it must still point at <project>/plugins/mine.js.
+    expect(strip(d.file(".opencode/opencode.json")).plugin).toEqual(["../plugins/mine.js"]);
+    // Without OpenCode's answer the list still treats the relative entries as project plugins.
+    await fetch(`http://127.0.0.1:${d.port()}/__fail`, { method: "POST", body: JSON.stringify({ path: "/config" }) });
+    const { installed } = await d.plugins({ type: "plugins.list" });
+    expect(installed.map((p: any) => p.scope)).toEqual(["project", "project"]);
+  });
+
+  it("a relative plugin entry that OpenCode reports as a file URL is a project plugin and can be uninstalled", async () => {
+    const d = await boot({ file: `{ "plugin": ["./plugins/rel.js", "other"] }\n`, fileName: "opencode.json" });
+    const url = pathToFileURL(join(d.project, "plugins", "rel.js")).href;
+    await d.plugins({ type: "plugins.list" });
+    await fetch(`http://127.0.0.1:${d.port()}/__config`, { method: "POST", body: JSON.stringify({ config: { plugin: [url] } }) });
+    const { installed } = await d.plugins({ type: "plugins.list" });
+    expect(installed.find((p: any) => p.id === url)?.scope).toBe("project");
+    await d.plugins({ type: "plugins.uninstall", pluginId: url, scope: "project" });
+    expect(strip(d.file("opencode.json")).plugin).toEqual(["other"]);
+  });
+
+  it("plugins.install writes nothing into a file whose plugin key is not a list", async () => {
+    const bad = `{ "plugin": "oops" }\n`;
+    const d = await boot({ file: bad, fileName: "opencode.json" });
+    expect(await d.request({ type: "plugins.install", cwd: d.project, engine: "opencode", pluginId: "x", scope: "project" })).toMatchObject({ type: "error", code: "config_invalid" });
+    expect(d.file("opencode.json")).toBe(bad);
+  });
+
+  it("plugins.install in a project without an opencode.json creates it with the list", async () => {
+    const d = await boot();
+    await d.plugins({ type: "plugins.install", pluginId: "first", scope: "project" });
+    expect(JSON.parse(d.file("opencode.json")).plugin).toEqual(["first"]);
+  });
+
+  it("plugins requests without engine reach Claude and with an OpenCode 2 binary answer opencode_v2_unsupported", async () => {
+    const d = await boot({ file: PLUGIN_FILE, fileName: "opencode.json", env: { FAKE_OPENCODE_VERSION: "2.3.0" } });
+    expect(await d.request({ type: "plugins.list", cwd: d.project, engine: "opencode" })).toMatchObject({ type: "error", code: "opencode_v2_unsupported" });
+    const claude = await d.request({ type: "plugins.list", cwd: d.project });
+    expect(JSON.stringify(claude)).not.toContain("listed-one");
   });
 });
