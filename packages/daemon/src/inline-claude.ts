@@ -166,6 +166,13 @@ export function inlineClaudeOptions(
 
 /** Thrown inside the run to skip the query: a stop or limit came during the setup awaits. */
 class Halt extends Error {}
+const LAST_STEPS = 5;
+/** One line of a tool step: the tool and the most telling input field, cut to 80 chars. */
+function stepLine(tool: string, input: Record<string, unknown> | undefined): string {
+  const v = ["command", "file_path", "path", "pattern", "url", "description"].map((k) => input?.[k]).find((x) => typeof x === "string") as string | undefined;
+  const one = (v ?? "").replace(/\s+/g, " ").trim();
+  return one ? `${tool}: ${one.length > 80 ? `${one.slice(0, 79)}…` : one}` : tool;
+}
 const rel = (cwd: string, p: string) => {
   const r = relative(cwd, p);
   return r === "" || r.startsWith("..") || isAbsolute(r) ? p : r.replace(/\\/g, "/");
@@ -200,6 +207,7 @@ export async function runInlineClaude(deps: InlineClaudeDeps, spec: InlineSpec, 
   const usages = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>();
   const changed = new Set<string>();
   const inputs = new Map<string, { tool: string; file?: string }>();
+  const steps = new Map<string, { line: string; failed?: boolean }>();
   let text = "";
   let usedModel: string | undefined;
   let final: Record<string, any> | undefined;
@@ -238,7 +246,12 @@ export async function runInlineClaude(deps: InlineClaudeDeps, spec: InlineSpec, 
           const field = FILE_TOOLS[b.name];
           const file = field ? b.input?.[field] : undefined;
           inputs.set(b.id, { tool: b.name, ...(typeof file === "string" && { file }) });
+          steps.set(b.id, { line: stepLine(b.name, b.input) });
         }
+      }
+      if (m.type === "user" && !m.parent_tool_use_id) {
+        const c = (m.message as unknown as { content?: unknown }).content;
+        if (Array.isArray(c)) for (const b of c as { type?: string; tool_use_id?: string; is_error?: boolean }[]) if (b.type === "tool_result" && b.is_error === true && b.tool_use_id && steps.has(b.tool_use_id)) steps.get(b.tool_use_id)!.failed = true;
       }
       if (m.type === "result") final = m as unknown as Record<string, any>;
       for (const p of adapter.convert(m)) {
@@ -283,12 +296,18 @@ export async function runInlineClaude(deps: InlineClaudeDeps, spec: InlineSpec, 
     filesChanged: [...changed].map((f) => rel(parent.cwd, f)),
     durationMs: Date.now() - t0,
   };
-  if (why) return { ...result, ...why };
-  if (subtype === "error_max_turns") return { ...result, status: "limit", limit: "turns" };
-  if (error !== undefined) return { ...result, status: "error", error };
-  if (final && (final.is_error || (subtype && subtype !== "success"))) {
-    const errs = Array.isArray(final.errors) ? (final.errors as string[]).join("; ") : "";
-    return { ...result, status: "error", error: errs || (typeof final.result === "string" && final.result) || subtype || "The run failed." };
-  }
-  return result;
+  // The SDK result lists every denied step (a user "No", a deny rule), also those the model worked around.
+  const denied = (Array.isArray(final?.permission_denials) ? (final.permission_denials as { tool_name?: unknown; tool_input?: Record<string, unknown> }[]) : [])
+    .filter((d) => typeof d?.tool_name === "string")
+    .map((d) => stepLine(d.tool_name as string, d.tool_input));
+  const withDenied = denied.length ? { ...result, denied } : result;
+  /** A run that did not end `done`: the caller gets its last steps. */
+  const ended = (r: InlineResult): InlineResult => (steps.size ? { ...r, steps: [...steps.values()].slice(-LAST_STEPS).map((s) => (s.failed ? `${s.line} (failed)` : s.line)) } : r);
+  if (why) return ended({ ...withDenied, ...why });
+  if (subtype === "error_max_turns") return ended({ ...withDenied, status: "limit", limit: "turns" });
+  const failure = error !== undefined ? error : final && (final.is_error || (subtype && subtype !== "success")) ? ((Array.isArray(final.errors) ? (final.errors as string[]).join("; ") : "") || (typeof final.result === "string" && final.result) || subtype || "The run failed.") : undefined;
+  if (failure === undefined) return withDenied;
+  // The run ended in error after a denial: say what was denied instead of the CLI's internal diagnostic.
+  if (denied.length) return ended({ ...withDenied, status: "denied", error: `The user denied ${denied.join("; ")}.` });
+  return ended({ ...withDenied, status: "error", error: failure });
 }

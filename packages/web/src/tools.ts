@@ -162,9 +162,11 @@ export const inlineTaskTool = (tool: string) => tool === INLINE_TOOL;
 export type InlineTokens = { input: number; output: number; cacheRead: number; cacheWrite: number };
 /** The tool result of `inline_task` (daemon InlineResult); every field but `status` may be missing in a result of an older or odd daemon. */
 export type InlineTaskResult = {
-  status: "done" | "limit" | "stopped" | "error";
+  status: "done" | "limit" | "stopped" | "error" | "denied";
   limit?: "turns" | "tokens" | "time";
   error?: string;
+  denied?: string[];
+  steps?: string[];
   text: string;
   truncated?: boolean;
   model?: string;
@@ -175,6 +177,11 @@ export type InlineTaskResult = {
   durationMs?: number;
 };
 
+/** The strings of an array field; undefined when none. */
+const strings = (v: unknown) => {
+  const list = Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  return list.length ? list : undefined;
+};
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
 /** The JSON `inline_task` returned (its result text), else undefined (an error text, a result still missing). */
@@ -182,13 +189,15 @@ export function inlineTaskResult(output: unknown): InlineTaskResult | undefined 
   const raw = terminalResult(output);
   if (!raw || Array.isArray(raw)) return;
   const status = raw.status;
-  if (status !== "done" && status !== "limit" && status !== "stopped" && status !== "error") return;
+  if (status !== "done" && status !== "limit" && status !== "stopped" && status !== "error" && status !== "denied") return;
   const tk = raw.tokens as Record<string, unknown> | null | undefined;
   const parts = tk && typeof tk === "object" ? [num(tk.input), num(tk.output), num(tk.cacheRead), num(tk.cacheWrite)] : [];
   return {
     status,
     ...(raw.limit === "turns" || raw.limit === "tokens" || raw.limit === "time" ? { limit: raw.limit } : {}),
     ...(typeof raw.error === "string" ? { error: raw.error } : {}),
+    ...(strings(raw.denied) ? { denied: strings(raw.denied) } : {}),
+    ...(strings(raw.steps) ? { steps: strings(raw.steps) } : {}),
     text: typeof raw.text === "string" ? raw.text : "",
     ...(raw.truncated === true ? { truncated: true } : {}),
     ...(typeof raw.model === "string" ? { model: raw.model } : {}),

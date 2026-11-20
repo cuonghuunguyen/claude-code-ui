@@ -197,6 +197,7 @@ export default {
   "session.run.limitTokens": "Stopped at the output token limit. The result is partial.",
   "session.run.limitTime": "Stopped at the time limit. The result is partial.",
   "session.run.stoppedPartial": "Stopped. The result is partial.",
+  "session.run.denied": "The user denied: {steps}",
   "session.run.error": "The run failed: {error}",
   "session.run.truncated": "The result text was cut to its last part.",
   "session.toolCard.exploring": "Exploring",

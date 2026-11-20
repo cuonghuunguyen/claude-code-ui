@@ -325,6 +325,16 @@ describe("runInlineClaude limits and stops", () => {
     const b = await run({ messages: [assistant("m1", [text("q")])], throwAfter: new Error("CLI died") }).done;
     expect(b).toMatchObject({ status: "error", error: "CLI died", text: "q" });
   });
+  it("a run that ends in error after a denied Bash step: status denied naming the step, with the last 5 steps; one that finishes despite the denial stays done", async () => {
+    const denials = [{ tool_name: "Bash", tool_use_id: "t6", tool_input: { command: "rm -rf build" } }];
+    const calls = [1, 2, 3, 4, 5, 6].map((n) => assistant(`m${n}`, [toolUse(`t${n}`, "Bash", { command: `step ${n}` })]));
+    const a = await run({ messages: [...calls, toolResult("t6", "No", true), result({ subtype: "error_during_execution", is_error: true, errors: ["[ede_diagnostic] stop_reason=tool_use"], permission_denials: denials })] }).done;
+    expect(a).toMatchObject({ status: "denied", error: "The user denied Bash: rm -rf build.", denied: ["Bash: rm -rf build"] });
+    expect(a.steps).toEqual(["Bash: step 2", "Bash: step 3", "Bash: step 4", "Bash: step 5", "Bash: step 6 (failed)"]);
+    const b = await run({ messages: [calls[5]!, toolResult("t6", "No", true), assistant("m7", [text("went on")]), result({ permission_denials: denials })] }).done;
+    expect(b).toMatchObject({ status: "done", text: "went on", denied: ["Bash: rm -rf build"] });
+    expect(b.steps).toBeUndefined();
+  });
 });
 
 describe("runInlineClaude filesChanged", () => {
