@@ -371,6 +371,23 @@ describe("sides", () => {
     c.ws.close();
   });
 
+  it.skipIf(process.platform === "win32")("merges a side project's origin into the list without its credentials; a side that sends none is no error", async () => {
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: wslRoot, stdio: "ignore" });
+    git("init", "-q", "-b", "main");
+    git("remote", "add", "origin", "https://bob:tok3n-value@example.com/acme/repo.git");
+    const c = await client();
+    await c.request({ type: "side.start", side: "wsl:Ubuntu" });
+    await c.request({ type: "project.open", cwd: wslRoot, side: "wsl:Ubuntu" });
+    const list = await c.request({ type: "session.list" });
+    expect(list.result.origins).toEqual({ [wslRoot]: "example.com/acme/repo" });
+    expect(JSON.stringify(list)).not.toContain("tok3n-value");
+    git("remote", "remove", "origin");
+    const without = await c.request({ type: "session.list" });
+    expect(without).toMatchObject({ type: "reply" });
+    expect(without.result.origins ?? {}).toEqual({});
+    c.ws.close();
+  });
+
   // Routes by the path's form: a real WSL path is POSIX, while this test stands in for it with a native temp dir, which on a Windows host is a Windows path and so (correctly) local.
   // The in-process side needs that same path on the real filesystem, so these cannot run on Windows; they run on Linux and macOS.
   it.skipIf(process.platform === "win32")("routes a side project's sessions to the side: create, subscribe, prompt, events", async () => {

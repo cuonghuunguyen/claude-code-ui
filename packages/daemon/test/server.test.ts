@@ -2199,6 +2199,29 @@ describe("daemon", () => {
     return { root, repo, git, projects, d, c, list };
   };
 
+  it("session.list reports the normalized origin of each git project: no credentials on the wire, none without origin, current after a change", async () => {
+    const { repo, git, d, c } = await repoDaemon("origins-");
+    try {
+      type L = { result: { origins?: Record<string, string> } };
+      const origins = async () => {
+        const raw = JSON.stringify(await c.request({ type: "session.list" }));
+        return { raw, origins: (JSON.parse(raw) as L).result.origins };
+      };
+      expect((await origins()).origins ?? {}).toEqual({});
+      git(repo, "remote", "add", "origin", "https://alice:s3cret-token@Example.com:8443/Acme/Repo.git");
+      const first = await origins();
+      expect(first.origins).toEqual({ [repo]: "example.com/acme/repo" });
+      expect(first.raw).not.toContain("s3cret-token");
+      expect(first.raw).not.toContain("alice");
+      git(repo, "remote", "set-url", "origin", "git@example.com:acme/other.git");
+      expect((await origins()).origins).toEqual({ [repo]: "example.com/acme/other" });
+      git(repo, "remote", "set-url", "origin", "not a url");
+      expect((await origins()).origins ?? {}).toEqual({});
+    } finally {
+      d.close();
+    }
+  });
+
   it("session.list shows a worktree added or removed from a terminal, and a branch checkout, on the very next list", async () => {
     const listed: unknown[] = [];
     const { root, repo, git, d, list } = await repoDaemon("wtstamp-", listed);

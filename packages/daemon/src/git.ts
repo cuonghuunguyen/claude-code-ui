@@ -975,6 +975,13 @@ async function branchesIn(cwd: string, o: ListBranchesOptions): Promise<Worktree
   return { branches: [...rows.values()], defaultBase: await defaultBaseName(main, o.claudeDir), ...(fetched && { fetched }), ...(fetchError && { fetchError }) };
 }
 
+/** The repository key of `cwd`'s `origin` (`<host>/<path>`, see `remoteRepoOf`); undefined without an origin or with an unreadable URL. One read-only git call. */
+export async function originKeyOf(cwd: string): Promise<string | undefined> {
+  const url = await git(cwd, "config", "--get", "remote.origin.url").catch(() => "");
+  const r = url ? remoteRepoOf(url) : undefined;
+  return r && `${r.host}/${r.path}`;
+}
+
 /**
  * A pasted pull request link: the branches of `origin` whose head is the pull request's head commit. One `git ls-remote origin`
  * (30 s, git's own credentials, no prompt) reads the host's pull request ref (GitHub `refs/pull/<n>/head`, GitLab
