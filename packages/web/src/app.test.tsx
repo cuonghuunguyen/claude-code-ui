@@ -4123,13 +4123,13 @@ describe("GH-430: panels on the new-session tab", () => {
       "session.setPermissionMode": { session: created },
       "session.prompt": {},
     });
+    const n0 = sent.length;
     try {
       await openNewTab();
-      await vi.waitFor(() => expect(sent.some((m) => m.type === "settings.get")).toBe(true));
-      await act(async () => new Promise((r) => setTimeout(r, 100)));
+      await act(async () => new Promise((r) => setTimeout(r, 200)));
       await sendFirst("hello");
-      await vi.waitFor(() => expect(sent.find((m) => m.type === "session.setEffort")).toMatchObject({ effort: "max" }));
-      expect(sent.find((m) => m.type === "session.create")).toMatchObject({ cwd: "/p/demo", model: "opus" });
+      await vi.waitFor(() => expect(sent.slice(n0).find((m) => m.type === "session.setEffort")).toMatchObject({ effort: "max" }));
+      expect(sent.slice(n0).find((m) => m.type === "session.create")).toMatchObject({ cwd: "/p/demo", model: "opus" });
     } finally {
       restore();
     }
@@ -4147,16 +4147,44 @@ describe("GH-430: panels on the new-session tab", () => {
       "session.setPermissionMode": { session: created },
       "session.prompt": {},
     });
+    const n0 = sent.length;
     try {
       await openNewTab();
-      await vi.waitFor(() => expect(sent.some((m) => m.type === "settings.get")).toBe(true));
-      await act(async () => new Promise((r) => setTimeout(r, 100)));
+      await act(async () => new Promise((r) => setTimeout(r, 200)));
       const n = sent.length;
       await pickOption('[data-testid="new-session-tab"] [data-testid="mode-select"]', "Plan mode");
       await pickOption('[data-testid="new-session-tab"] [data-testid="project-chip"]', "Oother/p/other");
       await act(async () => new Promise((r) => setTimeout(r, 50)));
       await sendFirst("hello");
-      await vi.waitFor(() => expect(sent.slice(n).find((m) => m.type === "session.create")).toMatchObject({ cwd: "/p/other", model: "default" }));
+      await vi.waitFor(() => expect(sent.slice(n0).find((m) => m.type === "session.create")).toMatchObject({ cwd: "/p/other", model: "default" }));
+    } finally {
+      restore();
+    }
+  });
+
+  it("GH-894: a model picked in the new-session tab keeps its Engine when the project switches to one with another Engine", async () => {
+    const overrides = { local: { "/p/other": { engine: "opencode" } } };
+    const restore = await remount({
+      "settings.get": { settings: { orchestration: {}, sessions: { engine: "claude", defaultMode: "default" }, projects: { overrides } } },
+      "models.list": { models: AUTO_MODELS },
+      "session.list": () => ({ ...TWO, sessions: sent.some((m) => m.type === "session.create") ? [session, created] : [session] }),
+      "session.subscribe": bySession,
+      "session.create": { session: created },
+      "session.setModel": { session: created },
+      "session.setEffort": { session: created },
+      "session.setPermissionMode": { session: created },
+      "session.prompt": {},
+    });
+    const n0 = sent.length;
+    try {
+      await openNewTab();
+      await act(async () => new Promise((r) => setTimeout(r, 200)));
+      const n = sent.length;
+      await pickOption('[data-testid="new-session-tab"] [data-testid="session-model"]', "Haiku 4.5");
+      await pickOption('[data-testid="new-session-tab"] [data-testid="project-chip"]', "Oother/p/other");
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      await sendFirst("hello");
+      await vi.waitFor(() => expect(sent.slice(n0).find((m) => m.type === "session.create")).toMatchObject({ cwd: "/p/other", engine: "claude", model: "haiku" }));
     } finally {
       restore();
     }

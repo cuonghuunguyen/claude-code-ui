@@ -55,11 +55,11 @@ it("setting a field saves the whole map, shows Project and a reset that unsets i
   const { q, patches } = await render();
   await click(q("project-effort-select"));
   await click(q("project-effort-high"));
-  expect(patches()).toEqual([{ local: { "/p": { effort: "high" } } }]);
+  expect(patches()).toEqual([{ local: { "/p": { effort: "high", engine: "claude" } } }]);
   expect(q("project-effort-status")!.textContent).toBe("Project");
   expect(q("project-effort-select")!.textContent).toContain("High");
   await click(q("project-effort-reset"));
-  expect(patches()[1]).toEqual({});
+  expect(patches()[1]).toEqual({ local: { "/p": { engine: "claude" } } });
   expect(q("project-effort-status")!.textContent).toBe("Global");
 });
 
@@ -73,7 +73,17 @@ it("each select field can be set: mode, model, history off, account", async () =
   await click(q("project-history-off"));
   await click(q("project-account-select"));
   await click(q("project-account-a1"));
-  expect(patches().at(-1)).toEqual({ local: { "/p": { mode: "acceptEdits", model: "opus", history: { enabled: false }, account: "a1" } } });
+  expect(patches().at(-1)).toEqual({ local: { "/p": { mode: "acceptEdits", model: "opus", engine: "claude", history: { enabled: false }, account: "a1" } } });
+});
+
+it("setting a model or effort also saves the Engine the Project uses now; with an Engine override it stays", async () => {
+  const { q, patches } = await render();
+  await click(q("project-model-select"));
+  await click(q("project-model-opus"));
+  expect(patches()).toEqual([{ local: { "/p": { model: "opus", engine: "claude" } } }]);
+  await click(q("project-effort-select"));
+  await click(q("project-effort-low"));
+  expect(patches()[1]).toEqual({ local: { "/p": { model: "opus", engine: "claude", effort: "low" } } });
 });
 
 it("changing the Engine clears the model and effort of the Project", async () => {
@@ -107,7 +117,7 @@ it("a Project on another Side keys its entry by the Side and has no account row"
   expect(q("project-account-side")).not.toBeNull();
   await click(q("project-effort-select"));
   await click(q("project-effort-low"));
-  expect(patches()).toEqual([{ "wsl:Ubuntu": { "/p": { effort: "low" } } }]);
+  expect(patches()).toEqual([{ "wsl:Ubuntu": { "/p": { effort: "low", engine: "claude" } } }]);
 });
 
 it("the daemon's refusal shows under the field", async () => {

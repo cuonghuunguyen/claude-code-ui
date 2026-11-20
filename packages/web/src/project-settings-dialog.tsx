@@ -192,6 +192,8 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
   const accountName = (id: string) => (id === "cli" ? t("app.plan.accountCli") : id === "" ? t("app.plan.accountDefault") : (accounts.find((a) => a.id === id)?.name ?? id));
   const accountOptions = [...(envToken ? [{ value: DEFAULT_ACCOUNT, label: t("app.plan.accountDefault") }] : []), { value: "cli", label: t("app.plan.accountCli") }, ...accounts.map((a) => ({ value: a.id, label: a.name }))];
   const modeNow = settings?.sessions.defaultMode;
+  // A model or effort belongs to an Engine: setting one pins the Engine the Project uses now, so a later change of the global Engine (the last one used) does not give it to another Engine.
+  const pinEngine = (v: string | undefined): Change => (v !== undefined && o.engine === undefined ? { engine: globalEngine } : {});
 
   return (
     <ConfigDialog title={t("projectSettings.title", { name })} open={open} onClose={onClose} testId="project-settings-dialog">
@@ -219,10 +221,10 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
                 )}
               </Row>
               <Row ui={ui} id="project-model" label={t("projectSettings.model.label")} hint={t("projectSettings.model.hint")} set={o.model !== undefined} reset={{ model: undefined }}>
-                {(p) => <Choice ui={ui} id="project-model" p={p} value={o.model} globalValue={t("projectSettings.default")} options={modelOptions} onChange={(v) => ui.save("project-model", { model: v })} />}
+                {(p) => <Choice ui={ui} id="project-model" p={p} value={o.model} globalValue={t("projectSettings.default")} options={modelOptions} onChange={(v) => ui.save("project-model", { model: v, ...pinEngine(v) })} />}
               </Row>
               <Row ui={ui} id="project-effort" label={t("projectSettings.effort.label")} hint={t("projectSettings.effort.hint")} set={o.effort !== undefined} reset={{ effort: undefined }}>
-                {(p) => <Choice ui={ui} id="project-effort" p={p} value={o.effort} globalValue={t("projectSettings.default")} options={effortOptions} onChange={(v) => ui.save("project-effort", { effort: v as Effort | undefined })} />}
+                {(p) => <Choice ui={ui} id="project-effort" p={p} value={o.effort} globalValue={t("projectSettings.default")} options={effortOptions} onChange={(v) => ui.save("project-effort", { effort: v as Effort | undefined, ...pinEngine(v) })} />}
               </Row>
               <Row ui={ui} id="project-mode" label={t("projectSettings.mode.label")} hint={t("projectSettings.mode.hint")} set={o.mode !== undefined} reset={{ mode: undefined }}>
                 {(p) => (

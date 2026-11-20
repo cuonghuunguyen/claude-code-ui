@@ -3116,7 +3116,8 @@ export function App() {
     const lost = d.mode === "auto" && !list.some((m) => m.value === d.model && m.supportsAutoMode);
     if (lost) setToast(autoUnavailable(list, d.model));
     // A field the user did not change stays as picked (absent: the Project's value or Default), so a change of mode does not pin the Project's values (GH-894).
-    const kept = { engine: d.engine === draft.engine ? pick.engine : d.engine, model: d.model === draft.model ? pick.model : d.model, effort: d.effort === draft.effort ? pick.effort : d.effort };
+    // A picked model or effort belongs to the Engine it was picked for: it pins that Engine, so a project switch cannot send it to another one.
+    const kept = { engine: d.model !== draft.model || d.effort !== draft.effort ? draft.engine : pick.engine, model: d.model === draft.model ? pick.model : d.model, effort: d.effort === draft.effort ? pick.effort : d.effort };
     setDraft(lost ? { ...d, ...kept, mode: "default" } : { ...d, ...kept, mode: d.mode === draft.mode ? pick.mode : d.mode });
     // GH-722: the same other mode picked three times in a row in a new session suggests it as the Default permission mode.
     const mode = lost ? undefined : d.mode;
@@ -3411,7 +3412,7 @@ export function App() {
       focusShownPrompt(id ?? s);
     },
     setModel: (model) => (draftShown ? changeDraft({ ...draft, model }) : configure({ type: "session.setModel", sessionId: shown!.id, model })),
-    setEffort: (effort) => (draftShown ? setDraft((d) => ({ ...d, effort })) : configure({ type: "session.setEffort", sessionId: shown!.id, effort })),
+    setEffort: (effort) => (draftShown ? setDraft((d) => ({ ...d, effort, engine: draftEngine })) : configure({ type: "session.setEffort", sessionId: shown!.id, effort })),
     setMode: (mode) => (draftShown ? setDraft((d) => ({ ...d, mode })) : configure({ type: "session.setPermissionMode", sessionId: shown!.id, mode })),
     rewind: (id) => (setRewindTo(id), showSession()),
     stop: () => client.current!.request({ type: "session.interrupt", sessionId: shown!.id }).catch((e) => setError((e as Error).message)),
