@@ -193,10 +193,22 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   const failed = (why: string) => new OpenCodeError("opencode_failed", `OpenCode server did not start: ${why}`);
   const tail = () => stderr.trim().split("\n").slice(-5).join("\n") || "no output";
 
-  async function start(): Promise<Up> {
+  /** The binary is of the other major than the adapter that asked: no `serve` (ADR 0015: only the version 2 adapter starts a version 2 server, whose first start changes `opencode.db`). */
+  const refusals = new WeakSet<Error>();
+  const wrongMajor = (major: 1 | 2) => {
+    const err =
+      major === 2
+        ? new OpenCodeError("opencode_v2_unsupported", "OpenCode 2 sessions are not supported yet. Set Settings › OpenCode › path to an OpenCode 1 binary.", 2)
+        : new OpenCodeError("opencode_failed", "OpenCode 2 client requested while the installed OpenCode is version 1", 1);
+    refusals.add(err);
+    return err;
+  };
+
+  async function start(want: 1 | 2): Promise<Up> {
     const exits = fastExits.filter((t) => now() - t < GUARD_MS);
     if (exits.length >= FAST_EXITS) throw failed(`it exited ${exits.length} times right after starting. Last output: ${tail()}`);
     const { cmd, version, major } = await check();
+    if (major !== want) throw wrongMajor(major);
     const password = randomBytes(32).toString("hex");
     stderr = "";
     stopRequested = false;
@@ -261,15 +273,18 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     }
   }
 
-  /** Starts the server unless it runs; concurrent calls share one start. */
-  const ensure = (): Promise<Up> => {
-    if (up && child) return Promise.resolve(up);
-    return (starting ??= start()
+  /** Starts the server of major `want` unless it runs; concurrent calls share one start. A binary or running server of the other major is refused, never started:
+   * the OpenCode 1 adapter (every caller but `client()`) can never start an OpenCode 2 server, whatever the catalogue switch believed about the version. */
+  const ensure = (want: 1 | 2 = 1): Promise<Up> => {
+    if (up && child) return up.major === want ? Promise.resolve(up) : Promise.reject(wrongMajor(up.major));
+    return (starting ??= start(want)
       .catch((err) => {
-        lastError = err instanceof Error ? err.message : String(err);
+        // A refusal started nothing: it is not a failed start for Settings.
+        if (!refusals.has(err)) lastError = err instanceof Error ? err.message : String(err);
         throw err;
       })
-      .finally(() => (starting = undefined)));
+      .finally(() => (starting = undefined)))
+      .then((u) => (u.major === want ? u : Promise.reject(wrongMajor(u.major))));
   };
 
   // The event stream (`GET /global/event`, one for every folder): open while a handler exists, reconnected through ensure() with a growing delay.
@@ -380,8 +395,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     major: (): 1 | 2 | undefined => (up && child ? up.major : lastMajor),
     /** The `@opencode/client` of the running version 2 server (started when it is down), built once per server process. The package is bundled into the published daemon (about +92 KB); it is initialised on first use only, so a Claude-only or OpenCode 1 user pays no runtime cost. */
     async client() {
-      const srv = await ensure();
-      if (srv.major !== 2) throw new OpenCodeError("opencode_failed", "OpenCode 2 client requested while the installed OpenCode is version 1", srv.major);
+      const srv = await ensure(2);
       if (clientOf?.up !== srv) {
         const { OpenCode } = await import("@opencode/client");
         clientOf = { up: srv, client: OpenCode.make({ baseUrl: srv.url, headers: { authorization: srv.auth }, fetch: v2Fetch as typeof fetch }) };
