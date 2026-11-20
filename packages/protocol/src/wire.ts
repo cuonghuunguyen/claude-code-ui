@@ -1103,6 +1103,22 @@ export const BACK_REMIND_MAX_MS = 7 * 86_400_000;
 /** First line of the brief turn's prompt; the web app folds a user_text that starts with it. */
 export const BACK_TAG = /^<claude-ui-brief part="([^"]+)"\/>$/;
 
+/** Overrides of global settings for one Project (ADR 0013); an absent field inherits the global value. Applied by the daemon that owns the Project's Sessions (docs/spec.md "Project settings"). */
+export type ProjectOverrides = {
+  engine?: Engine;
+  /** A model of the Project's effective Engine (`ModelInfo.value`). */
+  model?: string;
+  effort?: Effort;
+  /** New-Session Permission mode; wins over the Claude settings files. Never above what the daemon offers (`bypassPermissions` needs its flag). */
+  mode?: (typeof SESSION_MODES)[number];
+  /** `""` = Default, `"cli"`, or a Claude account id. Hub-local: never sent to a Side. */
+  account?: string;
+  inlineTask?: { model?: string; openCodeModel?: string };
+  history?: { enabled?: boolean };
+  jira?: { url?: string; email?: string; jql?: string; template?: string };
+};
+/** Most Side ids in `projects.overrides`. */
+export const PROJECT_OVERRIDES_SIDES_MAX = 20;
 export type Settings = { orchestration: { enabled: boolean; /** Live workers of one root coordinator's tree, every depth, plus its worker_start calls in flight. */ workerCap: number; /** Live workers of this daemon, all trees; 0 = no limit. */ workerCapTotal: number; /** Depth = coordinatorId hops from the root coordinator; a worker at this depth may not start workers. */ maxDepth: number; /** Live direct workers one coordinator may run. */ maxChildren: number; /** A running worker whose CLI sends no message for this long raises a `stalled` event to its coordinator; 0 = off. */ stallMinutes: number; /** An idle coordinator that waits on running workers, subagents or background commands gets a one-line keep-warm message this long after its last turn, so its prompt cache stays warm (set under the cache lifetime: 55 for 1 hour, 4 for 5 minutes); 0 = off. */ keepWarmMinutes: number; workerMode: WorkerModeSetting; /** Off: a worker's finished and error notify nobody but its coordinator; a worker's permission request or question still notifies the user. */ workerNotifications: boolean; /** GH-574: a worker whose turn ends settled loses its CLI (worker_send resumes it). */ closeFinished: boolean }; /** New session mode when Claude settings set none; `auto` on a model without auto support runs in `default`. */ sessions: { defaultMode: (typeof SESSION_MODES)[number]; /** The Engine of the last session created: the new-session tab starts with it. */ engine: Engine }; /** OpenCode engine (docs/spec.md "OpenCode engine"): `path` of its binary, "" = look it up on PATH. */ opencode: { path: string }; usageLimit: { autoContinue: boolean }; focus: { /** Claude predicts the next prompt after a turn (SDK promptSuggestions); applies to sessions started or resumed after the change. */ nextForYou: boolean }; notifications: { desktop: boolean };
   /** Keep computer awake (GH-523): the Hub holds an OS sleep inhibitor while a session runs. */
   power: { keepAwake: boolean };
@@ -1167,6 +1183,8 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
   back: { marks: Record<string, BackMark[]> };
   /** GH-646: the user's own editor for "Open in <name>". `command`: one line, program then arguments, `"..."` groups; `{path}` and `{root}` are replaced, else the paths are appended. `name`: menu label, "" = the program name. Only a browser on the daemon machine may change it. */
   editor: { command: string; name: string };
+  /** Overrides per Project, keyed by Side id (`local` = the daemon that stores it, `wsl:<distro>`, `ssh:<alias>`, `docker:<name>`), then Project cwd. A Side receives only its own entries as `local`, without `account`. A patch replaces the whole map. */
+  projects: { overrides: Record<string, Record<string, ProjectOverrides>> };
   app: { /** "" = the built-in icon; else an emoji (≤ LABEL_EMOJI_MAX) or a data:image/(png|webp|jpeg);base64 URL of a square APP_ICON_PX image (≤ APP_ICON_MAX). */ icon: string; /** "" = "Claude UI"; else 1..LABEL_NAME_MAX chars, no control characters, not only whitespace. */ name: string };
 };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };

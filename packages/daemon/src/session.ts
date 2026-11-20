@@ -68,6 +68,8 @@ export type SessionOpts = Partial<Omit<SessionSettings, "agent">> & {
   promptSuggestions?: () => boolean;
   /** Claude in Chrome setting (GH-514); read at every query start. Workers never get it. */
   chrome?: () => boolean;
+  /** The env of the session's Claude CLI processes (Project Claude account, GH-894); read at every CLI start and inline run. Absent: the daemon's account. */
+  claudeEnv?: (cwd: string) => NodeJS.ProcessEnv;
   /** Fork subagents setting (GH-718); read at every query start. Absent = off. */
   fork?: () => boolean;
   /** The visualize plugin folder to load into the CLI (GH-690), or undefined while the setting is off; read at every query start. */

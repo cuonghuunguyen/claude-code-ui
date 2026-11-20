@@ -93,7 +93,7 @@ A working directory the user added in claude-ui: opened with "Open project" (als
 _Avoid_: workspace, folder (folder = any directory in the folder browser)
 
 **Project settings**:
-Values that apply to one Project only: its Label, commit message instruction, skill overrides and overrides of some global settings (new-Session model, Permission mode, effort, Claude account; local history; Jira branch template). An unset value inherits the global setting; overrides apply when a Session is created. Its Worktrees use the Project's values; a Project on a Side keeps them on that Side. Private to the machine and never committed; kept when the Project is removed. Browser view state (selected repository, selected terminal) is not Project settings.
+Values that apply to one Project only: its Label, commit message instruction, skill overrides and overrides of some global settings (Engine, new-Session model, effort and Permission mode, Claude account, inline task model, local history, Jira URL, email, ticket filter and branch template). An unset value inherits the global setting; overrides apply when a Session is created or a request is made. Keyed by Side and cwd. Its Worktrees use the Project's values; a Project on a Side keeps them on that Side (the Claude account stays on the Hub). Private to the machine and never committed; kept when the Project is removed. Browser view state (selected repository, selected terminal) is not Project settings.
 _Avoid_: workspace settings, repo settings, local settings (Claude Code's settings.local.json is a different thing)
 
 **Worktree**:

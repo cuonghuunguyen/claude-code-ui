@@ -4823,10 +4823,9 @@ describe("transcript sync (terminal CLI turns)", () => {
 describe("default permission mode from Claude settings (permissions.defaultMode)", () => {
   const write = (file: string, mode: unknown) => (mkdirSync(dirname(file), { recursive: true }), writeFileSync(file, JSON.stringify({ permissions: { defaultMode: mode } })));
   /** A daemon with its own Claude user dir and project dir (a root, so cwd is allowed). */
-  async function setup(allowBypass = false) {
+  async function setup(allowBypass = false, appSettings = createSettings()) {
     const claudeDir = mkdtempSync(join(tmpdir(), "claude-user-"));
     const project = realpathSync(mkdtempSync(join(tmpdir(), "proj-")));
-    const appSettings = createSettings();
     const d = createDaemon({ webRoot, token, roots: [project], query: fakeQuery as never, claudeDir, allowBypass, appSettings, history: { listSessions: (async () => []) as never } as never });
     await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
     const c = await client((d.address() as AddressInfo).port);
@@ -4964,6 +4963,91 @@ describe("default permission mode from Claude settings (permissions.defaultMode)
     write(t.user, "acceptEdits");
     expect(await create()).toBe("acceptEdits");
     expect(() => t.appSettings.set({ sessions: { defaultMode: "bypassPermissions" as never } })).toThrow(/Default permission mode/);
+    t.d.close();
+  });
+});
+
+describe("Project override of the permission mode", () => {
+  it("wins over the Claude settings files and Settings sessions.defaultMode, for session.defaultMode and session.create; another Project is unchanged", async () => {
+    const claudeDir = mkdtempSync(join(tmpdir(), "claude-user-"));
+    const project = realpathSync(mkdtempSync(join(tmpdir(), "proj-")));
+    const other = realpathSync(mkdtempSync(join(tmpdir(), "proj-")));
+    writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({ permissions: { defaultMode: "acceptEdits" } }));
+    const appSettings = createSettings();
+    appSettings.set({ sessions: { defaultMode: "plan" }, projects: { overrides: { local: { [project]: { mode: "plan" }, [other]: { effort: "high" } } } } });
+    const d = createDaemon({ webRoot, token, roots: [project, other], query: fakeQuery as never, claudeDir, appSettings, history: { listSessions: (async () => []) as never } as never });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const c = await client((d.address() as AddressInfo).port);
+    const mode = async (cwd: string) => ((await c.request({ type: "session.defaultMode", cwd })) as { result: { mode: string } }).result.mode;
+    expect(await mode(project)).toBe("plan");
+    expect(await mode(other)).toBe("acceptEdits");
+    const created = (await c.request({ type: "session.create", cwd: project, model: "sonnet" })) as { result: { session: { permissionMode: string } } };
+    expect(created.result.session.permissionMode).toBe("plan");
+    appSettings.set({ projects: { overrides: {} } });
+    expect(await mode(project)).toBe("acceptEdits");
+    d.close();
+  });
+
+  it("never passes the daemon's bypass-permissions setting: a bypassPermissions override is refused, and a hand-edited one is ignored even when the daemon allows bypass", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "po-settings-"));
+    const f = join(dir, "settings.json");
+    const project = realpathSync(mkdtempSync(join(tmpdir(), "proj-")));
+    writeFileSync(f, JSON.stringify({ projects: { overrides: { local: { [project]: { mode: "bypassPermissions" } } } } }));
+    for (const allowBypass of [false, true]) {
+      const appSettings = createSettings({ file: f });
+      expect(() => appSettings.set({ projects: { overrides: { local: { [project]: { mode: "bypassPermissions" as never } } } } })).toThrow(/Project overrides must be/);
+      const t = await (async () => {
+        const claudeDir = mkdtempSync(join(tmpdir(), "claude-user-"));
+        const d = createDaemon({ webRoot, token, roots: [project], query: fakeQuery as never, claudeDir, allowBypass, appSettings, history: { listSessions: (async () => []) as never } as never });
+        await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+        return { d, c: await client((d.address() as AddressInfo).port) };
+      })();
+      expect(((await t.c.request({ type: "session.defaultMode", cwd: project })) as { result: { mode: string } }).result.mode).not.toBe("bypassPermissions");
+      t.d.close();
+    }
+  });
+});
+
+describe("Project overrides in a daemon", () => {
+  const boot = async () => {
+    const a = realpathSync(mkdtempSync(join(tmpdir(), "proj-a-")));
+    const b = realpathSync(mkdtempSync(join(tmpdir(), "proj-b-")));
+    const appSettings = createSettings();
+    const secrets = createSecrets();
+    const d = createDaemon({ webRoot, token, roots: [a, b], query: fakeQuery as never, appSettings, secrets, history: { listSessions: (async () => []) as never } as never });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    const c = await client((d.address() as AddressInfo).port);
+    const account = async (name: string, tok: string) => ((await c.request({ type: "claude.account.add", name, token: tok })) as { result: { claudeAccounts: { id: string; name: string }[] } }).result.claudeAccounts.find((x) => x.name === name)!.id;
+    const create = async (cwd: string) => ((await c.request({ type: "session.create", cwd, model: "sonnet" })) as { result: { session: { id: string } } }).result.session.id;
+    const prompt = async (id: string) => {
+      await c.request({ type: "session.prompt", sessionId: id, text: "hi" });
+      return calls.find((o) => o.sessionId === id)!.env as Record<string, string | undefined>;
+    };
+    const apply = async (patch: Parameters<typeof appSettings.set>[0]) => void (await c.request({ type: "settings.set", patch }));
+    return { a, b, d, c, appSettings, account, create, prompt, apply };
+  };
+
+  it("a Session's CLI env carries its Project's Claude account; CLI login removes the token; another Project uses the global account", async () => {
+    const t = await boot();
+    const work = await t.account("Work", "tok-work");
+    const home = await t.account("Home", "tok-home");
+    await t.apply({ claude: { account: home }, projects: { overrides: { local: { [t.a]: { account: work } } } } });
+    expect((await t.prompt(await t.create(t.a))).CLAUDE_CODE_OAUTH_TOKEN).toBe("tok-work");
+    expect((await t.prompt(await t.create(t.b))).CLAUDE_CODE_OAUTH_TOKEN).toBe("tok-home");
+    await t.apply({ projects: { overrides: { local: { [t.a]: { account: "cli" } } } } });
+    expect(await t.prompt(await t.create(t.a))).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
+    await t.apply({ projects: { overrides: { local: { [t.a]: { account: "" } } } } });
+    expect((await t.prompt(await t.create(t.a))).CLAUDE_CODE_OAUTH_TOKEN).not.toBe("tok-home");
+    t.d.close();
+  });
+
+  it("creating a Session remembers its Engine as the global default only when the Project sets no Engine", async () => {
+    const t = await boot();
+    await t.apply({ sessions: { engine: "opencode" }, projects: { overrides: { local: { [t.a]: { engine: "claude" } } } } });
+    await t.create(t.a);
+    expect(t.appSettings.get().sessions.engine).toBe("opencode");
+    await t.create(t.b);
+    expect(t.appSettings.get().sessions.engine).toBe("claude");
     t.d.close();
   });
 });

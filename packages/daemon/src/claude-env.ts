@@ -10,7 +10,9 @@ export function withoutApiKeys(env: NodeJS.ProcessEnv) {
 /** Default: undefined; CLI login: null (no CLAUDE_CODE_OAUTH_TOKEN); a token account: its token. */
 export const setClaudeToken = (t: string | null | undefined) => void (token = t);
 
-export function claudeEnv(env: NodeJS.ProcessEnv = process.env, t = token) {
+/** `account`: given (even undefined = Default), it replaces the daemon's account, as a Project's Claude account does; absent: the daemon's account. */
+export function claudeEnv(env: NodeJS.ProcessEnv = process.env, ...account: [account?: string | null | undefined]) {
+  const t = account.length ? account[0] : token;
   const e = withoutApiKeys(env);
   if (t === null) delete e.CLAUDE_CODE_OAUTH_TOKEN;
   else if (t) e.CLAUDE_CODE_OAUTH_TOKEN = t;

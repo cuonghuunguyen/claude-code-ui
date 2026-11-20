@@ -119,7 +119,7 @@ export type DaemonContext = {
   listVersions: ReturnType<typeof createListVersions>;
   sessionIds(): Promise<string[]>;
   /** Remembers the Engine of the last new session. */
-  rememberEngine(engine: EngineName): void;
+  rememberEngine(engine: EngineName, cwd: string): void;
   addProject(cwd: string): void;
   projects: Projects;
   /** Sessions being deleted. */

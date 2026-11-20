@@ -8,6 +8,7 @@ import type { AddonsRequest } from "./addons.ts";
 import type { Area, Connection, Handlers, Msg, Respond } from "./dispatch.ts";
 import { JiraError, jiraOrigin } from "./jira.ts";
 import { usesOauthToken } from "./plan-usage.ts";
+import { overrideAccounts, withoutOverrideAccount } from "./settings.ts";
 
 export type SettingsAreaContext = Pick<
   DaemonContext,
@@ -61,7 +62,9 @@ export function createSettingsArea(ctx: SettingsAreaContext, conn: Pick<Connecti
     try {
       const active = appSettings.get().claude.account === msg.id;
       secrets.removeClaudeAccount(msg.id);
-      if (active) appSettings.set({ claude: { account: "" } });
+      // One write: the global account and every Project that named it are Default again.
+      const cleaned = withoutOverrideAccount(appSettings.get().projects.overrides, msg.id);
+      if (active || cleaned) appSettings.set({ ...(active && { claude: { account: "" } }), ...(cleaned && { projects: { overrides: cleaned } }) });
       ctx.applyAccountToken();
       if (active) ctx.claudeLoginChanged();
     } catch (err) {
@@ -101,6 +104,8 @@ export function createSettingsArea(ctx: SettingsAreaContext, conn: Pick<Connecti
     try {
       const picked = msg.patch?.claude?.account;
       if (picked !== undefined && picked !== "" && picked !== "cli" && !secrets.claudeAccounts().some((a) => a.id === picked)) return fail("bad_settings", "Claude account: unknown account");
+      const unknown = overrideAccounts(msg.patch?.projects?.overrides ?? {}).find((a) => a !== "" && a !== "cli" && !secrets.claudeAccounts().some((x) => x.id === a));
+      if (unknown !== undefined) return fail("bad_settings", "Claude account: unknown account");
       const before = appSettings.get().claude.account;
       const settingsBefore = appSettings.get();
       const settings = appSettings.set(msg.patch);

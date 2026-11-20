@@ -16,3 +16,9 @@ it("an explicit token overrides the active one", () => {
   setClaudeToken(null);
   expect(claudeEnv(env, "x")).toEqual({ PATH: "/bin", CLAUDE_CODE_OAUTH_TOKEN: "x" });
 });
+
+it("an explicit Default (undefined) replaces the daemon's account: a Project on Default keeps the inherited token", () => {
+  setClaudeToken("picked");
+  expect(claudeEnv(env, undefined)).toEqual({ PATH: "/bin", CLAUDE_CODE_OAUTH_TOKEN: "inherited" });
+  expect(claudeEnv(env, null)).toEqual({ PATH: "/bin" });
+});

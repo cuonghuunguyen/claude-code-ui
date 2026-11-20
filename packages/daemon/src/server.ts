@@ -42,6 +42,7 @@ import { ARCHIVED_TAG, createClaudeCatalogue, transcriptFile, type History } fro
 import { createOpenCodeCatalogues } from "./opencode-catalogues.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
 import { claudeEnv, setClaudeToken } from "./claude-env.ts";
+import { historySettings, inlineTaskSettings, projectOverrides } from "./project-overrides.ts";
 import { TEST_ARGS, TEST_TIMEOUT_MS, testOutcome } from "./claude-test.ts";
 import { createPlanTracker, RESET_GRACE_MS, usesOauthToken } from "./plan-usage.ts";
 import { createPromptQueue } from "./prompt-queue.ts";
@@ -353,6 +354,7 @@ export function createDaemon(opts: {
     promptSuggestions: () => appSettings.get().focus.nextForYou,
     chrome: () => appSettings.get().chrome.enabled,
     fork: () => appSettings.get().fork.enabled,
+    claudeEnv: (cwd: string) => claudeEnvFor(cwd),
     visualizePlugin: () => (appSettings.get().chat.visualize ? visualizePluginDir() : undefined),
     // The plan fallback only while the plan says rejected: another 429 (per-model, credits) during a warning is no usage limit.
     onLimitStop: (id: string, resetsAt: number | undefined) => {
@@ -463,9 +465,10 @@ export function createDaemon(opts: {
     if (!route.live) return void res.writeHead(404).end();
     await route.live.transport.handleRequest(req, res, body);
   }
-  /** Settings `sessions.engine`: the Engine of the last created session. */
-  const rememberEngine = (engine: EngineName) => {
+  /** Settings `sessions.engine`: the Engine of the last created session; not when its Project sets the Engine itself (that choice must not become the global one). */
+  const rememberEngine = (engine: EngineName, cwd: string) => {
     if (appSettings.get().sessions.engine === engine) return;
+    if (projectOverrides(appSettings.get(), cwd).engine !== undefined) return;
     try {
       broadcastSettings(appSettings.set({ sessions: { engine } }));
     } catch (err) {
@@ -475,7 +478,7 @@ export function createDaemon(opts: {
   /** The undo records of applied `fs.replace` calls (docs/spec.md "Editor"), shared by every connection. */
   const replaceUndo = createReplaceUndo();
   /** Local history (local-history.ts): `before()` is the one entry point for every write that replaces file content (editor save, agent Edit/Write, git writes). */
-  const localHistory = createLocalHistory({ dir: opts.historyDir ?? join(tmpdir(), `claude-ui-history-${randomUUID()}`), settings: () => appSettings.get().history, allowed: (p) => allowed(p) });
+  const localHistory = createLocalHistory({ dir: opts.historyDir ?? join(tmpdir(), `claude-ui-history-${randomUUID()}`), settings: (path) => historySettings(appSettings.get(), path), allowed: (p) => allowed(p) });
   const secrets = opts.secrets ?? createSecrets();
   const jira = createJira({ config: () => appSettings.get().jira, token: (o) => secrets.jiraToken(o), ...(opts.jiraFetch && { fetch: opts.jiraFetch }) });
   /** `settings.get` / `settings.set` / `jira.token` reply: the settings, the daemon, whether a Jira token is saved (never the token). */
@@ -484,6 +487,11 @@ export function createDaemon(opts: {
   const accountToken = () => {
     const a = appSettings.get().claude.account;
     return a === "cli" ? null : a ? secrets.claudeToken(a) : undefined;
+  };
+  /** The CLI env of a session in `cwd`: its Project's Claude account when it overrides one (`""` = Default, `"cli"`, an account id; an unknown id is Default, as for the global setting), else the daemon's. */
+  const claudeEnvFor = (cwd: string) => {
+    const a = projectOverrides(appSettings.get(), cwd).account;
+    return a === undefined ? claudeEnv() : claudeEnv(process.env, a === "cli" ? null : a ? secrets.claudeToken(a) : undefined);
   };
   const accountName = () => {
     const a = appSettings.get().claude.account;
@@ -1131,7 +1139,7 @@ export function createDaemon(opts: {
           const s = sessions.get(id);
           if (!s) throw new ToolError("This engine cannot run inline tasks.");
           // Each Engine takes its own model from the setting when the spec names none.
-          return s.run.inlineTask(spec, { signal, toolUseId, input, settings: appSettings.get().inlineTask });
+          return s.run.inlineTask(spec, { signal, toolUseId, input, settings: inlineTaskSettings(appSettings.get(), s.cwd) });
         },
       }),
       ...createForkGroups(

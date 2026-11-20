@@ -303,7 +303,7 @@ function hub(sides: ReturnType<typeof createSides>) {
     sides,
     send: (m) => void sent.push(m),
     local: async () => {},
-    localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: m.type === "settings.get" ? { settings: { orchestration: { enabled: true }, launcher: { port: 4999 }, claude: { account: "cli" } } } : { sessions: [], projects: [], recentProjects: [] } }),
+    localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: m.type === "settings.get" ? { settings: { orchestration: { enabled: true }, launcher: { port: 4999 }, claude: { account: "cli" }, projects: { overrides: { local: { "/hub": { mode: "plan" } }, "wsl:A": { "/a": { mode: "acceptEdits", account: "tok" } }, "ssh:B": { "/b": { mode: "plan" } } } } } } : { sessions: [], projects: [], recentProjects: [] } }),
     isLocalSession: async () => false,
   });
   const ask = async (msg: object) => {
@@ -583,7 +583,8 @@ describe("settings sync only to a Hub an attach started", () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(settingsFrames(p)).toHaveLength(count);
     // The Hub's launcher options (port, LAN, roots) are for its own machine, never synced to a side; nor is the Claude account (Hub-local).
-    for (const f of settingsFrames(p)) expect(f.m.patch).toEqual({ orchestration: { enabled: true } });
+    // The side gets its own Project overrides as `local`, without the account, never the Hub's or another side's.
+    for (const f of settingsFrames(p)) expect(f.m.patch).toEqual({ orchestration: { enabled: true }, projects: { overrides: { local: { "/a": { mode: "acceptEdits" } } } } });
     expect(s.attachStarted("wsl:A")).toBe(!!startedBy);
     s.close();
   });
