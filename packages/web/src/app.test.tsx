@@ -4125,9 +4125,38 @@ describe("GH-430: panels on the new-session tab", () => {
     });
     try {
       await openNewTab();
+      await vi.waitFor(() => expect(sent.some((m) => m.type === "settings.get")).toBe(true));
+      await act(async () => new Promise((r) => setTimeout(r, 100)));
       await sendFirst("hello");
       await vi.waitFor(() => expect(sent.find((m) => m.type === "session.setEffort")).toMatchObject({ effort: "max" }));
       expect(sent.find((m) => m.type === "session.create")).toMatchObject({ cwd: "/p/demo", model: "opus" });
+    } finally {
+      restore();
+    }
+  });
+
+  it("GH-894: picking a mode in the new-session tab does not pin the Project's model; switching the project follows the other Project", async () => {
+    const overrides = { local: { "/p/demo": { model: "opus", effort: "max" } } };
+    const restore = await remount({
+      "settings.get": { settings: { orchestration: {}, sessions: { engine: "claude", defaultMode: "default" }, projects: { overrides } } },
+      "session.list": () => ({ ...TWO, sessions: sent.some((m) => m.type === "session.create") ? [session, created] : [session] }),
+      "session.subscribe": bySession,
+      "session.create": { session: created },
+      "session.setModel": { session: created },
+      "session.setEffort": { session: created },
+      "session.setPermissionMode": { session: created },
+      "session.prompt": {},
+    });
+    try {
+      await openNewTab();
+      await vi.waitFor(() => expect(sent.some((m) => m.type === "settings.get")).toBe(true));
+      await act(async () => new Promise((r) => setTimeout(r, 100)));
+      const n = sent.length;
+      await pickOption('[data-testid="new-session-tab"] [data-testid="mode-select"]', "Plan mode");
+      await pickOption('[data-testid="new-session-tab"] [data-testid="project-chip"]', "Oother/p/other");
+      await act(async () => new Promise((r) => setTimeout(r, 50)));
+      await sendFirst("hello");
+      await vi.waitFor(() => expect(sent.slice(n).find((m) => m.type === "session.create")).toMatchObject({ cwd: "/p/other", model: "default" }));
     } finally {
       restore();
     }

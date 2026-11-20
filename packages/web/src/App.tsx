@@ -3110,12 +3110,14 @@ export function App() {
     if (d.engine !== draft.engine) {
       // Another Engine has its own models, modes and effort levels.
       const offered = modesFor(d.engine!, "default");
-      return setDraft({ model: "default", effort: "default", engine: d.engine, mode: pick.mode && offered.includes(pick.mode) ? pick.mode : undefined });
+      return setDraft({ engine: d.engine, mode: pick.mode && offered.includes(pick.mode) ? pick.mode : undefined });
     }
     const list = modelsOf(draftEngine, draftProject);
     const lost = d.mode === "auto" && !list.some((m) => m.value === d.model && m.supportsAutoMode);
     if (lost) setToast(autoUnavailable(list, d.model));
-    setDraft(lost ? { ...d, mode: "default" } : { ...d, mode: d.mode === draft.mode ? pick.mode : d.mode });
+    // A field the user did not change stays as picked (absent: the Project's value or Default), so a change of mode does not pin the Project's values (GH-894).
+    const kept = { engine: d.engine === draft.engine ? pick.engine : d.engine, model: d.model === draft.model ? pick.model : d.model, effort: d.effort === draft.effort ? pick.effort : d.effort };
+    setDraft(lost ? { ...d, ...kept, mode: "default" } : { ...d, ...kept, mode: d.mode === draft.mode ? pick.mode : d.mode });
     // GH-722: the same other mode picked three times in a row in a new session suggests it as the Default permission mode.
     const mode = lost ? undefined : d.mode;
     if (mode && mode !== draft.mode && (SESSION_MODES as readonly string[]).includes(mode))
@@ -3863,7 +3865,7 @@ export function App() {
           cwd={projectSettings.cwd}
           name={projectName(projectSettings.cwd)}
           side={sideOfCwd(cwdSides, projectSettings.cwd)}
-          engines={enginesOf(projectSettings.cwd).map((e) => e.engine).length ? enginesOf(projectSettings.cwd).map((e) => e.engine) : [DEFAULT_ENGINE]}
+          engines={projectEngines(enginesOf(projectSettings.cwd))}
           modelsOf={(engine) => modelsOf(engine, projectSettings.cwd)}
           loadModels={(engine) => catalogue.load(sourceOf(engine, projectSettings.cwd))}
           request={(m) => client.current!.request(m)}
@@ -5263,6 +5265,7 @@ function EngineIcon({ engine }: { engine: Engine }) {
   return <Icon aria-hidden />;
 }
 
+const projectEngines = (list: { engine: Engine }[]): Engine[] => (list.length ? list.map((e) => e.engine) : [DEFAULT_ENGINE]);
 const autoUnavailable = (models: ModelInfo[], model: string) => tt("app.main.autoUnavailable", { model: models.find((m) => m.value === model)?.displayName ?? model });
 
 /** `draft`: the new-session tab's upload token (upload-owner.ts), claimed by session.create. */

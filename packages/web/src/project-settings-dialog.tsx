@@ -2,7 +2,7 @@
 // every field: a control whose first option (or empty text) is "Global (<value>)", a Global / Project status in text, and a reset button
 // while the Project sets it. A change is saved at once through settings.set (the whole overrides map, like labels).
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { EFFORTS, LOCAL_SIDE, SESSION_MODES, type ClaudeAccountInfo, type Effort, type Engine, type ModelInfo, type ProjectOverrides, type Settings, type SettingsPatch, type SettingsResult } from "@claude-ui/protocol";
+import { DEFAULT_ENGINE, EFFORTS, LOCAL_SIDE, SESSION_MODES, type ClaudeAccountInfo, type Effort, type Engine, type ModelInfo, type ProjectOverrides, type Settings, type SettingsPatch, type SettingsResult } from "@claude-ui/protocol";
 import { RotateCcwIcon } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { Request } from "./client.ts";
@@ -156,7 +156,7 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
 
   const all = settings?.projects?.overrides;
   const o: ProjectOverrides = overridesOf(all, side === LOCAL_SIDE ? {} : { [cwd]: side }, cwd);
-  const globalEngine = settings?.sessions.engine ?? "claude";
+  const globalEngine = settings?.sessions.engine ?? DEFAULT_ENGINE;
   const engine = o.engine ?? globalEngine;
   useEffect(() => {
     if (open && settings) loadModels(engine);
