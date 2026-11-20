@@ -53,6 +53,8 @@ export type SessionOpts = Partial<Omit<SessionSettings, "agent">> & {
   /** Whether a model value (`ModelInfo.value`) supports auto mode (`supportsAutoMode`); none = no model does. */
   supportsAuto?: (model: string) => boolean;
   uploadDir?: (id: string) => string | undefined;
+  /** The `subagents` folder of the session's transcript (`<projects>/<cwd key>/<id>/subagents`): where an inline run's steps are stored (inline-transcript.ts). Absent: not stored. */
+  subagentsDir?: (id: string, cwd: string) => string | undefined;
   query?: QueryFn;
   onSettings?: (s: SessionSettings, id: string, fields: (keyof SessionSettings)[]) => void;
   onCleared?: (heir: Session, from: Session) => void;

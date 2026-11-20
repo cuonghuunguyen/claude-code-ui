@@ -192,7 +192,7 @@ export default {
   "session.run.stop": "Stop {label} {summary}",
   "session.run.stopFailed": "Could not stop: {error}",
   "session.run.filesChanged": { one: "{count} file changed", other: "{count} files changed" },
-  "session.run.stepsNotKept": "Steps are not kept after the daemon restarts.",
+  "session.run.stepsNotKept": "The steps of this run were not kept.",
   "session.run.limitTurns": "Stopped at the turn limit. The result is partial.",
   "session.run.limitTokens": "Stopped at the output token limit. The result is partial.",
   "session.run.limitTime": "Stopped at the time limit. The result is partial.",

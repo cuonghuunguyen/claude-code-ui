@@ -375,6 +375,7 @@ export function createDaemon(opts: {
         return undefined;
       }
     },
+    subagentsDir: (id: string, cwd: string) => transcriptFile(projectsDir, transcriptCwd(id, cwd), id).replace(/\.jsonl$/, "/subagents"),
     query: opts.query,
     readTranscript,
     // The stale-turn check reads only the transcript's tail, not the chain and its subagent runs (GH-239).

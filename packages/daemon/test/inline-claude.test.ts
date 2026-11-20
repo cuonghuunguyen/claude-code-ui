@@ -117,6 +117,16 @@ describe("runInlineClaude options", () => {
     await none.done;
     expect(none.optionsSeen[0]!.permissionMode).toBe("default");
   });
+  it("stores every streamed step for a restore and waits for the write before it returns", async () => {
+    const kept: string[] = [];
+    let flushed = false;
+    const msgs = [assistant("m1", [toolUse("t1", "Grep", { pattern: "foo" })]), toolResult("t1"), assistant("m2", [text("done")]), result()];
+    const x = setup({ messages: msgs });
+    x.deps.transcript = (id, title) => (kept.push(`open ${id} ${title}`), { append: (m) => void kept.push(m.type), done: async () => (await Promise.resolve(), void (flushed = true)) });
+    await runInlineClaude(x.deps, SPEC, { signal: new AbortController().signal, toolUseId: "toolu_main" });
+    expect(kept).toEqual(["open toolu_main Find foo", "assistant", "user", "assistant", "result"]);
+    expect(flushed).toBe(true);
+  });
   it("model: the input first, then the setting", async () => {
     const a = run({ messages: [result()] }, { model: "sonnet" });
     await a.done;

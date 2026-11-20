@@ -6,6 +6,7 @@ import { createAdapter, type Part } from "@claude-ui/protocol";
 import { withoutApiKeys } from "./claude-env.ts";
 import { ToolError } from "./daemon-mcp.ts";
 import { runGit } from "./git-runner.ts";
+import type { InlineTranscript } from "./inline-transcript.ts";
 import { INLINE_OUTPUT_TOKENS, INLINE_TEXT_CHARS, INLINE_TIMEOUT_MS, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
 
 export const INLINE_SYSTEM = "You run one task for another agent. Use the tools you have to do it. Do not ask questions: if something is unclear, decide and say what you assumed. Reply with only the result the task asks for, no preface.";
@@ -45,6 +46,8 @@ export type InlineClaudeDeps = {
   gitDirty: (cwd: string) => Promise<Map<string, string> | undefined>;
   /** The CLI env of the daemon (account applied); API keys are removed here again. */
   env: () => NodeJS.ProcessEnv;
+  /** Stores the run's steps as a subagent run of the call (inline-transcript.ts) for a restore; undefined: not stored. */
+  transcript?: (toolUseId: string, title: string) => InlineTranscript | undefined;
   /** Abort per running call id (ClaudeSession.stopSubagent, close). */
   runs: Map<string, () => void>;
   limits?: { timeoutMs?: number; outputTokens?: number };
@@ -213,6 +216,7 @@ export async function runInlineClaude(deps: InlineClaudeDeps, spec: InlineSpec, 
   let final: Record<string, any> | undefined;
   let error: string | undefined;
 
+  const stored = callId ? deps.transcript?.(callId, spec.title) : undefined;
   let q: Query | undefined;
   let before: Map<string, string> | undefined;
   try {
@@ -254,6 +258,7 @@ export async function runInlineClaude(deps: InlineClaudeDeps, spec: InlineSpec, 
         if (Array.isArray(c)) for (const b of c as { type?: string; tool_use_id?: string; is_error?: boolean }[]) if (b.type === "tool_result" && b.is_error === true && b.tool_use_id && steps.has(b.tool_use_id)) steps.get(b.tool_use_id)!.failed = true;
       }
       if (m.type === "result") final = m as unknown as Record<string, any>;
+      stored?.append(m);
       for (const p of adapter.convert(m)) {
         if (!STEP_TYPES.has(p.type)) continue;
         if (p.type === "tool_call" && p.status === "done") {
@@ -275,6 +280,8 @@ export async function runInlineClaude(deps: InlineClaudeDeps, spec: InlineSpec, 
     deps.runs.delete(key);
     q?.close?.();
   }
+  // Before the result goes back: a daemon restart right after must find every step on disk.
+  await stored?.done();
 
   const after = await deps.gitDirty(parent.cwd);
   if (after) for (const [path, code] of after) if (before?.get(path) !== code) changed.add(path);

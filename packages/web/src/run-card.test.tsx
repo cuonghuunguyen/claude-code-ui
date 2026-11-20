@@ -98,7 +98,7 @@ it("a failed Stop request shows its error next to the card", async () => {
 it("a restored run without step parts says that steps are not kept", async () => {
   await render(props({ stepCount: 0, stepsKept: false, steps: null }));
   await click(header());
-  expect(q("run-steps-note")!.textContent).toBe("Steps are not kept after the daemon restarts.");
+  expect(q("run-steps-note")!.textContent).toBe("The steps of this run were not kept.");
   expect(q("run-steps-toggle")).toBeNull();
 });
 

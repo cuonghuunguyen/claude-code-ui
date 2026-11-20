@@ -42,6 +42,7 @@ import { DeniedRetryError, followUp, followUpAlways, OneShots, retryKey } from "
 import { addLocalAllowRule, localSettingsFile, SettingsFileError } from "./local-settings.ts";
 import { interleaveRuns, type TranscriptEnd } from "./transcript.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
+import { openInlineTranscript } from "./inline-transcript.ts";
 import { gitDirty, runInlineClaude, type InlineBridge } from "./inline-claude.ts";
 import type { InlineHooks, InlineResult, InlineSpec } from "./inline-types.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
@@ -985,6 +986,10 @@ export class ClaudeSession implements EngineSession {
         gitDirty,
         env: () => claudeEnv(),
         runs: this.inlineRuns,
+        transcript: (toolUseId, title) => {
+          const dir = this.opts.subagentsDir?.(this.id, this.cwd);
+          return dir ? openInlineTranscript({ dir, sessionId: this.id, cwd: this.cwd, toolUseId, description: title }) : undefined;
+        },
       },
       model ? { ...spec, model } : spec,
       hooks,
