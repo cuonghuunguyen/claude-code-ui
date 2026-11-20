@@ -145,7 +145,8 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     const known = meta.get(id);
     const client = await server.client();
     // A session OpenCode 2 does not have (an OpenCode 1 one, until the adapter record lands) answers 404: it is gone here.
-    const row = await client.session.get({ sessionID: id }).catch(() => undefined);
+    // Only "not found" means gone; a timeout or a restarting server is an error, not a lost session.
+    const row = await client.session.get({ sessionID: id }).catch((err) => ((err as { _tag?: string })._tag === "SessionNotFoundError" ? undefined : Promise.reject(err)));
     const cwd = row && ctx.allowed(known?.cwd ?? row.location.directory);
     if (!row || !cwd || ctx.isRemoving(cwd)) return undefined;
     const history = await loadOpenCode2History(client, id, cwd, (sid) => engine.isOurs(id, sid));

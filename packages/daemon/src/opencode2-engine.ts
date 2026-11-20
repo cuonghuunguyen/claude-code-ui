@@ -113,6 +113,8 @@ class OpenCode2Session implements EngineSession {
   private turnPosted = true;
   /** The `session.prompt` calls on their way: a Stop waits for them, so it reaches OpenCode after them. */
   private posting = new Set<Promise<unknown>>();
+  /** Prompt requests sent so far: a resync whose reads began before one of them has not seen its turn. */
+  private posts = 0;
   private turnEnd: TurnEnd | undefined;
   private turnKey = ascending("msg");
   /** The last assistant message of the running turn: the id of its failure notice, as at a restore. */
@@ -191,6 +193,7 @@ class OpenCode2Session implements EngineSession {
   }
 
   resync(): Promise<void> {
+    const posts = this.posts;
     return (this.resyncing ??= this.server
       .client()
       .then((c) => loadOpenCode2History(c, this.id, this.cwd, (sid) => this.engine.isOurs(this.id, sid)))
@@ -200,7 +203,7 @@ class OpenCode2Session implements EngineSession {
         const state = this.session.currentState();
         if (h.busy && state === "idle") (this.beginTurn(), this.openTurnEnd(), this.session.setState("running"));
         // A prompt that is still being prepared is not in OpenCode yet: only a turn that reached it can have ended there.
-        else if (!h.busy && state === "running" && this.turnPosted && this.posting.size === 0) this.turnStop < this.stops ? this.endStopped() : this.finish();
+        else if (!h.busy && state === "running" && this.turnPosted && this.posting.size === 0 && this.posts === posts) this.turnStop < this.stops ? this.endStopped() : this.finish();
       })
       .catch(() => {})
       .finally(() => (this.resyncing = undefined)));
@@ -281,7 +284,10 @@ class OpenCode2Session implements EngineSession {
     this.mapper.own.add(messageID);
     this.session.emit({ type: "user_text", id: messageID, text, images });
     const steer = this.session.currentState() !== "idle";
+    const stops = this.stops;
     const start = () => {
+      // A Stop while this prompt waited for the stopped turn drops it (as a prompt being prepared).
+      if (this.stops !== stops) return;
       if (!steer || afterStop) (this.beginTurn(), (this.turnPosted = false), this.session.setState("running"));
       void this.send(messageID, text, images).catch((err) => {
         this.notice(`prompt_failed:${messageID}`, `Could not send the prompt to OpenCode: ${(err as Error).message}`);
@@ -306,6 +312,7 @@ class OpenCode2Session implements EngineSession {
     if (!live()) return;
     this.turnPosted = true;
     const files = images.map((uri) => ({ uri, source: { type: "inline" as const }, name: "image" }));
+    this.posts++;
     const post = client.session.prompt({ sessionID: this.id, id: messageID, text, ...(files.length && { files }) });
     this.posting.add(post);
     try {
@@ -539,6 +546,7 @@ class OpenCode2EngineImpl implements Engine {
 
   add(s: OpenCode2Session) {
     this.sessions.set(s.id, s);
+    this.owners.clear();
     this.unsubscribe ??= this.server.events(
       {
         event: (_dir, payload) => {
@@ -572,10 +580,12 @@ class OpenCode2EngineImpl implements Engine {
         .client()
         .then((c) => c.session.get({ sessionID: sid }))
         .then((row) => (row.parentID ? this.ownerOf(row.parentID) : undefined))
-        .catch(() => undefined);
+        .catch(() => {
+          // A failed read is not kept: the next request asks again. A session that is not ours is (until a session is added).
+          this.owners.delete(sid);
+          return undefined;
+        });
       this.owners.set(sid, hit);
-      // A failed read is not kept: the next request asks again.
-      void hit.then((o) => o === undefined && this.owners.get(sid) === hit && this.owners.delete(sid));
     }
     return hit;
   }

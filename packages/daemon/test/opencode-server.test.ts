@@ -424,6 +424,22 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     }
   });
 
+  it("the event stream is the one of the binary in use: a version 1 consumer left from before a path change does not keep the version 2 consumer from /api/event", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "oc-mix-")));
+    const logFile = join(root, "fake.log");
+    const server = createOpenCodeServer({ path: () => "", command: [process.execPath, BIN2], env: () => ({ FAKE_OPENCODE_LOG: logFile }) });
+    try {
+      const off1 = server.events({ event: () => {}, resync: () => {} }, 1);
+      await server.ensure(2);
+      server.events({ event: () => {}, resync: () => {} }, 2);
+      const paths = () => readFileSync(logFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((l) => l.type === "request").map((l) => l.path);
+      await until(() => paths().includes("/api/event"), 6000);
+      off1();
+    } finally {
+      await server.close();
+    }
+  }, 20_000);
+
   it("an OpenCode 2 binary older than 2.3.0 answers opencode_old naming 2.3.0", async () => {
     const d = await boot({ bin: BIN2, env: { FAKE_OPENCODE_VERSION: "2.2.0" } });
     expect((await d.ok({ type: "opencode.status" })).result).toMatchObject({ state: "old", message: expect.stringContaining("2.3.0") });

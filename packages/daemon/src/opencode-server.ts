@@ -306,7 +306,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   let markConnected = () => {};
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  async function readStream(res: Response) {
+  async function readStream(res: Response, major: 1 | 2) {
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let buf = "";
@@ -328,7 +328,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
         // Version 2 sends the event itself (`{type, data, location, durable?}`), version 1 wraps it as `{directory, payload}`.
         const payload = msg.payload ?? (typeof msg.type === "string" ? { type: msg.type, properties: msg.data ?? {}, durable: msg.durable } : undefined);
         if (!payload || payload.type === "sync" || payload.type === "server.heartbeat" || payload.type === "server.connected") continue;
-        for (const h of [...handlers.keys()]) h.event(msg.directory ?? msg.location?.directory, payload);
+        for (const [h, m] of [...handlers]) if (m === major) h.event(msg.directory ?? msg.location?.directory, payload);
       }
     }
   }
@@ -341,16 +341,17 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     connected = new Promise<void>((r) => (markConnected = r));
     while (handlers.size) {
       try {
-        const u = await ensure(handlers.values().next().value ?? 1);
+        // The stream of the binary in use: the major of the running server, else of the last check, else of the first consumer (a consumer left from before a path change must not keep asking for the old major).
+        const u = await ensure(up && child ? up.major : (lastMajor ?? handlers.values().next().value ?? 1));
         if (!handlers.size) break;
         streamAbort = new AbortController();
         const res = await ocFetch(`${u.url}${u.major === 2 ? "/api/event" : "/global/event"}`, { headers: { authorization: u.auth, accept: "text/event-stream" }, signal: streamAbort.signal });
         if (!res.ok || !res.body) throw new Error(`event stream answered ${res.status}`);
-        if (again) for (const h of [...handlers.keys()]) h.resync();
+        if (again) for (const [h, m] of [...handlers]) if (m === u.major) h.resync();
         again = true;
         delay = RECONNECT_MIN_MS;
         markConnected();
-        await readStream(res);
+        await readStream(res, u.major);
       } catch {
         // Retried below; a start failure shows when the next request needs the server.
       }

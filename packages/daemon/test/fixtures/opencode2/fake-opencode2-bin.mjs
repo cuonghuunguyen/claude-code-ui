@@ -9,7 +9,7 @@
 //   {wait: "permission"}  holds the turn until `…/permission/:rid/reply` came; {when: "once"|"always"|"reject"|"allowed"} on a step skips it unless that was the reply (`allowed` = once or always); `$REJECT` is the reply's message
 //   {hold: true}    holds the turn until `…/interrupt`, which then ends it as the user's stop (`step.failed` aborted, `execution.interrupted`)
 //   {sleep: ms}
-// FAKE_OPENCODE2_MODEL_DELAY / _PROMPT_DELAY: ms the model routes / the prompt route wait. FAKE_OPENCODE2_SWALLOW_STOP: an interrupt sends no end events. POST /__drop ends the event streams.
+// FAKE_OPENCODE2_MODEL_DELAY / _PROMPT_DELAY / _MESSAGE_DELAY: ms the model routes / the prompt route / the message read wait. FAKE_OPENCODE2_SWALLOW_STOP: an interrupt sends no end events. POST /__drop ends the event streams.
 // FAKE_OPENCODE_LOG: JSON lines of `start`, `request` (method, path, authed, body of a write) and `version`.
 import { createServer } from "node:http";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -160,6 +160,8 @@ const server = createServer((req, res) => {
       if (sub === "message") {
         const list = messages.get(s.id) ?? [];
         const limit = Number(url.searchParams.get("limit") ?? 100);
+        // FAKE_OPENCODE2_MESSAGE_DELAY: ms a message read waits (its answer is as of the time it was asked).
+        if (process.env.FAKE_OPENCODE2_MESSAGE_DELAY) return setTimeout(() => json(res, 200, { data: list.slice(0, limit), cursor: { previous: null, next: null } }), Number(process.env.FAKE_OPENCODE2_MESSAGE_DELAY));
         return json(res, 200, { data: list.slice(0, limit), cursor: { previous: null, next: list.length >= limit ? "next" : null } });
       }
       if (sub === "interrupt") {

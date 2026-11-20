@@ -258,6 +258,20 @@ describe("OpenCode 2 sessions", { timeout: TEST_MS }, () => {
     expect(s.parts().some((p) => p.type === "turn_result")).toBe(false);
   });
 
+  it("a prompt queued behind a stopped turn is not sent when Stop is pressed again before it went", async () => {
+    const d = await boot({ script: ["hold"], env: { FAKE_OPENCODE2_SWALLOW_STOP: "1" } });
+    const s = await d.open();
+    await s.prompt("work");
+    await until(() => !!s.find("assistant_text", (p) => p.text === "working"));
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await s.prompt("next");
+    await sleep(200);
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await sleep(1500);
+    expect(d.requests("POST", `/api/session/${s.id}/prompt`).map((r) => r.body.text)).toEqual(["work"]);
+    expect(s.states().at(-1)).toBe("idle");
+  });
+
   it("a failed turn shows one warning with the first line of OpenCode's error, the retry state, and a turn result with isError", async () => {
     const d = await boot({ script: ["fail"] });
     const s = await d.open();
@@ -329,6 +343,25 @@ describe("OpenCode 2 sessions: list and restore", { timeout: TEST_MS }, () => {
     writeFileSync(join(d.root, "data.json"), JSON.stringify(data(d.project, d.other)));
     return d;
   }
+
+  it("a prompt right after opening a stored session is not ended by the open's resync whose reads began before the prompt", async () => {
+    const d = await bootWith({ script: ["hold"], env: { FAKE_OPENCODE2_MESSAGE_DELAY: "400" } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    await until(() => d.log().some((l) => l.type === "start"));
+    await d.ok({ type: "session.subscribe", sessionId: "ses_one", sinceSeq: 0 });
+    const s = d.view("ses_one");
+    await until(() => !!s.find("assistant_text"));
+    // The resync after the stream connected is reading (the message read is held 400 ms); the prompt goes meanwhile.
+    await until(() => d.requests("GET", "/api/session/ses_one/message").length >= 2);
+    await s.prompt("work");
+    await until(() => !!s.find("assistant_text", (p) => p.text === "working"));
+    await sleep(800);
+    // OpenCode still runs the held turn: the session must not have been ended as idle with a result.
+    expect(d.log().some((l) => l.type === "turn")).toBe(false);
+    expect(s.parts().some((p) => p.type === "turn_result")).toBe(false);
+    expect(s.states().at(-1)).toBe("running");
+  });
 
   it("session.list shows the root sessions of the project's folder, none of a subagent or another folder, and prunes no settings entry", async () => {
     // Saved long ago: a recent entry is kept by the prune anyway (PRUNE_GRACE_MS).
