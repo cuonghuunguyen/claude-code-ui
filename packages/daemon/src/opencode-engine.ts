@@ -210,7 +210,7 @@ const STALE_WATCH_MS = 1000;
 const ABORT_WAIT_MS = 3000;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Commands the daemon itself runs for an OpenCode session (OpenCode's web app has them as session commands, not server commands). */
-const LOCAL_COMMANDS: SlashCommand[] = [
+export const LOCAL_COMMANDS: SlashCommand[] = [
   { name: "compact", description: "Summarize the conversation to free context", argumentHint: "" },
   { name: "undo", description: "Undo the last message and its file changes", argumentHint: "" },
   { name: "redo", description: "Redo the last undone message", argumentHint: "" },

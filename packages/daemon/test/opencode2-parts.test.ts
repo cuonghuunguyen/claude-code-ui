@@ -46,3 +46,31 @@ it("a turn's tokens are the sum of its steps and a new turn starts from zero", (
   m.resetTurn();
   expect(m.turn().usage.inputTokens).toBe(0);
 });
+
+it("a bash mode command and a compaction show the same parts live and from storage (shapes of OpenCode 2.3.0)", () => {
+  const live = new OpenCode2Mapper();
+  const compaction = [
+    ...live.event("session.compaction.started", { sessionID: "ses_1", reason: "manual", inputID: "msg_c1" }),
+    ...live.event("session.compaction.ended", { sessionID: "ses_1", reason: "manual", text: "## Objective\n- x" }),
+  ];
+  const failed = [
+    ...live.event("session.compaction.started", { sessionID: "ses_1", reason: "manual", inputID: "msg_c2" }),
+    ...live.event("session.compaction.failed", { sessionID: "ses_1", reason: "manual", error: { type: "compaction.unavailable", message: "Nothing to compact yet" } }),
+  ];
+  const stored = new OpenCode2Mapper().history([
+    { id: "msg_s1", type: "shell", shellID: "sh_1", command: "echo hi; exit 4", status: "exited", exit: 4, output: { output: "hi\n" } },
+    { id: "msg_s2", type: "shell", shellID: "sh_2", command: "sleep 30", status: "killed", output: { output: "Shell command output is no longer available." } },
+    { id: "msg_c1", type: "compaction", status: "completed", reason: "manual", summary: "## Objective\n- x" },
+    { id: "msg_c2", type: "compaction", status: "failed", reason: "manual", error: { type: "compaction.unavailable", message: "Nothing to compact yet" } },
+  ]);
+  expect(stored.slice(0, 2)).toEqual([
+    { type: "bash", id: "sh_1", command: "echo hi; exit 4", stdout: "hi\n", stderr: "", status: "error", exitCode: 4 },
+    { type: "bash", id: "sh_2", command: "sleep 30", stdout: "Shell command output is no longer available.", stderr: "", status: "stopped" },
+  ]);
+  expect(stored.slice(2)).toEqual([compaction.at(-1), failed.at(-2), failed.at(-1)]);
+  expect(stored.slice(2)).toEqual([
+    { type: "compaction", id: "msg_c1", trigger: "manual", summary: "## Objective\n- x" },
+    { type: "compaction", id: "msg_c2", trigger: "manual" },
+    { type: "notice", id: "error:msg_c2", level: "warning", text: "Nothing to compact yet" },
+  ]);
+});

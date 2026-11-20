@@ -8,8 +8,41 @@ import { mapTool } from "./opencode-parts.ts";
 export type Failure = { type?: string; message?: string };
 type Json = Record<string, any>;
 type Content = { type: string; text?: string; id?: string; name?: string; state?: Json; time?: Json };
-/** An entry of `GET /api/session/{id}/message`. Only `user` and `assistant` show in the timeline in this version. */
-export type OpenCode2Message = { id: string; type: string; text?: string; files?: { data: string; mime: string }[]; content?: Content[]; error?: Failure; tokens?: Json; cost?: number; model?: { id: string; providerID: string } };
+/** An entry of `GET /api/session/{id}/message`. `user`, `assistant`, `shell` (bash mode) and `compaction` show in the timeline. */
+export type OpenCode2Message = {
+  id: string;
+  type: string;
+  text?: string;
+  files?: { data: string; mime: string }[];
+  content?: Content[];
+  error?: Failure;
+  tokens?: Json;
+  cost?: number;
+  model?: { id: string; providerID: string };
+  /** `shell`: the command run, its state and output. */
+  shellID?: string;
+  command?: string;
+  status?: string;
+  exit?: number | string;
+  output?: { output?: string };
+  /** `compaction`: why it ran and the summary it wrote. */
+  reason?: string;
+  summary?: string;
+};
+/** A bash mode command of OpenCode 2 (`ShellInfo`, `session.shell.*`). */
+export type Shell2 = { id: string; command: string; status: string; exit?: number | string };
+
+/** The `bash` part of a bash mode command (id = OpenCode's shell id, live and stored): killed or timed out = stopped, an exit code other than 0 = error. */
+export function bashPart(sh: Shell2, stdout: string): Extract<Part, { type: "bash" }> {
+  const exit = typeof sh.exit === "number" ? sh.exit : undefined;
+  const status = sh.status === "running" ? "running" : sh.status === "exited" ? (exit ? "error" : "done") : "stopped";
+  return { type: "bash", id: sh.id, command: sh.command, stdout, stderr: "", status, ...(exit !== undefined && { exitCode: exit }) };
+}
+/** The compaction marker (id = the compaction's inbox id, live and stored) and, when it failed, OpenCode's reason as a warning. */
+const compactionParts = (id: string, reason: string | undefined, summary: string | undefined, error: Failure | undefined): Part[] => [
+  { type: "compaction", id, trigger: reason === "auto" ? "auto" : "manual", ...(summary && { summary }) },
+  ...(error ? [{ type: "notice" as const, id: `error:${id}`, level: "warning" as const, text: failureText(error) }] : []),
+];
 
 const STATUS: Record<string, ToolStatus> = { completed: "done", error: "error", streaming: "pending", running: "running" };
 
@@ -36,6 +69,8 @@ export class OpenCode2Mapper {
   private readonly denied = new Set<string>();
   /** Per assistant message id: tokens and cost of its step, summed for a turn's result. */
   private readonly steps = new Map<string, { tokens: Json; cost: number }>();
+  /** The compaction running now: its inbox id (`session.compaction.ended` and `failed` do not carry it). */
+  private compacting: { id: string; reason?: string } | undefined;
   /** Message ids of prompts this daemon sent: their echo adds nothing (user_text was emitted at once). */
   readonly own = new Set<string>();
 
@@ -75,6 +110,8 @@ export class OpenCode2Mapper {
   history(messages: readonly OpenCode2Message[]): Part[] {
     return messages.flatMap((m) => {
       if (m.type === "user") return this.user(m);
+      if (m.type === "shell" && m.shellID) return [bashPart({ id: m.shellID, command: m.command ?? "", status: m.status ?? "exited", exit: m.exit }, m.output?.output ?? "")];
+      if (m.type === "compaction") return m.status === "running" ? [] : compactionParts(m.id, m.reason, m.summary, m.error);
       if (m.type !== "assistant") return [];
       let text = 0;
       let reasoning = 0;
@@ -135,7 +172,7 @@ export class OpenCode2Mapper {
     return out;
   }
 
-  /** One live `session.text.*`, `session.reasoning.*` or `session.tool.*` event; other types: nothing. */
+  /** One live `session.text.*`, `session.reasoning.*`, `session.tool.*` or `session.compaction.*` event; other types: nothing. */
   event(type: string, d: Json): Part[] {
     switch (type) {
       case "session.text.started":
@@ -150,6 +187,15 @@ export class OpenCode2Mapper {
         return this.ended(`${d.assistantMessageID}:text:${d.ordinal}`, "assistant_text", d.text);
       case "session.reasoning.ended":
         return this.ended(`${d.assistantMessageID}:reasoning:${d.ordinal}`, "thinking", d.text);
+      case "session.compaction.started":
+        this.compacting = { id: d.inputID, reason: d.reason };
+        return compactionParts(d.inputID, d.reason, undefined, undefined);
+      case "session.compaction.ended":
+      case "session.compaction.failed": {
+        const c = this.compacting;
+        this.compacting = undefined;
+        return c ? compactionParts(c.id, c.reason, type === "session.compaction.ended" ? d.text : undefined, d.error) : [];
+      }
       case "session.tool.input.started":
         return this.tool(d.id, d.name, "streaming", undefined, {}, { created: Date.now() });
       case "session.tool.called": {
