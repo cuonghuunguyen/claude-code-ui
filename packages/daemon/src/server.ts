@@ -39,7 +39,7 @@ import { createNotifier, type Push } from "./push.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
 import { createCatalogues, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx } from "./engine-catalogue.ts";
 import { ARCHIVED_TAG, createClaudeCatalogue, transcriptFile, type History } from "./claude-catalogue.ts";
-import { createOpenCodeCatalogue } from "./opencode-catalogue.ts";
+import { createOpenCodeCatalogues } from "./opencode-catalogues.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
 import { claudeEnv, setClaudeToken } from "./claude-env.ts";
 import { TEST_ARGS, TEST_TIMEOUT_MS, testOutcome } from "./claude-test.ts";
@@ -1251,7 +1251,7 @@ export function createDaemon(opts: {
         dropGone,
         modelListWaitMs: opts.modelListWaitMs,
       }),
-      createOpenCodeCatalogue(catalogueCtx, {
+      createOpenCodeCatalogues(catalogueCtx, {
         server: opts.opencode,
         // The local OpenCode server always reaches the daemon on 127.0.0.1 (it listens there or on 0.0.0.0).
         mcp: {

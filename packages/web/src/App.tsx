@@ -5047,14 +5047,14 @@ export function NewSession({
   const tr = useT();
   const { model, mode, effort } = draft;
   const engine = draft.engine ?? DEFAULT_ENGINE;
-  // A failed start of the OpenCode engine (missing, too old, failed to start) shows under the chips with the way to fix it.
+  // A failed start of the OpenCode engine (missing, too old, failed to start, OpenCode 2 not supported yet) shows under the chips with the way to fix it.
   // `engine`: the Engine of the failed start (the draft may be switched meanwhile); the settings button opens its group.
   const [engineError, setEngineError] = useState<{ message: string; engine: Engine }>();
   const start = (c: string, first: FirstMessage) => {
     setEngineError(undefined);
     return onStart(c, { model, mode, effort, engine: draft.engine, ...(agent && { agent }) }, first).catch((e: RequestError) => {
       // Shown under the chips with the settings button: the prompt box keeps the draft and adds no "Prompt not sent" line.
-      if (e.code === "opencode_missing" || e.code === "opencode_old" || e.code === "opencode_failed") (setEngineError({ message: e.message, engine }), (e as ShownError).shown = true);
+      if (e.code === "opencode_missing" || e.code === "opencode_old" || e.code === "opencode_failed" || e.code === "opencode_v2_unsupported") (setEngineError({ message: e.message, engine }), (e as ShownError).shown = true);
       throw e;
     });
   };

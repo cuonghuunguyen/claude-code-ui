@@ -9,12 +9,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { ALL_CAPABILITIES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ServerMessage } from "@claude-ui/protocol";
 import { createProjects } from "../src/projects.ts";
+import { createOpenCodeServer } from "../src/opencode-server.ts";
 import { createSettings } from "../src/settings.ts";
 import { createDaemon } from "../src/server.ts";
 import { OPENCODE_CAPABILITIES } from "../src/opencode-engine.ts";
 import { fakeQuery } from "./fake-query.ts";
 
 const BIN = fileURLToPath(new URL("./fixtures/opencode/fake-opencode-bin.mjs", import.meta.url));
+const BIN2 = fileURLToPath(new URL("./fixtures/opencode2/fake-opencode2-bin.mjs", import.meta.url));
 const history = JSON.parse(readFileSync(new URL("./fixtures/opencode/history.json", import.meta.url), "utf8"));
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
 const alive = (pid: number) => {
@@ -33,7 +35,7 @@ const until = async (cond: () => boolean, ms = 10_000) => {
 const cleanups: (() => void)[] = [];
 afterEach(() => cleanups.splice(0).forEach((c) => c()));
 
-async function boot(o: { engine?: "claude" | "opencode"; path?: string; env?: Record<string, string>; sessionsJson?: object; opencode?: object } = {}) {
+async function boot(o: { engine?: "claude" | "opencode"; path?: string; env?: Record<string, string>; sessionsJson?: object; opencode?: object; bin?: string } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "oc-")));
   const project = join(root, "project");
   const other = join(root, "other");
@@ -67,7 +69,7 @@ async function boot(o: { engine?: "claude" | "opencode"; path?: string; env?: Re
     // No transcript scan of the real ~/.claude (history defaults to the SDK's, which ignores projectsDir): on a machine with many projects every list took seconds and the tests below timed out or broke their time bounds.
     history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
     // session.list waits listWaitMs (3 s by default) for the OpenCode server to start; a start takes longer on a loaded Windows machine and the list then answers without the OpenCode sessions the test is about. Tests of the wait itself pass their own.
-    opencode: { command: [process.execPath, BIN], env: () => env, ...(process.platform === "win32" && { listWaitMs: 60_000 }), ...o.opencode },
+    opencode: { command: [process.execPath, o.bin ?? BIN], env: () => env, ...(process.platform === "win32" && { listWaitMs: 60_000 }), ...o.opencode },
   });
   await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
   const port = (http.address() as AddressInfo).port;
@@ -252,6 +254,45 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" });
     expect((await d.ok({ type: "opencode.status" })).result).toMatchObject({ state: "running", version: "1.18.34" });
     expect(d.starts()).toHaveLength(1);
+  });
+
+  it("an OpenCode 2 binary: opencode.status reports running with major 2 and version 2.3.0, the server answered /api/info", async () => {
+    const d = await boot({ bin: BIN2 });
+    expect((await d.ok({ type: "opencode.status" })).result).toMatchObject({ state: "stopped", version: "2.3.0", major: 2 });
+    expect(d.starts()).toHaveLength(0);
+    // session.create starts the server (the stub answers opencode_v2_unsupported after it).
+    await d.request({ type: "session.create", cwd: d.project, engine: "opencode" });
+    expect((await d.ok({ type: "opencode.status" })).result).toMatchObject({ state: "running", version: "2.3.0", major: 2 });
+    const paths = d.log().filter((l) => l.type === "request").map((l) => l.path);
+    expect(paths).toContain("/api/info");
+    expect(paths).not.toContain("/global/health");
+  });
+
+  it("the OpenCode 2 client reaches the server through the authenticated node:http transport", async () => {
+    const server = createOpenCodeServer({ path: () => "", command: [process.execPath, BIN2] });
+    try {
+      const client = await server.client();
+      expect(await client.server.info()).toMatchObject({ version: "2.3.0" });
+      expect(await server.client()).toBe(client);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("an OpenCode 2 binary older than 2.3.0 answers opencode_old naming 2.3.0", async () => {
+    const d = await boot({ bin: BIN2, env: { FAKE_OPENCODE_VERSION: "2.2.0" } });
+    expect((await d.ok({ type: "opencode.status" })).result).toMatchObject({ state: "old", message: expect.stringContaining("2.3.0") });
+    const created = await d.request({ type: "session.create", cwd: d.project, engine: "opencode" });
+    expect(created).toMatchObject({ type: "error", code: "opencode_old" });
+    expect((created as any).message).toContain("2.3.0");
+    expect(d.starts()).toHaveLength(0);
+  });
+
+  it("session.create with an OpenCode 2 binary answers opencode_v2_unsupported and creates no session", async () => {
+    const d = await boot({ bin: BIN2 });
+    const created = await d.request({ type: "session.create", cwd: d.project, engine: "opencode" });
+    expect(created).toMatchObject({ type: "error", code: "opencode_v2_unsupported" });
+    expect(d.log().filter((l) => l.type === "request" && l.path === "/session")).toEqual([]);
   });
 
   it("changing the binary path stops the running server", async () => {
