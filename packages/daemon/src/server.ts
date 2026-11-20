@@ -399,7 +399,7 @@ export function createDaemon(opts: {
     },
     agent: (id: string) => settings.get(id)?.agent,
     disallowedTools: (id: string) => asideDisallowed(settings.get(id)),
-    daemonMcp: { openCodeRules: (name: string, ask: "ask" | "allow") => daemonMcp.openCodeRules(name, ask), timeoutMs: () => daemonMcp.timeoutMs() },
+    daemonMcp: { openCodeRules: (name: string, ask: "ask" | "allow" | "deny") => daemonMcp.openCodeRules(name, ask), timeoutMs: () => daemonMcp.timeoutMs() },
     toolPolicy: (tool: string, mcpServer?: { name: string; source: string }) => orchestration.toolPolicy(tool, mcpServer) ?? daemonMcp.toolPolicy(tool, mcpServer),
     preflight: (id: string, tool: string, input: Record<string, unknown>, mcp?: { name: string; source: string }) => orchestration.preflight(id, tool, input, mcp),
     permissionCard: (id: string, tool: string, input: Record<string, unknown>, mcp?: { name: string; source: string }) => orchestration.permissionCard(id, tool, input, mcp) ?? daemonMcp.permissionCard(id, tool, input, mcp),
@@ -1082,7 +1082,11 @@ export function createDaemon(opts: {
     if (s.externalTurnRunning()) return { code: "external_turn", message: "A terminal CLI turn is running in this session" };
     if (s.bashRunning()) return { code: "bash_running", message: "A shell command is running in this session; stop it first" };
     try {
-      if (s.prompt(text, images) === undefined && out) out.local = true;
+      if (s.prompt(text, images) === undefined && out) {
+        out.local = true;
+        const draft = await s.localDraft();
+        if (draft) out.draft = draft;
+      }
     } catch (err) {
       return { code: "prompt_failed", message: (err as Error).message };
     }

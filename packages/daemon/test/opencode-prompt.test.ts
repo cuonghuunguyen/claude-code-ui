@@ -251,6 +251,26 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     expect(saved).toEqual([{ permission: "claude-ui", pattern: "always", action: "allow" }, { permission: "edit", pattern: "*", action: "allow" }, { permission: "claude-ui", pattern: "denials", action: "allow" }, { permission: "edit", pattern: "*", action: "deny" }]);
   });
 
+  it("Don't ask: the block denies what would ask; a request that arrives anyway is rejected at once with no card, the tool card is denied and no needs-input", async () => {
+    const d = await boot({ script: ["bash-reject"], data: { agents: [{ name: "build", mode: "primary", permission: [{ permission: "read", pattern: "*.env", action: "ask" }] }] } });
+    const s = await d.open();
+    await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "dontAsk" });
+    expect(s.find("session_permission_mode")?.mode).toBe("dontAsk");
+    const block = d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission as { permission: string; pattern: string; action: string }[];
+    expect(block[0]).toEqual({ permission: "claude-ui", pattern: "mode:dontAsk", action: "allow" });
+    expect(block.filter((r) => ["bash", "edit"].includes(r.permission))).toEqual([{ permission: "bash", pattern: "*", action: "deny" }, { permission: "edit", pattern: "*", action: "deny" }]);
+    expect(block.some((r) => r.action === "ask")).toBe(false);
+    // The agent's own ask rule is a deny here.
+    expect(block).toContainEqual({ permission: "read", pattern: "*.env", action: "deny" });
+    await s.prompt("run pwd");
+    await until(() => d.requests("POST", /\/permission\/.*\/reply/).length === 1);
+    expect(d.requests("POST", /\/permission\/.*\/reply/)[0]!.body).toEqual({ reply: "reject", message: expect.stringContaining("Don't ask") });
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
+    expect(s.parts().some((p) => p.type === "permission_request")).toBe(false);
+    expect(s.states()).not.toContain("needs_input");
+    expect(s.parts().filter((p) => p.type === "tool_call").at(-1)).toMatchObject({ status: "denied" });
+  });
+
   it("Deny with a message rejects with it, the card stays denied and the turn goes on; Deny without a message rejects and the turn ends", async () => {
     const d = await boot({ script: ["question", "bash-reject"] });
     const s = await d.open();
@@ -427,13 +447,13 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     await until(() => s.parts().some((p) => p.type === "notice" && p.id.startsWith(`${s.id}:shell_failed:`)) && s.states().at(-1) === "idle");
   });
 
-  it("modes: the plan mode is the plan agent; auto, dontAsk and (without the flag) bypass are refused; leaving plan through OpenCode returns to build", async () => {
+  it("modes: the plan mode is the plan agent; auto and (without the flag) bypass are refused; leaving plan through OpenCode returns to build", async () => {
     const d = await boot({ script: ["text"] });
     const s = await d.open();
     const flat = (rules: { permission: string; pattern: string; action: string }[]) => rules.map((r) => `${r.permission}:${r.pattern}:${r.action}`);
     expect(flat(d.requests("POST", "/session")[0]!.body.permission)).toEqual(["claude-ui:mode:config:allow", "claude-ui:agent:build:allow", "claude-ui-*:*:deny", "orchestration-*:*:deny", "claude-ui:always:allow"]);
-    expect((await d.ok({ type: "session.subscribe", sessionId: s.id, sinceSeq: 0 })).session).toMatchObject({ permissionMode: "config", permissionModes: ["config", "default", "acceptEdits"] });
-    for (const mode of ["auto", "dontAsk", "bypassPermissions"]) expect(await d.request({ type: "session.setPermissionMode", sessionId: s.id, mode })).toMatchObject({ type: "error" });
+    expect((await d.ok({ type: "session.subscribe", sessionId: s.id, sinceSeq: 0 })).session).toMatchObject({ permissionMode: "config", permissionModes: ["config", "default", "acceptEdits", "dontAsk"] });
+    for (const mode of ["auto", "bypassPermissions"]) expect(await d.request({ type: "session.setPermissionMode", sessionId: s.id, mode })).toMatchObject({ type: "error" });
     const reply = await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "plan" });
     expect(reply.session).toMatchObject({ permissionMode: "config", agent: "plan" });
     expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission)).toEqual(["claude-ui:mode:config:allow", "claude-ui:agent:plan:allow", "edit:*:deny", "edit:.opencode/plans/*.md:allow", "edit:*:deny", "edit:.opencode/plans/*.md:allow", "claude-ui-*:*:deny", "orchestration-*:*:deny", "claude-ui:always:allow"]);
@@ -484,6 +504,36 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     for (const agent of ["general", "title", "nope"]) expect(await d.request({ type: "session.setAgent", sessionId: s.id, agent })).toMatchObject({ type: "error" });
     const claude = (await d.ok({ type: "session.create", cwd: d.project })).session.id;
     expect(await d.request({ type: "session.setAgent", sessionId: claude, agent: "docs" })).toMatchObject({ type: "error" });
+  });
+
+  it("default agent: OpenCode's default_agent (a visible primary agent) is the agent a new session is created and prompted as, and the first in the list; the chosen agent wins; an invalid one falls back to build", async () => {
+    const d = await boot({ script: ["text", "text"], data: { config: { default_agent: "docs" } } });
+    const s = await d.open();
+    const created = (d.requests("POST", "/session")[0]!.body.permission as { permission: string; pattern: string }[]).filter((r) => r.permission === "claude-ui").map((r) => r.pattern);
+    expect(created).toContain("agent:docs");
+    await until(() => !!s.find("agents"));
+    expect(s.find("agents")!.agents.map((a) => a.name)).toEqual(["docs", "build", "plan"]);
+    expect((await d.ok({ type: "session.agents", cwd: d.project, engine: "opencode" })).agents.map((a: { name: string }) => a.name)).toEqual(["docs", "build", "plan"]);
+    expect((await d.ok({ type: "session.subscribe", sessionId: s.id, sinceSeq: 0 })).session.agent).toBe("docs");
+    const patches = d.requests("PATCH", `/session/${s.id}`).length;
+    await s.prompt("one");
+    await until(() => !!s.find("turn_result"));
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)[0]!.body.agent).toBe("docs");
+    // The block was written for docs at create: the first prompt writes no other one.
+    expect(d.requests("PATCH", `/session/${s.id}`)).toHaveLength(patches);
+    await d.ok({ type: "session.setAgent", sessionId: s.id, agent: "plan" });
+    await s.prompt("two");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 2);
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)[1]!.body.agent).toBe("plan");
+
+    // A default_agent that is no visible primary agent (a subagent, a hidden or unknown one) is ignored: build.
+    for (const bad of ["general", "title", "nope"]) {
+      const d2 = await boot({ script: ["text"], data: { config: { default_agent: bad } } });
+      const s2 = await d2.open();
+      await s2.prompt("hi");
+      await until(() => d2.requests("POST", `/session/${s2.id}/prompt_async`).length === 1);
+      expect(d2.requests("POST", `/session/${s2.id}/prompt_async`)[0]!.body.agent).toBe("build");
+    }
   });
 
   it("session.agents lists a folder's primary agents for the draft; Claude gets none", async () => {
@@ -916,10 +966,11 @@ describe("OpenCode rewind", { timeout: TEST_MS }, () => {
     await r.streamRead();
     const run = (text: string) => r.d.ok({ type: "session.prompt", sessionId: "ses_rw", text });
     const reverts = () => r.d.requests("POST", "/session/ses_rw/revert").map((q) => q.body.messageID);
-    expect(await run("/undo")).toEqual({ local: true });
+    // The reply carries the undone prompt: the web puts it back into the prompt box.
+    expect(await run("/undo")).toEqual({ local: true, draft: { text: "four", images: [] } });
     await until(() => r.parts().some((p) => p.type === "rewind" && p.userMessageId === "msg_u4"));
     expect(reverts()).toEqual(["msg_u4"]);
-    await run("/undo");
+    expect(await run("/undo")).toEqual({ local: true, draft: { text: "three", images: [] } });
     await until(() => r.parts().some((p) => p.type === "rewind" && p.userMessageId === "msg_u3"));
     expect(reverts()).toEqual(["msg_u4", "msg_u3"]);
     // Redo moves the revert point to the next undone message: the messages before it are read again.
@@ -950,7 +1001,8 @@ describe("OpenCode rewind", { timeout: TEST_MS }, () => {
     const r = await restored({ revert: "msg_u1" });
     const run = (text: string) => r.d.ok({ type: "session.prompt", sessionId: "ses_rw", text });
     const notices = () => r.parts().filter((p) => p.type === "notice").map((p) => (p as { text: string }).text);
-    await run("/undo");
+    // Nothing to undo: a local reply without a draft.
+    expect(await run("/undo")).toEqual({ local: true });
     await until(() => notices().includes("Nothing to undo"));
     const busy = await restored({ busy: true });
     await busy.d.ok({ type: "session.prompt", sessionId: "ses_rw", text: "/undo" });

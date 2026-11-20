@@ -297,6 +297,18 @@ describe("later prompts", () => {
     expect(visible('[data-testid="user-message"]')).toHaveLength(0);
   });
 
+  it("/undo: the reply's draft (the undone prompt) goes back into the prompt box, as the rewind button does", async () => {
+    const prompt = defer<unknown>();
+    replies["session.prompt"] = () => prompt.promise;
+    await open();
+    await type("/undo");
+    await enter();
+    expect(box().value).toBe("");
+    await act(async () => prompt.resolve({ local: true, draft: { text: "the undone prompt", images: [] } }));
+    expect(visible('[data-testid="user-message"]')).toHaveLength(0);
+    expect(box().value).toBe("the undone prompt");
+  });
+
   it("a dialog command (/mcp) sends nothing and shows no bubble", async () => {
     replies["mcp.list"] = { servers: [] };
     await open();

@@ -39,6 +39,8 @@ export interface EngineSession {
 
   /** The message id of the prompt (its `user_text` is emitted); undefined = the Engine ran the text as its own command and echoes nothing. */
   prompt(text: string, images?: string[]): string | undefined;
+  /** After a `prompt()` that returned undefined: settles when the local command ended; the prompt `/undo` took back, if any. */
+  localDraft?(): Promise<{ text: string; images: string[] } | undefined>;
   setModel(model: string): Promise<void>;
   setPermissionMode(mode: PermissionMode): Promise<void>;
   setEffort(effort: Effort): Promise<void>;

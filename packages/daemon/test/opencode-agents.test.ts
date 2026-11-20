@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentOf, denialsOf, modeBlock, primaryAgents, type OpenCodeAgent, type Rule } from "../src/opencode-engine.ts";
+import { agentOf, denialsOf, modeBlock, modeOf, primaryAgents, type OpenCodeAgent, type Rule } from "../src/opencode-engine.ts";
 
 const r = (permission: string, pattern: string, action: Rule["action"]): Rule => ({ permission, pattern, action });
 const flat = (rules: Rule[]) => rules.map((x) => `${x.permission}:${x.pattern}:${x.action}`);
@@ -56,6 +56,40 @@ describe("OpenCode agents", () => {
       "orchestration-*:*:deny",
       "claude-ui:always:allow",
     ]);
+  });
+
+  it("dontAsk denies what would ask: the tools, the agent's own asks, worker_start and the claude-ui tools; the always-allow rules come after the denies and win", () => {
+    const always = [r("bash", "ls *", "allow")];
+    const block = modeBlock("dontAsk", always, denialsOf(review.permission), {
+      agent: "review",
+      agentAsks: [r("read", "*.env", "ask")],
+      mcp: "orchestration-abc",
+      daemon: [r("claude-ui-abc_terminal_run", "*", "deny")],
+    });
+    expect(flat(block)).toEqual([
+      "claude-ui:mode:dontAsk:allow",
+      "claude-ui:agent:review:allow",
+      "bash:*:deny",
+      "edit:*:deny",
+      "webfetch:*:deny",
+      "websearch:*:deny",
+      "external_directory:*:deny",
+      "doom_loop:*:deny",
+      "read:*.env:deny",
+      "edit:*:deny",
+      "claude-ui-*:*:deny",
+      "claude-ui-abc_terminal_run:*:deny",
+      "orchestration-*:*:deny",
+      "orchestration-abc_*:*:allow",
+      "orchestration-abc_worker_start:*:deny",
+      "claude-ui:always:allow",
+      "bash:ls *:allow",
+      "claude-ui:denials:allow",
+      "edit:*:deny",
+    ]);
+    // Nothing of the block asks: a request in this mode is refused by the engine's safety net, never shown.
+    expect(block.some((x) => x.action === "ask")).toBe(false);
+    expect(modeOf(block)).toBe("dontAsk");
   });
 
   it("bypass keeps the plan agent's edit denial last for edit", () => {
