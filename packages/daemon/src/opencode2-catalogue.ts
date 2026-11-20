@@ -9,7 +9,7 @@ export type OpenCode2Catalogue = Omit<EngineCatalogue, "engine" | "listScope" | 
 export const openCode2Unsupported = (what = "OpenCode 2 sessions") =>
   new EngineError("opencode_v2_unsupported", `${what} are not supported yet. Set Settings › OpenCode › path to an OpenCode 1 binary.`);
 
-export function createOpenCode2Catalogue(o: OpenCode2CatalogueOpts): OpenCode2Catalogue {
+export function createOpenCode2Catalogue(_o: OpenCode2CatalogueOpts): OpenCode2Catalogue {
   const unsupported = async (): Promise<never> => {
     throw openCode2Unsupported();
   };
@@ -17,11 +17,8 @@ export function createOpenCode2Catalogue(o: OpenCode2CatalogueOpts): OpenCode2Ca
     isLocal: async () => false,
     knownIds: async () => [],
     startMode: async () => "config",
-    // The server starts first: a server that does not come up shows its own error, and `/api/info` proves the binary serves.
-    create: async () => {
-      await o.server.ensure();
-      throw openCode2Unsupported();
-    },
+    // No server start: OpenCode 2's first start imports the user's OpenCode 1 history once and changes `opencode.db`, after which OpenCode 1 cannot start on it.
+    create: unsupported,
     // Lists nothing and prunes nothing: the OpenCode 1 entries of the settings file stay.
     list: async () => ({ items: [], keep: () => true }),
     restore: async () => undefined,

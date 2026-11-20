@@ -378,7 +378,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     running: () => !!up && !!child,
     /** Major version of the running server, else of the last successful `check()`; undefined until one of them happened. */
     major: (): 1 | 2 | undefined => (up && child ? up.major : lastMajor),
-    /** The `@opencode/client` of the running version 2 server (started when it is down), built once per server process. The package loads on first use only: a Claude-only or OpenCode 1 user never pays for it. */
+    /** The `@opencode/client` of the running version 2 server (started when it is down), built once per server process. The package is bundled into the published daemon (about +92 KB); it is initialised on first use only, so a Claude-only or OpenCode 1 user pays no runtime cost. */
     async client() {
       const srv = await ensure();
       if (srv.major !== 2) throw new OpenCodeError("opencode_failed", "OpenCode 2 client requested while the installed OpenCode is version 1", srv.major);

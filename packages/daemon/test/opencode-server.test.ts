@@ -231,6 +231,36 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     expect(Object.keys(JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8")))).toContain("ses_gone");
   }, 30_000);
 
+  it("session.list does not wait for a slow `opencode --version`: it lists no OpenCode session and keeps the sessions.json entry, the sessions follow on sessions.changed", async () => {
+    const entry = { ses_gone: { model: "default", permissionMode: "default", effort: "default", saved: 1 } };
+    const d = await boot({ engine: "opencode", env: { FAKE_OPENCODE_VERSION_DELAY_MS: "2000" }, sessionsJson: entry, opencode: { listWaitMs: 300 } });
+    const first = (await d_list(d)).result;
+    expect(first.sessions.filter((s: any) => s.engine === "opencode")).toEqual([]);
+    expect(Object.keys(JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8")))).toContain("ses_gone");
+    await until(() => d.inbox.some((m) => m.type === "sessions.changed"), 20_000);
+    // The client lists again on sessions.changed; the first list after the check is the cold-server list (no wait), so poll until OpenCode answered.
+    let ids: string[] = [];
+    for (let n = 0; n < 200 && !ids.length; n++) {
+      ids = (await d_list(d)).result.sessions.filter((s: any) => s.engine === "opencode").map((s: any) => s.id);
+      if (!ids.length) await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(ids).toEqual(["ses_hist"]);
+  }, 30_000);
+
+  it("session.list does not wait for a hung `opencode --version`, and a failed check is not run again on the next list", async () => {
+    const d = await boot({ engine: "opencode", env: { FAKE_OPENCODE_VERSION_DELAY_MS: "600000" }, opencode: { listWaitMs: 300, startTimeoutMs: 1500 } });
+    const t = Date.now();
+    const first = (await d_list(d)).result;
+    expect(first.sessions.filter((s: any) => s.engine === "opencode")).toEqual([]);
+    expect(Date.now() - t).toBeLessThan(1400);
+    // Past the hung check's timeout (1.5 s): the failure is remembered, so this list neither waits for another `--version` nor starts a server.
+    await new Promise((r) => setTimeout(r, 1800));
+    const t2 = Date.now();
+    await d_list(d);
+    expect(Date.now() - t2).toBeLessThan(1400);
+    expect(d.starts()).toHaveLength(0);
+  }, 30_000);
+
   it("the OpenCode server ends with a daemon that is killed (SIGKILL)", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "oc-")));
     const logFile = join(root, "fake.log");
@@ -256,13 +286,18 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     expect(d.starts()).toHaveLength(1);
   });
 
-  it("an OpenCode 2 binary: opencode.status reports running with major 2 and version 2.3.0, the server answered /api/info", async () => {
+  it("an OpenCode 2 binary: opencode.status reports stopped with major 2 and version 2.3.0; its server answers /api/info and then reports running", async () => {
     const d = await boot({ bin: BIN2 });
     expect((await d.ok({ type: "opencode.status" })).result).toMatchObject({ state: "stopped", version: "2.3.0", major: 2 });
     expect(d.starts()).toHaveLength(0);
-    // session.create starts the server (the stub answers opencode_v2_unsupported after it).
-    await d.request({ type: "session.create", cwd: d.project, engine: "opencode" });
-    expect((await d.ok({ type: "opencode.status" })).result).toMatchObject({ state: "running", version: "2.3.0", major: 2 });
+    // The adapter stub never starts the server (OpenCode 2's first start imports the OpenCode 1 history): the server object is started here.
+    const server = createOpenCodeServer({ path: () => "", command: [process.execPath, BIN2], env: () => ({ FAKE_OPENCODE_LOG: join(d.root, "fake.log") }) });
+    try {
+      await server.ensure();
+      expect(await server.status()).toMatchObject({ state: "running", version: "2.3.0", major: 2 });
+    } finally {
+      await server.close();
+    }
     const paths = d.log().filter((l) => l.type === "request").map((l) => l.path);
     expect(paths).toContain("/api/info");
     expect(paths).not.toContain("/global/health");
@@ -292,6 +327,7 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     const d = await boot({ bin: BIN2 });
     const created = await d.request({ type: "session.create", cwd: d.project, engine: "opencode" });
     expect(created).toMatchObject({ type: "error", code: "opencode_v2_unsupported" });
+    expect(d.starts()).toHaveLength(0);
     expect(d.log().filter((l) => l.type === "request" && l.path === "/session")).toEqual([]);
   });
 
