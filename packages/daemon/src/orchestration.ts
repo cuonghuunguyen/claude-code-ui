@@ -70,7 +70,7 @@ export type WorkerEvent = {
   /** denied: the worker's tool call that was denied (auto-mode classifier, a rule, the user). */
   toolUseId?: string;
   input?: string;
-  /** turn_end, stalled closed_waiting: the worker's last reply text. */
+  /** turn_end, stalled closed_idle: the worker's last reply text. */
   result?: string;
   isError?: boolean;
   interrupted?: boolean;
@@ -78,10 +78,10 @@ export type WorkerEvent = {
   closed?: true;
   /**
    * stalled: ended_without_result (the CLI ended in the middle of a turn), no_start (a new turn got no CLI message), silent (running, no CLI message for the stall time),
-   * idle_waiting (idle, its last turn ended while work of its own ran, that work ended and no turn followed for the stall time), closed_waiting (the CLI of such a waiting worker closed without the coordinator asking; `result` is its last reply text).
+   * idle_waiting (idle, its last turn ended while work of its own ran, that work ended and no turn followed for the stall time), closed_idle (the CLI of such a waiting worker closed without the coordinator asking; `result` is its last reply text).
    * Report only: the worker is not stopped.
    */
-  reason?: "ended_without_result" | "no_start" | "silent" | "idle_waiting" | "closed_waiting";
+  reason?: "ended_without_result" | "no_start" | "silent" | "idle_waiting" | "closed_idle";
   /** stalled: ISO time of the last CLI message. */
   lastActivity?: string;
 };
@@ -535,7 +535,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
     if (!waiting.delete(s.id) || quiet.has(s.id) || closing.has(s.id) || stallOf(s.id)) return;
     const l = linkOf(s.id);
     const t = lastText.get(s.id);
-    stall(s, "closed_waiting", { result: cut(t?.text ?? "", MAX_TEXT, t && l?.name && readMore(l.name, t.id)) });
+    stall(s, "closed_idle", { result: cut(t?.text ?? "", MAX_TEXT, t && l?.name && readMore(l.name, t.id)) });
   }
 
   function route(id: string, coordinator: string, e: WorkerEvent) {
@@ -824,7 +824,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
       ),
       def(
         "worker_wait",
-        `Wait for worker events: denied (cannot be undone), turn_end (\`result\`: first ${MAX_TEXT} characters, \`closed: true\`: the daemon closed the CLI), error, stalled (\`reason\`; \`result\` for closed_waiting; a report only, the worker is not stopped). Returns unread events at once, else waits up to timeoutMs (default ${DEFAULT_WAIT_MS}, max ${MAX_WAIT_MS}); an empty list on timeout.`,
+        `Wait for worker events: denied (cannot be undone), turn_end (\`result\`: first ${MAX_TEXT} characters, \`closed: true\`: the daemon closed the CLI), error, stalled (\`reason\`; \`result\` for closed_idle; a report only, the worker is not stopped). Returns unread events at once, else waits up to timeoutMs (default ${DEFAULT_WAIT_MS}, max ${MAX_WAIT_MS}); an empty list on timeout.`,
         {
           names: z.array(name).max(50).optional(),
           types: z.array(z.enum(EVENT_TYPES)).max(EVENT_TYPES.length).optional(),

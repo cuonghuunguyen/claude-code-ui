@@ -2054,7 +2054,7 @@ describe("stall watchdog", () => {
     expect(await row(coord, "iw1")).not.toHaveProperty("stalled");
   });
 
-  it("a daemon drop of a waiting worker's CLI raises stalled closed_waiting with the last reply; worker_close raises none (GH-852)", async () => {
+  it("a daemon drop of a waiting worker's CLI raises stalled closed_idle with the last reply; worker_close raises none (GH-852)", async () => {
     enable();
     const coord = await coordinator();
     const w = await call(coord, "worker_start", { name: "cw1", cwd: dirB, prompt: "bg" });
@@ -2063,8 +2063,8 @@ describe("stall watchdog", () => {
     // A silent daemon drop of the CLI (plugins restart).
     await c.request({ type: "plugins.restart", cwd: dirB, sessionId: w.sessionId });
     const [e] = await stalls(coord);
-    expect(e).toMatchObject({ name: "cw1", reason: "closed_waiting", result: "bg" });
-    expect(await row(coord, "cw1")).toMatchObject({ live: false, stalled: "closed_waiting" });
+    expect(e).toMatchObject({ name: "cw1", reason: "closed_idle", result: "bg" });
+    expect(await row(coord, "cw1")).toMatchObject({ live: false, stalled: "closed_idle" });
     const w2 = await call(coord, "worker_start", { name: "cw2", cwd: dirB, prompt: "bg" });
     await settle(w2.sessionId);
     await turnEnd(coord, "cw2");
