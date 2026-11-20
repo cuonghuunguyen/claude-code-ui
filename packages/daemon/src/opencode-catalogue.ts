@@ -4,7 +4,7 @@ import { EFFORTS, type ClientMessage, type ModelInfo, type PermissionMode, type 
 import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx, type SavedSession, type Settings } from "./engine-catalogue.ts";
 import { brokenState, createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels, primaryAgents, ProviderStateBroken, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { checkLogin, listProviders, loginError } from "./opencode-providers.ts";
-import { createOpenCodeServer, OpenCodeError } from "./opencode-server.ts";
+import { createOpenCodeServer, OpenCodeError, type OpenCodeServer } from "./opencode-server.ts";
 import { mapLimit } from "./session-scan.ts";
 import { Session, type SessionSettings } from "./session.ts";
 
@@ -18,7 +18,7 @@ const PROVIDERS_BROKEN_BUSY = "OpenCode's provider list is broken. It is reloade
 
 export type OpenCodeCatalogueOpts = {
   /** Test seam: `command` replaces the PATH lookup of `opencode` (argv prefix), `env` is added to the OpenCode child's environment. */
-  server?: { command?: string[]; env?: () => NodeJS.ProcessEnv; startTimeoutMs?: number; /** How long `session.list` waits for OpenCode (default 3 s). */ listWaitMs?: number };
+  server?: { command?: string[]; env?: () => NodeJS.ProcessEnv; startTimeoutMs?: number; /** The server to use instead of a new one (opencode-catalogues.ts shares one between both adapters). */ instance?: OpenCodeServer; /** How long `session.list` waits for OpenCode (default 3 s). */ listWaitMs?: number };
   /** How OpenCode reaches the daemon's MCP route (the route itself stays in server.ts). */
   mcp: OpenCodeMcpRoute;
 };
@@ -26,7 +26,7 @@ export type OpenCodeCatalogueOpts = {
 export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalogueOpts): EngineCatalogue {
   const { appSettings, settings } = ctx;
   /** The OpenCode server: started on first use (docs/spec.md "OpenCode engine"), stopped with the daemon. */
-  const openCode = createOpenCodeServer({ path: () => appSettings.get().opencode.path, ...o.server });
+  const openCode = o.server?.instance ?? createOpenCodeServer({ path: () => appSettings.get().opencode.path, ...o.server });
   /** Directory and title of each OpenCode session this daemon listed, created or opened. */
   const openCodeMeta = new Map<string, { cwd: string; title: string }>();
   const openCodeFail = (err: unknown) => (err instanceof OpenCodeError ? { code: err.code, message: err.message } : { code: "opencode_failed", message: (err as Error).message });

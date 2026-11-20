@@ -66,6 +66,10 @@ A group of client message types whose handlers live in one daemon module (`packa
 The one `opencode serve` process a Daemon starts on the first OpenCode Session. It holds OpenCode Session history and provider credentials; the Daemon keeps neither.
 _Avoid_: OpenCode daemon
 
+**OpenCode adapter**:
+The part of the OpenCode Engine that speaks to one major version of OpenCode (1 or 2). The Daemon picks it from the version of the installed `opencode` binary; the user sees one Engine. Both versions use `ses_` Session IDs, so the Daemon records the adapter of each Session it creates; a Session with no record belongs to version 1.
+_Avoid_: OpenCode 2 Engine, backend
+
 **Docked session**:
 A session tab shown in the side or bottom panel instead of the tabs bar (wide screens). It keeps its place in the stored tab list but is never the current session.
 

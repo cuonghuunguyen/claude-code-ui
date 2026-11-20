@@ -29,6 +29,8 @@ export const DEFAULT_ENGINE: Engine = "claude";
 export const engineOf = (s: { engine?: Engine }): Engine => s.engine ?? DEFAULT_ENGINE;
 /** Oldest OpenCode this daemon works with: its API was checked against 1.18.34. Raise when a later feature needs newer endpoints. */
 export const OPENCODE_MIN = "1.18.0";
+/** Oldest OpenCode 2 this daemon works with: its API was checked against 2.3.0. */
+export const OPENCODE2_MIN = "2.3.0";
 /** What an Engine supports for its sessions (ADR 0012); web hides or disables a control by these, never by engine name. */
 export type EngineCapabilities = {
   /** Every permission mode the Engine has; SessionInfo.permissionModes is the subset offered now. */
@@ -641,8 +643,8 @@ export type AsideOpenResult = { session: SessionInfo; title: string; from: strin
 export type SubscribeResult = { logEpoch: string; seq: number; session: SessionInfo; title: string; snapshot?: SnapshotWire; planDirs?: string[] };
 /** session.setModel, session.setPermissionMode, session.setEffort, session.setAgent. */
 export type SetModelResult = { session: SessionInfo };
-/** opencode.status: `missing` no binary, `old` below OPENCODE_MIN, `failed` the last start failed, `stopped` found and not started, `running`. */
-export type OpenCodeStatus = { state: "running" | "stopped" | "missing" | "old" | "failed"; version?: string; path?: string; message?: string };
+/** opencode.status: `missing` no binary, `old` below OPENCODE_MIN (major 1) or OPENCODE2_MIN (major 2), `failed` the last start failed, `stopped` found and not started, `running`. `major`: the OpenCode major version of the binary (absent when none was read). */
+export type OpenCodeStatus = { state: "running" | "stopped" | "missing" | "old" | "failed"; version?: string; major?: 1 | 2; path?: string; message?: string };
 export type OpenCodeAuthPrompt = { type: "text"; key: string; message: string; placeholder?: string; when?: { key: string; op: "eq" | "neq"; value: string } } | { type: "select"; key: string; message: string; options: { label: string; value: string; hint?: string }[]; when?: { key: string; op: "eq" | "neq"; value: string } };
 export type OpenCodeAuthMethod = { type: "api" | "oauth"; label: string; prompts?: OpenCodeAuthPrompt[] };
 /** `source`: where the connection comes from; only `api` and `custom` (OAuth, plugin) can be logged out. */

@@ -1,6 +1,6 @@
 // Settings › OpenCode (docs/spec.md "OpenCode engine"): the binary path (daemon setting `opencode.path`) and the status of that binary.
 import { useEffect, useState } from "react";
-import { OPENCODE_MIN, type OpenCodeStatus, type Settings, type SettingsPatch } from "@claude-ui/protocol";
+import { OPENCODE_MIN, OPENCODE2_MIN, type OpenCodeStatus, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 import { Button } from "@/components/ui/button";
 import type { Request } from "./client.ts";
 import { isImeKey } from "./ime.ts";
@@ -27,7 +27,7 @@ export function OpenCodeSection({ opencode, saving, save, request, onProviders }
     if (v === opencode.path) return setDraft(undefined);
     save({ opencode: { path: v } }, undefined, true, true).then(() => (setDraft(undefined), check()), (e: Error) => setInvalid(e.message));
   };
-  const text = failed ?? (!status ? t("settings.opencode.checking") : status.state === "missing" ? t("settings.opencode.missing") : status.state === "old" ? t("settings.opencode.old", { version: status.version ?? "?", min: OPENCODE_MIN }) : status.state === "failed" ? (status.message ?? t("settings.opencode.failed")) : t(status.state === "running" ? "settings.opencode.running" : "settings.opencode.stopped", { version: status.version ?? "?" }));
+  const text = failed ?? (!status ? t("settings.opencode.checking") : status.state === "missing" ? t("settings.opencode.missing") : status.state === "old" ? t("settings.opencode.old", { version: status.version ?? "?", min: status.major === 2 ? OPENCODE2_MIN : OPENCODE_MIN }) : status.state === "failed" ? (status.message ?? t("settings.opencode.failed")) : t(status.state === "running" ? "settings.opencode.running" : "settings.opencode.stopped", { version: status.version ?? "?" }));
 
   return (
     <section aria-labelledby="settings-opencode" className="flex flex-col" data-testid="settings-opencode">

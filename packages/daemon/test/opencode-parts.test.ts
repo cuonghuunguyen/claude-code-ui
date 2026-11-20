@@ -183,6 +183,7 @@ describe("permission blocks", () => {
 describe("version compare", () => {
   it("reads x.y.z from any text and compares numbers, not strings", () => {
     expect(parseVersion("opencode 1.18.34\n")).toEqual([1, 18, 34]);
+    expect(parseVersion("opencode v2.3.0\n")).toEqual([2, 3, 0]);
     expect(parseVersion("dev")).toBeUndefined();
     expect(olderThan([1, 9, 0], [1, 18, 0])).toBe(true);
     expect(olderThan([1, 18, 0], [1, 18, 0])).toBe(false);

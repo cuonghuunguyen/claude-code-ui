@@ -6,11 +6,11 @@ import { request as httpRequest } from "node:http";
 import { Readable } from "node:stream";
 import { homedir, release } from "node:os";
 import { posix, win32 } from "node:path";
-import { OPENCODE_MIN, type OpenCodeStatus } from "@claude-ui/protocol";
+import { OPENCODE_MIN, OPENCODE2_MIN, type OpenCodeStatus } from "@claude-ui/protocol";
 import { SERVE_WATCHER } from "./tailscale.ts";
 import { winQuote } from "./update.ts";
 
-export type OpenCodeErrorCode = "opencode_missing" | "opencode_old" | "opencode_failed";
+export type OpenCodeErrorCode = "opencode_missing" | "opencode_old" | "opencode_failed" | "opencode_v2_unsupported";
 /** A non-2xx answer: `status` and the parsed `body` let callers map OpenCode's error `name`. */
 export class OpenCodeHttpError extends Error {
   constructor(
@@ -26,6 +26,8 @@ export class OpenCodeError extends Error {
   constructor(
     readonly code: OpenCodeErrorCode,
     message: string,
+    /** The major version of the binary, when it was read. */
+    readonly major?: 1 | 2,
   ) {
     super(message);
   }
@@ -106,8 +108,8 @@ export function invocation(binary: string, args: string[], platform: NodeJS.Plat
   return { file: "cmd.exe", args: ["/d", "/s", "/c", `"${[binary, ...args].map(winQuote).join(" ")}"`], verbatim: true };
 }
 
-/** A consumer of the server's event stream: `event` per payload of `GET /global/event`; `resync` after a reconnect (events may be lost). */
-export type OpenCodeEvents = { event(directory: string | undefined, payload: { type: string; properties: Record<string, any> }): void; resync(): void };
+/** A consumer of the server's event stream: `event` per payload of `GET /global/event` (version 2: `GET /api/event`, mapped to the same shape); `resync` after a reconnect (events may be lost). */
+export type OpenCodeEvents = { event(directory: string | undefined, payload: { type: string; properties: Record<string, any>; /** Version 2 durable events: `{aggregateID, seq}`. */ durable?: unknown }): void; resync(): void };
 const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 10_000;
 /** A prompt waits this long for the stream before it is sent anyway. */
@@ -126,7 +128,7 @@ export type OpenCodeServerOpts = {
   startTimeoutMs?: number;
 };
 
-type Up = { url: string; auth: string; version: string };
+type Up = { url: string; auth: string; version: string; major: 1 | 2 };
 
 /**
  * E2E harness only: when `CLAUDE_UI_E2E_OPENCODE_INFO` names a file, the daemon writes `{url, auth}` of its OpenCode server there (mode 600) each time the
@@ -151,6 +153,11 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   let lastError: string | undefined;
   let stderr = "";
   let stopRequested = false;
+  /** Major version of the last successful `check()`: known before any server starts. */
+  let lastMajor: 1 | 2 | undefined;
+  /** Bumped by `reset()` (the path changed): a `--version` of the previous binary that ends later is run again on the current one, its result is never kept. */
+  let gen = 0;
+  let clientOf: { up: Up; client: import("@opencode/client").OpenCodeClient } | undefined;
   // The child is SERVE_WATCHER (tailscale.ts): it runs `opencode serve` in its own process group and kills that group when its stdin closes,
   // so the serve ends with the daemon even when the daemon is killed (the pipe closes). Closing stdin is the way to stop it.
   const killSync = () => child?.stdin?.destroy();
@@ -165,30 +172,48 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   };
 
   /** Binary and version, never a server: throws OpenCodeError. The bound is the start timeout, not a shorter one of its own: `--version` starts the same binary, so a machine too busy to answer it in 10 s would refuse to start OpenCode although `serve` is given 20 s. */
-  async function check() {
+  async function check(): Promise<{ cmd: string[]; version: string; major: 1 | 2 }> {
+    const g = gen;
     const cmd = argv();
     if (!cmd) throw missing();
     const run = invocation(cmd[0]!, [...cmd.slice(1), "--version"]);
     const out = await new Promise<string>((resolve, reject) =>
       execFile(run.file, run.args, { env: env(), timeout: o.startTimeoutMs ?? START_TIMEOUT_MS, windowsHide: true, windowsVerbatimArguments: run.verbatim }, (err, stdout, errout) => (err ? reject(err) : resolve(`${stdout}${errout}`))),
     ).catch((err: NodeJS.ErrnoException) => {
+      if (g !== gen) return undefined;
       if (err.code === "ENOENT") throw missing();
       throw new OpenCodeError("opencode_failed", `OpenCode did not answer --version: ${err.message}`);
     });
+    if (g !== gen || out === undefined) return check();
     const version = parseVersion(out);
     if (!version) throw new OpenCodeError("opencode_failed", `OpenCode --version printed no version: ${out.trim().slice(0, 200)}`);
     const text = version.join(".");
-    if (olderThan(version, parseVersion(OPENCODE_MIN)!)) throw new OpenCodeError("opencode_old", `OpenCode ${text} is older than the minimum ${OPENCODE_MIN}. Upgrade it with \`opencode upgrade\`.`);
-    return { cmd, version: text };
+    const major: 1 | 2 = version[0]! >= 2 ? 2 : 1;
+    const min = major === 2 ? OPENCODE2_MIN : OPENCODE_MIN;
+    if (olderThan(version, parseVersion(min)!)) throw new OpenCodeError("opencode_old", `OpenCode ${text} is older than the minimum ${min}. Upgrade it with \`opencode upgrade\`.`, major);
+    lastMajor = major;
+    return { cmd, version: text, major };
   }
 
   const failed = (why: string) => new OpenCodeError("opencode_failed", `OpenCode server did not start: ${why}`);
   const tail = () => stderr.trim().split("\n").slice(-5).join("\n") || "no output";
 
-  async function start(): Promise<Up> {
+  /** The binary is of the other major than the adapter that asked: no `serve` (ADR 0015: only the version 2 adapter starts a version 2 server, whose first start changes `opencode.db`). */
+  const refusals = new WeakSet<Error>();
+  const wrongMajor = (major: 1 | 2) => {
+    const err =
+      major === 2
+        ? new OpenCodeError("opencode_v2_unsupported", "OpenCode 2 sessions are not supported yet. Set Settings › OpenCode › path to an OpenCode 1 binary.", 2)
+        : new OpenCodeError("opencode_failed", "OpenCode 2 client requested while the installed OpenCode is version 1", 1);
+    refusals.add(err);
+    return err;
+  };
+
+  async function start(want: 1 | 2): Promise<Up> {
     const exits = fastExits.filter((t) => now() - t < GUARD_MS);
     if (exits.length >= FAST_EXITS) throw failed(`it exited ${exits.length} times right after starting. Last output: ${tail()}`);
-    const { cmd, version } = await check();
+    const { cmd, version, major } = await check();
+    if (major !== want) throw wrongMajor(major);
     const password = randomBytes(32).toString("hex");
     stderr = "";
     stopRequested = false;
@@ -230,12 +255,13 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
         exited,
         new Promise<never>((_, reject) => (timer = setTimeout(() => reject(failed(`no answer in ${(o.startTimeoutMs ?? START_TIMEOUT_MS) / 1000} s. Last output: ${tail()}`)), o.startTimeoutMs ?? START_TIMEOUT_MS))),
       ]);
+      // Version 1: `GET /global/health` says `healthy`. Version 2 has no such route: `GET /api/info` answers its version.
       const health = await Promise.race([
-        ocFetch(`${url}/global/health`, { headers: { authorization: auth }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).then((r) => (r.ok ? (r.json() as Promise<{ healthy?: boolean }>) : Promise.reject(new Error(`health answered ${r.status}`)))),
+        ocFetch(`${url}${healthPath(major)}`, { headers: { authorization: auth }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).then((r) => (r.ok ? (r.json() as Promise<{ healthy?: boolean; version?: unknown }>) : Promise.reject(new Error(`health answered ${r.status}`)))),
         exited,
       ]);
-      if (!health.healthy) throw new Error("health says not healthy");
-      up = { url: url.replace(/\/$/, ""), auth, version };
+      if (major === 2 ? typeof health.version !== "string" : !health.healthy) throw new Error("health says not healthy");
+      up = { url: url.replace(/\/$/, ""), auth, version, major };
       shareWithE2e(up);
       lastError = undefined;
       return up;
@@ -252,15 +278,18 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     }
   }
 
-  /** Starts the server unless it runs; concurrent calls share one start. */
-  const ensure = (): Promise<Up> => {
-    if (up && child) return Promise.resolve(up);
-    return (starting ??= start()
+  /** Starts the server of major `want` unless it runs; concurrent calls share one start. A binary or running server of the other major is refused, never started:
+   * the OpenCode 1 adapter (every caller but `client()`) can never start an OpenCode 2 server, whatever the catalogue switch believed about the version. */
+  const ensure = (want: 1 | 2 = 1): Promise<Up> => {
+    if (up && child) return up.major === want ? Promise.resolve(up) : Promise.reject(wrongMajor(up.major));
+    return (starting ??= start(want)
       .catch((err) => {
-        lastError = err instanceof Error ? err.message : String(err);
+        // A refusal started nothing: it is not a failed start for Settings.
+        if (!refusals.has(err)) lastError = err instanceof Error ? err.message : String(err);
         throw err;
       })
-      .finally(() => (starting = undefined)));
+      .finally(() => (starting = undefined)))
+      .then((u) => (u.major === want ? u : Promise.reject(wrongMajor(u.major))));
   };
 
   // The event stream (`GET /global/event`, one for every folder): open while a handler exists, reconnected through ensure() with a growing delay.
@@ -284,15 +313,16 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
         buf = buf.slice(i + 2);
         const data = block.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trimStart()).join("\n");
         if (!data) continue;
-        let msg: { directory?: string; payload?: { type: string; properties: Record<string, any> } };
+        let msg: { directory?: string; payload?: { type: string; properties: Record<string, any> }; type?: string; data?: Record<string, any>; location?: { directory?: string }; durable?: unknown };
         try {
           msg = JSON.parse(data);
         } catch {
           continue;
         }
-        const payload = msg.payload;
+        // Version 2 sends the event itself (`{type, data, location, durable?}`), version 1 wraps it as `{directory, payload}`.
+        const payload = msg.payload ?? (typeof msg.type === "string" ? { type: msg.type, properties: msg.data ?? {}, durable: msg.durable } : undefined);
         if (!payload || payload.type === "sync" || payload.type === "server.heartbeat" || payload.type === "server.connected") continue;
-        for (const h of [...handlers]) h.event(msg.directory, payload);
+        for (const h of [...handlers]) h.event(msg.directory ?? msg.location?.directory, payload);
       }
     }
   }
@@ -308,7 +338,8 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
         const u = await ensure();
         if (!handlers.size) break;
         streamAbort = new AbortController();
-        const res = await ocFetch(`${u.url}/global/event`, { headers: { authorization: u.auth, accept: "text/event-stream" }, signal: streamAbort.signal });
+        // Version 2 route: unused until the OpenCode 2 adapter (slice 2) opens the stream with its major (ensure() here asks for version 1).
+        const res = await ocFetch(`${u.url}${u.major === 2 ? "/api/event" : "/global/event"}`, { headers: { authorization: u.auth, accept: "text/event-stream" }, signal: streamAbort.signal });
         if (!res.ok || !res.body) throw new Error(`event stream answered ${res.status}`);
         if (again) for (const h of [...handlers]) h.resync();
         again = true;
@@ -364,18 +395,31 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
       return Promise.race([connected, new Promise((r) => (timer = setTimeout(r, STREAM_WAIT_MS)))]).then(() => clearTimeout(timer));
     },
     /** The path setting changed: stop, and forget crashes (the new binary gets a fresh start). */
-    reset: () => ((fastExits = []), (lastError = undefined), stop()),
+    reset: () => ((gen += 1), (fastExits = []), (lastError = undefined), (lastMajor = undefined), stop()),
     running: () => !!up && !!child,
+    /** Major version of the running server, else of the last successful `check()`; undefined until one of them happened. */
+    major: (): 1 | 2 | undefined => (up && child ? up.major : lastMajor),
+    /** The `@opencode/client` of the running version 2 server (started when it is down), built once per server process. The package is bundled into the published daemon (about +92 KB); it is initialised on first use only, so a Claude-only or OpenCode 1 user pays no runtime cost. */
+    async client() {
+      const srv = await ensure(2);
+      if (clientOf?.up !== srv) {
+        const { OpenCode } = await import("@opencode/client");
+        clientOf = { up: srv, client: OpenCode.make({ baseUrl: srv.url, headers: { authorization: srv.auth }, fetch: v2Fetch as typeof fetch }) };
+      }
+      return clientOf.client;
+    },
+    /** `binary --version` only (throws OpenCodeError): makes `major()` known without starting a server. */
+    check: async () => (await check()).major,
     /** Binary and version only, never `serve`. */
     async status(): Promise<OpenCodeStatus> {
       const path = o.path() || undefined;
       try {
-        const { version } = await check();
-        if (up && child) return { state: "running", version, ...(path && { path }) };
-        return lastError ? { state: "failed", version, message: lastError, ...(path && { path }) } : { state: "stopped", version, ...(path && { path }) };
+        const { version, major } = await check();
+        if (up && child) return { state: "running", version, major, ...(path && { path }) };
+        return lastError ? { state: "failed", version, major, message: lastError, ...(path && { path }) } : { state: "stopped", version, major, ...(path && { path }) };
       } catch (err) {
         if (!(err instanceof OpenCodeError)) throw err;
-        return { state: err.code === "opencode_missing" ? "missing" : err.code === "opencode_old" ? "old" : "failed", message: err.message, ...(path && { path }) };
+        return { state: err.code === "opencode_missing" ? "missing" : err.code === "opencode_old" ? "old" : "failed", ...(err.major && { major: err.major }), message: err.message, ...(path && { path }) };
       }
     },
     /** JSON in and out; starts the server when it is down (a crash restarts here); `directory` scopes the request to a project. */
@@ -471,9 +515,17 @@ const cutBeforeAnswer = (err: unknown): boolean => {
   const c = (err as { cause?: { code?: string } } | undefined)?.cause;
   return c?.code === "ECONNRESET" || c?.code === "EPIPE";
 };
+/** `fetch` for `@opencode/client`: the same node:http transport as every other request to the server (ocFetch), never undici. */
+const v2Fetch = async (input: string | URL | Request, init?: RequestInit) => {
+  const req = new Request(input, init);
+  const body = req.method === "GET" || req.method === "HEAD" ? undefined : await req.text();
+  return ocFetch(req.url, { method: req.method, headers: Object.fromEntries(req.headers), body: body || undefined, signal: req.signal });
+};
+/** The route that answers while the server is healthy (version 2 has no `/global/health`). */
+const healthPath = (major: 1 | 2) => (major === 2 ? "/api/info" : "/global/health");
 /** Whether the server answers its health check at all. */
-const alive = (srv: { url: string; auth: string }) =>
-  ocFetch(`${srv.url}/global/health`, { headers: { authorization: srv.auth }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).then(
+const alive = (srv: { url: string; auth: string; major: 1 | 2 }) =>
+  ocFetch(`${srv.url}${healthPath(srv.major)}`, { headers: { authorization: srv.auth }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).then(
     () => true,
     () => false,
   );
