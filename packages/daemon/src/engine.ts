@@ -1,6 +1,6 @@
 // The Engine interface (CONTEXT.md "Engine", ADR 0012): the agent runtime behind a Session: the Claude Engine and the OpenCode Engine.
 import type { Effort, Engine as EngineName, EngineCapabilities, PermissionMode, RewindMode, RewindPreview } from "@claude-ui/protocol";
-import type { InlineRunner } from "./inline-types.ts";
+import type { ForkResult, ForkSpec, InlineHooks, InlineRunner } from "./inline-types.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 export interface Engine {
@@ -51,6 +51,8 @@ export interface EngineSession {
   interrupt(): Promise<void>;
   /** Runs an inline task (GH-734) as a child of the running `inline_task` call; an Engine without it throws a ToolError. */
   inlineTask: InlineRunner;
+  /** Runs a Fork run (docs/spec.md "Fork runs") as a child of the running `fork` call, foreground: settles when the fork ended. OpenCode only; absent = the Engine forks through its own tool. */
+  forkRun?(spec: ForkSpec, hooks: InlineHooks): Promise<ForkResult>;
   stopSubagent(callId: string): Promise<boolean>;
   backgroundShell(toolUseId: string): Promise<boolean>;
   /** Allow and retry (GH-711), Claude only: approves the classifier-denied call once and sends the follow-up message; throws DeniedRetryError (`unsupported` on the other Engines). */

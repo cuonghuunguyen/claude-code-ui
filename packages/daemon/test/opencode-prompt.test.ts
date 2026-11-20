@@ -45,7 +45,7 @@ async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object
   const env: Record<string, string> = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_DATA: dataFile, FAKE_OPENCODE_SCRIPT: (o.script ?? []).map(turn).join(","), ...o.env };
   // Terminal access (GH-709) attaches a second MCP server to every session: off here; "OpenCode claude-ui tools" turns it on.
   const appSettings = createSettings();
-  appSettings.set({ terminalAccess: { enabled: false }, inlineTask: { enabled: false } } as never);
+  appSettings.set({ terminalAccess: { enabled: false }, inlineTask: { enabled: false }, fork: { enabled: false } } as never);
   const http = createDaemon({
     webRoot: root,
     roots: [root],
@@ -1131,6 +1131,36 @@ describe("OpenCode Aside and session management", { timeout: TEST_MS }, () => {
     const { session } = await d.ok({ type: "aside.open", sessionId: "ses_own", text: "q" });
     await d.ok({ type: "aside.keep", sessionId: session.id });
     expect(link(d, session.id).ownerId).toBeUndefined();
+  });
+
+  it("the fork of a Fork run is hidden from the list but its link stays; the parent restores the card with the fork's steps; deleting the parent deletes the fork", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const text = (id: string, mid: string, t: string, sid = "ses_own") => ({ id, type: "text", messageID: mid, sessionID: sid, text: t, time: { start: 1, end: 2 } });
+    const call = { id: "prt_c", type: "tool", messageID: "msg_a1", callID: "call_fork", tool: "claude-ui-abcdefghij_fork", state: { status: "completed", input: { description: "map it", prompt: "go" }, output: "{}", time: { start: 1, end: 2 } } };
+    const messages = {
+      ses_own: [{ info: { id: "msg_u1", sessionID: "ses_own", role: "user" }, parts: [text("prt_u1", "msg_u1", "dig in")] }, { info: { id: "msg_a1", sessionID: "ses_own", ...done }, parts: [call] }],
+      ses_forked: [{ info: { id: "msg_c1", sessionID: "ses_forked", role: "user" }, parts: [text("prt_c1", "msg_c1", "dig in", "ses_forked")] }, { info: { id: "msg_f1", sessionID: "ses_forked", ...done }, parts: [text("prt_f1", "msg_f1", "the answer", "ses_forked")] }],
+    };
+    // An entry older than the prune grace period: it stays only because the list knows the fork's id.
+    writeFileSync(join(root, "sessions.json"), JSON.stringify({ ses_forked: { forkOf: { sessionId: "ses_own", callId: "call_fork", prefix: 1 }, saved: 1 } }));
+    const d = await boot({ root, script: ["text"], data: { sessions: [row(project), row(project, "ses_forked")], messages } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    for (let i = 0; i < 2400; i++) {
+      if ((await d.ok({ type: "session.list" })).sessions.some((x: { id: string }) => x.id === "ses_own")) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect((await d.ok({ type: "session.list" })).sessions.map((s: any) => s.id)).toEqual(["ses_own"]);
+    expect(link(d, "ses_forked")).toMatchObject({ forkOf: { sessionId: "ses_own", callId: "call_fork", prefix: 1 } });
+    await d.ok({ type: "session.subscribe", sessionId: "ses_own", sinceSeq: 0 });
+    const parts = d.inbox.filter((m): m is Extract<ServerMessage, { type: "event" }> => m.type === "event" && m.sessionId === "ses_own").map((m) => m.part);
+    expect(parts.find((p) => p.type === "subagent")).toMatchObject({ id: "call_fork", agentType: "fork", description: "map it" });
+    // a part is emitted again at a resync (same id replaces)
+    expect(new Set(parts.filter((p) => p.parentId === "call_fork").map((p) => `${p.id}:${p.type === "assistant_text" && p.text}`))).toEqual(new Set(["prt_f1:the answer"]));
+    await d.ok({ type: "session.delete", sessionId: "ses_own" });
+    expect(d.requests("DELETE", "/session/ses_forked")).toHaveLength(1);
+    expect(link(d, "ses_forked")).toBeUndefined();
   });
 
   it("rename, archive, unarchive and delete go to OpenCode", async () => {

@@ -249,7 +249,7 @@ export default {
   "settings.row.inlineTask.maxTurns.label": "Maximum turns",
   "settings.row.inlineTask.maxTurns.hint": "Model turns one inline task may take, 1 to 30. At the limit the task stops and returns its partial result.",
   "settings.row.fork.enabled.label": "Let the agent fork itself",
-  "settings.row.fork.enabled.hint": "Claude Code sessions only. The agent may start a subagent as a fork: it inherits this conversation, runs in its own context and returns only its result, which keeps the main context small. OpenCode subagents always start fresh. Applies to turns that start after the change.",
+  "settings.row.fork.enabled.hint": "The agent may start a subagent as a fork: it inherits this conversation, runs in its own context and returns only its result, which keeps the main context small. In OpenCode the agent calls the fork tool and waits for it; OpenCode subagents (task) still start fresh. Applies to turns that start after the change.",
   "settings.row.terminalAccess.enabled.label": "Let sessions use open terminals",
   "settings.row.terminalAccess.enabled.hint": "A session's agent can list the terminals open in this project's Terminal panel, read their recent output (secrets are hidden) and, after you allow it, type a command into one. Applies to turns that start after the change.",
   "settings.row.chat.visualize.hint": "Claude can draw charts, diagrams and small interactive widgets in its replies. They run in a sandboxed frame without access to the app, your files or the network, except script CDNs. Applies to sessions started or resumed after the change; off: visualizations show as code. OpenCode: from the next prompt; ask with /visualize.",

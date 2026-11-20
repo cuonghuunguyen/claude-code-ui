@@ -349,5 +349,5 @@ A mid-size task run as one `inline_task` call by a small model with minimized co
 _Avoid_: mini agent, sub-session. Not a Fork run.
 
 **Fork run**:
-A Subagent run started with `subagent_type: "fork"` (Claude Code only): it inherits the parent conversation, runs on the parent's model in its own context and only its result returns to the parent. Shown as a run card labelled Fork. OpenCode has none: its subagents always start fresh.
+A Subagent run started with `subagent_type: "fork"` (Claude Code, background) or the daemon `fork` tool (OpenCode 1, foreground): it inherits the parent conversation, runs on the parent's model in its own context and only its result returns to the parent. Shown as a run card labelled Fork. OpenCode's own `task` subagents always start fresh.
 _Avoid_: fork session (that is `forkSession`: Aside, the git graph), forked session. Not an Aside, not an Inline task.

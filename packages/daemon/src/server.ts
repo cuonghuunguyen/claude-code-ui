@@ -65,7 +65,7 @@ import { createUpdater, type Updater } from "./update.ts";
 import { createOrchestration, SERVER as ORCHESTRATION_SERVER } from "./orchestration.ts";
 import { createDaemonMcp, DAEMON_SERVER, ToolError } from "./daemon-mcp.ts";
 import { createAgentTerminals, terminalPort } from "./agent-terminals.ts";
-import { createForkGroup } from "./fork-guidance.ts";
+import { createForkGroups } from "./fork-guidance.ts";
 import { createInlineTask } from "./inline-task.ts";
 import type { AddressInfo } from "node:net";
 import { serveAppIcon } from "./app-icon.ts";
@@ -1134,7 +1134,14 @@ export function createDaemon(opts: {
           return s.run.inlineTask(spec, { signal, toolUseId, input, settings: appSettings.get().inlineTask });
         },
       }),
-      createForkGroup(() => appSettings.get().fork.enabled),
+      ...createForkGroups(
+        () => appSettings.get().fork.enabled,
+        async (id, spec, signal, input) => {
+          const s = sessions.get(id);
+          if (!s?.run.forkRun) throw new ToolError("This engine cannot run forks.");
+          return s.run.forkRun(spec, { signal: signal ?? new AbortController().signal, input });
+        },
+      ),
     ],
   });
   /** Orchestration reads OpenCode's agents and models for its own checks; fake catalogues without OpenCode have none. */
@@ -1224,6 +1231,7 @@ export function createDaemon(opts: {
     track,
     sessionOpts,
     settings,
+    saveSettings,
     appSettings,
     allowed: (p) => allowed(p),
     isRemoving,

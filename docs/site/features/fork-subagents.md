@@ -4,7 +4,7 @@ A fork is a subagent that starts with a copy of your whole conversation. It runs
 
 A fork is not a new session and not an [aside](aside). It appears as a **Fork** card in the transcript, under the agent's call.
 
-Forks work in Claude Code sessions. OpenCode has no fork: its subagents always start fresh, with a brief written by the agent.
+Forks work in Claude Code sessions and in OpenCode 1 sessions. In Claude Code a fork runs in the background. In OpenCode the agent calls the `fork` tool and its step waits until the fork ends. OpenCode's own subagents (`task`) still start fresh, with a brief written by the agent.
 
 ## When to fork
 
@@ -51,7 +51,7 @@ In **Settings › Sessions › Fork subagents**:
 | --- | --- | --- |
 | Let the agent fork itself | On | Off: turns that start later cannot fork, and the agent gets no fork guidance |
 
-The setting applies to turns that start after the change. It does not apply to OpenCode sessions.
+The setting applies to turns that start after the change. It also turns the OpenCode `fork` tool on or off.
 
 ## Good to know
 

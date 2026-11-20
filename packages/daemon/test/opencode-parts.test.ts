@@ -199,3 +199,26 @@ describe("splitLabels", () => {
     expect(splitLabels("", ["Red"])).toEqual([]);
   });
 });
+
+describe("openCodeParts: a Fork run (docs/spec.md \"Fork runs\")", () => {
+  const user = (id: string, text: string): OpenCodeMessage => ({ info: { id, role: "user" }, parts: [{ id: `prt_${id}`, type: "text", text, messageID: id }] });
+  const reply = (id: string, text: string): OpenCodeMessage => ({ info: { id, role: "assistant", time: { completed: 2 } }, parts: [{ id: `prt_${id}`, type: "text", text, messageID: id, time: { start: 1, end: 2 } }] });
+  const forkCall: OpenCodeMessage = {
+    info: { id: "msg_a2", role: "assistant" },
+    parts: [{ id: "prt_c", type: "tool", messageID: "msg_a2", callID: "call_fork", tool: "claude-ui-abcdefghij_fork", state: { status: "completed", input: { description: "map it", prompt: "go" }, output: "{}", time: { start: 5, end: 9 } } }],
+  };
+  const parent = [user("msg_u1", "hello"), reply("msg_a1", "hi"), user("msg_u2", "dig in"), forkCall];
+
+  it("the fork call is a subagent part with agentType fork", () => {
+    expect(openCodeParts(parent).find((p) => p.type === "subagent")).toEqual({ type: "subagent", id: "call_fork", toolUseId: "call_fork", description: "map it", status: "done", startedAt: 5, endedAt: 9, agentType: "fork" });
+  });
+
+  it("its fork session shows only the steps after the copied history (prefix), under the call; the fork prompt is no step", () => {
+    // the fork copied 3 messages (msg_u1, msg_a1, msg_u2), then ran its prompt
+    const fork = [user("msg_f1", "history copy"), reply("msg_f2", "history copy reply"), user("msg_f3", "copy"), user("msg_f4", "You are a fork: go"), reply("msg_f5", "the answer")];
+    const parts = openCodeParts(parent, {}, undefined, [{ forkId: "ses_fork", callId: "call_fork", prefix: 3, messages: fork }]);
+    expect(parts.filter((p) => p.parentId === "call_fork")).toEqual([{ type: "assistant_text", id: "prt_msg_f5", text: "the answer", streaming: false, parentId: "call_fork" }]);
+    expect(parts.some((p) => p.type === "user_text" && p.text.includes("fork"))).toBe(false);
+    expect(parts.filter((p) => p.type === "assistant_text").map((p) => (p as { text: string }).text)).toEqual(["hi", "the answer"]);
+  });
+});

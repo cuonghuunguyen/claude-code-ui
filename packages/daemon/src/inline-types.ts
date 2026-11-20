@@ -54,3 +54,7 @@ export type InlineResult = {
 };
 /** The engine-neutral entry: step parts go to the parent session (parentId = the call), the final result back to the tool. */
 export type InlineRunner = (spec: InlineSpec, hooks: InlineHooks) => Promise<InlineResult>;
+
+/** A Fork run (docs/spec.md "Fork runs"): the daemon `fork` tool's input and what an engine's `forkRun` returns to the tool. */
+export type ForkSpec = { description: string; prompt: string };
+export type ForkResult = Pick<InlineResult, "status" | "limit" | "error" | "text" | "truncated" | "filesChanged" | "durationMs">;

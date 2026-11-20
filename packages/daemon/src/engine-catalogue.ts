@@ -92,7 +92,9 @@ export type CatalogueContext = {
   track(s: Session): Session;
   sessionOpts(initial: Partial<SessionSettings>): Record<string, unknown>;
   /** Link store (sessions.json). */
-  settings: Pick<SessionSettingsStore, "get">;
+  settings: Pick<SessionSettingsStore, "get" | "entries" | "set" | "delete">;
+  /** Runs a change of `settings`: a failed save is logged and the change holds in memory (server.ts). */
+  saveSettings(change: () => void): void;
   appSettings: Pick<AppSettings, "get">;
   /** The canonical path when inside the roots. */
   allowed(path: unknown): string | undefined;
