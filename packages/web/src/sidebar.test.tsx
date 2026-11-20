@@ -15,7 +15,8 @@ vi.mock("./session-actions.tsx", async (orig) => {
   return { ...m, SessionMenu: (p: Parameters<typeof m.SessionMenu>[0]) => (rowRenders.push(p.target.title), <m.SessionMenu {...p} />) };
 });
 
-const now = Date.now();
+// Pinned to local noon: relative fixtures never straddle midnight, whatever the real clock says.
+const now = new Date(2026, 5, 15, 12, 0).getTime();
 const item = (id: string, cwd: string, title: string, minutesAgo: number, state: SessionState = "closed"): SessionListItem => ({
   id,
   cwd,
@@ -40,9 +41,11 @@ const LIST = [
 const EXPANDED = "claude-ui.expandedWorkers";
 const openWorkers = (...keys: string[]) => localStorage.setItem(EXPANDED, JSON.stringify(keys));
 let root: ReturnType<typeof createRoot> | undefined;
+beforeEach(() => void vi.useFakeTimers({ toFake: ["Date"], now }));
 afterEach(() => {
   root?.unmount();
   localStorage.clear();
+  vi.useRealTimers();
 });
 
 async function render(props: { copy?: boolean; sideState?: ContextType<typeof SideState>; reveal?: number; activeId?: string | null; list?: SessionListItem[]; renaming?: string; projects?: string[]; worktrees?: Record<string, Worktree[]>; side?: (cwd: string) => { label: string; short: string } | undefined; openTabs?: Set<string>; state?: (s: SessionListItem) => SessionState; cleanUp?: boolean; removing?: (path: string) => boolean } = {}) {
