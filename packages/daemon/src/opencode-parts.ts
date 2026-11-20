@@ -59,7 +59,8 @@ export function mapTool(name: string, input: Record<string, unknown> = {}): { to
 }
 
 /** A value with its object keys sorted, for comparing inputs. */
-const canon = (v: unknown): unknown => (Array.isArray(v) ? v.map(canon) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, x]) => [k, canon(x)])) : v);
+/** `v` with its object keys sorted: inputs compared by value. */
+export const canon = (v: unknown): unknown => (Array.isArray(v) ? v.map(canon) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, x]) => [k, canon(x)])) : v);
 
 const sumTokens = (parts: Iterable<OpenCodePart>) => {
   const t = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
