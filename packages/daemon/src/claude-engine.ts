@@ -335,9 +335,9 @@ export class ClaudeSession implements EngineSession {
   private commandsAsked = false;
   /** After a failed load no new throwaway starts before this time (ms). */
   private commandsRetryAt = 0;
-  /** The env of this session's CLI processes: the Project's Claude account when it sets one, else the daemon's. */
   /** The plan tracker each CLI process reports into, chosen when it started. */
   private readonly trackers = new WeakMap<Query, NonNullable<ReturnType<NonNullable<SessionOpts["plan"]>>>>();
+  /** The env of this session's CLI processes: the Project's Claude account when it sets one, else the daemon's. */
   private cliEnv() {
     return this.opts.claudeEnv?.(this.cwd) ?? claudeEnv();
   }

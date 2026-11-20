@@ -621,19 +621,19 @@ export function createDaemon(opts: {
   const addons = opts.addonsDir ? createAddons({ dir: opts.addonsDir, file: join(opts.addonsDir, "addons.json"), onChanged: () => broadcast({ type: "config.changed", kind: "addons", cwd: "" }) }) : undefined;
   const root = resolve(opts.webRoot);
   // Model list per Claude account key (its subscription decides which models and auto mode it offers), cached until the login or an account changes (claudeLoginChanged).
-  const modelCaches = new Map<string, { list?: ReturnType<typeof listModels>; known: ModelInfo[] }>();
+  const modelCaches = new Map<string, { list?: ReturnType<typeof listModels>; known: ModelInfo[]; loaded?: true }>();
   /** The account key of a model list request: the folder's Project account, the global one without a folder. */
   const modelKey = (cwd?: string) => (cwd === undefined ? globalAccount() : accountKeyOf(cwd));
   // Sync copy for SessionInfo.permissionModes: every path that builds a SessionInfo for a folder awaits modelList(cwd) first.
   const knownModels = (cwd?: string) => {
     const own = modelCaches.get(modelKey(cwd));
     // Not read yet for this account: the global list stands in until it is.
-    return own?.list ? own.known : (modelCaches.get(globalAccount())?.known ?? []);
+    return own?.loaded ? own.known : (modelCaches.get(globalAccount())?.known ?? []);
   };
   const modelList = (cwd?: string) => {
     const key = modelKey(cwd);
     const entry = modelCaches.get(key) ?? (modelCaches.set(key, { known: [] }), modelCaches.get(key)!);
-    return (entry.list ??= listModels(opts.query, claudeEnvOf(key)).then((l) => ((entry.known = l), l))).catch((e) => {
+    return (entry.list ??= listModels(opts.query, claudeEnvOf(key)).then((l) => ((entry.known = l), (entry.loaded = true), l))).catch((e) => {
       if (modelCaches.get(key) === entry) entry.list = undefined;
       throw e;
     });
