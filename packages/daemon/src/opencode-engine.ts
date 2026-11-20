@@ -13,6 +13,7 @@ import { INLINE_SYSTEM, InlineCollector, clip, inlineTools, lastAssistantText } 
 import { INLINE_TIMEOUT_MS, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
 import { mapTool, openCodeParts, OpenCodeMapper, type OpenCodeMessage, type OpenCodeTodo } from "./opencode-parts.ts";
 import { OpenCodeHttpError, type OpenCodeServer } from "./opencode-server.ts";
+import { contentBefore, type PatchPart, type SnapshotSource } from "./opencode-snapshot.ts";
 import { StopControl } from "./opencode-stop.ts";
 import { mapLimit } from "./session-scan.ts";
 import { visualizeSystem } from "./visualize.ts";
@@ -984,6 +985,8 @@ class OpenCodeSession implements EngineSession {
     const p = payload.properties;
     const sid = p.sessionID ?? p.part?.sessionID ?? p.info?.sessionID ?? p.info?.id;
     const root = sid === this.id;
+    // Before the filters below: a step's files changed on disk whatever the card shows (a stopped prompt that reached OpenCode late, an inline run without a call).
+    if (payload.type === "message.part.updated" && p.part?.type === "patch") this.recordPatch(p.part as PatchPart);
     const inline = sid && sid !== this.id ? this.inlines.get(sid) : undefined;
     if (inline) {
       inline.notify(payload);
@@ -1065,6 +1068,16 @@ class OpenCodeSession implements EngineSession {
         return typeof p.info?.title === "string" ? this.engine.onTitle?.(this.id, p.info.title) : undefined;
       }
     }
+  }
+  /** The `patch` parts already read (part events repeat). */
+  private readonly patched = new Set<string>();
+  /** A step of the agent changed files: the content they had before goes to Local history (opencode-snapshot.ts). Async, never blocks the event pump. */
+  private recordPatch(part: PatchPart) {
+    const onEdit = this.opts.onFileEdit;
+    if (!onEdit || !part.id || this.patched.has(part.id)) return;
+    if (this.patched.size >= 5000) this.patched.clear();
+    this.patched.add(part.id);
+    void contentBefore(this.engine.snapshots, this.cwd, this.id, part).then((list) => list.forEach(([path, before]) => onEdit(path, before)), () => {});
   }
   private emitAll(parts: ReturnType<OpenCodeMapper["part"]>) {
     for (const part of parts) this.session.emit(part);
@@ -1294,6 +1307,28 @@ class OpenCodeEngineImpl implements Engine {
     readonly mcp?: OpenCodeMcpRoute,
     readonly visualizeOn?: () => boolean,
   ) {}
+
+  /** OpenCode's snapshot store: the data folder, and `projectID` and `worktree` per folder (cached; a failed read is not). */
+  readonly snapshots: SnapshotSource = (() => {
+    const projects = new Map<string, Promise<{ projectID: string; worktree: string }>>();
+    return {
+      data: () => this.server.dataDir(),
+      project: (cwd, sessionId) => {
+        const key = `${sessionId}\0${cwd}`;
+        let hit = projects.get(key);
+        if (!hit) {
+          hit = (async () => {
+            const [row, path] = await Promise.all([this.server.request<{ projectID: string }>(`/session/${sessionId}`, { directory: cwd }), this.server.request<{ worktree: string }>("/path", { directory: cwd })]);
+            if (!row?.projectID || !path?.worktree) throw new Error("no project id or worktree");
+            return { projectID: row.projectID, worktree: path.worktree };
+          })();
+          projects.set(key, hit);
+          hit.catch(() => projects.delete(key));
+        }
+        return hit.then((v) => v, () => undefined);
+      },
+    };
+  })();
 
   permissionModes = (o: { allowBypass?: boolean; supportsAuto?: boolean }) => permissionModesFor({ ...o, modes: OPENCODE_PERMISSION_MODES });
 

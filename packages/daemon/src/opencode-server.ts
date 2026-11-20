@@ -157,6 +157,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   let lastMajor: 1 | 2 | undefined;
   /** Bumped by `reset()` (the path changed): a `--version` of the previous binary that ends later is run again on the current one, its result is never kept. */
   let gen = 0;
+  let dataDir: Promise<string | undefined> | undefined;
   let clientOf: { up: Up; client: import("@opencode/client").OpenCodeClient } | undefined;
   // The child is SERVE_WATCHER (tailscale.ts): it runs `opencode serve` in its own process group and kills that group when its stdin closes,
   // so the serve ends with the daemon even when the daemon is killed (the pipe closes). Closing stdin is the way to stop it.
@@ -395,7 +396,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
       return Promise.race([connected, new Promise((r) => (timer = setTimeout(r, STREAM_WAIT_MS)))]).then(() => clearTimeout(timer));
     },
     /** The path setting changed: stop, and forget crashes (the new binary gets a fresh start). */
-    reset: () => ((gen += 1), (fastExits = []), (lastError = undefined), (lastMajor = undefined), stop()),
+    reset: () => ((gen += 1), (fastExits = []), (lastError = undefined), (lastMajor = undefined), (dataDir = undefined), stop()),
     running: () => !!up && !!child,
     /** Major version of the running server, else of the last successful `check()`; undefined until one of them happened. */
     major: (): 1 | 2 | undefined => (up && child ? up.major : lastMajor),
@@ -408,6 +409,11 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
       }
       return clientOf.client;
     },
+    /**
+     * OpenCode's data folder (`binary debug paths`, the `data` line), read once per path setting with the server's environment: it holds the snapshot store
+     * (opencode-snapshot.ts). Undefined when the binary does not print it; never throws.
+     */
+    dataDir: () => (dataDir ??= dataOf(argv, env).then((d) => d, () => ((dataDir = undefined), undefined))),
     /** `binary --version` only (throws OpenCodeError): makes `major()` known without starting a server. */
     check: async () => (await check()).major,
     /** Binary and version only, never `serve`. */
@@ -529,5 +535,16 @@ const alive = (srv: { url: string; auth: string; major: 1 | 2 }) =>
     () => true,
     () => false,
   );
+
+/** The `data` line of `binary debug paths` (`data    /path`). */
+async function dataOf(argv: () => string[] | undefined, env: () => NodeJS.ProcessEnv): Promise<string | undefined> {
+  const cmd = argv();
+  if (!cmd) return undefined;
+  const run = invocation(cmd[0]!, [...cmd.slice(1), "debug", "paths"]);
+  const out = await new Promise<string>((resolve, reject) =>
+    execFile(run.file, run.args, { env: env(), timeout: START_TIMEOUT_MS, windowsHide: true, windowsVerbatimArguments: run.verbatim }, (err, stdout) => (err ? reject(err) : resolve(stdout))),
+  );
+  return /^data\s+(.+?)\s*$/m.exec(out)?.[1];
+}
 
 export type OpenCodeServer = ReturnType<typeof createOpenCodeServer>;

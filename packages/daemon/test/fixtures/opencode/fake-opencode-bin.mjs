@@ -26,6 +26,11 @@ if (args.includes("--version")) {
   console.log(process.env.FAKE_OPENCODE_VERSION ?? "1.18.34");
   process.exit(0);
 }
+// `debug paths`: the folders of OpenCode, FAKE_OPENCODE_DATA_DIR the `data` one (none: the line is left out, as a binary that does not print it).
+if (args[0] === "debug" && args[1] === "paths") {
+  console.log(`home        /fake/home\n${process.env.FAKE_OPENCODE_DATA_DIR ? `data        ${process.env.FAKE_OPENCODE_DATA_DIR}\n` : ""}cache       /fake/cache`);
+  process.exit(0);
+}
 if (args[0] !== "serve") (console.error(`fake opencode: unknown command ${args[0]}`), process.exit(2));
 if (process.env.FAKE_OPENCODE_HANG === "1") (log({ type: "start", pid: process.pid, argv: args, hung: true }), setInterval(() => {}, 1e9), await new Promise(() => {}));
 const password = process.env.OPENCODE_SERVER_PASSWORD;
