@@ -1,9 +1,9 @@
 // The OpenCode 2 adapter's catalogue (ADR 0015): creates, lists and restores sessions of the daemon's OpenCode 2 server through `@opencode/client`.
-// Create, list, restore, models, rename, archive, delete and the Aside fork. Agents and slash commands are later slices.
+// Create, list, restore, models, rename, archive, delete, the Aside fork and the daemon's own slash commands. Agents and server slash commands are later slices.
 import { existsSync } from "node:fs";
 import { EFFORTS, type PermissionMode, type SessionListItem } from "@claude-ui/protocol";
 import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type ListCtx, type SavedSession } from "./engine-catalogue.ts";
-import { OPENCODE_MODES } from "./opencode-engine.ts";
+import { LOCAL_COMMANDS, OPENCODE_MODES } from "./opencode-engine.ts";
 import { openCodeWanted } from "./opencode-catalogue.ts";
 import { OpenCodeError, type OpenCodeServer } from "./opencode-server.ts";
 import { createOpenCode2Engine, loadOpenCode2History, modeRules, OPENCODE2_CAPABILITIES } from "./opencode2-engine.ts";
@@ -249,7 +249,8 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
       meta.delete(id);
     },
     forkForAside: (owner, title) => forkForAside(owner, title).catch((err) => Promise.reject(failure(err))),
-    commands: async () => [],
+    // The daemon's own `/compact`, `/undo`, `/redo`; OpenCode 2's server commands are a later slice.
+    commands: async () => LOCAL_COMMANDS,
     agents: async () => [],
     models: (cwd) => engine.modelInfos(cwd),
   };

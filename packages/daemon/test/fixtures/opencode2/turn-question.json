@@ -1,0 +1,15 @@
+[
+ { "event": "session.execution.started", "data": { "sessionID": "$SESSION" } },
+ { "event": "session.step.started", "data": { "sessionID": "$SESSION", "agent": "build", "model": { "id": "m", "providerID": "fake" }, "assistantMessageID": "$A1" } },
+ { "event": "session.tool.input.started", "data": { "sessionID": "$SESSION", "assistantMessageID": "$A1", "id": "$CALL", "name": "question" } },
+ { "event": "session.tool.called", "data": { "sessionID": "$SESSION", "assistantMessageID": "$A1", "id": "$CALL", "executed": false, "input": { "questions": [
+   { "question": "Pick a color?", "header": "Color", "options": [ { "label": "Red", "description": "r" }, { "label": "Blue", "description": "b" } ] },
+   { "question": "Which?", "header": "Pick", "multiple": true, "options": [ { "label": "A", "description": "a" }, { "label": "B", "description": "b" } ] } ] } } },
+ { "form": { "fields": [
+   { "key": "q0", "title": "Color", "description": "Pick a color?", "type": "string", "options": [ { "value": "Red", "label": "Red", "description": "r" }, { "value": "Blue", "label": "Blue", "description": "b" } ], "custom": true },
+   { "key": "q1", "title": "Pick", "description": "Which?", "type": "multiselect", "options": [ { "value": "A", "label": "A", "description": "a" }, { "value": "B", "label": "B", "description": "b" } ], "custom": true } ] } },
+ { "wait": "form" },
+ { "event": "session.tool.success", "data": { "sessionID": "$SESSION", "assistantMessageID": "$A1", "id": "$CALL", "executed": false, "content": [ { "type": "text", "text": "User has answered your questions." } ] } },
+ { "event": "session.step.ended", "data": { "sessionID": "$SESSION", "assistantMessageID": "$A1", "finish": "tool-calls", "tokens": { "input": 10, "output": 5, "reasoning": 0, "cache": { "read": 0, "write": 0 } }, "cost": 0, "files": [] } },
+ { "event": "session.execution.succeeded", "data": { "sessionID": "$SESSION" } }
+]

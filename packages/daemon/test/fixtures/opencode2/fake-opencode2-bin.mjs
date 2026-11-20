@@ -1,9 +1,15 @@
 // A fake OpenCode 2 `opencode` binary (2.3.0 API shape, recorded in development-docs spike and checked against a real 2.3.0): `--version`, `serve`, the session routes of the
 // adapter and scripted turns. `--version` prints `opencode v${FAKE_OPENCODE_VERSION ?? "2.3.0"}`. `serve` checks Basic auth, prints `server listening on http://…`.
 // GET /api/info -> {version, pid, urls}; GET /api/event -> SSE (`server.connected`, the turns' events, `: heartbeat` comments). There is no /global/health: it answers 404.
-// Routes: GET /api/model, /api/model/default, /api/session, /api/session/active, /api/session/:id, /api/session/:id/message, /api/permission/request;
+// Routes: GET /api/model, /api/model/default, /api/session, /api/session/active, /api/session/:id, /api/session/:id/message, /api/session/:id/message/:mid, /api/permission/request;
 // POST /api/session, /api/session/:id/prompt, /api/session/:id/model, /api/session/:id/interrupt, /api/session/:id/permission/:rid/reply, /api/session/:id/fork;
 // PATCH /api/session/:id (permissions, title, archived); DELETE /api/session/:id.
+// Revert (as 2.3.0): POST …/revert/stage {messageID, files?} (stored messages stay listed; `session.revert` marks the cut), POST …/revert/commit, DELETE …/revert
+// (clear: `session.revert.cleared`, then an empty `execution.started`/`succeeded`, as 2.3.0 sends; FAKE_OPENCODE2_CLEAR_ACTIVE_MS: the session active that long meanwhile), a prompt while staged commits first. GET …/diff?from=&to= sums the
+// fake `diff` lists ([{file, additions, deletions}]) of the user messages from `from` up to `to` (excluded; default the next user message).
+// POST …/compact: a compaction turn (`summary` stored; a session without messages fails "Nothing to compact yet"). POST …/shell {id, command}: answers when the
+// command ends (FAKE_OPENCODE2_SHELL_START_MS delays `session.shell.started`); output `out:<command>`, `exit <n>` in the command = that exit code, `sleep` in it runs until DELETE /api/shell/:sh (killed). GET /api/shell/:sh/output.
+// Forms: GET …/form, GET /api/form, POST …/form/:fid/reply {answer}, DELETE …/form/:fid (cancel: the turn ends interrupted, as 2.3.0).
 // FAKE_OPENCODE2_FAIL: see the session route.
 // FAKE_OPENCODE2_DATA: JSON `{sessions: [{id, directory, title, time, permissions?, parentID?}], messages: {<id>: [v2 messages]}, models?, default?}`.
 // FAKE_OPENCODE2_SCRIPT: comma-separated turn files, one per prompt in order (a prompt after the last one gets a plain "pong" turn). A turn is a JSON list of steps:
@@ -11,7 +17,9 @@
 //   {wait: "permission"}  holds the turn until `…/permission/:rid/reply` came; {when: "once"|"always"|"reject"|"allowed"} on a step skips it unless that was the reply (`allowed` = once or always); `$REJECT` is the reply's message
 //   {hold: true}    holds the turn until `…/interrupt`, which then ends it as the user's stop (`step.failed` aborted, `execution.interrupted`)
 //   {sleep: ms}
-// FAKE_OPENCODE2_MODEL_DELAY / _PROMPT_DELAY / _MESSAGE_DELAY: ms the model routes / the prompt route / the message read wait. FAKE_OPENCODE2_SWALLOW_STOP: an interrupt sends no end events. POST /__drop ends the event streams; POST /__forget/<id> drops a session.
+//   {form: {fields, title?, sessionID?}}  asks a question form (of `sessionID`, default the turn's) (`form.created`, metadata kind question, tool `$A1`/`$CALL`); {wait: "form"} holds until it is answered ("replied")
+//     or cancelled ("cancelled": the call fails aborted and the turn ends interrupted); `$ANSWER` is the answer
+// FAKE_OPENCODE2_MODEL_DELAY / _PROMPT_DELAY / _MESSAGE_DELAY: ms the model routes / the prompt route / the message read wait. FAKE_OPENCODE2_SWALLOW_STOP: an interrupt sends no end events. POST /__drop ends the event streams; POST /__forget/<id> drops a session; POST /__stage/<id>/<message id> and /__clear/<id> revert as OpenCode's own app.
 // FAKE_OPENCODE_LOG: JSON lines of `start`, `request` (method, path, authed, body of a write) and `version`.
 import { createServer } from "node:http";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -63,16 +71,22 @@ const failed = {};
 const running = new Map();
 /** Open permission requests by id. */
 const asked = new Map();
+/** Open forms by id: `{form, turn}`. */
+const forms = new Map();
+/** Running shells by id: `{kill()}`. */
+const shells = new Map();
+const shellOut = new Map();
 let nextTurn = 0;
 
 const fill = (v, vars) => (typeof v === "string" ? vars[v] ?? v : Array.isArray(v) ? v.map((x) => fill(x, vars)) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fill(x, vars)])) : v);
 async function runTurn(sid, userId, steps) {
   const dir = sessions.get(sid).directory;
-  const vars = { $SESSION: sid, $USER: userId, $DIR: dir, ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`$A${n}`, id("msg")])), $PERM: id("per") };
+  const vars = { $SESSION: sid, $USER: userId, $DIR: dir, ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`$A${n}`, id("msg")])), $PERM: id("per"), $FORM: id("frm"), $CALL: id("call") };
   let reply;
+  let formDone;
   let interrupt;
   const stop = new Promise((r) => (interrupt = r));
-  const turn = { stopped: false, interrupt: () => ((turn.stopped = true), interrupt()), reply: (decision, message) => ((vars.$REJECT = message ?? "The user rejected this tool call"), reply?.(decision)) };
+  const turn = { stopped: false, interrupt: () => ((turn.stopped = true), interrupt()), reply: (decision, message) => ((vars.$REJECT = message ?? "The user rejected this tool call"), reply?.(decision)), form: (r) => formDone?.(r) };
   running.set(sid, turn);
   const sleep = (ms) => Promise.race([new Promise((r) => setTimeout(r, ms)), stop]);
   let last;
@@ -86,6 +100,23 @@ async function runTurn(sid, userId, steps) {
       if (turn.stopped) break;
       emit("permission.replied", { sessionID: sid, requestID: vars.$PERM, reply: last }, dir);
       asked.delete(vars.$PERM);
+    } else if (step.form) {
+      const form = { id: vars.$FORM, sessionID: step.form.sessionID ?? sid, title: step.form.title ?? "Questions", metadata: { kind: "question", tool: { messageID: vars.$A1, id: vars.$CALL } }, fields: step.form.fields };
+      forms.set(form.id, { form, turn });
+      emit("form.created", { form }, dir);
+    } else if (step.wait === "form") {
+      const r = await Promise.race([new Promise((x) => (formDone = x)), stop]);
+      if (turn.stopped) break;
+      forms.delete(vars.$FORM);
+      last = r.cancel ? "cancelled" : "replied";
+      vars.$ANSWER = r.answer;
+      if (r.cancel) {
+        emit("form.cancelled", { id: vars.$FORM, sessionID: sid }, dir);
+        emit("session.tool.failed", { sessionID: sid, assistantMessageID: vars.$A1, id: vars.$CALL, error: { type: "aborted", message: "The user dismissed this question" } }, dir);
+        emit("session.execution.interrupted", { sessionID: sid, reason: "shutdown" });
+        break;
+      }
+      emit("form.replied", { id: vars.$FORM, sessionID: sid, answer: r.answer }, dir);
     } else if (step.event) {
       const d = fill(step.data, vars);
       if (step.event === "permission.asked") asked.set(d.id, { sessionID: sid, ...d, turn });
@@ -98,6 +129,7 @@ async function runTurn(sid, userId, steps) {
 
 /** The prompt is stored, its turn starts (registered at once, so an interrupt after the answer finds it) and the request is answered. */
 function takePrompt(s, body, res) {
+  if (s.revert) commitRevert(s);
   const userId = body.id ?? id("msg");
   const user = { id: userId, time: { created: Date.now() }, text: body.text, ...(body.files && { files: body.files.map((f) => ({ data: f.uri.split(",")[1], mime: /^data:([^;,]+)/.exec(f.uri)?.[1], source: f.source, name: f.name })) }), type: "user" };
   messages.get(s.id).push(user);
@@ -107,6 +139,81 @@ function takePrompt(s, body, res) {
   emit("session.inbox.enqueued", { inboxID: userId, sessionID: s.id, item: { type: "user", payload: { text: body.text }, delivery: "steer" } }, s.directory);
   void runTurn(s.id, userId, steps);
   json(res, 200, { data: { id: userId, sessionID: s.id, time: user.time, type: "user", payload: { text: body.text } } });
+}
+
+/** The empty execution 2.3.0 runs after a revert clear. FAKE_OPENCODE2_CLEAR_ACTIVE_MS: it runs that long, the session listed as active meanwhile. */
+function clearExecution(s) {
+  emit("session.execution.started", { sessionID: s.id });
+  const ms = Number(process.env.FAKE_OPENCODE2_CLEAR_ACTIVE_MS ?? 0);
+  if (!ms) return emit("session.execution.succeeded", { sessionID: s.id });
+  const t = { interrupt() {}, reply() {}, form() {} };
+  running.set(s.id, t);
+  setTimeout(() => (running.get(s.id) === t && running.delete(s.id), emit("session.execution.succeeded", { sessionID: s.id })), ms);
+}
+/** Drops the messages from the revert point on (`session.revert.committed`). */
+function commitRevert(s) {
+  const list = messages.get(s.id) ?? [];
+  const at = list.findIndex((x) => x.id === s.revert.messageID);
+  if (at >= 0) list.splice(at);
+  emit("session.revert.committed", { sessionID: s.id, to: s.revert.messageID }, s.directory);
+  delete s.revert;
+}
+/** The fake `diff` lists of the user messages from `from` to `to` (excluded; default: the next user message), summed per file. */
+function diffOf(s, from, to) {
+  const list = messages.get(s.id) ?? [];
+  const start = list.findIndex((x) => x.id === from);
+  if (start < 0) return undefined;
+  const users = list.filter((x) => x.type === "user");
+  const end = to ? list.findIndex((x) => x.id === to) : list.findIndex((x, i) => i > start && x.type === "user");
+  const out = new Map();
+  for (const u of users) {
+    const i = list.indexOf(u);
+    if (i < start || (end >= 0 && i >= end)) continue;
+    for (const d of u.diff ?? []) {
+      const o = out.get(d.file) ?? { file: d.file, patch: "", additions: 0, deletions: 0, status: "modified" };
+      out.set(d.file, { ...o, additions: o.additions + d.additions, deletions: o.deletions + d.deletions });
+    }
+  }
+  return [...out.values()];
+}
+function compact(s, body, res) {
+  const inputID = body?.id ?? id("msg");
+  const list = messages.get(s.id);
+  emit("session.inbox.enqueued", { inboxID: inputID, sessionID: s.id, item: { type: "compaction", payload: {}, delivery: "steer" } }, s.directory);
+  json(res, 200, { data: { id: inputID, sessionID: s.id, time: { created: Date.now() }, type: "compaction", payload: {}, delivery: "steer" } });
+  setTimeout(() => {
+    emit("session.execution.started", { sessionID: s.id });
+    emit("session.compaction.started", { sessionID: s.id, reason: "manual", inputID }, s.directory);
+    if (!list.length) emit("session.compaction.failed", { sessionID: s.id, reason: "manual", inputID, error: { type: "compaction.unavailable", message: "Nothing to compact yet" } }, s.directory);
+    else {
+      const summary = "## Objective\n- the fake summary";
+      list.push({ type: "compaction", id: inputID, time: { created: Date.now() }, status: "completed", reason: "manual", summary });
+      emit("session.compaction.ended", { sessionID: s.id, reason: "manual", model: { id: "m", providerID: "fake" }, text: summary, tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0 }, s.directory);
+    }
+    emit("session.execution.succeeded", { sessionID: s.id });
+  }, 30);
+}
+function shell(s, body, res) {
+  const sh = id("sh");
+  const msg = { id: body.id ?? id("msg"), metadata: { background: true }, time: { created: Date.now() }, type: "shell", shellID: sh, command: body.command, status: "running" };
+  messages.get(s.id).push(msg);
+  const info = (status, extra = {}) => ({ id: sh, status, command: body.command, cwd: s.directory, shell: "/bin/sh", ...extra });
+  // FAKE_OPENCODE2_SHELL_START_MS: ms before OpenCode names the shell (`session.shell.started`).
+  const started = () => (emit("shell.created", { info: info("running") }, s.directory), emit("session.shell.started", { sessionID: s.id, shell: info("running") }, s.directory));
+  const delay = Number(process.env.FAKE_OPENCODE2_SHELL_START_MS ?? 0);
+  if (delay) setTimeout(started, delay);
+  else started();
+  shellOut.set(sh, `out:${body.command}\n`);
+  const end = (status, exit) => {
+    shells.delete(sh);
+    Object.assign(msg, { status, ...(exit !== undefined && { exit }), time: { ...msg.time, completed: Date.now() }, output: { output: shellOut.get(sh), cursor: 0, size: 0, truncated: false } });
+    emit("shell.exited", { id: sh, status, ...(exit !== undefined && { exit }) }, s.directory);
+    emit("session.shell.ended", { sessionID: s.id, shell: info(status, exit !== undefined ? { exit } : {}) }, s.directory);
+    res.writeHead(204);
+    res.end();
+  };
+  if (/sleep/.test(body.command)) return shells.set(sh, { kill: () => (shellOut.set(sh, "Shell command output is no longer available."), end("killed")) });
+  setTimeout(() => end("exited", Number(/exit (\d+)/.exec(body.command)?.[1] ?? 0)), 50);
 }
 
 const server = createServer((req, res) => {
@@ -120,6 +227,21 @@ const server = createServer((req, res) => {
     if (url.pathname === "/__drop") return (clients.forEach((c) => c.end()), json(res, 200, {}));
     // POST /__forget/<session id>: the session is gone, as if deleted in OpenCode's own app (a test seam like /__drop).
     if (url.pathname.startsWith("/__forget/")) return (sessions.delete(url.pathname.slice(10)), json(res, 200, {}));
+    // POST /__stage/<session id>/<message id>, POST /__clear/<session id>: a revert staged or cleared in OpenCode's own app (test seams like /__drop).
+    if (url.pathname.startsWith("/__stage/")) {
+      const [sid, mid] = url.pathname.slice(9).split("/");
+      const s = sessions.get(sid);
+      s.revert = { messageID: mid, files: [] };
+      emit("session.revert.staged", { sessionID: sid, revert: s.revert }, s.directory);
+      return json(res, 200, {});
+    }
+    if (url.pathname.startsWith("/__clear/")) {
+      const s = sessions.get(url.pathname.slice(9));
+      delete s.revert;
+      emit("session.revert.cleared", { sessionID: s.id }, s.directory);
+      clearExecution(s);
+      return json(res, 200, {});
+    }
     log({ type: "request", method: req.method, path: url.pathname, authed, ...(body !== undefined && { body }) });
     if (!authed) return json(res, 401, { error: "unauthorized" });
     const p = url.pathname;
@@ -138,6 +260,11 @@ const server = createServer((req, res) => {
     if (p === "/api/model") return later(() => json(res, 200, { location: { directory: dir }, data: models }));
     if (p === "/api/model/default") return later(() => json(res, 200, { location: { directory: dir }, data: defaultModel }));
 
+    if (p === "/api/form") return json(res, 200, { location: { directory: dir }, data: [...forms.values()].map((f) => f.form).filter((f) => sessions.get(f.sessionID)?.directory === dir || !dir) });
+    if ((m = /^\/api\/shell\/([^/]+)(\/output)?$/.exec(p))) {
+      if (m[2]) return shellOut.has(m[1]) ? json(res, 200, { location: { directory: dir }, data: { output: shellOut.get(m[1]), cursor: 0, size: 0, truncated: false } }) : json(res, 404, { message: "shell not found" });
+      if (req.method === "DELETE") return (shells.get(m[1])?.kill(), res.writeHead(204), res.end());
+    }
     if (p === "/api/permission/request") return json(res, 200, { location: { directory: dir }, data: [...asked.values()].filter((a) => sessions.get(a.sessionID)?.directory === dir || !dir).map(({ turn, ...a }) => a) });
     if (p === "/api/session/active" && req.method === "GET") return json(res, 200, { data: Object.fromEntries([...running.keys()].map((k) => [k, { type: "running" }])) });
     if (p === "/api/session" && req.method === "POST") {
@@ -186,6 +313,39 @@ const server = createServer((req, res) => {
         return json(res, 200, { data: f });
       }
       if (sub === "model") return (s.model = body.model, res.writeHead(204), res.end());
+      if (sub === "revert/stage") {
+        const list = messages.get(s.id) ?? [];
+        if (!list.some((x) => x.id === body.messageID)) return json(res, 404, { _tag: "MessageNotFoundError", message: `Message not found: ${body.messageID}` });
+        s.revert = { messageID: body.messageID, files: body.files === false ? [] : (diffOf(s, body.messageID, "none") ?? []) };
+        emit("session.revert.staged", { sessionID: s.id, revert: s.revert }, s.directory);
+        return json(res, 200, { data: s.revert });
+      }
+      if (sub === "revert/commit") return (s.revert && commitRevert(s), res.writeHead(204), res.end());
+      if (sub === "revert" && req.method === "DELETE") {
+        delete s.revert;
+        emit("session.revert.cleared", { sessionID: s.id }, s.directory);
+        clearExecution(s);
+        return (res.writeHead(204), res.end());
+      }
+      if (sub === "diff") {
+        const d = diffOf(s, url.searchParams.get("from"), url.searchParams.get("to") ?? undefined);
+        return d ? json(res, 200, { data: d }) : json(res, 404, { _tag: "MessageNotFoundError", message: "Message not found" });
+      }
+      if (sub === "compact") return compact(s, body, res);
+      if (sub === "shell") return shell(s, body, res);
+      if (sub === "form") return json(res, 200, { data: [...forms.values()].map((f) => f.form).filter((f) => f.sessionID === s.id) });
+      const fm = /^form\/([^/]+)(\/reply)?$/.exec(sub ?? "");
+      if (fm) {
+        const f = forms.get(fm[1]);
+        if (!f) return json(res, 404, { message: `Form not found: ${fm[1]}` });
+        f.turn.form(fm[2] ? { answer: body.answer } : { cancel: true });
+        return (res.writeHead(204), res.end());
+      }
+      const mm = /^message\/([^/]+)$/.exec(sub ?? "");
+      if (mm) {
+        const one = (messages.get(s.id) ?? []).find((x) => x.id === mm[1]);
+        return one ? json(res, 200, { data: one }) : json(res, 404, { _tag: "MessageNotFoundError", message: `Message not found: ${mm[1]}` });
+      }
       if (sub === "message") {
         let list = messages.get(s.id) ?? [];
         const limit = Number(url.searchParams.get("limit") ?? 100);

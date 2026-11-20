@@ -1,0 +1,8 @@
+[
+ { "event": "session.execution.started", "data": { "sessionID": "$SESSION" } },
+ { "event": "session.step.started", "data": { "sessionID": "$SESSION", "agent": "build", "model": { "id": "m", "providerID": "fake" }, "assistantMessageID": "$A1" } },
+ { "form": { "sessionID": "ses_child", "fields": [ { "key": "q0", "title": "Color", "description": "Pick a color?", "type": "string", "options": [ { "value": "Red", "label": "Red", "description": "r" } ], "custom": true } ] } },
+ { "wait": "form" },
+ { "event": "session.step.ended", "data": { "sessionID": "$SESSION", "assistantMessageID": "$A1", "finish": "stop", "tokens": { "input": 1, "output": 1, "reasoning": 0, "cache": { "read": 0, "write": 0 } }, "cost": 0, "files": [] } },
+ { "event": "session.execution.succeeded", "data": { "sessionID": "$SESSION" } }
+]

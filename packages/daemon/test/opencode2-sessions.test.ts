@@ -118,6 +118,19 @@ async function boot(o: { script?: string[]; data?: object; env?: Record<string, 
   return { root, project, other, recorded, http, ws, inbox, request, ok, log, requests, fake, open, view, appSettings };
 }
 
+const done = { time: { created: 2, completed: 3 } };
+const msg = (id: string, type: "user" | "assistant", extra: object = {}) => ({ id, type, time: { created: 1 }, ...(type === "user" ? { text: "q" } : { agent: "build", model: { id: "m", providerID: "fake" }, content: [{ type: "text", text: "a" }] }), ...extra });
+/** A daemon whose OpenCode 2 holds `ses_own` (in the project) with `messages`, listed once. */
+async function owned(messages: object[], extra: object = {}, o: Parameters<typeof boot>[0] = {}) {
+  const d = await boot(o);
+  writeFileSync(join(d.root, "data.json"), JSON.stringify({ sessions: [row("ses_own", d.project, "Owner", 5000, extra)], messages: { ses_own: messages } }));
+  await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+  await d.ok({ type: "session.list" });
+  await until(() => d.log().some((l) => l.type === "start"));
+  for (let i = 0; i < 80 && !(await d.ok({ type: "session.list" })).sessions.some((x: any) => x.id === "ses_own"); i++) await sleep(50);
+  return d;
+}
+
 describe("OpenCode 2 sessions", { timeout: TEST_MS }, () => {
   it("session.create makes a session on the version 2 server through its /api routes, with the rules of its mode, and tags it with the version 2 capabilities", async () => {
     const d = await boot();
@@ -393,7 +406,7 @@ describe("OpenCode 2 sessions: list and restore", { timeout: TEST_MS }, () => {
     const s = d.view("ses_one");
     await until(() => !!s.find("assistant_text"));
     // The history is read at the open and again once the stream connected; a re-emit of a part id replaces it.
-    const kinds = [...new Set(s.parts().filter((p) => p.type !== "session_state" && p.type !== "context_usage").map((p) => `${p.type}:${p.id}`))];
+    const kinds = [...new Set(s.parts().filter((p) => p.type !== "session_state" && p.type !== "context_usage" && p.type !== "commands").map((p) => `${p.type}:${p.id}`))];
     expect(kinds).toEqual(["user_text:msg_u1", "thinking:msg_a1:reasoning:0", "tool_call:call_9", "tool_result:call_9:result", "tool_call:call_10", "tool_result:call_10:result", "assistant_text:msg_a1:text:0"]);
     expect(s.last("call_9")).toMatchObject({ tool: "Bash", status: "done", exitCode: 0, input: { command: "ls" } });
     expect(s.last("call_10")).toMatchObject({ status: "denied" });
@@ -418,6 +431,22 @@ describe("OpenCode 2 sessions: list and restore", { timeout: TEST_MS }, () => {
     await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
     expect(d.requests("POST", `/api/session/ses_child/permission/${req.requestId}/reply`)[0]!.body).toEqual({ decision: "once" });
     expect(d.requests("POST", new RegExp(`/api/session/ses_one/permission/`))).toEqual([]);
+  });
+
+  it("a question of a subagent's session shows in the session and is answered under the subagent's id", async () => {
+    const d = await bootWith({ script: ["child-question"] });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    await until(() => d.log().some((l) => l.type === "start"));
+    await d.ok({ type: "session.subscribe", sessionId: "ses_one", sinceSeq: 0 });
+    const s = d.view("ses_one");
+    await until(() => !!s.find("assistant_text"));
+    await s.prompt("run the subagent");
+    await until(() => !!s.find("question"));
+    const q = s.find("question")!;
+    await d.ok({ type: "question.respond", requestId: q.requestId, answers: { "Pick a color?": "Red" } });
+    await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
+    expect(d.requests("POST", `/api/session/ses_child/form/${q.requestId}/reply`)[0]!.body).toEqual({ answer: { q0: "Red" } });
   });
 
   it("an event stream that drops is read again from OpenCode: nothing shows twice and the session works afterwards", async () => {
@@ -545,18 +574,6 @@ describe("OpenCode 2 sessions: adapter record and version mismatch", { timeout: 
 });
 
 describe("OpenCode 2 sessions: rename, archive, delete and Aside", { timeout: TEST_MS }, () => {
-  const done = { time: { created: 2, completed: 3 } };
-  const msg = (id: string, type: "user" | "assistant", extra: object = {}) => ({ id, type, time: { created: 1 }, ...(type === "user" ? { text: "q" } : { agent: "build", model: { id: "m", providerID: "fake" }, content: [{ type: "text", text: "a" }] }), ...extra });
-  /** A daemon whose OpenCode 2 holds `ses_own` (in the project) with `messages`, listed once. */
-  async function owned(messages: object[], extra: object = {}, o: Parameters<typeof boot>[0] = {}) {
-    const d = await boot(o);
-    writeFileSync(join(d.root, "data.json"), JSON.stringify({ sessions: [row("ses_own", d.project, "Owner", 5000, extra)], messages: { ses_own: messages } }));
-    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
-    await d.ok({ type: "session.list" });
-    await until(() => d.log().some((l) => l.type === "start"));
-    for (let i = 0; i < 80 && !(await d.ok({ type: "session.list" })).sessions.some((x: any) => x.id === "ses_own"); i++) await sleep(50);
-    return d;
-  }
   const link = (d: Awaited<ReturnType<typeof boot>>, id: string) => JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8"))[id];
 
   it("rename, archive, unarchive and delete go to OpenCode 2; the list shows them and the delete drops the adapter record", async () => {
@@ -672,5 +689,189 @@ describe("OpenCode 2 sessions: owner of a subagent's session", () => {
     expect(await engine.ownerOf("ses_grand")).toBeUndefined();
     recover();
     expect(await engine.ownerOf("ses_grand")).toBe("ses_root");
+  });
+});
+
+describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and questions", { timeout: TEST_MS }, () => {
+  /** Three turns; the first two changed files (the fake's `diff` of a user message: what its turn changed). */
+  const history = [
+    msg("msg_u1", "user", { text: "one", diff: [{ file: "g1.txt", additions: 1, deletions: 0 }] }),
+    msg("msg_a1", "assistant", done),
+    msg("msg_u2", "user", { text: "two", diff: [{ file: "g2.txt", additions: 2, deletions: 1 }] }),
+    msg("msg_a2", "assistant", done),
+    msg("msg_u3", "user", { text: "three" }),
+    msg("msg_a3", "assistant", done),
+  ];
+  async function opened(extra: object = {}, o: Parameters<typeof boot>[0] = {}) {
+    const d = await owned(history, extra, o);
+    await d.ok({ type: "session.subscribe", sessionId: "ses_own", sinceSeq: 0 });
+    const s = d.view("ses_own");
+    await until(() => !!s.last("msg_u1"));
+    return { d, s };
+  }
+  /** The user messages shown (a resync re-emits a part under its id). */
+  const shown = (s: ReturnType<Awaited<ReturnType<typeof boot>>["view"]>) => [...new Set(s.parts().filter((p) => p.type === "user_text").map((p) => p.id))];
+  const stages = (d: Awaited<ReturnType<typeof boot>>) => d.requests("POST", "/api/session/ses_own/revert/stage").map((r) => r.body);
+
+  it("rewind previews the files changed from that message on, offers code and conversation or the conversation only, stages OpenCode's revert and cuts the timeline; a stored cut stays cut", async () => {
+    const { d, s } = await opened();
+    expect(await d.ok({ type: "session.rewindPreview", sessionId: "ses_own", userMessageId: "msg_u2" })).toEqual({ filesChanged: ["g2.txt"], insertions: 2, deletions: 1, conversation: true, modes: ["both", "conversation"] });
+    expect((await d.ok({ type: "session.rewindPreview", sessionId: "ses_own", userMessageId: "msg_u3" })).modes).toEqual(["conversation"]);
+    await d.ok({ type: "session.rewind", sessionId: "ses_own", userMessageId: "msg_u2", mode: "both" });
+    await d.ok({ type: "session.rewind", sessionId: "ses_own", userMessageId: "msg_u1", mode: "conversation" });
+    expect(stages(d)).toEqual([{ messageID: "msg_u2", files: true }, { messageID: "msg_u1", files: false }]);
+    // One rewind part per rewind: OpenCode's own `revert.staged` of it adds none.
+    await sleep(300);
+    expect(s.parts().filter((p) => p.type === "rewind").map((p) => (p as { userMessageId: string }).userMessageId)).toEqual(["msg_u2", "msg_u1"]);
+    // A session stored with a cut opens without the messages from it on, and its preview counts only what is shown.
+    const r = await opened({ revert: { messageID: "msg_u2" } });
+    await sleep(300);
+    expect(shown(r.s)).toEqual(["msg_u1"]);
+    expect(await r.d.ok({ type: "session.rewindPreview", sessionId: "ses_own", userMessageId: "msg_u1" })).toMatchObject({ filesChanged: ["g1.txt"], insertions: 1 });
+  });
+
+  it("/undo takes back the last prompt as a draft, /redo brings the messages back one prompt at a time; the clear's empty execution is no turn; the slash menu lists them", async () => {
+    // OpenCode lists the session as active during the clear's empty execution.
+    const { d, s } = await opened({}, { env: { FAKE_OPENCODE2_CLEAR_ACTIVE_MS: "300" } });
+    const names = (await d.ok({ type: "session.commands", cwd: d.project, engine: "opencode" })).commands.map((c: { name: string }) => c.name);
+    expect(names).toEqual(expect.arrayContaining(["compact", "undo", "redo"]));
+    // An open session's slash menu reads its `commands` part.
+    expect(s.find("commands")?.commands.map((c) => c.name)).toEqual(expect.arrayContaining(["compact", "undo", "redo"]));
+    expect(await s.prompt("/undo")).toMatchObject({ local: true, draft: { text: "three", images: [] } });
+    expect(await s.prompt("/undo")).toMatchObject({ local: true, draft: { text: "two" } });
+    expect(stages(d)).toEqual([{ messageID: "msg_u3", files: false }, { messageID: "msg_u2", files: true }]);
+    await s.prompt("/redo");
+    // The revert point moves to the next undone prompt; the messages between come back.
+    expect(stages(d).at(-1)).toEqual({ messageID: "msg_u3", files: true });
+    const before = s.parts().length;
+    await s.prompt("/redo");
+    await until(() => d.requests("DELETE", "/api/session/ses_own/revert").length === 1);
+    await until(() => s.parts().slice(before).some((p) => p.id === "msg_u3"));
+    await sleep(300);
+    // OpenCode 2.3.0 follows a clear with an empty execution: no turn, the session stays idle.
+    expect(s.parts().some((p) => p.type === "turn_result")).toBe(false);
+    expect(s.states().slice(-1)).toEqual(["idle"]);
+    expect(s.states()).not.toContain("running");
+    await s.prompt("/redo");
+    await until(() => s.parts().some((p) => p.type === "notice" && /Nothing to redo/.test((p as { text: string }).text)));
+    expect(s.parts().filter((p) => p.type === "user_text" && /^\/(undo|redo)/.test((p as { text: string }).text))).toEqual([]);
+  });
+
+  it("a prompt sent here is not sent again by a reconnect; undone and redone, it comes back with its user message", async () => {
+    const { d, s } = await opened();
+    const id: string = (await s.prompt("four")).messageId ?? lastOf(s.parts(), (p) => p.type === "user_text" && (p as { text: string }).text === "four")!.id;
+    await until(() => s.parts().some((p) => p.type === "turn_result"));
+    // A reconnect's read does not send it again (a listener, e.g. a brief, would take it as a new message).
+    const reads = d.requests("GET", "/api/form").length;
+    const mark = s.parts().length;
+    await d.fake("/__drop");
+    await until(() => d.requests("GET", "/api/form").length > reads);
+    await sleep(300);
+    expect(s.parts().slice(mark).some((p) => p.id === id)).toBe(false);
+    await s.prompt("/undo");
+    expect(lastOf(stages(d), () => true)).toMatchObject({ messageID: id });
+    const before = s.parts().length;
+    await s.prompt("/redo");
+    await until(() => d.requests("DELETE", "/api/session/ses_own/revert").length === 1);
+    await until(() => s.parts().slice(before).some((p) => p.id === id && p.type === "user_text"));
+  });
+
+  it("a revert staged, moved or cleared in OpenCode's own app cuts the timeline or brings the messages back", async () => {
+    const { d, s } = await opened({}, { env: { FAKE_OPENCODE2_CLEAR_ACTIVE_MS: "300" } });
+    await d.fake("/__stage/ses_own/msg_u2");
+    await until(() => s.find("rewind")?.userMessageId === "msg_u2");
+    // Moved to a later message: the messages between come back.
+    let before = s.parts().length;
+    await d.fake("/__stage/ses_own/msg_u3");
+    await until(() => s.find("rewind")?.userMessageId === "msg_u3");
+    await until(() => s.parts().slice(before).some((p) => p.id === "msg_u2"));
+    before = s.parts().length;
+    await d.fake("/__clear/ses_own");
+    await until(() => s.parts().slice(before).some((p) => p.id === "msg_u3"));
+    await sleep(500);
+    expect(s.parts().some((p) => p.type === "turn_result")).toBe(false);
+    expect(s.states()).not.toContain("running");
+  });
+
+  it("/compact runs OpenCode's compaction as a turn: a compaction part with the summary, then the turn result; nothing to compact shows OpenCode's reason", async () => {
+    const { d, s } = await opened();
+    expect(await s.prompt("/compact")).toMatchObject({ local: true });
+    await until(() => s.parts().some((p) => p.type === "turn_result"));
+    expect(d.requests("POST", "/api/session/ses_own/compact")).toHaveLength(1);
+    expect(s.find("compaction")).toMatchObject({ trigger: "manual", summary: expect.stringContaining("the fake summary") });
+    expect(s.states()).toContain("running");
+    expect(s.states().at(-1)).toBe("idle");
+    const e = await d.open();
+    await e.prompt("/compact");
+    await until(() => e.parts().some((p) => p.type === "notice" && /Nothing to compact yet/.test((p as { text: string }).text)));
+  });
+
+  it("bash mode runs the command in OpenCode without a model turn: a bash part with its output and exit code, the session recorded first; Stop kills a running command; Run in background frees the session", async () => {
+    const { d, s } = await opened();
+    expect(d.recorded()).toEqual({});
+    await d.ok({ type: "session.bash", sessionId: "ses_own", command: "ls; exit 2" });
+    await until(() => s.find("bash")?.status === "error");
+    expect(s.find("bash")).toMatchObject({ command: "ls; exit 2", stdout: "out:ls; exit 2\n", exitCode: 2 });
+    expect(d.requests("POST", "/api/session/ses_own/shell")[0]!.body).toMatchObject({ command: "ls; exit 2" });
+    expect(d.recorded()).toEqual({ ses_own: 2 });
+    await until(() => s.states().at(-1) === "idle");
+    expect(s.parts().some((p) => p.type === "turn_result")).toBe(false);
+    await d.ok({ type: "session.bash", sessionId: "ses_own", command: "sleep 30" });
+    await until(() => s.find("bash", (p) => p.command === "sleep 30")?.status === "running");
+    // A reconnect's read finds no OpenCode turn: the command still runs as this session's turn.
+    const reads = d.requests("GET", "/api/form").length;
+    await d.fake("/__drop");
+    await until(() => d.requests("GET", "/api/form").length > reads);
+    await sleep(300);
+    expect(s.states().at(-1)).toBe("running");
+    await d.ok({ type: "session.interrupt", sessionId: "ses_own" });
+    await until(() => s.find("bash", (p) => p.command === "sleep 30")?.status === "stopped");
+    expect(d.requests("DELETE", /^\/api\/shell\/sh_/)).toHaveLength(1);
+    await until(() => s.states().at(-1) === "idle");
+    expect(s.parts().some((p) => p.type === "turn_interrupted" || p.type === "turn_result")).toBe(false);
+    // Run in background: the session is free at once, OpenCode runs the command on.
+    await d.ok({ type: "session.bash", sessionId: "ses_own", command: "sleep 31" });
+    await until(() => s.find("bash", (p) => p.command === "sleep 31")?.status === "running");
+    await d.ok({ type: "session.backgroundShell", sessionId: "ses_own", toolUseId: s.find("bash", (p) => p.command === "sleep 31")!.id });
+    await until(() => s.states().at(-1) === "idle");
+    expect(s.find("bash", (p) => p.command === "sleep 31")).toMatchObject({ status: "running", shell: "background" });
+    expect(d.requests("DELETE", /^\/api\/shell\/sh_/)).toHaveLength(1);
+  });
+
+  it("Stop before OpenCode named the shell kills the command once it is named", async () => {
+    const { d, s } = await opened({}, { env: { FAKE_OPENCODE2_SHELL_START_MS: "400" } });
+    await d.ok({ type: "session.bash", sessionId: "ses_own", command: "sleep 30" });
+    await d.ok({ type: "session.interrupt", sessionId: "ses_own" });
+    await until(() => s.find("bash", (p) => p.command === "sleep 30")?.status === "stopped");
+    expect(d.requests("DELETE", /^\/api\/shell\/sh_/)).toHaveLength(1);
+    await until(() => s.states().at(-1) === "idle");
+  });
+
+  it("a question shows as a question part under its call; the answer goes back by field, a multi-select as a list; it survives a stream reconnect; Stop cancels it", async () => {
+    const d = await boot({ script: ["question", "question"] });
+    const s = await d.open();
+    await s.prompt("ask");
+    await until(() => !!s.find("question"));
+    const q = s.find("question")!;
+    expect(q.questions).toEqual([
+      { question: "Pick a color?", header: "Color", options: [{ label: "Red", description: "r" }, { label: "Blue", description: "b" }], multiSelect: false },
+      { question: "Which?", header: "Pick", options: [{ label: "A", description: "a" }, { label: "B", description: "b" }], multiSelect: true },
+    ]);
+    expect(q.toolUseId).toBe(s.find("tool_call")!.toolUseId);
+    // A reconnect reads the session again: the question OpenCode still waits for stays open.
+    await d.fake("/__drop");
+    await until(() => d.requests("GET", "/api/form").length > 0);
+    await sleep(300);
+    expect(s.find("question")!.settled).toBe(false);
+    await d.ok({ type: "question.respond", requestId: q.requestId, answers: { "Pick a color?": "Blue", "Which?": "A, B" } });
+    await until(() => s.parts().some((p) => p.type === "turn_result"));
+    expect(d.requests("POST", new RegExp(`/form/${q.requestId}/reply$`))[0]!.body).toEqual({ answer: { q0: "Blue", q1: ["A", "B"] } });
+    expect(s.find("question")!.settled).toBe(true);
+    await s.prompt("ask again");
+    await until(() => s.find("question", (p) => p.requestId !== q.requestId) !== undefined);
+    const q2 = s.find("question", (p) => p.requestId !== q.requestId)!;
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => d.requests("DELETE", new RegExp(`/form/${q2.requestId}$`)).length === 1);
+    await until(() => s.states().at(-1) === "idle");
   });
 });
