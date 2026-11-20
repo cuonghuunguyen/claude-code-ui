@@ -51,7 +51,7 @@ Thẻ nằm dưới lần gọi tool. Thẻ hiển thị trạng thái, nội du
 
 - Tool: mặc định `Read`, `Grep`, `Glob`. `Bash`, `Write`, `Edit` và các MCP server của phiên (ví dụ Playwright) chỉ khi agent cấp.
 - Quyền: chế độ và quy tắc của phiên áp dụng cho mọi lần gọi tool. Tác vụ không bao giờ có nhiều quyền hơn phiên.
-- Không hook, không CLAUDE.md, không memory, không skill. Hook PreToolUse và các hook khác của phiên cha không chạy bên trong tác vụ inline. Tác vụ không khởi động agent khác, và không có tool của claude-ui hay orchestration.
+- Không CLAUDE.md, không memory, không skill. Hook PreToolUse của phiên (ví dụ hook từ chối Bash) cũng chạy bên trong tác vụ inline; các hook khác và hook của plugin thì không. Tác vụ không khởi động agent khác, và không có tool của claude-ui hay orchestration.
 - Tài khoản: giống phiên (gói đăng ký hoặc API key). Không có key riêng.
 
 ## Giới hạn {#limits}
