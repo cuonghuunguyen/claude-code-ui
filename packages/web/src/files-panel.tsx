@@ -278,7 +278,7 @@ export function FilesPanel({
     <nav
           className="flex min-h-0 flex-1 flex-col overflow-auto py-1 font-mono text-xs"
           id="file-tree"
-          data-testid="file-tree"
+          data-testid="file-tree" data-part="file-tree"
           aria-label={tr("files.panel.tree")}
         >
           <FileTree
@@ -318,7 +318,7 @@ export function FilesPanel({
   );
 
   return (
-    <div ref={rootRef} className="@container flex min-h-0 flex-1 flex-col" data-testid="files-panel" data-layout={wide ? "beside" : "drawer"}>
+    <div ref={rootRef} className="@container flex min-h-0 flex-1 flex-col" data-testid="files-panel" data-part="files-panel" data-layout={wide ? "beside" : "drawer"}>
       <div className="flex items-center gap-1 border-b px-2 py-1 text-xs">
         <Button
           ref={filesButton}

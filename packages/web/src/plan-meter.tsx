@@ -118,7 +118,7 @@ export function PlanPopup({ usage, side, switcher }: { usage: PlanUsage; side: "
           {usage.windows.map((w) => {
             const l = windowLevel(w);
             return (
-              <li key={`${w.kind}:${w.label}`} data-testid="plan-window" data-level={l} className="flex flex-col gap-1 text-xs">
+              <li key={`${w.kind}:${w.label}`} data-testid="plan-window" data-part="plan-window" data-level={l} className="flex flex-col gap-1 text-xs">
                 <div className="flex items-center gap-2">
                   <span className="min-w-0 flex-1 truncate">{w.label}</span>
                   {/* The server can grade a low percent as warning: not color only. */}

@@ -51,7 +51,7 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
   const card = (selected: boolean) =>
     `flex cursor-pointer items-start gap-3 rounded-md border bg-muted py-2 pr-2 pl-2.5 hover:bg-card ${selected ? "ring-2 ring-foreground" : ""}`;
   return (
-    <form onSubmit={submit} className={`${DOCK} max-h-[60dvh]`} data-testid="question-panel" aria-label={t("session.question.label")}>
+    <form onSubmit={submit} className={`${DOCK} max-h-[60dvh]`} data-testid="question-panel" data-part="question-panel" aria-label={t("session.question.label")}>
       {/* The scroller is a div: a fieldset does not scroll reliably everywhere. The tray below stays in view. */}
       <div className="min-h-0 overflow-y-auto overscroll-contain">
       <VisualizeAnswerContext value={fillOther}>

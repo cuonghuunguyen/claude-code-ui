@@ -364,7 +364,7 @@ export function PromptToolbar(props: {
   }));
   return (
     // Phone (below sm): one row, attach, settings chip, agents, then the context ring and send on the right (GH-166).
-    <div className="@container flex items-end gap-1 px-2 py-2 pointer-coarse:gap-2 pointer-coarse:py-1" data-testid="prompt-toolbar">
+    <div className="@container flex items-end gap-1 px-2 py-2 pointer-coarse:gap-2 pointer-coarse:py-1" data-testid="prompt-toolbar" data-part="prompt-toolbar">
       {/* flex-wrap: on a narrow screen a chooser moves to the next row at its full width; nothing shrinks away the model name. */}
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 pointer-coarse:gap-2 max-sm:flex-nowrap">
         <button
@@ -504,6 +504,7 @@ function SendButton({ steering = true, state, hasInput, onSend, onQueue, sendMod
       title={hint ? undefined : label + key}
       data-state={state}
       data-testid={busy && !steer ? "toolbar-stop" : "send"}
+      data-part={busy && !steer ? undefined : "send"}
       ref={ref}
       disabled={disabled}
       className={`${SEND_BASE} ${state === "needs_input" ? "bg-warning text-background motion-safe:animate-pulse" : "bg-send text-primary-foreground"}`}

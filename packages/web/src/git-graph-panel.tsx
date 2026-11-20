@@ -321,7 +321,7 @@ export function GraphPanel({ client, cwd, hidden = false, exact = false, onRefre
   const row = ROW;
   const headLabel = head && branches.includes(head) ? `${HEAD} (${short(head)})` : HEAD;
   return (
-    <div className={cn("@container min-h-0 flex-1 flex-col", hidden ? "hidden" : "flex")} data-testid="graph-panel">
+    <div className={cn("@container min-h-0 flex-1 flex-col", hidden ? "hidden" : "flex")} data-testid="graph-panel" data-part="graph-panel">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1.5 max-md:py-2">
         {toolbar}
         <BranchPopup client={client} cwd={cwd} exact={exact} repoName={repoName} busy={!!op} onRun={runRemote} branches={branches} head={head} value={ref} label={ref === ALL ? tr("files.graph.allBranches") : ref === HEAD ? headLabel : short(ref)} headLabel={headLabel} allLabel={tr("files.graph.allBranches")} onChange={setRef} />

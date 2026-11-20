@@ -74,7 +74,7 @@ export function ContextPopup({ usage, side, stats }: { usage: ContextUsage; side
             ))}
           </div>
         )}
-        <div data-testid="context-bar" className="mt-3 flex h-2 overflow-hidden rounded-full bg-secondary" aria-hidden>
+        <div data-testid="context-bar" data-part="context-bar" className="mt-3 flex h-2 overflow-hidden rounded-full bg-secondary" aria-hidden>
           {/* Buffer and free space fill the rest of the window; they are not in totalTokens. */}
           {categories.map((c) =>
             c.kind !== "used" ? null : <span key={c.name} title={c.name} style={{ width: share(c.tokens, maxTokens), background: colorOf(c) }} />,
@@ -124,7 +124,7 @@ export function ContextMeter({ usage, stats }: { usage: ContextUsage; stats?: To
         <Popover.Trigger
           aria-label={t("app.context.meterLabel", { used: full.format(totalTokens), max: full.format(maxTokens), percent: percentage })}
           aria-describedby={tip}
-          data-testid="context-meter"
+          data-testid="context-meter" data-part="context-meter"
           className="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-muted-foreground text-xs tabular-nums hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring outline-none data-popup-open:bg-accent data-popup-open:text-foreground pointer-coarse:h-11"
         >
           <Ring percent={percentage} />

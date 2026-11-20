@@ -187,7 +187,7 @@ export function CommitBox({ client, cwd, exact, repoName, project, rows, checked
           placeholder={t("files.changes.commitMessage")}
           aria-label={t("files.changes.commitMessage")}
           className="max-h-40 min-h-14 w-full resize-y rounded-md bg-secondary/60 py-1.5 pr-12 pl-2 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring md:pr-9"
-          data-testid="commit-message"
+          data-testid="commit-message" data-part="commit-message"
         />
         <Button
           size="icon"

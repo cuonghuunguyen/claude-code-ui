@@ -915,7 +915,7 @@ function FocusTab({ active, count, focusable, onSelect }: { active: boolean; cou
     <div
       className={cn("relative flex h-7 shrink-0 items-center rounded-md transition-colors", active ? "bg-secondary" : "hover:bg-secondary/70")}
       data-active={active || undefined}
-      data-testid="focus-tab"
+      data-testid="focus-tab" data-part="focus-tab"
       data-tab-id={FOCUS_TAB}
     >
       <button
@@ -1255,7 +1255,7 @@ function Tab({
         onMouseDown={(e) => e.button === 1 && e.preventDefault()}
         onAuxClick={(e) => e.button === 1 && onClose(id)}
         onContextMenu={(e) => swallowKeyFollowup(e, keyOpenedAt)}
-        data-testid="tab"
+        data-testid="tab" data-part="tab"
         data-tab-id={id}
         data-state={s}
         title={[STATUS_LABEL[s] ? tr("app.tabs.withStatus", { title: t.title, status: STATUS_LABEL[s] }) : t.title, t.worktree, t.path ?? t.cwd].filter(Boolean).join("\n")}

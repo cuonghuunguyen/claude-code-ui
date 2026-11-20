@@ -279,7 +279,7 @@ export function VirtualTimeline<T>({
         type="button"
         aria-label={t("session.timeline.jumpLatest")}
         title={t("session.timeline.jumpLatest")}
-        data-testid="scroll-to-bottom"
+        data-testid="scroll-to-bottom" data-part="scroll-to-bottom"
         inert={pinned}
         className={`absolute bottom-8 left-1/2 z-10 flex h-7 w-8 -translate-x-1/2 cursor-pointer items-center justify-center rounded-lg bg-background/90 text-foreground shadow-raised ring-[0.5px] ring-foreground/15 outline-none backdrop-blur-[2px] transition-[opacity,scale,translate] duration-200 ease-out hover:bg-accent focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-info motion-reduce:transition-none pointer-coarse:size-11 ${pinned ? "pointer-events-none translate-y-2 scale-[0.8] opacity-0" : ""}`}
         onClick={() => {

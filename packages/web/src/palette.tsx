@@ -219,7 +219,7 @@ export function CommandPalette({
         aria-modal="true"
         aria-label={t("app.palette.title")}
         className="relative flex max-h-[min(100dvh-96px,480px)] min-h-70 w-full max-w-160 flex-col self-start rounded-2xl border bg-popover text-popover-foreground shadow-floating"
-        data-testid="palette"
+        data-testid="palette" data-part="palette"
         onMouseDown={(e) => e.target !== input.current && e.preventDefault()}
       >
         <div className="p-1.5">

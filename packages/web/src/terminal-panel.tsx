@@ -226,7 +226,7 @@ export function TerminalPanel({
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="terminal">
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="terminal" data-part="terminal">
       {/* WAI-ARIA tabs like tabs-bar.tsx: one tab in the Tab order; arrows, Home and End select and focus. */}
       {/* OpenCode terminal-panel-v2: tabs bar 52px, tab text 14px/500. */}
       <div className="flex h-13 shrink-0 items-center gap-1 border-b px-2 font-[500] text-[14px]">
@@ -242,7 +242,7 @@ export function TerminalPanel({
                 tabIndex={t.id === focusable ? 0 : -1}
                 className="h-full cursor-pointer whitespace-nowrap rounded-md pl-2 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                 onClick={() => ((focusShell.current = true), setActiveId(t.id), setFocusTick((n) => n + 1))}
-                data-testid="terminal-tab"
+                data-testid="terminal-tab" data-part="terminal-tab"
               >
                 {t.title}
               </button>

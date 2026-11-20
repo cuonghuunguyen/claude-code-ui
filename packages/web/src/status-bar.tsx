@@ -100,7 +100,7 @@ export function StatusBar(props: { view: SessionView; git?: () => Promise<GitSta
   const entries = Object.entries(props.addonStatus ?? (props.sessionId ? fromApp[props.sessionId] : undefined) ?? {});
   if (!git && !tokensShown && !shells.length && !entries.length) return null;
   return (
-    <div data-testid="status-bar" className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1 text-muted-foreground text-xs tabular-nums max-sm:flex-nowrap max-sm:overflow-hidden max-sm:whitespace-nowrap">
+    <div data-testid="status-bar" data-part="status-bar" className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1 text-muted-foreground text-xs tabular-nums max-sm:flex-nowrap max-sm:overflow-hidden max-sm:whitespace-nowrap">
       {git && <Field field="branch">{git.branch}</Field>}
       {git && (
         <Field field="diff">
