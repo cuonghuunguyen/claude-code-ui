@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
@@ -371,21 +371,28 @@ describe("sides", () => {
     c.ws.close();
   });
 
-  it.skipIf(process.platform === "win32")("merges a side project's origin into the list without its credentials; a side that sends none is no error", async () => {
-    const git = (...args: string[]) => execFileSync("git", args, { cwd: wslRoot, stdio: "ignore" });
-    git("init", "-q", "-b", "main");
-    git("remote", "add", "origin", "https://bob:tok3n-value@example.com/acme/repo.git");
-    const c = await client();
-    await c.request({ type: "side.start", side: "wsl:Ubuntu" });
-    await c.request({ type: "project.open", cwd: wslRoot, side: "wsl:Ubuntu" });
-    const list = await c.request({ type: "session.list" });
-    expect(list.result.origins).toEqual({ [wslRoot]: "example.com/acme/repo" });
-    expect(JSON.stringify(list)).not.toContain("tok3n-value");
-    git("remote", "remove", "origin");
-    const without = await c.request({ type: "session.list" });
-    expect(without).toMatchObject({ type: "reply" });
-    expect(without.result.origins ?? {}).toEqual({});
-    c.ws.close();
+  it.skipIf(process.platform === "win32")("merges a side project's origin into the list without its credentials; a project without origin has no entry", async () => {
+    // A folder of its own: the shared side root stays no git repository for the other tests.
+    const repo = join(wslRoot, "origin-repo");
+    mkdirSync(repo);
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "ignore" });
+    try {
+      git("init", "-q", "-b", "main");
+      git("remote", "add", "origin", "https://bob:tok3n-value@example.com/acme/repo.git");
+      const c = await client();
+      await c.request({ type: "side.start", side: "wsl:Ubuntu" });
+      await c.request({ type: "project.open", cwd: repo, side: "wsl:Ubuntu" });
+      const list = await c.request({ type: "session.list" });
+      expect(list.result.origins).toEqual({ [repo]: "example.com/acme/repo" });
+      expect(JSON.stringify(list)).not.toContain("tok3n-value");
+      git("remote", "remove", "origin");
+      const without = await c.request({ type: "session.list" });
+      expect(without).toMatchObject({ type: "reply" });
+      expect(without.result.origins ?? {}).toEqual({});
+      c.ws.close();
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   // Routes by the path's form: a real WSL path is POSIX, while this test stands in for it with a native temp dir, which on a Windows host is a Windows path and so (correctly) local.
@@ -524,6 +531,16 @@ describe("sides", () => {
     const router = createRouter({ sides: s, send: (m) => sent.push(m), local: async () => {}, localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: list }), isLocalSession: async () => false });
     await router.handle({ type: "session.list", reqId: "r" } as never);
     expect((sent.find((m) => m.type === "reply") as any).result.sessions).toEqual([expect.objectContaining({ id: "y", live: false, state: "closed" })]);
+  });
+
+  it("session.list: a saved side that is not ready keeps its cached origins, so its project stays in the merged repository group", async () => {
+    const s = createSides({ targets: [wslSide("Ubuntu")], saved: [{ id: "wsl:Ubuntu" }], discoverMs: 0, discover: async () => [], spawn: () => scriptedSide(() => ({})) });
+    await s.refresh();
+    s.remember("wsl:Ubuntu", { sessions: [], projects: ["/y"], recentProjects: [], origins: { "/y": "example.com/acme/repo" } });
+    const sent: ServerMessage[] = [];
+    const router = createRouter({ sides: s, send: (m) => sent.push(m), local: async () => {}, localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: { sessions: [], projects: [], recentProjects: [], origins: { "/x": "example.com/acme/repo" } } }), isLocalSession: async () => false });
+    await router.handle({ type: "session.list", reqId: "r" } as never);
+    expect((sent.find((m) => m.type === "reply") as any).result.origins).toEqual({ "/x": "example.com/acme/repo", "/y": "example.com/acme/repo" });
   });
 
   it("session.list: claiming the sessions of a side list asks the cached local scan, not one transcript lookup per ID", async () => {

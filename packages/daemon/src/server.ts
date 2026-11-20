@@ -758,8 +758,8 @@ export function createDaemon(opts: {
    * a list runs on every turn start and end, and a git process blocks the event loop on Windows).
    */
   const originKeys = new Map<string, { stamp: string; key: Promise<string | undefined> }>();
-  const originOf = (main: string) => {
-    const common = gitDirsOf(main)?.common;
+  const originOf = (cwd: string) => {
+    const common = gitDirsOf(cwd)?.common;
     if (!common) return Promise.resolve(undefined);
     const config = join(common, "config");
     let stamp = "-";
@@ -769,7 +769,14 @@ export function createDaemon(opts: {
     } catch {}
     const hit = originKeys.get(common);
     if (hit?.stamp === stamp) return hit.key;
-    const entry = { stamp, key: originKeyOf(main) };
+    // A failed read (timeout, spawn error) is not kept: the next list reads again.
+    const entry: { stamp: string; key: Promise<string | undefined> } = {
+      stamp,
+      key: originKeyOf(cwd).catch(() => {
+        if (originKeys.get(common) === entry) originKeys.delete(common);
+        return undefined;
+      }),
+    };
     originKeys.set(common, entry);
     return entry.key;
   };
@@ -1451,8 +1458,8 @@ export function createDaemon(opts: {
     const origins: Record<string, string> = {};
     await Promise.all(
       open.map(async (cwd) => {
-        const main = worktrees[cwd]?.find((w) => w.main)?.path;
-        const key = main && (await originOf(main));
+        // The project's own folder: a linked worktree of a bare repository has no main entry, and every worktree shares the common dir.
+        const key = await originOf(cwd);
         if (key) origins[cwd] = key;
       }),
     );
