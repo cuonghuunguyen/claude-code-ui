@@ -52,6 +52,8 @@ describe("tabs", () => {
   it("the URL hash keeps the active tab, also the new-session tab", () => {
     const id = "0b5e6f1c-1111-4222-8333-444455556666";
     expect(tabFromHash(tabHash(id))).toBe(id);
+    // An OpenCode session id is no UUID: its link must still open it (GH-863).
+    expect(tabFromHash(tabHash("ses_e05b93227ffeNKwoybf1RL1QK4"))).toBe("ses_e05b93227ffeNKwoybf1RL1QK4");
     expect(tabFromHash(tabHash(NEW_TAB))).toBe(NEW_TAB);
     expect(tabFromHash("#focus")).toBe(FOCUS_TAB);
     expect(tabFromHash(tabHash(FOCUS_TAB))).toBe(FOCUS_TAB);

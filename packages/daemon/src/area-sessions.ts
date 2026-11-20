@@ -46,16 +46,21 @@ function parseKnown(v: unknown): Map<string, string> | undefined | null {
   return out;
 }
 
-export type SessionsAreaContext = Pick<DaemonContext, "sessions" | "findSession" | "locate" | "titleOf" | "list" | "listVersions" | "sessionIds" | "catalogues" | "rememberEngine" | "addProject" | "projects" | "allowed" | "inside" | "refused" | "isRemoving" | "deleting" | "uploads" | "firstSend" | "localFiles" | "localFilesCache" | "mirror" | "holds" | "unhold" | "queue" | "sendPrompt" | "runBash" | "autoContinue" | "briefDropped" | "briefFailed" | "startBrief" | "dropQueuedBrief" | "asideOf" | "settings" | "saveSettings" | "orchestration" | "deleteSessionById" | "appSettings" | "broadcast" | "broadcastSettings" | "clock" | "perfMon" | "logEpoch" | "media" | "checkArtifact" | "scratchpadRoot" | "within" | "transcripts" | "transcriptCwd" | "sessionCwd" | "projectsDir" | "port"> & { opts: Pick<DaemonContext["opts"], "attached" | "replayMaxEvents"> };
+export type SessionsAreaContext = Pick<DaemonContext, "sessions" | "findSession" | "restoreRefusal" | "locate" | "titleOf" | "list" | "listVersions" | "sessionIds" | "catalogues" | "rememberEngine" | "addProject" | "projects" | "allowed" | "inside" | "refused" | "isRemoving" | "deleting" | "uploads" | "firstSend" | "localFiles" | "localFilesCache" | "mirror" | "holds" | "unhold" | "queue" | "sendPrompt" | "runBash" | "autoContinue" | "briefDropped" | "briefFailed" | "startBrief" | "dropQueuedBrief" | "asideOf" | "settings" | "saveSettings" | "orchestration" | "deleteSessionById" | "appSettings" | "broadcast" | "broadcastSettings" | "clock" | "perfMon" | "logEpoch" | "media" | "checkArtifact" | "scratchpadRoot" | "within" | "transcripts" | "transcriptCwd" | "sessionCwd" | "projectsDir" | "port"> & { opts: Pick<DaemonContext["opts"], "attached" | "replayMaxEvents"> };
 
 export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): Area<SessionsTypes> {
-  const { sessions, findSession, locate, titleOf, list, listVersions, sessionIds, catalogues, rememberEngine, addProject, projects, allowed, inside, refused, isRemoving, deleting, uploads, firstSend, localFiles, localFilesCache, mirror, holds, unhold, queue, sendPrompt, runBash, autoContinue, briefDropped, briefFailed, startBrief, dropQueuedBrief, asideOf, settings, saveSettings, orchestration, deleteSessionById, appSettings, broadcast, broadcastSettings, clock, perfMon, logEpoch, media, checkArtifact, scratchpadRoot, within, transcripts, transcriptCwd, sessionCwd, projectsDir, port, opts } = ctx;
+  const { sessions, findSession, restoreRefusal, locate, titleOf, list, listVersions, sessionIds, catalogues, rememberEngine, addProject, projects, allowed, inside, refused, isRemoving, deleting, uploads, firstSend, localFiles, localFilesCache, mirror, holds, unhold, queue, sendPrompt, runBash, autoContinue, briefDropped, briefFailed, startBrief, dropQueuedBrief, asideOf, settings, saveSettings, orchestration, deleteSessionById, appSettings, broadcast, broadcastSettings, clock, perfMon, logEpoch, media, checkArtifact, scratchpadRoot, within, transcripts, transcriptCwd, sessionCwd, projectsDir, port, opts } = ctx;
   const unsubscribes = new Map<string, () => void>();
   /** This connection's session feeds: events go to the socket while its buffer allows, else from the log later (feed.ts). */
   const feeds = createFeeds(conn.ws, (e) => conn.send(e));
   let subscribeOrder = 0;
   let searching: AbortController | undefined;
-  const find = async (r: Respond, id: string, background = false) => (await findSession(id, background)) ?? void r.fail("unknown_session", `no session ${id}`);
+  const find = async (r: Respond, id: string, background = false) => {
+    const s = await findSession(id, background);
+    if (s) return s;
+    const why = restoreRefusal(id) ?? { code: "unknown_session", message: `no session ${id}` };
+    r.fail(why.code, why.message);
+  };
 
   const create = async (msg: Msg<"session.create">, r: Respond) => {
     if (typeof msg.cwd === "string" && refused(msg.cwd)) return r.fail("cwd_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);

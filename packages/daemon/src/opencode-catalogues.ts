@@ -1,5 +1,6 @@
 // The one OpenCode Engine catalogue (ADR 0015): one `opencode serve` process shared by both adapters, and a switch by the major version of the installed binary.
-import { EngineError, type CatalogueContext, type EngineCatalogue, type EngineRequest } from "./engine-catalogue.ts";
+import { EngineError, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx } from "./engine-catalogue.ts";
+import { createOpenCodeAdapters } from "./opencode-adapters.ts";
 import { createOpenCodeCatalogue, openCodeWanted, type OpenCodeCatalogueOpts } from "./opencode-catalogue.ts";
 import { createOpenCode2Catalogue } from "./opencode2-catalogue.ts";
 import { createOpenCodeServer } from "./opencode-server.ts";
@@ -11,10 +12,21 @@ const LIST_WAIT_MS = 3000;
 /** Requests that stay valid under version 2: they only touch the shared server. */
 const SHARED_REQUESTS = new Set(["opencode.status", "opencode.restart"]);
 
-export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatalogueOpts): EngineCatalogue {
+export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatalogueOpts & { /** opencode-adapters.json (default: in memory). */ adaptersFile?: string }): EngineCatalogue {
   const srv = createOpenCodeServer({ path: () => ctx.appSettings.get().opencode.path, ...o.server });
+  const adapters = createOpenCodeAdapters(o.adaptersFile);
   const v1 = createOpenCodeCatalogue(ctx, { ...o, server: { ...o.server, instance: srv } });
-  const v2 = createOpenCode2Catalogue(ctx, { server: srv, listWaitMs: o.server?.listWaitMs });
+  const v2 = createOpenCode2Catalogue(ctx, {
+    server: srv,
+    listWaitMs: o.server?.listWaitMs,
+    record: (id) => {
+      try {
+        adapters.set2(id);
+      } catch (err) {
+        throw new Error(`Could not save which OpenCode version the session belongs to (opencode-adapters.json): ${(err as Error).message}`);
+      }
+    },
+  });
   /** Version 2 only when the binary said so; unknown = version 1, so a Claude-only user never starts a check. */
   const pick = () => (srv.major() === 2 ? v2 : v1);
   /** One `--version` run at a time, shared by every caller. A failure (missing, old, hung binary) is remembered for NEGATIVE_MS: it is not run again on every list.
@@ -48,6 +60,38 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
     if (srv.major() === undefined && !recentlyFailed()) await check();
     return pick();
   };
+  const mismatch = (needs: 1 | 2) => new EngineError("opencode_version_mismatch", `This session needs an OpenCode ${needs} binary. Set Settings › OpenCode › path to one.`);
+  /**
+   * The adapter of a stored session (ADR 0015). A session recorded as version 2 never opens under an OpenCode 1 binary: its copy there (an import from before) misses the version 2 turns.
+   * A session with no record belongs to version 1, unless the installed version 2 has it (the adapter looks, see `restore`). An unknown version (missing or old binary) is left to the adapter's own error.
+   */
+  const forId = async (id: string) => {
+    const a = await known();
+    if (a === v1 && srv.major() === 1 && adapters.get(id) === 2) throw mismatch(2);
+    return a;
+  };
+  /** The list of the adapter in use. Only a user whose Engine is OpenCode or who has a stored OpenCode session asks the binary. The first list does not wait for it, later lists at most the normal list wait: a hung or slow
+   * `--version` lists nothing and prunes nothing (the settings entries stay), the late sessions are pushed as `sessions.changed`. While the major is unknown
+   * (check pending or failed) no adapter lists. A Claude-only user never starts a check. */
+  const listOf = async (lctx: ListCtx): Promise<CatalogueList> => {
+    if (srv.major() === undefined && openCodeWanted(ctx.appSettings.get().sessions.engine, lctx.read().linked)) {
+      if (recentlyFailed()) return { items: [], keep: () => true };
+      let timer: NodeJS.Timeout | undefined;
+      const late = new Promise<"late">((r) => (timer = setTimeout(() => r("late"), checkedOnce ? (o.server?.listWaitMs ?? LIST_WAIT_MS) : 0)));
+      const ran = check();
+      await Promise.race([ran, late]).finally(() => clearTimeout(timer));
+      if (srv.major() === undefined) {
+        // The answer goes on as the adapter's own list would have gone on: OpenCode 1 starts its server and pushes `sessions.changed` when it answered.
+        void ran
+          .then(async () => {
+            if (srv.major() !== undefined) await pick().list(lctx);
+          })
+          .catch(() => {});
+        return { items: [], keep: () => true };
+      }
+    }
+    return pick().list(lctx);
+  };
   const requests: Record<string, EngineRequest> = {};
   for (const [type, handler] of Object.entries(v1.requests ?? {}))
     requests[type] = async (msg, reply, fail) => {
@@ -76,35 +120,28 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
     startMode: (cwd, model) => pick().startMode(cwd, model),
     // Creating starts the server anyway: always read the version first.
     create: async (cwd, initial, opts) => (await known()).create(cwd, initial, opts),
-    // Only a user whose Engine is OpenCode or who has a stored OpenCode session asks the binary. The first list does not wait for it, later lists at most the normal list wait: a hung or slow
-    // `--version` lists nothing and prunes nothing (the settings entries stay), the late sessions are pushed as `sessions.changed`. While the major is unknown
-    // (check pending or failed) no adapter lists. A Claude-only user never starts a check.
     list: async (lctx) => {
-      if (srv.major() === undefined && openCodeWanted(ctx.appSettings.get().sessions.engine, lctx.read().linked)) {
-        if (recentlyFailed()) return { items: [], keep: () => true };
-        let timer: NodeJS.Timeout | undefined;
-        const late = new Promise<"late">((r) => (timer = setTimeout(() => r("late"), checkedOnce ? (o.server?.listWaitMs ?? LIST_WAIT_MS) : 0)));
-        const ran = check();
-        await Promise.race([ran, late]).finally(() => clearTimeout(timer));
-        if (srv.major() === undefined) {
-          // The answer goes on as the adapter's own list would have gone on: OpenCode 1 starts its server and pushes `sessions.changed` when it answered.
-          void ran
-            .then(async () => {
-              if (srv.major() !== undefined) await pick().list(lctx);
-            })
-            .catch(() => {});
-          return { items: [], keep: () => true };
-        }
-      }
-      return pick().list(lctx);
+      const r = await listOf(lctx);
+      // A session recorded as version 2 is no entry to prune when the binary is version 1: its settings come back with the version 2 binary.
+      return { ...r, keep: (id) => adapters.get(id) === 2 || r.keep(id) };
     },
-    restore: async (id, background) => (await known()).restore(id, background),
-    locate: async (id, live) => (await known()).locate(id, live),
+    restore: async (id, background) => {
+      const a = await forId(id);
+      const s = await a.restore(id, background);
+      // Version 2 lacks a session with no record: an OpenCode 1 session it did not import. Known to this daemon (it has an entry) = it needs the OpenCode 1 binary; else it is gone.
+      if (!s && a === v2 && adapters.get(id) === 1 && ctx.settings.get(id)) throw mismatch(1);
+      return s;
+    },
+    locate: async (id, live) => {
+      const a = await known();
+      // Recorded as version 2 under an OpenCode 1 binary: the session is not found there (opening it says why).
+      return a === v1 && srv.major() === 1 && adapters.get(id) === 2 ? undefined : a.locate(id, live);
+    },
     title: (s) => pick().title(s),
-    rename: async (id, cwd, title) => (await known()).rename(id, cwd, title),
-    archive: async (id, cwd, archived) => (await known()).archive(id, cwd, archived),
-    delete: async (id, at) => (await known()).delete(id, at),
-    forkForAside: async (owner, title) => (await known()).forkForAside(owner, title),
+    rename: async (id, cwd, title) => (await forId(id)).rename(id, cwd, title),
+    archive: async (id, cwd, archived) => (await forId(id)).archive(id, cwd, archived),
+    delete: async (id, at) => (await forId(id)).delete(id, at),
+    forkForAside: async (owner, title) => (await forId(owner.id)).forkForAside(owner, title),
     commands: async (cwd) => (await known()).commands(cwd),
     agents: async (cwd) => (await known()).agents(cwd),
     models: async (cwd) => (await known()).models(cwd),

@@ -303,6 +303,8 @@ class OpenCode2Session implements EngineSession {
     const stops = this.stops;
     // A Stop while the prompt is prepared ends the wait: nothing was posted, interrupt() ended the turn.
     const live = () => this.stops === stops;
+    // The record comes before anything of this turn reaches OpenCode 2: a failed save fails the prompt, never leaves a version 2 turn with no record.
+    this.engine.record(this.id);
     await this.server.streamReady();
     if (!live()) return;
     const client = await this.server.client();
@@ -536,6 +538,8 @@ class OpenCode2EngineImpl implements Engine {
   constructor(
     readonly server: OpenCodeServer,
     readonly onTitle?: (id: string, title: string) => void,
+    /** Writes the adapter record of a session (ADR 0015); throws when it cannot be saved. */
+    readonly record: (id: string) => void = () => {},
   ) {}
 
   permissionModes = (o: { allowBypass?: boolean; supportsAuto?: boolean }) => permissionModesFor({ ...o, modes: OPENCODE_PERMISSION_MODES });
@@ -623,4 +627,4 @@ class OpenCode2EngineImpl implements Engine {
 }
 
 export type OpenCode2Engine = OpenCode2EngineImpl;
-export const createOpenCode2Engine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void } = {}): OpenCode2Engine => new OpenCode2EngineImpl(server, o.onTitle);
+export const createOpenCode2Engine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; record?: (id: string) => void } = {}): OpenCode2Engine => new OpenCode2EngineImpl(server, o.onTitle, o.record);

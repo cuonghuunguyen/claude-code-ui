@@ -1,5 +1,5 @@
 // OpenCode 2 sessions over the daemon's WebSocket: a real daemon, the fake OpenCode 2 binary (fixtures/opencode2) and scripted turns cut from a recording of a real OpenCode 2.3.0.
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,10 +10,11 @@ import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type Part, type ServerMessage } fro
 import { createProjects } from "../src/projects.ts";
 import { createSettings } from "../src/settings.ts";
 import { createDaemon } from "../src/server.ts";
-import { modeRules, OPENCODE2_CAPABILITIES } from "../src/opencode2-engine.ts";
+import { createOpenCode2Engine, modeRules, OPENCODE2_CAPABILITIES } from "../src/opencode2-engine.ts";
 import { fakeQuery } from "./fake-query.ts";
 
 const BIN2 = fileURLToPath(new URL("./fixtures/opencode2/fake-opencode2-bin.mjs", import.meta.url));
+const BIN1 = fileURLToPath(new URL("./fixtures/opencode/fake-opencode-bin.mjs", import.meta.url));
 const turn = (name: string) => fileURLToPath(new URL(`./fixtures/opencode2/turn-${name}.json`, import.meta.url));
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
 const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -31,7 +32,7 @@ afterEach(() => cleanups.splice(0).forEach((c) => c()));
 /** A stored OpenCode 2 session row of the fake. */
 const row = (id: string, directory: string, title: string, updated: number, extra = {}) => ({ id, directory, title, time: { created: 1, updated }, ...extra });
 
-async function boot(o: { script?: string[]; data?: object; env?: Record<string, string>; sessionsJson?: object; allowBypass?: boolean } = {}) {
+async function boot(o: { script?: string[]; data?: object; env?: Record<string, string>; sessionsJson?: object; allowBypass?: boolean; /** The binary (default: the fake OpenCode 2). */ bin?: string; /** The adapter record on disk before the start. */ adapters?: object; /** A folder where the record file should be: a save of the record fails. */ adaptersBroken?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "oc2-")));
   const project = join(root, "project");
   const other = join(root, "other");
@@ -41,7 +42,10 @@ async function boot(o: { script?: string[]; data?: object; env?: Record<string, 
   const dataFile = join(root, "data.json");
   writeFileSync(dataFile, JSON.stringify({ sessions: [], messages: {}, ...o.data }));
   if (o.sessionsJson) writeFileSync(join(root, "sessions.json"), JSON.stringify(o.sessionsJson));
-  const env: Record<string, string> = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE2_DATA: dataFile, FAKE_OPENCODE2_SCRIPT: (o.script ?? []).map(turn).join(","), ...o.env };
+  const adaptersFile = join(root, "opencode-adapters.json");
+  if (o.adapters) writeFileSync(adaptersFile, JSON.stringify(o.adapters));
+  if (o.adaptersBroken) mkdirSync(adaptersFile);
+  const env: Record<string, string> = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE2_DATA: dataFile, FAKE_OPENCODE2_SCRIPT: (o.script ?? []).map(turn).join(","), FAKE_OPENCODE_DATA: dataFile, ...o.env };
   const appSettings = createSettings();
   appSettings.set({ terminalAccess: { enabled: false }, inlineTask: { enabled: false } } as never);
   const http = createDaemon({
@@ -56,13 +60,14 @@ async function boot(o: { script?: string[]; data?: object; env?: Record<string, 
     })(),
     appSettings,
     settingsFile: join(root, "sessions.json"),
+    opencodeAdaptersFile: adaptersFile,
     claudeDir: join(root, "claude"),
     projectsDir: join(root, "claude", "projects"),
     uploadSweepMs: 0,
     allowBypass: o.allowBypass,
     modelListWaitMs: 0,
     history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
-    opencode: { command: [process.execPath, BIN2], env: () => env, listWaitMs: 2000 },
+    opencode: { command: [process.execPath, o.bin ?? BIN2], env: () => env, listWaitMs: 2000 },
   });
   await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
   const port = (http.address() as AddressInfo).port;
@@ -109,7 +114,8 @@ async function boot(o: { script?: string[]; data?: object; env?: Record<string, 
     return view(id);
   };
   cleanups.push(() => (ws.close(), http.close()));
-  return { root, project, other, http, ws, inbox, request, ok, log, requests, fake, open, view, appSettings };
+  const recorded = () => (existsSync(adaptersFile) && !o.adaptersBroken ? JSON.parse(readFileSync(adaptersFile, "utf8")) : {}) as Record<string, number>;
+  return { root, project, other, recorded, http, ws, inbox, request, ok, log, requests, fake, open, view, appSettings };
 }
 
 describe("OpenCode 2 sessions", { timeout: TEST_MS }, () => {
@@ -432,5 +438,136 @@ describe("OpenCode 2 sessions: list and restore", { timeout: TEST_MS }, () => {
     expect(new Set(s.parts().filter((p) => p.type === "user_text").map((p) => p.id))).toEqual(new Set(["msg_u1"]));
     await s.prompt("more");
     await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
+  });
+});
+
+// The adapter record (ADR 0015): which OpenCode version a session belongs to, and what a binary of the other version shows.
+describe("OpenCode 2 sessions: adapter record and version mismatch", { timeout: TEST_MS }, () => {
+  const stored = [{ id: "msg_u1", type: "user", time: { created: 1 }, text: "old question" }, { id: "msg_a1", type: "assistant", time: { created: 2 }, agent: "build", model: { id: "m", providerID: "fake" }, content: [{ type: "text", text: "old answer" }] }];
+  const v1row = (id: string, directory: string, updated = 5000) => ({ id, slug: id, projectID: "global", directory, title: "Old session", version: "1.18.34", time: { created: 1, updated } });
+  /** What a user's old OpenCode 1 session looks like once OpenCode 2 imported it: the same id in the version 2 store. */
+  const imported = (project: string) => ({ sessions: [row("ses_old", project, "Old session", 5000)], messages: { ses_old: stored } });
+  const listFirst = async (d: Awaited<ReturnType<typeof boot>>) => {
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    await until(() => d.log().some((l) => l.type === "start"));
+  };
+  const entry = { model: "default", permissionMode: "default", effort: "default" };
+
+  it("session.create records the session as version 2 in opencode-adapters.json", async () => {
+    const d = await boot();
+    const s = await d.open();
+    expect(d.recorded()).toEqual({ [s.id]: 2 });
+  });
+
+  it("a session that cannot be recorded is not created: the error names the record", async () => {
+    const d = await boot({ adaptersBroken: true });
+    const r = await d.request({ type: "session.create", cwd: d.project, engine: "opencode" });
+    expect(r).toMatchObject({ type: "error", code: "opencode_failed" });
+    expect((r as { message: string }).message).toContain("which OpenCode version");
+  });
+
+  it("a session with no record opens with version 2 when version 2 has it; its first prompt records version 2 before OpenCode gets the prompt", async () => {
+    const d = await boot({ script: ["hold"] });
+    writeFileSync(join(d.root, "data.json"), JSON.stringify(imported(d.project)));
+    await listFirst(d);
+    await d.ok({ type: "session.subscribe", sessionId: "ses_old", sinceSeq: 0 });
+    const s = d.view("ses_old");
+    await until(() => !!s.find("assistant_text", (p) => p.text === "old answer"));
+    expect(d.recorded()).toEqual({});
+    await s.prompt("continue");
+    await until(() => d.requests("POST", "/api/session/ses_old/prompt").length === 1);
+    expect(d.recorded()).toEqual({ ses_old: 2 });
+  });
+
+  it("a prompt whose record cannot be saved is not sent to OpenCode and the session shows why", async () => {
+    const d = await boot({ script: ["hold"], adaptersBroken: true });
+    writeFileSync(join(d.root, "data.json"), JSON.stringify(imported(d.project)));
+    await listFirst(d);
+    await d.ok({ type: "session.subscribe", sessionId: "ses_old", sinceSeq: 0 });
+    const s = d.view("ses_old");
+    await until(() => !!s.find("assistant_text"));
+    await s.prompt("continue");
+    await until(() => s.parts().some((p) => p.type === "notice" && p.text.includes("which OpenCode version")));
+    await sleep(300);
+    expect(d.requests("POST", "/api/session/ses_old/prompt")).toEqual([]);
+    expect(s.states().at(-1)).toBe("idle");
+    // A second prompt meets the same failed save: the failure is not remembered as a saved record.
+    await s.prompt("again");
+    await sleep(1500);
+    expect(d.requests("POST", "/api/session/ses_old/prompt")).toEqual([]);
+  });
+
+  it("a session with no record that version 2 lacks, but this daemon knows, says it needs an OpenCode 1 binary; an unknown id is no session", async () => {
+    const d = await boot({ sessionsJson: { ses_v1only: { ...entry, saved: Date.now() } } });
+    await listFirst(d);
+    const r = await d.request({ type: "session.subscribe", sessionId: "ses_v1only", sinceSeq: 0 });
+    expect(r).toMatchObject({ type: "error", code: "opencode_version_mismatch" });
+    expect((r as { message: string }).message).toContain("OpenCode 1 binary");
+    expect(await d.request({ type: "session.subscribe", sessionId: "ses_nowhere", sinceSeq: 0 })).toMatchObject({ type: "error", code: "unknown_session" });
+  });
+
+  it("a failed read of a session (the server answers 500) is not 'needs an OpenCode 1 binary'; the next open works", async () => {
+    const d = await boot({ sessionsJson: { ses_old: { ...entry, saved: Date.now() } }, env: { FAKE_OPENCODE2_FAIL: JSON.stringify({ ses_old: 1 }) } });
+    writeFileSync(join(d.root, "data.json"), JSON.stringify(imported(d.project)));
+    await listFirst(d);
+    // The list read of the folder is no GET of the session row: the first open meets the failure.
+    const first = await d.request({ type: "session.subscribe", sessionId: "ses_old", sinceSeq: 0 });
+    expect(first).toMatchObject({ type: "error", code: "unknown_session" });
+    const second = await d.request({ type: "session.subscribe", sessionId: "ses_old", sinceSeq: 0 });
+    expect(second.type).toBe("reply");
+  });
+
+  it("under an OpenCode 1 binary a version 2 session says it needs an OpenCode 2 binary and OpenCode 1 is never asked for it; its settings entry is not pruned", async () => {
+    const old = Date.now() - 3 * 24 * 3600 * 1000;
+    const d = await boot({
+      bin: BIN1,
+      adapters: { ses_two: 2 },
+      sessionsJson: { ses_two: { ...entry, saved: old }, ses_gone: { ...entry, saved: old } },
+    });
+    writeFileSync(join(d.root, "data.json"), JSON.stringify({ sessions: [v1row("ses_one", d.project)], messages: {} }));
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    // The list that answered for the folder (the first one does not wait for OpenCode) is the one that prunes.
+    let listed: any[] = [];
+    await until(() => d.log().some((l) => l.type === "start"));
+    for (let i = 0; i < 80 && !listed.some((x) => x.id === "ses_one"); i++) (await sleep(50), (listed = (await d.ok({ type: "session.list" })).sessions));
+    expect(listed.some((x) => x.id === "ses_one")).toBe(true);
+    const r = await d.request({ type: "session.subscribe", sessionId: "ses_two", sinceSeq: 0 });
+    expect(r).toMatchObject({ type: "error", code: "opencode_version_mismatch" });
+    expect((r as { message: string }).message).toContain("OpenCode 2 binary");
+    expect(d.requests("GET", /^\/session\/ses_two/)).toEqual([]);
+    // The version 1 list knows neither ses_two (a version 2 session) nor ses_gone: only the gone one is pruned.
+    const kept = JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8"));
+    expect(Object.keys(kept)).toContain("ses_two");
+    expect(Object.keys(kept)).not.toContain("ses_gone");
+  });
+});
+
+describe("OpenCode 2 sessions: owner of a subagent's session", () => {
+  /** An engine over a stub server whose session rows are `parents` (id -> parentID) and whose read of `failing` fails once. */
+  function engineOver(parents: Record<string, string | undefined>, failing: string) {
+    let failed = false;
+    const server = {
+      client: async () => ({
+        session: {
+          get: async ({ sessionID }: { sessionID: string }) => {
+            if (sessionID === failing && !failed) throw new Error("storage busy");
+            return { id: sessionID, parentID: parents[sessionID] };
+          },
+        },
+      }),
+    };
+    const engine = createOpenCode2Engine(server as never);
+    // The root is one of this engine's open sessions.
+    (engine as unknown as { sessions: Map<string, unknown> }).sessions.set("ses_root", {});
+    return { engine, recover: () => (failed = true) };
+  }
+
+  it("a failed read up the parent chain is not remembered as 'not ours': the next request finds the owner", async () => {
+    const { engine, recover } = engineOver({ ses_grand: "ses_child", ses_child: "ses_root" }, "ses_child");
+    expect(await engine.ownerOf("ses_grand")).toBeUndefined();
+    recover();
+    expect(await engine.ownerOf("ses_grand")).toBe("ses_root");
   });
 });
