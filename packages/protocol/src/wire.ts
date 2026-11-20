@@ -478,9 +478,9 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "mcp.remove"; cwd: string; engine?: Engine; name: string; scope: ConfigScope }
   // "Slash commands" dialog (docs/spec.md "Config dialogs"): the live query of `sessionId` when it has one, else the config query of `cwd`.
   /** `getSkillsDialog()`; reply SkillsResult (empty when the CLI does not support it). */
-  | { type: "skills.list"; cwd: string; sessionId?: string }
+  | { type: "skills.list"; cwd: string; sessionId?: string; engine?: Engine }
   /** `claude edit-skill-overrides --json`, then `reloadSkills()` and a poll until the row shows `state`; reply SkillsSetStateResult. Broadcasts `config.changed`. */
-  | { type: "skills.setState"; cwd: string; sessionId?: string; name: string; state: SkillState; handles?: SkillHandles }
+  | { type: "skills.setState"; cwd: string; sessionId?: string; engine?: Engine; name: string; state: SkillState; handles?: SkillHandles }
   // Manage Plugins dialog (docs/spec.md "Config dialogs: plugins"): `claude plugin …` in `cwd`; each write then reloads plugins in
   // every live query and broadcasts `config.changed` (kind plugins).
   /** Reply PluginsListResult. */
@@ -1239,8 +1239,8 @@ export type McpAddConfig =
   | { transport: "stdio"; command: string; args: string[]; env: string[] }
   | { transport: "http" | "sse"; url: string; headers: string[] };
 
-/** Claude Code's `skillOverrides` values; the dialog labels them On / Name only / User only / Off. */
-export type SkillState = "on" | "name-only" | "user-invocable-only" | "off";
+/** Claude Code's `skillOverrides` values; the dialog labels them On / Name only / User only / Off. OpenCode's `permission.skill` actions: `allow` = On, `ask` = Ask, `deny` = Off. */
+export type SkillState = "on" | "name-only" | "user-invocable-only" | "off" | "ask";
 /** `get_skills_dialog` `handles` as the CLI sends it (snake_case), passed back unchanged to `edit-skill-overrides`. */
 export type SkillHandles = { unqualified_name?: string; aliases?: string[]; bare_name_reserved?: boolean };
 /**
@@ -1252,7 +1252,8 @@ export type SkillRow = {
   displayName: string;
   description: string;
   source: string;
-  tokens: number;
+  /** Absent when the Engine reports no token count (`ConfigGap` `skillTokens`). */
+  tokens?: number;
   state: SkillState | (string & {});
   lockedBy?: string;
   advertised: boolean;

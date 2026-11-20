@@ -395,10 +395,15 @@ export default {
   "session.skills.state.nameOnly": "Name only",
   "session.skills.state.userOnly": "User only",
   "session.skills.state.off": "Off",
+  "session.skills.state.ask": "Ask",
   "session.skills.hint.on": "Claude sees it and you can invoke it",
   "session.skills.hint.nameOnly": "Claude sees only its name",
   "session.skills.hint.userOnly": "Only you can invoke it; hidden from Claude",
   "session.skills.hint.off": "Not shown to Claude or in the command list",
+  "session.skills.hint.ask": "Asks before it is used",
+  "session.skills.hintEngine.on": "The agent loads it without asking",
+  "session.skills.hintEngine.ask": "The agent asks you before it loads it",
+  "session.skills.hintEngine.off": "The agent cannot load it; it stays in this list",
   "session.skills.lock.higher": "Overridden by a higher-priority setting",
   "session.skills.lock.plugin": "Controlled by its plugin",
   "session.skills.lock.author": "Fixed in the skill file",
@@ -420,6 +425,7 @@ export default {
   "session.skillsDialog.locked": "{state} · locked",
   "session.skillsDialog.stateTitle": "{hint}. Click to change.",
   "session.skillsDialog.saving": "Saving…",
+  "session.skillsDialog.savedLater": "Saved in opencode.json. OpenCode uses it after it reloads this folder: at the next change made here while no session of the folder is busy, or after OpenCode restarts.",
   // signal.ts
   "session.signal.toolCalls": { one: "{count} tool call", other: "{count} tool calls" },
   // rewind.ts

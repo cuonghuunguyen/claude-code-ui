@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, useState } from "react";
+import { act, useState, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { SkillRow, SlashCommand } from "@claude-ui/protocol";
@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 type Handler = (msg: Request) => unknown;
-async function render(handlers: Record<string, Handler> = {}, commands = COMMANDS) {
+async function render(handlers: Record<string, Handler> = {}, commands = COMMANDS, props: Partial<ComponentProps<typeof SkillsDialog>> = {}) {
   let skills = structuredClone(SKILLS);
   const calls: Request[] = [];
   const request = vi.fn(async (msg: Request) => {
@@ -50,7 +50,7 @@ async function render(handlers: Record<string, Handler> = {}, commands = COMMAND
   function Host() {
     const [open, set] = useState(true);
     setOpen = set;
-    return <SkillsDialog open={open} cwd="/p" sessionId="s1" commands={commands} request={request as never} onRun={(r) => runs.push(r)} onClose={() => set(false)} />;
+    return <SkillsDialog open={open} cwd="/p" sessionId="s1" commands={commands} request={request as never} onRun={(r) => runs.push(r)} onClose={() => set(false)} {...props} />;
   }
   root = createRoot(el);
   await act(async () => root!.render(<Host />));
@@ -179,4 +179,23 @@ it("rows and state buttons are 44 px high on phone and buttons for the keyboard;
   expect(d.all("skills-state")[0]!.className).toContain("max-md:h-11");
   await act(async () => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   expect(d.q("skills-dialog")).toBeNull();
+});
+
+it("with OpenCode flags the state button cycles On, Ask, Off and no token count shows", async () => {
+  const config = { mcpScopes: ["project"], mcpTransports: ["stdio", "http"], skillStates: ["on", "ask", "off"], gaps: { skillTokens: "OpenCode does not report a token count." } } as const;
+  const rows = [skill("probe", { source: "project", tokens: undefined }), skill("denied", { source: "user", tokens: undefined, state: "off" })];
+  const saved = (m: Request) => ({ skills: rows.map((r) => (r.name === (m as { name: string }).name ? { ...r, state: (m as { state: SkillRow["state"] }).state } : r)), confirmed: (m as { name: string }).name !== "probe" });
+  const d = await render({ "skills.list": () => ({ skills: rows }), "skills.setState": saved }, [cmd("probe", "Probe skill")], { engine: "opencode", config: config as never });
+  expect(d.calls[0]).toEqual({ type: "skills.list", cwd: "/p", sessionId: "s1", engine: "opencode" });
+  expect(d.all("skills-row").map((r) => r.textContent)).toEqual(["/probeprojectOn", "/denieduserOff"]);
+  expect(d.q("skills-tokens-gap")!.textContent).toBe("OpenCode does not report a token count.");
+  expect(d.text()).not.toContain("tokens ·");
+  expect(d.state("/probe: On").title).toBe("The agent loads it without asking. Click to change.");
+  await d.click(d.state("/probe: On"));
+  expect(d.calls.at(-1)).toEqual({ type: "skills.setState", cwd: "/p", sessionId: "s1", engine: "opencode", name: "probe", state: "ask", handles: {} });
+  // A folder with a busy session was not reloaded: the notice says when it applies, not Claude's "old state" text.
+  expect(d.text()).toContain("Saved in opencode.json. OpenCode uses it after it reloads this folder");
+  // Off is followed by On again.
+  await d.click(d.state("/denied: Off"));
+  expect(d.calls.at(-1)).toMatchObject({ name: "denied", state: "on" });
 });

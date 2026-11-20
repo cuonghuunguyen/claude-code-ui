@@ -9,17 +9,26 @@ export const STATE_LABEL: Record<SkillState, string> = {
   get "name-only"() { return t("session.skills.state.nameOnly"); },
   get "user-invocable-only"() { return t("session.skills.state.userOnly"); },
   get off() { return t("session.skills.state.off"); },
+  get ask() { return t("session.skills.state.ask"); },
 };
 export const STATE_HINT: Record<SkillState, string> = {
   get on() { return t("session.skills.hint.on"); },
   get "name-only"() { return t("session.skills.hint.nameOnly"); },
   get "user-invocable-only"() { return t("session.skills.hint.userOnly"); },
   get off() { return t("session.skills.hint.off"); },
+  get ask() { return t("session.skills.hint.ask"); },
+};
+/** Hints for an Engine that sets its own skill states (`ConfigCapabilities.skillStates`): they say what the Engine does, not what Claude sees. */
+const STATE_HINT_ENGINE: Partial<Record<SkillState, () => string>> = {
+  on: () => t("session.skills.hintEngine.on"),
+  ask: () => t("session.skills.hintEngine.ask"),
+  off: () => t("session.skills.hintEngine.off"),
 };
 /** An unknown state (newer CLI) shows as sent and cycles to On. */
 export const stateLabel = (s: string) => STATE_LABEL[s as SkillState] ?? s;
-export const stateHint = (s: string) => STATE_HINT[s as SkillState] ?? s;
-export const nextState = (s: string): SkillState => STATES[(STATES.indexOf(s as SkillState) + 1) % STATES.length]!;
+export const stateHint = (s: string, engineStates = false) => (engineStates ? STATE_HINT_ENGINE[s as SkillState]?.() : undefined) ?? STATE_HINT[s as SkillState] ?? s;
+/** The state after `s` in `states` (the Engine's `skillStates`; Claude's four by default). */
+export const nextState = (s: string, states: SkillState[] = STATES): SkillState => states[(states.indexOf(s as SkillState) + 1) % states.length]!;
 
 export const lockText = (lockedBy: string) =>
   lockedBy === "plugin" ? t("session.skills.lock.plugin") : lockedBy === "author" ? t("session.skills.lock.author") : lockedBy === "reserved-name" ? t("session.skills.lock.reserved") : t("session.skills.lock.higher");
@@ -28,7 +37,8 @@ export const noticeSlow = () => t("session.skills.noticeSlow");
 export const noticeUnconfirmed = () => t("session.skills.noticeUnconfirmed");
 
 export const tokenText = (n: number) => (n < 20 ? "< 20" : `~${n}`);
-export const skillMeta = (s: SkillRow) => t("session.skills.meta", { source: s.source, tokens: tokenText(s.tokens) });
+/** An Engine that reports no token count shows the source alone. */
+export const skillMeta = (s: SkillRow) => (s.tokens === undefined ? s.source : t("session.skills.meta", { source: s.source, tokens: tokenText(s.tokens) }));
 
 /** `command`: the picker's command; `skill`: its get_skills_dialog row. Inert rows have no command. */
 export type Row = { id: string; label: string; description: string; command?: SlashCommand; skill?: SkillRow };

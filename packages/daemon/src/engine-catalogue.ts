@@ -35,9 +35,11 @@ export type CatalogueList = { items: SessionListItem[]; keep(id: string): boolea
 export type EngineEntry = { engine: EngineName; capabilities: EngineCapabilities; permissionModes: PermissionMode[] };
 export type EngineRequest = (msg: ClientMessage, reply: (result: unknown) => void, fail: (code: string, message: string) => void) => Promise<void>;
 
-/** The config dialogs of a non-Claude Engine (ADR 0012). `mcp` replies McpListResult, McpAuthResult or {}. `mcp` takes every `mcp.*` request; a missing control is a capability gap, never an emulation. Throws EngineError for a failure the user must see. */
+/** The config dialogs of a non-Claude Engine (ADR 0012). `mcp` replies McpListResult, McpAuthResult or {} and takes every `mcp.*` request, `skills` every `skills.*` request; a missing control is a capability gap, never an emulation. Throws EngineError for a failure the user must see. */
 export type EngineConfig = {
   mcp(msg: Extract<ClientMessage, { type: `mcp.${string}` }>, cwd: string, ctx: { /** The request comes from a browser on the daemon machine (ADR 0011). */ local: boolean }): Promise<unknown>;
+  /** `skills.list` replies SkillsResult, `skills.setState` SkillsSetStateResult. */
+  skills(msg: Extract<ClientMessage, { type: `skills.${string}` }>, cwd: string): Promise<unknown>;
 };
 
 export interface EngineCatalogue {

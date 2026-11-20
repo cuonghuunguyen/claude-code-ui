@@ -63,6 +63,10 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
         if ((await known()) !== v1) throw new EngineError("opencode_v2_unsupported", "OpenCode 2 does not support the MCP servers dialog in claude-ui yet.");
         return v1.config!.mcp(msg, cwd, c);
       },
+      skills: async (msg, cwd) => {
+        if ((await known()) !== v1) throw new EngineError("opencode_v2_unsupported", "OpenCode 2 does not support the skills dialog in claude-ui yet.");
+        return v1.config!.skills(msg, cwd);
+      },
     },
     listScope: v1.listScope,
     ownsId: v1.ownsId,
