@@ -96,6 +96,11 @@ export function createPlanTracker({
   account?: () => string | undefined;
 }) {
   const oauthToken = () => (typeof oauthSetting === "function" ? oauthSetting() : oauthSetting);
+  /** Dropped (its account is no longer referenced): no timer, no change message. */
+  let disposed = false;
+  const emit = (u: PlanUsage | null) => {
+    if (!disposed) onChange(u);
+  };
   let usage: PlanUsage | null | undefined;
   let status: Pick<PlanUsage, "status" | "statusResetsAt" | "statusLimit"> = { status: "allowed" };
   let statusRead = 0;
@@ -120,6 +125,7 @@ export function createPlanTracker({
   // The CLI sends rate_limit_event and usage only during a turn: nothing else ends a limit while idle.
   function arm() {
     clearTimeout(expiry);
+    if (disposed) return;
     const now = Date.now();
     const at = Math.min(...[status.statusResetsAt, ...(usage?.windows.map((w) => w.resetsAt) ?? [])].filter((t): t is number => !!t && t > now));
     if (at === Infinity) return;
@@ -128,7 +134,7 @@ export function createPlanTracker({
       // Not there yet (delay clamped): wait the rest.
       if (delay > MAX_TIMER_MS) return arm();
       if (status.statusResetsAt && status.statusResetsAt <= Date.now()) setStatus({ status: "allowed" });
-      if (usage) onChange(current()!);
+      if (usage) emit(current()!);
       arm();
       void reread();
     }, Math.min(delay, MAX_TIMER_MS)).unref();
@@ -151,7 +157,7 @@ export function createPlanTracker({
       usage = u;
       if (n > statusRead && !status.statusResetsAt) setStatus({ status: "allowed" });
       arm();
-      onChange(current()!);
+      emit(current()!);
     } catch (err) {
       console.error("plan usage failed:", err);
     }
@@ -171,9 +177,15 @@ export function createPlanTracker({
       arm();
       if (had) {
         usage = fromEvents(null) ?? { plan: null, windows: [], status: "allowed" };
-        onChange(current()!);
+        emit(current()!);
       }
       return reread();
+    },
+    /** The account is no longer referenced: clears the reset timer and drops any answer still on its way. */
+    dispose() {
+      disposed = true;
+      request++;
+      clearTimeout(expiry);
     },
     /** Undefined until the first answer. */
     current,
@@ -192,10 +204,58 @@ export function createPlanTracker({
           : { status: info.status, ...(info.resetsAt ? { statusResetsAt: info.resetsAt * 1000 } : {}), ...(limit ? { statusLimit: limit } : {}) },
       );
       statusRead = request + 1;
-      if (usage) onChange(current()!);
+      if (usage) emit(current()!);
       return refresh(q);
     },
   };
 }
 
 export type PlanTracker = ReturnType<typeof createPlanTracker>;
+
+/**
+ * One plan tracker per Claude account key (`""` Default, `"cli"`, a token account id; plan-usage per account, GH-900). `sync` keeps exactly the
+ * referenced keys: a new one starts empty, a dropped one is disposed. `onChange` and `read` get the key; `read(key, refresh)` runs the
+ * throwaway query on that account's env and hands it to `refresh`.
+ */
+export function createPlanTrackers({
+  onChange,
+  read,
+  oauthToken,
+  name,
+}: {
+  onChange: (key: string, usage: PlanUsage | null) => void;
+  read: (key: string, refresh: PlanTracker["refresh"]) => Promise<void>;
+  oauthToken: (key: string) => boolean;
+  name: (key: string) => string | undefined;
+}) {
+  const map = new Map<string, PlanTracker>();
+  const make = (key: string): PlanTracker => {
+    const t: PlanTracker = createPlanTracker({ onChange: (u) => onChange(key, u), read: () => read(key, t.refresh), oauthToken: () => oauthToken(key), account: () => name(key) });
+    return t;
+  };
+  return {
+    sync(keys: Iterable<string>) {
+      const want = new Set(keys);
+      for (const [k, t] of map)
+        if (!want.has(k)) {
+          t.dispose();
+          map.delete(k);
+        }
+      for (const k of want) if (!map.has(k)) map.set(k, make(k));
+    },
+    get: (key: string) => map.get(key),
+    /** The tracker of `key`, made when missing (a Session started before the next sync; the next sync drops it unless the settings name the key). */
+    ensure(key: string): PlanTracker {
+      let t = map.get(key);
+      if (!t) map.set(key, (t = make(key)));
+      return t;
+    },
+    keys: () => [...map.keys()],
+    /** Login changed: every tracker reads again. */
+    reset: () => Promise.all([...map.values()].map((t) => t.reset())),
+    dispose() {
+      for (const t of map.values()) t.dispose();
+      map.clear();
+    },
+  };
+}

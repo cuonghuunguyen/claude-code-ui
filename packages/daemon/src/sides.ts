@@ -1457,8 +1457,8 @@ export function createRouter(opts: {
       noteRequest(id, m.part as never);
       return send(m);
     }
-    // Plan usage is the local account's; a side's would overwrite it.
-    if (m.type === "plan_usage") return;
+    // Plan usage is the local accounts'; a side's would overwrite it.
+    if (m.type === "plan_usage" || m.type === "account_usage") return;
     // The browser's connection has the Hub's identity and epoch (GH-771); a side's hello would replace it.
     if (m.type === "daemon_hello") return;
     // A side deletes its own sessions from the list only.

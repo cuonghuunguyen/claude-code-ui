@@ -31,6 +31,7 @@ export type SettingsAreaContext = Pick<
   | "testAccount"
   | "applyAccountToken"
   | "claudeLoginChanged"
+  | "projectAccountsChanged"
   | "warmCommit"
   | "catalogues"
   | "autoContinue"
@@ -76,12 +77,14 @@ export function createSettingsArea(ctx: SettingsAreaContext, conn: Pick<Connecti
     if (typeof msg.id !== "string") return fail("bad_settings", "id must be a string");
     try {
       const active = appSettings.get().claude.account === msg.id;
+      const before = appSettings.get();
       secrets.removeClaudeAccount(msg.id);
       // One write: the global account and every Project that named it are Default again.
       const cleaned = withoutOverrideAccount(appSettings.get().projects.overrides, msg.id);
       if (active || cleaned) appSettings.set({ ...(active && { claude: { account: "" } }), ...(cleaned && { projects: { overrides: cleaned } }) });
       ctx.applyAccountToken();
       if (active) ctx.claudeLoginChanged();
+      else ctx.projectAccountsChanged(before);
     } catch (err) {
       return fail("bad_settings", (err as Error).message);
     }
@@ -129,6 +132,7 @@ export function createSettingsArea(ctx: SettingsAreaContext, conn: Pick<Connecti
       if (msg.patch?.git?.commitMessageWarm !== undefined) (settings.git.commitMessageWarm ? ctx.warmCommit.prewarm() : ctx.warmCommit.stop());
       for (const c of ctx.catalogues.all) c.settingsChanged?.(settingsBefore, settings);
       if (settings.claude.account !== before) (ctx.applyAccountToken(), ctx.claudeLoginChanged());
+      else ctx.projectAccountsChanged(settingsBefore);
       const origin = jiraOrigin(settings.jira.url);
       const urlPatched = msg.patch?.jira?.url !== undefined;
       // GH-487: a token saved without URL takes the first URL set here (never a hand edit), in one write; a token of an origin that neither the global URL nor a Project override uses is dropped (cleanup, it is never sent anyway).

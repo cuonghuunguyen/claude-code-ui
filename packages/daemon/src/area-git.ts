@@ -11,10 +11,10 @@ import { gitBranch, gitFetch, gitPull, gitPush, gitTagDelete, gitTagRemote } fro
 import { generateCommitMessage, instructionFor, promptFor } from "./commit-message.ts";
 import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff, gitCommitFiles, gitCommitMenu, gitContinue, gitMergeRebase, gitReword, gitRollback, gitRollbackHunk, gitRollbackPreview, gitStash, gitStashList, gitStashPush, gitTag, gitTagCreate, gitTagSigning } from "./git-write.ts";
 
-export type GitAreaContext = Pick<DaemonContext, "git" | "refused" | "statusOf" | "reposOf" | "lastOpen" | "localHistory" | "netSlot" | "appSettings" | "warmCommit"> & { opts: Pick<DaemonContext["opts"], "query"> };
+export type GitAreaContext = Pick<DaemonContext, "git" | "refused" | "statusOf" | "reposOf" | "lastOpen" | "localHistory" | "netSlot" | "appSettings" | "warmCommit" | "accountOf"> & { opts: Pick<DaemonContext["opts"], "query"> };
 
 export function createGitArea(ctx: GitAreaContext): Area<GitTypes> {
-  const { git, refused, statusOf, reposOf, lastOpen, localHistory, netSlot, appSettings, warmCommit, opts } = ctx;
+  const { git, refused, statusOf, reposOf, lastOpen, localHistory, netSlot, appSettings, warmCommit, accountOf, opts } = ctx;
   /** The running `git.commitMessage` of this connection: stopped by `git.commitMessageCancel`, a newer one, and the close. */
   let generating: AbortController | undefined;
   /** The signed `git.tagCreate` of this connection, aborted by `git.tagCancel` and when the connection closes. */
@@ -150,7 +150,9 @@ export function createGitArea(ctx: GitAreaContext): Area<GitTypes> {
         const d = await gitCommitDiff(cwd, { paths: msg.paths, allowed: inside });
         if (!d) throw new GitRequestError("not_git", NOT_TOP);
         const prompt = promptFor(instructionFor(appSettings.get().git, msg.project), d);
-        const message = await generateCommitMessage({ cwd, prompt, signal: ctl.signal, query: opts.query, ...(appSettings.get().git.commitMessageWarm && { warm: warmCommit }) });
+        // The Project's Claude account: a diff of a Project with its own account does not go out on the global one. The warm process runs on the global account only.
+        const account = accountOf(cwd);
+        const message = await generateCommitMessage({ cwd, prompt, signal: ctl.signal, query: opts.query, env: account.env, ...(account.global && appSettings.get().git.commitMessageWarm && { warm: warmCommit }) });
         return { message, ...(d.cut && { truncated: true }) };
       })));
     } finally {

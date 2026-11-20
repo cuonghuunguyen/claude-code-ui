@@ -191,7 +191,8 @@ export const openQuery = (query: typeof sdkQuery = sdkQuery, options: Options = 
 /** withQuery() in the daemon-wide throwaway queue. */
 export const queuedQuery = <T,>(fn: (q: Query) => Promise<T>, query: typeof sdkQuery = sdkQuery, options: Options = {}): Promise<T> => queued(() => withQuery(fn, query, options));
 
-export const listModels = (query: typeof sdkQuery = sdkQuery): Promise<ModelInfo[]> => withQuery((q) => q.supportedModels(), query);
+/** The model list as the account of `env` sees it (absent: the daemon's account). */
+export const listModels = (query: typeof sdkQuery = sdkQuery, env?: NodeJS.ProcessEnv): Promise<ModelInfo[]> => withQuery((q) => q.supportedModels(), query, env ? { env } : {});
 
 
 /** Why auto mode ignores the allow rule of a denied `tool` call (user-facing). */
@@ -204,11 +205,11 @@ const ignoredWhy = (tool: string) =>
  * Whether auto mode keeps the allow rule `rule`: a throwaway auto mode CLI with only that rule as a flag rule lists the rules it
  * applies (it omits the ones auto mode ignores). Not the session's CLI: the session may not run in auto mode when the user clicks.
  */
-export async function autoModeKeeps(cwd: string, rule: string, query?: typeof sdkQuery): Promise<{ kept: boolean; managedOnly: boolean }> {
+export async function autoModeKeeps(cwd: string, rule: string, query?: typeof sdkQuery, env?: NodeJS.ProcessEnv): Promise<{ kept: boolean; managedOnly: boolean }> {
   const { state } = await queuedQuery(
     (q) => (q as unknown as { listPermissionRules(): Promise<{ state: { rules: { behavior: string; source: string }[]; managedOnly: boolean } }> }).listPermissionRules(),
     query,
-    { cwd, permissionMode: "auto", persistSession: false, ...(process.env.CLAUDE_UI_E2E_CLAUDE_CLI && { pathToClaudeCodeExecutable: process.env.CLAUDE_UI_E2E_CLAUDE_CLI }), settings: { permissions: { allow: [rule] } } },
+    { cwd, permissionMode: "auto", persistSession: false, ...(env && { env }), ...(process.env.CLAUDE_UI_E2E_CLAUDE_CLI && { pathToClaudeCodeExecutable: process.env.CLAUDE_UI_E2E_CLAUDE_CLI }), settings: { permissions: { allow: [rule] } } },
   );
   return { managedOnly: state.managedOnly, kept: state.rules.some((r) => r.behavior === "allow" && r.source === "flagSettings") };
 }
@@ -334,6 +335,8 @@ export class ClaudeSession implements EngineSession {
   private commandsAsked = false;
   /** After a failed load no new throwaway starts before this time (ms). */
   private commandsRetryAt = 0;
+  /** The plan tracker each CLI process reports into, chosen when it started. */
+  private readonly trackers = new WeakMap<Query, NonNullable<ReturnType<NonNullable<SessionOpts["plan"]>>>>();
   /** The env of this session's CLI processes: the Project's Claude account when it sets one, else the daemon's. */
   private cliEnv() {
     return this.opts.claudeEnv?.(this.cwd) ?? claudeEnv();
@@ -448,7 +451,7 @@ export class ClaudeSession implements EngineSession {
     if (!rule) throw new DeniedRetryError("no_rule", `no allow rule fits this ${call.tool} call`);
     this.savingAlways.add(toolUseId);
     try {
-      const check = await autoModeKeeps(this.cwd, rule, this.opts.query).catch((e: Error) => {
+      const check = await autoModeKeeps(this.cwd, rule, this.opts.query, this.cliEnv()).catch((e: Error) => {
         throw new DeniedRetryError("check_failed", `Could not check the rule against auto mode: ${e.message}`);
       });
       if (check.managedOnly) throw new DeniedRetryError("managed_only", "Your organization allows managed permission rules only.");
@@ -609,6 +612,8 @@ export class ClaudeSession implements EngineSession {
     const rules = sessionRules(this.grants);
     const disallowed = this.opts.disallowedTools?.(this.id);
     const visualize = this.opts.visualizePlugin?.();
+    // The account of this CLI: its env (below, cliEnv()) and its plan tracker come from the same settings, read here in one tick.
+    const plan = this.opts.plan?.(this.cwd);
     const q = (this.query = (this.opts.query ?? sdkQuery)({
       prompt: this.input,
       options: {
@@ -656,6 +661,7 @@ export class ClaudeSession implements EngineSession {
         ...(process.env.CLAUDE_UI_E2E_CLAUDE_CLI && { pathToClaudeCodeExecutable: process.env.CLAUDE_UI_E2E_CLAUDE_CLI }),
       },
     }));
+    if (plan) this.trackers.set(q, plan);
     this.resumeAt = undefined;
     // The first query creates the transcript: saved now, defaults too. A restore without an entry reads the transcript, whose
     // replies record the effort they ran with (the model's default, e.g. medium), not "default".
@@ -888,7 +894,7 @@ export class ClaudeSession implements EngineSession {
     this.session.emit({ type: "session_model", id: "session_model", model });
     // Auto needs a model that supports it: back to ask, as the web toast says.
     try {
-      if (this.permissionMode === "auto" && !this.opts.supportsAuto?.(model)) {
+      if (this.permissionMode === "auto" && !this.opts.supportsAuto?.(model, this.cwd)) {
         await this.query?.setPermissionMode("default");
         this.setMode("default");
       }
@@ -991,7 +997,7 @@ export class ClaudeSession implements EngineSession {
           };
         },
         parentQuery: () => this.liveQuery(),
-        supportsAuto: (m) => !!this.opts.supportsAuto?.(m),
+        supportsAuto: (m) => !!this.opts.supportsAuto?.(m, this.cwd),
         defaultModel: () => "haiku", // server.ts fills spec.model from Settings.inlineTask.model
         emit: (p) => this.session.emit(p),
         canUseTool: (tool, input, o, bridge) => this.askPermission(tool, input, o, bridge),
@@ -1375,7 +1381,7 @@ export class ClaudeSession implements EngineSession {
     const late = m.type === "prompt_suggestion" && !this.opts.promptSuggestions?.();
     if (!late) for (const part of this.adapter.convert(m)) this.session.emit(part);
     if (m.type === "prompt_suggestion" && !late) this.session.suggested = true;
-    if (m.type === "rate_limit_event") void this.opts.plan?.rateLimit(m.rate_limit_info, q);
+    if (m.type === "rate_limit_event") void this.trackers.get(q)?.rateLimit(m.rate_limit_info, q);
     if (m.type === "rate_limit_event" && m.rate_limit_info.status === "rejected" && m.rate_limit_info.resetsAt) this.limitResetsAt = m.rate_limit_info.resetsAt * 1000;
     if (m.type === "assistant" && !m.parent_tool_use_id && m.error === "rate_limit") this.limitHit = true;
     if (m.type === "result") {
@@ -1386,9 +1392,11 @@ export class ClaudeSession implements EngineSession {
       const hit = this.limitHit, at = this.limitResetsAt;
       this.limitHit = false;
       this.limitResetsAt = undefined;
-      if (hit) this.opts.onLimitStop?.(this.id, at);
+      // The plan fallback only while the plan says rejected: another 429 (per-model, credits) during a warning is no usage limit.
+      const plan = this.trackers.get(q)?.current();
+      if (hit) this.opts.onLimitStop?.(this.id, at ?? (plan?.status === "rejected" ? plan.statusResetsAt : undefined));
       // Not on a query the login change just dropped.
-      if (this.query === q) void this.opts.plan?.refresh(q);
+      if (this.query === q) void this.trackers.get(q)?.refresh(q);
       if (this.syncDeferred && !this.busy()) {
         this.syncDeferred = false;
         void this.session.sync();
@@ -1466,7 +1474,7 @@ export class ClaudeSession implements EngineSession {
         const model = this.model === "default" ? undefined : this.model;
         // A new session before its first prompt has no transcript: the window of a fresh conversation.
         const at = this.started ? { resume: this.id, resumeSessionAt: this.resumeAt } : {};
-        await withQuery(read, this.opts.query, { ...at, persistSession: false, cwd: this.cwd, model });
+        await withQuery(read, this.opts.query, { ...at, persistSession: false, cwd: this.cwd, model, env: this.cliEnv() });
       });
     } catch (err) {
       console.error(`session ${this.id}: context usage failed:`, err);
@@ -1478,7 +1486,7 @@ export class ClaudeSession implements EngineSession {
     if (this.commandsAsked || Date.now() < this.commandsRetryAt) return;
     this.commandsAsked = true;
     try {
-      const list = await queued(async () => (this.query ? undefined : withQuery((q) => q.supportedCommands(), this.opts.query, { cwd: this.cwd, persistSession: false })));
+      const list = await queued(async () => (this.query ? undefined : withQuery((q) => q.supportedCommands(), this.opts.query, { cwd: this.cwd, persistSession: false, env: this.cliEnv() })));
       if (list && !this.query) this.adapter.commands(list).forEach((p) => this.session.emit(p));
     } catch (err) {
       this.commandsAsked = false;
