@@ -293,8 +293,9 @@ it("with OpenCode flags the dialog has no marketplaces tab, no switch, and an in
     marketplaces: [],
   };
   let applied = false;
+  let fails = false;
   const d = await render(
-    { "plugins.list": () => structuredClone(list), "plugins.install": () => (applied ? { reload: { reloaded: 0, failed: [], errorCount: 0 }, applied: false } : OK) },
+    { "plugins.list": () => structuredClone(list), "plugins.install": () => (fails ? Promise.reject(new Error("is already in the plugin list")) : applied ? { reload: { reloaded: 0, failed: [], errorCount: 0 }, applied: false } : OK) },
     { engine: "opencode", config: OPENCODE, sessionId: "s1" },
   );
   expect(d.calls.find((c) => c.type === "plugins.list")).toEqual({ type: "plugins.list", cwd: "/p", engine: "opencode" });
@@ -320,4 +321,10 @@ it("with OpenCode flags the dialog has no marketplaces tab, no switch, and an in
   expect(d.calls).toContainEqual({ type: "plugins.install", cwd: "/p", engine: "opencode", pluginId: "file:///p/listed.js", scope: "project" });
   expect(d.q("banner-success")!.textContent).toBe("Saved. It applies when the sessions of this folder are idle.");
   expect(input.value).toBe("");
+  // A refused entry stays typed.
+  await d.type(input, "dup");
+  fails = true;
+  await d.click(d.button("Add plugin"));
+  expect(d.q("banner-error")).not.toBeNull();
+  expect(input.value).toBe("dup");
 });

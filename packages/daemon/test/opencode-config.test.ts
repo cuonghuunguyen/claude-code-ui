@@ -414,8 +414,22 @@ describe("OpenCode Plugins dialog", { timeout: TEST_MS }, () => {
     const before = d.file("opencode.json");
     for (const pluginId of ["   ", "two words", "listed-one"]) expect(await d.request({ type: "plugins.install", cwd: d.project, engine: "opencode", pluginId, scope: "project" })).toMatchObject({ type: "error" });
     expect(d.file("opencode.json")).toBe(before);
+    // A relative path stays as typed (the repo works in another folder); an absolute one becomes the file URL OpenCode takes.
     await d.plugins({ type: "plugins.install", pluginId: "./plugins/mine.js", scope: "project" });
-    expect(strip(d.file("opencode.json")).plugin.at(-1)).toBe(pathToFileURL(join(d.project, "plugins", "mine.js")).href);
+    await d.plugins({ type: "plugins.install", pluginId: join(d.project, "abs.js"), scope: "project" });
+    expect(strip(d.file("opencode.json")).plugin.slice(-2)).toEqual(["./plugins/mine.js", pathToFileURL(join(d.project, "abs.js")).href]);
+    expect(await d.request({ type: "plugins.install", cwd: d.project, engine: "opencode", pluginId: "./plugins/mine.js", scope: "project" })).toMatchObject({ type: "error", code: "already_exists" });
+  });
+
+  it("a relative plugin entry that OpenCode reports as a file URL is a project plugin and can be uninstalled", async () => {
+    const d = await boot({ file: `{ "plugin": ["./plugins/rel.js", "other"] }\n`, fileName: "opencode.json" });
+    const url = pathToFileURL(join(d.project, "plugins", "rel.js")).href;
+    await d.plugins({ type: "plugins.list" });
+    await fetch(`http://127.0.0.1:${d.port()}/__config`, { method: "POST", body: JSON.stringify({ config: { plugin: [url] } }) });
+    const { installed } = await d.plugins({ type: "plugins.list" });
+    expect(installed.find((p: any) => p.id === url)?.scope).toBe("project");
+    await d.plugins({ type: "plugins.uninstall", pluginId: url, scope: "project" });
+    expect(strip(d.file("opencode.json")).plugin).toEqual(["other"]);
   });
 
   it("plugins.install writes nothing into a file whose plugin key is not a list", async () => {

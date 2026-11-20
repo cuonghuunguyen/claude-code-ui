@@ -97,7 +97,7 @@ export function projectLists(cwd: string, path: string[]): { file: string; items
  * Appends `value` to the list at `path` of the winning project file (the list is created when no file has one in it), or removes from every project file
  * the entries `drop` accepts. Same rules as `editProjectFile`: every file is parsed first, atomic per file, comments and layout kept. Returns the files written.
  */
-export function editProjectList(cwd: string, path: string[], change: { append: unknown } | { drop: (item: unknown) => boolean }): string[] {
+export function editProjectList(cwd: string, path: string[], change: { append: unknown } | { drop: (item: unknown, file: string) => boolean }): string[] {
   const lists = projectLists(cwd, path);
   if ("append" in change) {
     const file = writeTarget(cwd);
@@ -108,7 +108,7 @@ export function editProjectList(cwd: string, path: string[], change: { append: u
   }
   const done: string[] = [];
   for (const l of lists) {
-    const at = l.items.flatMap((item, i) => (change.drop(item) ? [i] : []));
+    const at = l.items.flatMap((item, i) => (change.drop(item, l.file) ? [i] : []));
     // From the end: an earlier index stays valid after a later one is removed.
     for (const i of at.reverse()) write(l.file, [...path, i], undefined);
     if (at.length) done.push(l.file);

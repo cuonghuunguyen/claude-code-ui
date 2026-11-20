@@ -2,7 +2,7 @@
 // (`GET /config`), and install and uninstall edit the `plugin` list of the project's opencode.json (opencode-config-file.ts), then dispose the folder so OpenCode loads it again.
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parse } from "jsonc-parser";
 import type { InstalledPlugin, PluginsListResult, PluginWriteResult } from "@claude-ui/protocol";
@@ -54,11 +54,14 @@ function inPluginFolder(spec: string, cwd: string): boolean {
   );
 }
 
-/** What the user typed as a spec: an npm name or a `file://` URL as it is, a path as the `file://` URL OpenCode takes. */
-function normalize(typed: string, cwd: string): string {
-  if (/^(\/|\.\.?\/|~\/|[a-zA-Z]:[\\/])/.test(typed)) return pathToFileURL(typed.startsWith("~/") ? join(homedir(), typed.slice(2)) : resolve(cwd, typed)).href;
+const RELATIVE = /^\.\.?\//;
+/** What the user typed as a spec: an npm name, a `file://` URL or a relative path as it is (a repo keeps working in another folder), an absolute path as the `file://` URL OpenCode takes. */
+function normalize(typed: string): string {
+  if (/^(\/|~\/|[a-zA-Z]:[\\/])/.test(typed)) return pathToFileURL(typed.startsWith("~/") ? join(homedir(), typed.slice(2)) : typed).href;
   return typed;
 }
+/** The identity of a list entry: OpenCode reports a relative path as the absolute `file://` URL of the file next to the config file that lists it. */
+const canon = (spec: string, base: string) => (RELATIVE.test(spec) ? pathToFileURL(resolve(base, spec)).href : spec);
 
 const WRITTEN: PluginWriteResult = { reload: { reloaded: 0, failed: [], errorCount: 0 } };
 
@@ -93,7 +96,7 @@ export function createOpenCodePluginsConfig(o: { server: OpenCodeServer; repair(
 
   async function list(cwd: string): Promise<PluginsListResult> {
     const all = await known(cwd);
-    const project = new Set(projectLists(cwd, ["plugin"]).flatMap((l) => specs(l.items)));
+    const project = new Set(projectLists(cwd, ["plugin"]).flatMap((l) => specs(l.items).map((x) => canon(x, dirname(l.file)))));
     const installed: InstalledPlugin[] = [...new Set(all)].map((id) => ({ id, scope: project.has(id) ? "project" : inPluginFolder(id, cwd) ? "folder" : "user", enabled: true, updatable: false }));
     return { installed, available: [], marketplaces: [] };
   }
@@ -102,15 +105,15 @@ export function createOpenCodePluginsConfig(o: { server: OpenCodeServer; repair(
     const spec = typed.trim();
     if (!spec) throw fail("invalid_input", "Type an npm package or a path.");
     if (/\s/.test(spec)) throw fail("invalid_input", "A plugin is one npm package or one path, without spaces.");
-    const entry = normalize(spec, cwd);
-    if ((await known(cwd)).includes(entry)) throw fail("already_exists", `${entry} is already in the plugin list.`);
+    const entry = normalize(spec);
+    if ((await known(cwd)).map((x) => canon(x, cwd)).includes(canon(entry, cwd))) throw fail("already_exists", `${entry} is already in the plugin list.`);
     editProjectList(cwd, ["plugin"], { append: entry });
     return { ...WRITTEN, ...((await o.repair(cwd)) ? {} : { applied: false }) };
   }
 
   async function uninstall(cwd: string, id: string, scope: string | undefined): Promise<PluginWriteResult> {
     if (scope !== undefined && scope !== "project") throw fail("invalid_input", REMOVE_GAP);
-    const done = editProjectList(cwd, ["plugin"], { drop: (item) => specOf(item) === id });
+    const done = editProjectList(cwd, ["plugin"], { drop: (item, file) => canon(specOf(item) ?? "", dirname(file)) === id || specOf(item) === id });
     if (!done.length) throw fail("invalid_input", REMOVE_GAP);
     return { ...WRITTEN, ...((await o.repair(cwd)) ? {} : { applied: false }) };
   }

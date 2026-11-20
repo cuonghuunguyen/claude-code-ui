@@ -138,16 +138,19 @@ export function PluginsDialog({
   const clear = () => (setError(undefined), setNotice(undefined));
   const afterReload = (reload?: ReloadResult) => reload?.failed.length && setFailedReload(reload.failed);
   /** A write that answers PluginWriteResult: the error line on failure, the reload-failed dialog, then a fresh list. */
-  const write = async (msg: Request) => {
+  const write = async (msg: Request): Promise<boolean> => {
     clear();
+    let done = false;
     try {
       const r = await request<PluginWriteResult>(msg);
       afterReload(r.reload);
       if (r.applied === false) setNotice(t("session.pluginsDialog.savedLater"));
+      done = true;
     } catch (e) {
       setError((e as Error).message);
     }
     await refresh();
+    return done;
   };
   /** The install box of an Engine without a catalog: the typed npm package or path goes into the project's plugin list. */
   async function addSpec() {
@@ -155,8 +158,8 @@ export function PluginsDialog({
     if (!v || typing) return;
     setTyping(true);
     try {
-      await write({ type: "plugins.install", cwd, ...eng, pluginId: v, scope: "project" });
-      setSpec("");
+      // A refused entry stays typed, so it can be corrected.
+      if (await write({ type: "plugins.install", cwd, ...eng, pluginId: v, scope: "project" })) setSpec("");
     } finally {
       setTyping(false);
     }
