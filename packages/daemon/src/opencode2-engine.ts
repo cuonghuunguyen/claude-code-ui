@@ -572,20 +572,18 @@ class OpenCode2EngineImpl implements Engine {
 
   /** The session of ours a session belongs to (itself, or the root of its parent chain), undefined when none is ours. Read once per session id. */
   private readonly owners = new Map<string, Promise<string | undefined>>();
-  ownerOf(sid: string): Promise<string | undefined> {
+  ownerOf = (sid: string): Promise<string | undefined> => this.find(sid).catch(() => undefined);
+  /** Rejects when a read failed (nothing is kept for it: the next request asks again); an answer, "not ours" included, is kept until a session is added. */
+  private find(sid: string): Promise<string | undefined> {
     if (this.sessions.has(sid)) return Promise.resolve(sid);
     let hit = this.owners.get(sid);
     if (!hit) {
-      hit = this.server
+      const mine: Promise<string | undefined> = (hit = this.server
         .client()
         .then((c) => c.session.get({ sessionID: sid }))
-        .then((row) => (row.parentID ? this.ownerOf(row.parentID) : undefined))
-        .catch(() => {
-          // A failed read is not kept: the next request asks again. A session that is not ours is (until a session is added).
-          this.owners.delete(sid);
-          return undefined;
-        });
-      this.owners.set(sid, hit);
+        .then((row) => (row.parentID ? this.find(row.parentID) : undefined)));
+      this.owners.set(sid, mine);
+      mine.catch(() => this.owners.get(sid) === mine && this.owners.delete(sid));
     }
     return hit;
   }

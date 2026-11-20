@@ -342,7 +342,10 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     while (handlers.size) {
       try {
         // The stream of the binary in use: the major of the running server, else of the last check, else of the first consumer (a consumer left from before a path change must not keep asking for the old major).
-        const u = await ensure(up && child ? up.major : (lastMajor ?? handlers.values().next().value ?? 1));
+        const mine = new Set(handlers.values());
+        const known = up && child ? up.major : lastMajor;
+        // Only a major an open consumer needs is asked for: a version 1 consumer on a version 2 binary is refused as before, it never starts a version 2 server.
+        const u = await ensure(known && mine.has(known) ? known : (handlers.values().next().value ?? 1));
         if (!handlers.size) break;
         streamAbort = new AbortController();
         const res = await ocFetch(`${u.url}${u.major === 2 ? "/api/event" : "/global/event"}`, { headers: { authorization: u.auth, accept: "text/event-stream" }, signal: streamAbort.signal });

@@ -440,6 +440,23 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     }
   }, 20_000);
 
+  it("an open OpenCode 1 consumer on an OpenCode 2 binary never starts a version 2 server through the event stream", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "oc-v1on2-")));
+    const logFile = join(root, "fake.log");
+    const server = createOpenCodeServer({ path: () => "", command: [process.execPath, BIN2], env: () => ({ FAKE_OPENCODE_LOG: logFile }) });
+    try {
+      expect(await server.check()).toBe(2);
+      const off = server.events({ event: () => {}, resync: () => {} }, 1);
+      // The first attempt is refused, the retry (1 s later) must be refused too.
+      await new Promise((r) => setTimeout(r, 2500));
+      off();
+      expect(server.running()).toBe(false);
+      expect(existsSync(logFile) ? readFileSync(logFile, "utf8").split("\n").filter((l) => l.includes('"start"')) : []).toEqual([]);
+    } finally {
+      await server.close();
+    }
+  }, 20_000);
+
   it("an OpenCode 2 binary older than 2.3.0 answers opencode_old naming 2.3.0", async () => {
     const d = await boot({ bin: BIN2, env: { FAKE_OPENCODE_VERSION: "2.2.0" } });
     expect((await d.ok({ type: "opencode.status" })).result).toMatchObject({ state: "old", message: expect.stringContaining("2.3.0") });
