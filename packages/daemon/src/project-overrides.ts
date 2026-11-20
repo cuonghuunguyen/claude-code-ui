@@ -32,7 +32,7 @@ export function projectOverrides(settings: Settings, cwd: string): ProjectOverri
 }
 
 const DEPTH_MAX = 64;
-/** The overrides of the Project a file belongs to: the nearest folder above it that is a Project or a Worktree of one. */
+/** The overrides of the Project a file belongs to: the nearest folder above it that has an override entry or is a Worktree of a folder that has one. */
 export function projectOverridesOfFile(settings: Settings, file: string): ProjectOverrides {
   if (!Object.keys(own(settings)).length) return {};
   let dir = dirname(file);

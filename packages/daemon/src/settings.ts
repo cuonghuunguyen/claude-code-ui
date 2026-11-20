@@ -57,10 +57,9 @@ const instructions = (label: string): Check => ({
   rule: `at most ${LABEL_ENTRIES_MAX} entries of 1 to ${COMMIT_INSTRUCTION_MAX} characters`,
 });
 const overrideText = (c: Check) => (v: unknown) => v !== "" && c.valid(v);
-/** One Project's overrides: only known fields, each under the rule of its global setting, an empty string is not a value (unset = absent). `strict`: the rule of a new value. */
-const overridesOk = (o: unknown, strict: boolean): o is ProjectOverrides => {
+/** One Project's overrides: only known fields, each under the rule of its global setting for a new value, an empty string is not a value (unset = absent). */
+const overridesOk = (o: unknown): o is ProjectOverrides => {
   if (!isObj(o)) return false;
-  const rule = (c: Check) => (strict ? (c.patch ?? c.valid) : c.valid);
   const fields: Record<string, (v: unknown) => boolean> = {
     engine: CHECKS.sessions.engine.valid,
     model: (v) => typeof v === "string" && v.length >= 1 && v.length <= 200 && !/[\0-\x1f\x7f]/.test(v),
@@ -72,7 +71,7 @@ const overridesOk = (o: unknown, strict: boolean): o is ProjectOverrides => {
   const groups: Record<string, Record<string, (v: unknown) => boolean>> = {
     inlineTask: { model: overrideText(CHECKS.inlineTask.model), openCodeModel: overrideText(CHECKS.inlineTask.openCodeModel) },
     history: { enabled: CHECKS.history.enabled.valid },
-    jira: { url: overrideText({ ...CHECKS.jira.url, valid: rule(CHECKS.jira.url) }), email: overrideText(CHECKS.jira.email), jql: overrideText(CHECKS.jira.jql), template: overrideText(CHECKS.jira.template) },
+    jira: { url: overrideText({ ...CHECKS.jira.url, valid: CHECKS.jira.url.patch ?? CHECKS.jira.url.valid }), email: overrideText(CHECKS.jira.email), jql: overrideText(CHECKS.jira.jql), template: overrideText(CHECKS.jira.template) },
   };
   return Object.entries(o).every(([k, v]) => {
     if (v === undefined) return true;
@@ -108,12 +107,12 @@ const overrides = (label: string): Check => ({
   valid: (v) =>
     isObj(v) &&
     Object.keys(v).length <= PROJECT_OVERRIDES_SIDES_MAX &&
-    Object.entries(v).every(([side, projects]) => keyOk(side) && isObj(projects) && Object.keys(projects).length <= LABEL_ENTRIES_MAX && Object.entries(projects).every(([cwd, o]) => keyOk(cwd) && overridesOk(o, true))),
+    Object.entries(v).every(([side, projects]) => keyOk(side) && isObj(projects) && Object.keys(projects).length <= LABEL_ENTRIES_MAX && Object.entries(projects).every(([cwd, o]) => keyOk(cwd) && overridesOk(o))),
   label,
   rule: `at most ${PROJECT_OVERRIDES_SIDES_MAX} machines with at most ${LABEL_ENTRIES_MAX} projects each, a project holding only known fields of valid values`,
   // A hand-edited entry that fails drops alone; the others stay.
   // The rule of a new value too: the whole map is written back on every change, and one entry a patch would refuse would refuse every later write (overrides have no legacy values).
-  stored: (v) => (isObj(v) ? overridesMap(v, (o) => overridesOk(o, true)) : undefined),
+  stored: (v) => (isObj(v) ? overridesMap(v, (o) => overridesOk(o)) : undefined),
   normalize: (v) => overridesMap(v as Record<string, unknown>, () => true),
 });
 const intIn = (label: string, min: number, max: number): Check => ({ valid: (v) => Number.isInteger(v) && (v as number) >= min && (v as number) <= max, label, rule: `a whole number from ${min} to ${max}` });
