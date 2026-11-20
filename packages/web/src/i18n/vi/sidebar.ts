@@ -354,6 +354,7 @@ export default {
   "sidebar.cw.noBranches": "Không có nhánh",
   "sidebar.cw.inWorktree": "trong worktree {name}",
   "sidebar.cw.noJira": "Jira chưa được thiết lập.",
+  "sidebar.cw.noProjectToken": "Chưa có token cho trang Jira của dự án này.",
   "sidebar.cw.openJira": "Mở Cài đặt › Jira",
   "sidebar.cw.openProjectJira": "Mở Cài đặt dự án › Jira",
   "sidebar.cw.ticketPlaceholder": "Mã, văn bản, liên kết ticket hoặc pull request",

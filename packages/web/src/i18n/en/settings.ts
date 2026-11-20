@@ -652,6 +652,8 @@ export default {
   "projectSettings.jira.tokenGlobal": "This project uses the global Jira URL and so the global token (Settings › Jira). Set a URL above to give it its own token.",
   "projectSettings.jira.shared": "Also used by {with}. Replacing or clearing the token changes it for all of them.",
   "projectSettings.jira.sharedGlobal": "the global settings",
-  "projectSettings.jira.sharedProjects": "{count} other projects",
+  "projectSettings.jira.sharedProjects": { one: "{count} other project", other: "{count} other projects" },
+  "projectSettings.jira.clearTitle": "Clear the token for {origin}?",
+  "projectSettings.jira.clearBody": "Also used by {with}. They lose this token too and cannot reach Jira until a new one is saved.",
   "settings.projectSettings": "Project settings for {project}…",
 } as const;

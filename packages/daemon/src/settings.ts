@@ -3,7 +3,7 @@
 import { isAbsolute } from "node:path";
 import { createJsonFile } from "./json-file.ts";
 import { marksOk } from "./back-marks.ts";
-import { EFFORTS, ENGINES, parseEditorCommand, PROJECT_OVERRIDES_SIDES_MAX, APP_ICON_MAX, COMMIT_INSTRUCTION_MAX, AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, jiraUrlProblem, LABEL_EMOJI_MAX, LABEL_ENTRIES_MAX, LABEL_ICON_MAX, LABEL_NAME_MAX, PARENT_FOLDER_MODES, SESSION_MODES, WORKER_MODES, type BackMark, type ProjectOverrides, type Settings, type SettingsPatch } from "@claude-ui/protocol";
+import { EFFORTS, ENGINES, parseEditorCommand, PROJECT_OVERRIDES_SIDES_MAX, APP_ICON_MAX, COMMIT_INSTRUCTION_MAX, AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, jiraUrlProblem, JIRA_HTTPS_RULE, LABEL_EMOJI_MAX, LABEL_ENTRIES_MAX, LABEL_ICON_MAX, LABEL_NAME_MAX, PARENT_FOLDER_MODES, SESSION_MODES, WORKER_MODES, type BackMark, type ProjectOverrides, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 
 export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {}, commitMessageWarm: false }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, projects: { overrides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } };
 
@@ -12,7 +12,7 @@ export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 
  * `stored`: reads a stored value that may be partly invalid and returns what is usable (instead of `valid` all or nothing).
  * `normalize`: the form a valid patched value is stored in.
  */
-type Check = { valid: (v: unknown) => boolean; label: string; rule: string; patch?: (v: unknown) => boolean; patchRule?: string; stored?: (v: unknown) => unknown; normalize?: (v: unknown) => unknown };
+type Check = { valid: (v: unknown) => boolean; label: string; rule: string; problem?: (v: unknown) => string | undefined; patch?: (v: unknown) => boolean; patchRule?: string; stored?: (v: unknown) => unknown; normalize?: (v: unknown) => unknown };
 const jiraUrl = (v: unknown) => {
   if (typeof v !== "string" || v.length > 500) return false;
   try {
@@ -109,6 +109,11 @@ const overrides = (label: string): Check => ({
     Object.keys(v).length <= PROJECT_OVERRIDES_SIDES_MAX &&
     Object.entries(v).every(([side, projects]) => keyOk(side) && isObj(projects) && Object.keys(projects).length <= LABEL_ENTRIES_MAX && Object.entries(projects).every(([cwd, o]) => keyOk(cwd) && overridesOk(o))),
   label,
+  // The whole map is one value: name the first Jira URL it refuses instead of the whole-map rule.
+  problem: (v) => {
+    const url = Object.values(isObj(v) ? v : {}).flatMap((projects) => Object.values(isObj(projects) ? projects : {})).map((o) => (isObj(o) && isObj(o.jira) ? o.jira.url : undefined)).find((u) => typeof u === "string" && u !== "" && !CHECKS.jira.url.patch!(u));
+    return url === undefined ? undefined : (jiraUrlProblem(url as string) ?? `${CHECKS.jira.url.label} must be ${CHECKS.jira.url.patchRule}`);
+  },
   rule: `at most ${PROJECT_OVERRIDES_SIDES_MAX} machines with at most ${LABEL_ENTRIES_MAX} projects each, a project holding only known fields of valid values`,
   // A hand-edited entry that fails drops alone; the others stay.
   // The rule of a new value too: the whole map is written back on every change, and one entry a patch would refuse would refuse every later write (overrides have no legacy values).
@@ -298,7 +303,7 @@ export function checkPatch(patch: unknown): string | undefined {
       if (s === "orchestration" && k === "coordinatorPermissions") continue;
       const c = Object.hasOwn(sec, k) ? sec[k] : undefined;
       if (!c) return `unknown setting ${s}.${k}`;
-      if (!(c.patch ?? c.valid)(v[k])) return `${c.label} must be ${c.patchRule ?? c.rule}`;
+      if (!(c.patch ?? c.valid)(v[k])) return c.problem?.(v[k]) ?? `${c.label} must be ${c.patchRule ?? c.rule}`;
     }
   }
 }
