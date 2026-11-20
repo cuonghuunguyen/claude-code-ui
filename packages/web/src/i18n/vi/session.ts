@@ -427,7 +427,7 @@ export default {
   "session.skillsDialog.locked": "{state} · đã khóa",
   "session.skillsDialog.stateTitle": "{hint}. Nhấn để đổi.",
   "session.skillsDialog.saving": "Đang lưu…",
-  "session.skillsDialog.savedLater": "Đã lưu. Thay đổi có hiệu lực khi các phiên của thư mục này rảnh.",
+  "session.skillsDialog.savedLater": "Đã lưu trong opencode.json. OpenCode dùng nó sau khi tải lại thư mục này: ở lần thay đổi tiếp theo tại đây khi không phiên nào của thư mục đang bận, hoặc sau khi OpenCode khởi động lại.",
   // signal.ts
   "session.signal.toolCalls": { other: "{count} lệnh gọi công cụ" },
   // rewind.ts

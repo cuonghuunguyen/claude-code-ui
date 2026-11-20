@@ -425,7 +425,7 @@ export default {
   "session.skillsDialog.locked": "{state} · locked",
   "session.skillsDialog.stateTitle": "{hint}. Click to change.",
   "session.skillsDialog.saving": "Saving…",
-  "session.skillsDialog.savedLater": "Saved. It applies when the sessions of this folder are idle.",
+  "session.skillsDialog.savedLater": "Saved in opencode.json. OpenCode uses it after it reloads this folder: at the next change made here while no session of the folder is busy, or after OpenCode restarts.",
   // signal.ts
   "session.signal.toolCalls": { one: "{count} tool call", other: "{count} tool calls" },
   // rewind.ts

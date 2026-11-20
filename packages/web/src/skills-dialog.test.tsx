@@ -194,7 +194,7 @@ it("with OpenCode flags the state button cycles On, Ask, Off and no token count 
   await d.click(d.state("/probe: On"));
   expect(d.calls.at(-1)).toEqual({ type: "skills.setState", cwd: "/p", sessionId: "s1", engine: "opencode", name: "probe", state: "ask", handles: {} });
   // A folder with a busy session was not reloaded: the notice says when it applies, not Claude's "old state" text.
-  expect(d.text()).toContain("Saved. It applies when the sessions of this folder are idle.");
+  expect(d.text()).toContain("Saved in opencode.json. OpenCode uses it after it reloads this folder");
   // Off is followed by On again.
   await d.click(d.state("/denied: Off"));
   expect(d.calls.at(-1)).toMatchObject({ name: "denied", state: "on" });
