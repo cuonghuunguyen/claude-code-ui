@@ -28,13 +28,18 @@ export function createConfigArea(ctx: ConfigAreaContext, conn: Pick<Connection, 
     const s = "sessionId" in msg && typeof msg.sessionId === "string" ? sessions.get(msg.sessionId) : undefined;
     // The Engine of the request: the live session's, else the one the client shows, else Claude (an older client). Only OpenCode answers config requests besides Claude.
     const engine = (s ? s.info().engine : undefined) ?? ("engine" in msg ? msg.engine : undefined) ?? "claude";
-    if (engine !== "claude" && msg.type.startsWith("mcp."))
+    if (engine !== "claude")
       try {
         const c = catalogues.byName(engine)?.config;
-        if (!c) return res.fail("config_unsupported", `The ${engine} engine has no MCP servers dialog.`);
+        if (!c) return res.fail("config_unsupported", `The ${engine} engine has no ${msg.type.startsWith("skills.") ? "skills" : "MCP servers"} dialog.`);
+        if (msg.type.startsWith("skills.")) {
+          const r = await c.skills(msg as Parameters<typeof c.skills>[0], cwd);
+          if (msg.type === "skills.setState") commandCache.clear();
+          return res.reply(r);
+        }
         return res.reply(await c.mcp(msg as Parameters<typeof c.mcp>[0], cwd, { local: conn.sameHost }));
       } catch (e) {
-        return res.fail(e instanceof EngineError || e instanceof ConfigError ? e.code : "mcp_failed", (e as Error).message);
+        return res.fail(e instanceof EngineError || e instanceof ConfigError ? e.code : msg.type.startsWith("skills.") ? "skills_failed" : "mcp_failed", (e as Error).message);
       }
     try {
       const live = s?.cwd === cwd ? s.claudeQuery() : undefined;

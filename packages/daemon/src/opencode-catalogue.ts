@@ -4,6 +4,7 @@ import { EFFORTS, type ClientMessage, type ModelInfo, type PermissionMode, type 
 import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx, type SavedSession, type Settings } from "./engine-catalogue.ts";
 import { brokenState, createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels, primaryAgents, ProviderStateBroken, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { createOpenCodeMcpConfig } from "./opencode-config-mcp.ts";
+import { createOpenCodeSkillsConfig } from "./opencode-config-skills.ts";
 import { checkLogin, listProviders, loginError } from "./opencode-providers.ts";
 import { createOpenCodeServer, OpenCodeError, type OpenCodeServer } from "./opencode-server.ts";
 import { mapLimit } from "./session-scan.ts";
@@ -267,7 +268,10 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
 
   return {
     engine: openCodeEngine,
-    config: { mcp: createOpenCodeMcpConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), hidden: (name) => openCodeEngine.attached.has(name), waitMs: o.server?.mcpWaitMs }) },
+    config: {
+      mcp: createOpenCodeMcpConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), hidden: (name) => openCodeEngine.attached.has(name), waitMs: o.server?.mcpWaitMs }),
+      skills: createOpenCodeSkillsConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), waitMs: o.server?.mcpWaitMs }),
+    },
     listScope: "folders",
     ownsId,
     // Listed, created or opened here: not a UUID (the transcript scan's shape), so it is not found by one.

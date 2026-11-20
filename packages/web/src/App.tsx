@@ -4565,6 +4565,8 @@ export function App() {
           sessionId={skillsDialog.sessionId}
           commands={skillsCommands}
           changed={configChanged[skillsDialog.cwd]}
+          engine={shownEngine}
+          config={shownCaps.config}
           request={(m) => client.current!.request(m)}
           onRun={runCommand}
           onClose={() => setSkillsDialog({ ...skillsDialog, open: false })}

@@ -23,7 +23,7 @@ import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 export const OPENCODE_MODES: PermissionMode[] = ["config", "default", "acceptEdits", "dontAsk", "plan", "bypassPermissions"];
 /** Modes offered: config first (the default, GH-705); plan is the plan agent (GH-684). */
 export const OPENCODE_PERMISSION_MODES: PermissionMode[] = ["config", "default", "acceptEdits", "dontAsk", "bypassPermissions"];
-export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_PERMISSION_MODES, agents: true, providers: true, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true, shell: true, config: { mcpScopes: ["project"], mcpTransports: ["stdio", "http"], skillStates: ["on", "off"], gaps: { mcpTools: "OpenCode does not list the tools of a server.", mcpRemoveScope: "Remove it from ~/.config/opencode/opencode.json." } } };
+export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_PERMISSION_MODES, agents: true, providers: true, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true, shell: true, config: { mcpScopes: ["project"], mcpTransports: ["stdio", "http"], skillStates: ["on", "ask", "off"], gaps: { mcpTools: "OpenCode does not list the tools of a server.", skillTokens: "OpenCode does not report a token count.", mcpRemoveScope: "Remove it from ~/.config/opencode/opencode.json." } } };
 
 export type Rule = { permission: string; pattern: string; action: "allow" | "ask" | "deny" };
 /** An entry of `GET /agent`. */

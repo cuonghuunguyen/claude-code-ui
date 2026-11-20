@@ -220,3 +220,117 @@ describe("OpenCode MCP servers dialog", { timeout: TEST_MS }, () => {
     expect(r).toMatchObject({ type: "error", code: "opencode_v2_unsupported" });
   });
 });
+
+const SKILL_FILE = `{
+  // keep this comment
+  "permission": { "bash": "ask", "skill": { "*": "allow", "legacy": "deny", "team-docs": "allow", "team-*": "ask" } }
+}
+`;
+
+describe("OpenCode skills dialog", { timeout: TEST_MS }, () => {
+  /** A project with skills in the four places OpenCode reads; the user's global folder and ~/.claude/skills point into the test folder. */
+  async function bootSkills(file: string | null = SKILL_FILE, mcpWaitMs?: number) {
+    const d = await boot({ ...(file !== null && { file }), fileName: "opencode.jsonc", env: { FAKE_OPENCODE_CONFIG_CACHE: "1" }, ...(mcpWaitMs !== undefined && { mcpWaitMs }) });
+    const home = join(d.root, "home");
+    const xdg = join(d.root, "xdg");
+    const saved = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+    process.env.HOME = home;
+    process.env.XDG_CONFIG_HOME = xdg;
+    cleanups.push(() => Object.entries(saved).forEach(([k, v]) => (v === undefined ? delete process.env[k] : (process.env[k] = v))));
+    const places: [string, string[]][] = [
+      [join(d.project, ".opencode/skills"), ["review", "legacy"]],
+      [join(d.project, ".claude/skills"), ["team-docs"]],
+      [join(xdg, "opencode/skills"), ["mine"]],
+      [join(home, ".claude/skills"), ["shared"]],
+    ];
+    for (const [dir, names] of places)
+      for (const n of names) {
+        mkdirSync(join(dir, n), { recursive: true });
+        writeFileSync(join(dir, n, "SKILL.md"), `---\nname: ${n}\n---\n`);
+      }
+    const skills = (msg: object = {}) => d.ok({ type: "skills.list", cwd: d.project, engine: "opencode", ...msg });
+    const set = (name: string, state: string, msg: object = {}) => d.ok({ type: "skills.setState", cwd: d.project, engine: "opencode", name, state, ...msg });
+    const states = (r: { skills: { name: string; state: string }[] }) => Object.fromEntries(r.skills.map((s) => [s.name, s.state]));
+    const rules = () => JSON.parse(d.file().replace(/^\s*\/\/.*$/gm, "")).permission.skill as Record<string, string>;
+    return { ...d, skills, set, states, rules };
+  }
+
+  it("skills.list on OpenCode shows where each skill comes from, no token count, and a denied skill as Off", async () => {
+    const d = await bootSkills();
+    const r = await d.skills();
+    const by = Object.fromEntries(r.skills.map((s: any) => [s.name, s]));
+    expect(by["customize-opencode"].source).toBe("built-in");
+    expect([by.review.source, by.legacy.source, by["team-docs"].source]).toEqual(["project", "project", "project"]);
+    expect(by.mine.source).toBe("user");
+    expect(by.shared.source).toBe("external");
+    expect(r.skills.some((s: any) => "tokens" in s)).toBe(false);
+    // `*` allow, `legacy` deny, then `team-docs` allow and `team-*` ask: the last matching rule wins, so team-docs is Ask.
+    expect(d.states(r)).toMatchObject({ review: "on", legacy: "off", "team-docs": "ask", mine: "on", "customize-opencode": "on" });
+    expect(by.legacy).toMatchObject({ advertised: true, displayName: "legacy" });
+  });
+
+  it("skills.setState writes the skill rule last in opencode.json, keeps the file and the list shows the new state", async () => {
+    const d = await bootSkills();
+    const ask = await d.set("review", "ask");
+    expect(d.states(ask).review).toBe("ask");
+    expect(ask.confirmed).toBe(true);
+    expect(Object.entries(d.rules()).at(-1)).toEqual(["review", "ask"]);
+    expect(d.file()).toContain("// keep this comment");
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(1);
+    // Off after Ask: the old exact rule is replaced, never duplicated.
+    const off = await d.set("review", "off");
+    expect(d.states(off).review).toBe("off");
+    expect(Object.keys(d.rules()).filter((k) => k === "review")).toHaveLength(1);
+    // On with `*` allow behind it: the exact rule is removed.
+    const on = await d.set("review", "on");
+    expect(d.states(on).review).toBe("on");
+    expect(d.rules()).not.toHaveProperty("review");
+    // On under a `team-*` ask pattern needs its own allow rule after the pattern (the old exact rule sat before it and lost).
+    const team = await d.set("team-docs", "on");
+    expect(d.states(team)["team-docs"]).toBe("on");
+    expect(Object.entries(d.rules()).at(-1)).toEqual(["team-docs", "allow"]);
+  });
+
+  it("skills.setState while a session of the folder is busy keeps the new state shown and is not confirmed", async () => {
+    const d = await bootSkills();
+    const id: string = (await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" })).session.id;
+    const port = d.log().find((l) => l.type === "start")!.port;
+    await fetch(`http://127.0.0.1:${port}/__status`, { method: "POST", body: JSON.stringify({ sessionId: id, status: { type: "busy" } }) });
+    const r = await d.set("review", "off");
+    expect(r.confirmed).toBe(false);
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+    // OpenCode still has the old rule until a dispose: the list keeps showing what the user saved.
+    expect(d.states(await d.skills()).review).toBe("off");
+    await fetch(`http://127.0.0.1:${port}/__status`, { method: "POST", body: JSON.stringify({ sessionId: id }) });
+    const done = await d.set("mine", "off");
+    expect(done.confirmed).toBe(true);
+    expect(d.states(done)).toMatchObject({ review: "off", mine: "off" });
+  });
+
+  it("skills.setState refuses a file whose permission is one string and writes nothing", async () => {
+    const d = await bootSkills(`{ "permission": "allow" }\n`);
+    const r = await d.request({ type: "skills.setState", cwd: d.project, engine: "opencode", name: "review", state: "off" });
+    expect(r).toMatchObject({ type: "error", code: "invalid_input" });
+    expect(d.file()).toBe(`{ "permission": "allow" }\n`);
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+  });
+
+  it("skills.setState creates opencode.json when the project has none", async () => {
+    const d = await bootSkills(null);
+    const r = await d.set("review", "off");
+    expect(d.states(r).review).toBe("off");
+    expect(JSON.parse(d.file("opencode.json")).permission).toEqual({ skill: { review: "deny" } });
+  });
+  it("skills.list answers a retryable error within the caller timer and never aborts the read", async () => {
+    const d = await bootSkills(SKILL_FILE, 200);
+    const port = (await d.skills(), d.log().find((l) => l.type === "start")!.port);
+    await fetch(`http://127.0.0.1:${port}/__delay`, { method: "POST", body: JSON.stringify({ path: "/skill", ms: 800 }) });
+    const t0 = Date.now();
+    expect(await d.request({ type: "skills.list", cwd: d.project, engine: "opencode" })).toMatchObject({ type: "error", code: "opencode_loading" });
+    expect(Date.now() - t0).toBeLessThan(700);
+    // The read went on (no 499, no dispose): the next list answers.
+    await new Promise((r) => setTimeout(r, 900));
+    expect(d.states(await d.skills()).review).toBe("on");
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+  });
+});

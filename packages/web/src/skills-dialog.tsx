@@ -2,7 +2,7 @@
 // token cost and state button. Logic and texts in skills.ts.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SearchIcon } from "lucide-react";
-import type { SkillRow, SkillsResult, SkillsSetStateResult, SlashCommand } from "@claude-ui/protocol";
+import type { ConfigCapabilities, Engine, SkillRow, SkillsResult, SkillsSetStateResult, SlashCommand } from "@claude-ui/protocol";
 import type { Request, RequestError } from "./client.ts";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { choose } from "./commands.ts";
@@ -12,6 +12,7 @@ import { useT } from "./i18n.ts";
 /**
  * `commands`: the shown session's commands (none on the new-session tab: every skill is then an inert row). `onRun`: what
  * clicking a command does, as `choose()` decides (send it, or put `/name ` in the prompt box). `changed`: bumped on `config.changed` for `cwd`.
+ * `engine`, `config`: the shown Engine and its config flags (GH-864; absent = Claude): the states the button cycles, and what the Engine lacks, with the reason.
  */
 export function SkillsDialog({
   open,
@@ -19,6 +20,8 @@ export function SkillsDialog({
   sessionId,
   commands,
   changed = 0,
+  engine,
+  config,
   request,
   onRun,
   onClose,
@@ -28,6 +31,8 @@ export function SkillsDialog({
   sessionId?: string;
   commands: SlashCommand[];
   changed?: number;
+  engine?: Engine;
+  config?: ConfigCapabilities;
   request: <T>(msg: Request) => Promise<T>;
   onRun: (r: ReturnType<typeof choose>) => void;
   onClose: () => void;
@@ -41,7 +46,7 @@ export function SkillsDialog({
   const [notice, setNotice] = useState<string>();
   const [filter, setFilter] = useState("");
 
-  const base = { cwd, ...(sessionId && { sessionId }) };
+  const base = { cwd, ...(sessionId && { sessionId }), ...(engine && { engine }) };
   const ask = useRef(request);
   ask.current = request;
   const where = useRef(base);
@@ -75,13 +80,13 @@ export function SkillsDialog({
     setNotice(undefined);
     setFilter("");
     void load();
-  }, [open, cwd, sessionId]);
+  }, [open, cwd, sessionId, engine]);
   useEffect(() => void (open && changed && load()), [changed]);
 
   /** Cycles a skill's state: the row shows the next one at once, then the daemon's answer (the session's own view of it). */
   async function change(skill: SkillRow) {
     if (saving) return;
-    const state = nextState(skill.state);
+    const state = nextState(skill.state, config?.skillStates);
     setError(undefined);
     setNotice(undefined);
     setSaving(skill.name);
@@ -89,7 +94,7 @@ export function SkillsDialog({
     try {
       const r = await request<SkillsSetStateResult>({ type: "skills.setState", ...base, name: skill.name, state, ...(skill.handles && { handles: skill.handles }) });
       setSkills(r.skills);
-      if (!r.confirmed) setNotice(noticeUnconfirmed());
+      if (!r.confirmed) setNotice(config ? t("session.skillsDialog.savedLater") : noticeUnconfirmed());
     } catch (e) {
       if ((e as RequestError).code === "cli_timeout") setNotice(noticeSlow());
       else setError((e as Error).message || t("session.skillsDialog.changeFailed"));
@@ -123,19 +128,20 @@ export function SkillsDialog({
       {loadError && <Banner kind="error">{t("session.skillsDialog.loadFailed", { error: loadError })}</Banner>}
       {error && <Banner kind="error">{error}</Banner>}
       {notice && <Banner kind="warning">{notice}</Banner>}
+      {config?.gaps.skillTokens && <p className="text-muted-foreground text-sm" data-testid="skills-tokens-gap">{config.gaps.skillTokens}</p>}
       {loading && !!commands.length && <p className="text-muted-foreground text-sm">{t("session.skillsDialog.loadingSkills")}</p>}
       {loading && !commands.length && <p className="text-muted-foreground text-sm">{t("session.skillsDialog.loadingCommands")}</p>}
       {!loading && !rows.length && <p className="py-6 text-center text-muted-foreground text-sm">{none || !filter.trim() ? t("session.skillsDialog.none") : t("session.skillsDialog.noMatch")}</p>}
       <div className="flex flex-col gap-px" data-testid="skills-list">
         {rows.map((r) => (
-          <SkillRowView key={r.id} row={r} saving={saving} onRun={(c) => (onRun(choose(c)), onClose())} onChange={change} />
+          <SkillRowView key={r.id} row={r} saving={saving} engineStates={!!config} onRun={(c) => (onRun(choose(c)), onClose())} onChange={change} />
         ))}
       </div>
     </ConfigDialog>
   );
 }
 
-function SkillRowView({ row, saving, onRun, onChange }: { row: Row; saving?: string; onRun: (c: SlashCommand) => void; onChange: (s: SkillRow) => void }) {
+function SkillRowView({ row, saving, engineStates, onRun, onChange }: { row: Row; saving?: string; engineStates: boolean; onRun: (c: SlashCommand) => void; onChange: (s: SkillRow) => void }) {
   useT();
   const { skill, command } = row;
   // The extension shows a skill's source and cost in the description's place; the description is the tooltip.
@@ -157,12 +163,12 @@ function SkillRowView({ row, saving, onRun, onChange }: { row: Row; saving?: str
           {body}
         </div>
       )}
-      {skill && <StateControl skill={skill} label={row.label} saving={saving} onChange={onChange} />}
+      {skill && <StateControl skill={skill} label={row.label} saving={saving} engineStates={engineStates} onChange={onChange} />}
     </div>
   );
 }
 
-function StateControl({ skill, label, saving, onChange }: { skill: SkillRow; label: string; saving?: string; onChange: (s: SkillRow) => void }) {
+function StateControl({ skill, label, saving, engineStates, onChange }: { skill: SkillRow; label: string; saving?: string; engineStates: boolean; onChange: (s: SkillRow) => void }) {
   const t = useT();
   const text = stateLabel(skill.state);
   if (skill.lockedBy)
@@ -176,7 +182,7 @@ function StateControl({ skill, label, saving, onChange }: { skill: SkillRow; lab
       type="button"
       className="mr-2 h-8 shrink-0 rounded-md bg-secondary px-2.5 text-[13px] outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 max-md:h-11 max-md:min-w-11"
       data-state={skill.state}
-      title={t("session.skillsDialog.stateTitle", { hint: stateHint(skill.state) })}
+      title={t("session.skillsDialog.stateTitle", { hint: stateHint(skill.state, engineStates) })}
       aria-label={`${label}: ${text}`}
       disabled={!!saving}
       onClick={() => onChange(skill)}

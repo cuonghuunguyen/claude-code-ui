@@ -397,10 +397,15 @@ export default {
   "session.skills.state.nameOnly": "Chỉ tên",
   "session.skills.state.userOnly": "Chỉ người dùng",
   "session.skills.state.off": "Tắt",
+  "session.skills.state.ask": "Hỏi",
   "session.skills.hint.on": "Claude thấy nó và bạn có thể gọi nó",
   "session.skills.hint.nameOnly": "Claude chỉ thấy tên của nó",
   "session.skills.hint.userOnly": "Chỉ bạn có thể gọi nó; ẩn với Claude",
   "session.skills.hint.off": "Không hiện với Claude hay trong danh sách lệnh",
+  "session.skills.hint.ask": "Hỏi trước khi dùng",
+  "session.skills.hintEngine.on": "Agent tải nó mà không hỏi",
+  "session.skills.hintEngine.ask": "Agent hỏi bạn trước khi tải nó",
+  "session.skills.hintEngine.off": "Agent không thể tải nó; nó vẫn nằm trong danh sách này",
   "session.skills.lock.higher": "Bị ghi đè bởi cài đặt có ưu tiên cao hơn",
   "session.skills.lock.plugin": "Do plugin của nó điều khiển",
   "session.skills.lock.author": "Cố định trong tệp skill",
@@ -422,6 +427,7 @@ export default {
   "session.skillsDialog.locked": "{state} · đã khóa",
   "session.skillsDialog.stateTitle": "{hint}. Nhấn để đổi.",
   "session.skillsDialog.saving": "Đang lưu…",
+  "session.skillsDialog.savedLater": "Đã lưu. Thay đổi có hiệu lực khi các phiên của thư mục này rảnh.",
   // signal.ts
   "session.signal.toolCalls": { other: "{count} lệnh gọi công cụ" },
   // rewind.ts
