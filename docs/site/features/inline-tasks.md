@@ -6,7 +6,7 @@ An inline task is not a session: it has no entry in the session list and no tran
 
 ## When to use it
 
-The tool is always loaded in a Claude Code session: its description is in the first prompt of every turn, so the agent sees it without a tool search. The agent reads these rules (the same text is its guidance):
+In a Claude Code session the tool is always loaded (OpenCode sessions do not do this): its description is in the first prompt of every turn, so the agent sees it without a tool search. The agent reads these rules (the same text is its guidance):
 
 > Prefer inline_task over Agent (haiku, Explore, general-purpose) when the task:
 > - is mechanical: search, read logs, run tests, extract, summarize, classify, format, small edit;
@@ -61,7 +61,7 @@ The card sits under the tool call. It shows the status, the task, and `model · 
 | Time | 10 minutes |
 | Running at once | 3 per session |
 | Prompt | 20,000 characters |
-| Files given to the task | 20 files, about 400,000 characters in total in the prompt |
+| Files given to the task | 20 files, about 250,000 bytes in total in the prompt |
 
 A file that does not fit in the prompt is not rejected: the prompt names its path and size, and the task reads it with `Read` and `Grep` (both are added to its tools when the agent did not grant them). Files are added in the order given.
 

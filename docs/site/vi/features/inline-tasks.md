@@ -6,7 +6,7 @@ Tác vụ nội tuyến không phải là một phiên: nó không có mục tro
 
 ## Khi nào dùng {#when-to-use}
 
-Trong phiên Claude Code, tool này luôn được nạp sẵn: mô tả của nó nằm trong prompt đầu tiên của mỗi lượt, agent thấy nó mà không cần tìm tool. Agent đọc các quy tắc sau (cùng một văn bản với hướng dẫn của agent):
+Chỉ trong phiên Claude Code, tool này luôn được nạp sẵn (phiên OpenCode không có hành vi này): mô tả của nó nằm trong prompt đầu tiên của mỗi lượt, agent thấy nó mà không cần tìm tool. Agent đọc các quy tắc sau (cùng một văn bản với hướng dẫn của agent):
 
 > Prefer inline_task over Agent (haiku, Explore, general-purpose) when the task:
 > - is mechanical: search, read logs, run tests, extract, summarize, classify, format, small edit;
@@ -63,7 +63,7 @@ Thẻ nằm dưới lần gọi tool. Thẻ hiển thị trạng thái, nội du
 | Thời gian | 10 phút |
 | Chạy cùng lúc | 3 mỗi phiên |
 | Prompt | 20.000 ký tự |
-| Tệp đưa cho tác vụ | 20 tệp, tổng khoảng 400.000 ký tự trong prompt |
+| Tệp đưa cho tác vụ | 20 tệp, tổng khoảng 250.000 byte trong prompt |
 
 Tệp không vừa trong prompt không bị từ chối: prompt ghi đường dẫn và kích thước của tệp, và tác vụ đọc nó bằng `Read` và `Grep` (cả hai được thêm vào tool của tác vụ nếu agent chưa cấp). Các tệp được thêm theo thứ tự đã cho.
 

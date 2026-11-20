@@ -1,6 +1,6 @@
 // The `inline` tool group of the claude-ui MCP server (docs/spec.md "Inline tasks (GH-734)"): the agent runs a mid-size task as one
 // `inline_task` call on a small model with minimized context. The engine's `EngineSession.inlineTask` runs it; this group checks the input.
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { z } from "zod";
 import { DAEMON_SERVER, ToolError, type DaemonTool, type DaemonToolCtx, type DaemonToolGroup } from "./daemon-mcp.ts";
@@ -24,8 +24,8 @@ Examples:
 - Log extraction: grep a large log, return the lines asked for.
 - Mechanical edit: rename a symbol in a few files, return files changed and check result.`;
 
-/** Characters of `files` appended to the prompt: a 200k-token context (smallest default) minus output, system and tools, at ~4 characters per token. A file that does not fit is not appended; the run reads it with Read or Grep. */
-export const INLINE_FILES_BUDGET = 400_000;
+/** Bytes of `files` appended to the prompt. Assumption: the smallest default run context is 200k tokens; minus output, system and tools, and at 2-3 bytes per token for dense input (minified JSON, base64), 250,000 bytes stay inside it. A file that does not fit is not appended; the run reads it with Read or Grep. */
+export const INLINE_FILES_BUDGET_BYTES = 250_000;
 export const PROMPT_MAX = 20_000;
 const REFUSED_SERVERS = [DAEMON_SERVER, "orchestration"];
 const TITLE_CHARS = 60;
@@ -58,6 +58,23 @@ const shape = {
 };
 type Args = { prompt: string; files?: string[]; tools?: InlineBuiltin[]; mcp?: string[]; model?: string; maxTurns?: number };
 
+/** Reads at most `max` bytes: a file that grew after its stat does not go over the budget. */
+function readUpTo(path: string, max: number) {
+  const fd = openSync(path, "r");
+  try {
+    const buf = Buffer.alloc(max);
+    let got = 0;
+    while (got < max) {
+      const r = readSync(fd, buf, got, max - got, got);
+      if (r === 0) break;
+      got += r;
+    }
+    return buf.subarray(0, got);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 const withReadGrep = (tools: InlineBuiltin[], left: boolean): InlineBuiltin[] => (left ? [...tools, ...(["Read", "Grep"] as const).filter((t) => !tools.includes(t))] : tools);
 
 export function createInlineTask(deps: InlineTaskDeps): DaemonToolGroup {
@@ -83,11 +100,11 @@ export function createInlineTask(deps: InlineTaskDeps): DaemonToolGroup {
     let left = false;
     const parts = found.map(({ abs, size: n }, i) => {
       const path = slash(relative(root, abs));
-      if (used + n > INLINE_FILES_BUDGET) {
+      if (used + n > INLINE_FILES_BUDGET_BYTES) {
         left = true;
         return `<file path="${path}" size="${size(n)}" not-included>Too large to include: read it with Grep or Read.</file>`;
       }
-      const buf = readFileSync(abs);
+      const buf = readUpTo(abs, n);
       if (buf.includes(0)) throw new ToolError(`${files[i]} is a binary file.`);
       used += n;
       return `<file path="${path}">\n${buf.toString("utf8")}\n</file>`;
