@@ -6,6 +6,7 @@ import { brokenState, createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABI
 import { forkAt } from "./opencode-fork.ts";
 import { createOpenCodeMcpConfig } from "./opencode-config-mcp.ts";
 import { createOpenCodeSkillsConfig } from "./opencode-config-skills.ts";
+import { createOpenCodePluginsConfig } from "./opencode-config-plugins.ts";
 import { checkLogin, listProviders, loginError } from "./opencode-providers.ts";
 import { createOpenCodeServer, OpenCodeError, type OpenCodeServer } from "./opencode-server.ts";
 import { mapLimit } from "./session-scan.ts";
@@ -281,6 +282,7 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     config: {
       mcp: createOpenCodeMcpConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), hidden: (name) => openCodeEngine.attached.has(name), waitMs: o.server?.mcpWaitMs }),
       skills: createOpenCodeSkillsConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), waitMs: o.server?.mcpWaitMs }),
+      plugins: createOpenCodePluginsConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), waitMs: o.server?.mcpWaitMs }),
     },
     listScope: "folders",
     ownsId,

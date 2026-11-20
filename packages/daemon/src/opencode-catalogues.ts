@@ -67,6 +67,10 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
         if ((await known()) !== v1) throw new EngineError("opencode_v2_unsupported", "OpenCode 2 does not support the skills dialog in claude-ui yet.");
         return v1.config!.skills(msg, cwd);
       },
+      plugins: async (msg, cwd) => {
+        if ((await known()) !== v1) throw new EngineError("opencode_v2_unsupported", "OpenCode 2 does not support the Plugins dialog in claude-ui yet.");
+        return v1.config!.plugins(msg, cwd);
+      },
     },
     listScope: v1.listScope,
     ownsId: v1.ownsId,

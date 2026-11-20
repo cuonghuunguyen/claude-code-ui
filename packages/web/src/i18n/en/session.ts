@@ -342,6 +342,11 @@ export default {
   "session.plugins.scope.local": "Install locally",
   "session.plugins.scope.localHint": "Only you, only this project",
   // plugins-dialog.tsx
+  "session.pluginsDialog.noneOpenCode": "No plugins in the plugin list yet.",
+  "session.pluginsDialog.savedLater": "Saved. It applies when the sessions of this folder are idle.",
+  "session.pluginsDialog.specPlaceholder": "npm package or path, e.g. my-plugin or ./plugins/x.js",
+  "session.pluginsDialog.specAdd": "Add plugin",
+  "session.pluginsDialog.specHint": "Type an npm package or a path. OpenCode loads it when the folder reloads, and reports no error for a wrong entry.",
   "session.pluginsDialog.installing": "Installing {name}…",
   "session.pluginsDialog.updating": "Updating {name}…",
   "session.pluginsDialog.loading": "Loading plugins…",

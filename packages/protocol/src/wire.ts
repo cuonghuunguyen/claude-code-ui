@@ -32,7 +32,7 @@ export const OPENCODE_MIN = "1.18.0";
 /** Oldest OpenCode 2 this daemon works with: its API was checked against 2.3.0. */
 export const OPENCODE2_MIN = "2.3.0";
 /** Config dialog controls an Engine lacks (ADR 0012): each gap hides its control and shows the reason text in its place. */
-export type ConfigGap = "mcpTools" | "mcpRemoveScope" | "skillTokens" | "pluginSwitch" | "pluginUpdate" | "pluginCatalog" | "marketplaces";
+export type ConfigGap = "mcpTools" | "mcpRemoveScope" | "skillTokens" | "pluginSwitch" | "pluginUpdate" | "pluginCatalog" | "pluginRemoveScope" | "pluginStatus" | "marketplaces";
 export type ConfigCapabilities = {
   /** Scopes `mcp.add` and `mcp.remove` write. */
   mcpScopes: ConfigScope[];
@@ -482,28 +482,28 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** `claude edit-skill-overrides --json`, then `reloadSkills()` and a poll until the row shows `state`; reply SkillsSetStateResult. Broadcasts `config.changed`. */
   | { type: "skills.setState"; cwd: string; sessionId?: string; engine?: Engine; name: string; state: SkillState; handles?: SkillHandles }
   // Manage Plugins dialog (docs/spec.md "Config dialogs: plugins"): `claude plugin …` in `cwd`; each write then reloads plugins in
-  // every live query and broadcasts `config.changed` (kind plugins).
+  // every live query and broadcasts `config.changed` (kind plugins). `engine`: the Engine of the shown session or new-session tab (absent = claude); OpenCode edits the plugin list of the project's opencode.json.
   /** Reply PluginsListResult. */
-  | { type: "plugins.list"; cwd: string }
+  | { type: "plugins.list"; cwd: string; engine?: Engine }
   /** Reply PluginWriteResult. */
-  | { type: "plugins.install"; cwd: string; pluginId: string; scope: ConfigScope }
+  | { type: "plugins.install"; cwd: string; engine?: Engine; pluginId: string; scope: ConfigScope }
   /** `scope`: the installed row's (the CLI uninstalls from user scope otherwise). */
-  | { type: "plugins.uninstall"; cwd: string; pluginId: string; scope?: PluginScope }
-  | { type: "plugins.setEnabled"; cwd: string; pluginId: string; enabled: boolean }
+  | { type: "plugins.uninstall"; cwd: string; engine?: Engine; pluginId: string; scope?: PluginScope }
+  | { type: "plugins.setEnabled"; cwd: string; engine?: Engine; pluginId: string; enabled: boolean }
   /** Reply PluginUpdateResult. */
-  | { type: "plugins.update"; cwd: string; pluginId: string; scope: PluginScope }
+  | { type: "plugins.update"; cwd: string; engine?: Engine; pluginId: string; scope: PluginScope }
   /** `reloadPlugins()` in every live query; reply ReloadResult. */
-  | { type: "plugins.reload"; cwd: string }
+  | { type: "plugins.reload"; cwd: string; engine?: Engine }
   /** Closes the session's live query; its next prompt resumes the transcript in a new CLI. */
-  | { type: "plugins.restart"; cwd: string; sessionId: string }
+  | { type: "plugins.restart"; cwd: string; engine?: Engine; sessionId: string }
   /** Reply MarketplacesResult. */
-  | { type: "marketplace.list"; cwd: string }
+  | { type: "marketplace.list"; cwd: string; engine?: Engine }
   /** `source`: GitHub repo, URL or path. Reply `{}`. */
-  | { type: "marketplace.add"; cwd: string; source: string }
+  | { type: "marketplace.add"; cwd: string; engine?: Engine; source: string }
   /** Uninstalls its plugins too. Reply PluginWriteResult. */
-  | { type: "marketplace.remove"; cwd: string; name: string }
+  | { type: "marketplace.remove"; cwd: string; engine?: Engine; name: string }
   /** Refreshes its catalog. Reply `{}`. */
-  | { type: "marketplace.update"; cwd: string; name: string }
+  | { type: "marketplace.update"; cwd: string; engine?: Engine; name: string }
   // Addons (docs/spec.md "Addons"): Hub only, never routed to a Side. Each write broadcasts `config.changed` (kind addons, cwd "").
   /** Reply AddonsListResult. Re-reads local-folder addons. */
   | { type: "addons.list" }
@@ -1279,7 +1279,8 @@ export type PluginsListResult = { installed: InstalledPlugin[]; available: Avail
 export type MarketplacesResult = { marketplaces: MarketplaceInfo[] };
 /** `failed`: sessions whose `reloadPlugins()` threw (restart them); `errorCount`: plugin load errors summed. */
 export type ReloadResult = { reloaded: number; failed: string[]; errorCount: number };
-export type PluginWriteResult = { reload: ReloadResult };
+/** `applied: false` (OpenCode): saved, but the folder was busy so it is not loaded yet. */
+export type PluginWriteResult = { reload: ReloadResult; applied?: boolean };
 export type PluginUpdateFailure = "timeout" | "policy" | "disabled" | "needs_consent" | "not_installed" | "not_found" | "network" | "other";
 /** ok: `message` = the CLI's result line (e.g. already at the latest version); `reload` when the update needs one. */
 export type PluginUpdateResult = { outcome: "ok"; message?: string; reload?: ReloadResult } | { outcome: "failed"; kind: PluginUpdateFailure; message: string };

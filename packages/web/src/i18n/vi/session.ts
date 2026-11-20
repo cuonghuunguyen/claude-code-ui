@@ -344,6 +344,11 @@ export default {
   "session.plugins.scope.local": "Cài đặt cục bộ",
   "session.plugins.scope.localHint": "Chỉ bạn, chỉ dự án này",
   // plugins-dialog.tsx
+  "session.pluginsDialog.noneOpenCode": "Danh sách plugin chưa có mục nào.",
+  "session.pluginsDialog.savedLater": "Đã lưu. Thay đổi có hiệu lực khi các phiên của thư mục này rảnh.",
+  "session.pluginsDialog.specPlaceholder": "Gói npm hoặc đường dẫn, ví dụ my-plugin hoặc ./plugins/x.js",
+  "session.pluginsDialog.specAdd": "Thêm plugin",
+  "session.pluginsDialog.specHint": "Nhập gói npm hoặc đường dẫn. OpenCode nạp khi thư mục được nạp lại và không báo lỗi nếu nhập sai.",
   "session.pluginsDialog.installing": "Đang cài đặt {name}…",
   "session.pluginsDialog.updating": "Đang cập nhật {name}…",
   "session.pluginsDialog.loading": "Đang tải plugin…",

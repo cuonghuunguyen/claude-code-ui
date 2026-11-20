@@ -61,11 +61,11 @@ const has = (data: Record<string, unknown>, path: (string | number)[]) => {
   return v !== undefined;
 };
 
-function write(link: string, path: (string | number)[], value: unknown) {
+function write(link: string, path: (string | number)[], value: unknown, insert = false) {
   // A symlinked config file (dotfiles) stays a link: the real file is replaced, with its mode.
   const file = existsSync(link) ? realpathSync(link) : link;
   const { text } = read(file);
-  const next = applyEdits(text, modify(text, path, value, { formattingOptions: { insertSpaces: true, tabSize: 2, eol: text.includes("\r\n") ? "\r\n" : "\n" } }));
+  const next = applyEdits(text, modify(text, path, value, { isArrayInsertion: insert, formattingOptions: { insertSpaces: true, tabSize: 2, eol: text.includes("\r\n") ? "\r\n" : "\n" } }));
   const tmp = `${file}.${process.pid}.tmp`;
   writeFileSync(tmp, next, existsSync(file) ? { mode: statSync(file).mode & 0o777 } : undefined);
   renameSync(tmp, file);
@@ -80,4 +80,38 @@ export function editProjectFile(cwd: string, path: (string | number)[], value: u
   for (const f of files) read(f);
   for (const f of files) write(f, path, value);
   return files;
+}
+
+/** The entries of the list at `path` in each project file that has one, lowest precedence first (OpenCode joins the lists of its config files). A key that is not a list is refused. */
+export function projectLists(cwd: string, path: string[]): { file: string; items: unknown[] }[] {
+  return projectFiles(cwd).flatMap((file) => {
+    let v: unknown = read(file).data;
+    for (const k of path) v = v !== null && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined;
+    if (v === undefined) return [];
+    if (!Array.isArray(v)) throw new ConfigFileError("config_invalid", `${file}: "${path.join(".")}" is not a list. Fix it and try again.`);
+    return [{ file, items: v }];
+  });
+}
+
+/**
+ * Appends `value` to the list at `path` of the winning project file (the list is created when no file has one in it), or removes from every project file
+ * the entries `drop` accepts. Same rules as `editProjectFile`: every file is parsed first, atomic per file, comments and layout kept. Returns the files written.
+ */
+export function editProjectList(cwd: string, path: string[], change: { append: unknown } | { drop: (item: unknown) => boolean }): string[] {
+  const lists = projectLists(cwd, path);
+  if ("append" in change) {
+    const file = writeTarget(cwd);
+    read(file);
+    const own = lists.find((l) => l.file === file);
+    write(file, own ? [...path, own.items.length] : path, own ? change.append : [change.append], !!own);
+    return [file];
+  }
+  const done: string[] = [];
+  for (const l of lists) {
+    const at = l.items.flatMap((item, i) => (change.drop(item) ? [i] : []));
+    // From the end: an earlier index stays valid after a later one is removed.
+    for (const i of at.reverse()) write(l.file, [...path, i], undefined);
+    if (at.length) done.push(l.file);
+  }
+  return done;
 }
