@@ -1,6 +1,6 @@
 // The project config file of OpenCode 1 (opencode.json / opencode.jsonc): located and edited by the daemon, because `PATCH /config` writes a file OpenCode does not read.
 // Edits keep the user's comments and layout (jsonc-parser). A file that does not parse is never written.
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { applyEdits, modify, parse, printParseErrorCode, type ParseError } from "jsonc-parser";
 
@@ -61,11 +61,13 @@ const has = (data: Record<string, unknown>, path: (string | number)[]) => {
   return v !== undefined;
 };
 
-function write(file: string, path: (string | number)[], value: unknown) {
+function write(link: string, path: (string | number)[], value: unknown) {
+  // A symlinked config file (dotfiles) stays a link: the real file is replaced, with its mode.
+  const file = realpathSync(link);
   const { text } = read(file);
   const next = applyEdits(text, modify(text, path, value, { formattingOptions: { insertSpaces: true, tabSize: 2, eol: text.includes("\r\n") ? "\r\n" : "\n" } }));
   const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync(tmp, next);
+  writeFileSync(tmp, next, { mode: statSync(file).mode & 0o777 });
   renameSync(tmp, file);
 }
 

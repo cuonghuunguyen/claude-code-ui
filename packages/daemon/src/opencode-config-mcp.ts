@@ -86,13 +86,20 @@ export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd:
   };
 
   async function list(cwd: string): Promise<McpListResult> {
-    const config = server.request<{ mcp?: Record<string, McpConfig> }>("/config", { directory: cwd }).then((c) => c.mcp ?? {});
+    // Never cut off (a cold MCP load may hold it too), never an unhandled rejection: a failed read gives no type or command.
+    const config = server.request<{ mcp?: Record<string, McpConfig> }>("/config", { directory: cwd, timeoutMs: 0 }).then((c) => c.mcp ?? {}, () => undefined);
     const first = await raced(read(cwd));
-    const status: Status =
-      first === "late"
-        ? Object.fromEntries(Object.entries(await config).map(([name, c]) => [name, { status: c.enabled === false ? "disabled" : "pending" }]))
-        : first.value;
-    const defined = await config.catch(() => ({}) as Record<string, McpConfig>);
+    let defined: Record<string, McpConfig> = {};
+    let status: Status;
+    if (first === "late") {
+      const c = await raced(config);
+      if (c === "late" || !c.value) throw fail("opencode_loading", "OpenCode is still loading this folder. Try again in a moment.");
+      defined = c.value;
+      status = Object.fromEntries(Object.entries(defined).map(([name, m]) => [name, { status: m.enabled === false ? "disabled" : "pending" }]));
+    } else {
+      status = first.value;
+      defined = (await config) ?? {};
+    }
     const project = projectKeys(cwd, ["mcp"]);
     const user = globalNames();
     const gone = removed.get(cwd);
@@ -167,7 +174,9 @@ export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd:
             return done === "late" ? ({ requiresUserAction: true, opened: true } satisfies McpAuthResult) : ({ requiresUserAction: false } satisfies McpAuthResult);
           }
           // Another machine: the redirect cannot reach OpenCode's port, so the dialog opens the page and the user pastes the redirect URL.
-          const r = (await call(cwd, mcpPath(msg.name, "/auth"))) as { authorizationUrl?: string };
+          const done = await raced(call(cwd, mcpPath(msg.name, "/auth")));
+          if (done === "late") throw fail("opencode_loading", "OpenCode is still loading this folder. Try again in a moment.");
+          const r = done.value as { authorizationUrl?: string };
           return { requiresUserAction: true, ...(r.authorizationUrl && { authUrl: r.authorizationUrl }) } satisfies McpAuthResult;
         }
         case "mcp.oauthCallback": {
@@ -178,11 +187,12 @@ export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd:
             // Not a URL.
           }
           if (!code) throw fail("invalid_input", "The pasted address has no code. Paste the address of the page that opened after you signed in.");
-          await call(cwd, mcpPath(msg.name, "/auth/callback"), "POST", { code });
+          const sent = await raced(call(cwd, mcpPath(msg.name, "/auth/callback"), "POST", { code }));
+          if (sent === "late") throw fail("opencode_loading", "OpenCode is still loading this folder. Try again in a moment.");
           return {};
         }
         case "mcp.clearAuth": {
-          await call(cwd, mcpPath(msg.name, "/auth"), "DELETE");
+          await raced(call(cwd, mcpPath(msg.name, "/auth"), "DELETE"));
           return await after(cwd, await o.repair(cwd));
         }
       }

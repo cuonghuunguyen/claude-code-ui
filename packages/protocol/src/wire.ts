@@ -31,7 +31,6 @@ export const engineOf = (s: { engine?: Engine }): Engine => s.engine ?? DEFAULT_
 export const OPENCODE_MIN = "1.18.0";
 /** Oldest OpenCode 2 this daemon works with: its API was checked against 2.3.0. */
 export const OPENCODE2_MIN = "2.3.0";
-/** What an Engine supports for its sessions (ADR 0012); web hides or disables a control by these, never by engine name. */
 /** Config dialog controls an Engine lacks (ADR 0012): each gap hides its control and shows the reason text in its place. */
 export type ConfigGap = "mcpTools" | "mcpRemoveScope" | "skillTokens" | "pluginSwitch" | "pluginUpdate" | "pluginCatalog" | "marketplaces";
 export type ConfigCapabilities = {
@@ -43,6 +42,7 @@ export type ConfigCapabilities = {
   skillStates: SkillState[];
   gaps: Partial<Record<ConfigGap, string>>;
 };
+/** What an Engine supports for its sessions (ADR 0012); web hides or disables a control by these, never by engine name. */
 export type EngineCapabilities = {
   /** Every permission mode the Engine has; SessionInfo.permissionModes is the subset offered now. */
   permissionModes: PermissionMode[];
@@ -461,7 +461,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "worktree.remove"; cwd: string; path: string; expectSafe?: boolean; expect?: { uncommitted: number; ahead: number; ignored?: number }; deleteBranch?: boolean }
   // MCP servers dialog (docs/spec.md "Config dialogs"): the live query of `sessionId` when it has one, else the config query of `cwd`. `engine`: the Engine of the shown session or new-session tab (absent = the session's own, else claude).
   /** Reply McpListResult. */
-  | { type: "mcp.list"; cwd: string; sessionId?: string }
+  | { type: "mcp.list"; cwd: string; sessionId?: string; engine?: Engine }
   /** `toggleMcpServer()`: persists for new sessions of the project; reply McpListResult. */
   | { type: "mcp.toggle"; cwd: string; sessionId?: string; engine?: Engine; name: string; enabled: boolean }
   /** Reply McpListResult. */

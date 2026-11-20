@@ -1,5 +1,5 @@
 // The MCP servers dialog on OpenCode 1 (GH-864 slice 1): reads and actions through the fake `opencode`, saved changes in the project's opencode.json(c).
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -186,6 +186,26 @@ describe("OpenCode MCP servers dialog", { timeout: TEST_MS }, () => {
     const r = await d.request({ type: "mcp.toggle", cwd: d.project, engine: "opencode", name: "a", enabled: false });
     expect(r).toMatchObject({ type: "error", code: "config_invalid" });
     expect(d.file()).toBe(bad);
+  });
+
+  it("an edit of a symlinked opencode.json updates the link target and keeps the link", async () => {
+    const d = await boot();
+    const target = join(d.root, "dotfiles-opencode.json");
+    writeFileSync(target, FILE);
+    symlinkSync(target, join(d.project, "opencode.json"));
+    await d.mcp({ type: "mcp.toggle", name: "echo", enabled: false });
+    expect(lstatSync(join(d.project, "opencode.json")).isSymbolicLink()).toBe(true);
+    expect(readFileSync(target, "utf8")).toContain('"enabled": false');
+  });
+
+  it("mcp.list still answers when GET /config fails", async () => {
+    const d = await boot({ file: FILE });
+    await d.mcp({ type: "mcp.list" });
+    const port = d.log().find((l) => l.type === "start")!.port;
+    await fetch(`http://127.0.0.1:${port}/__fail`, { method: "POST", body: JSON.stringify({ path: "/config" }) });
+    const r = await d.mcp({ type: "mcp.list" });
+    expect(d.names(r)).toEqual(["broken", "echo", "oauthy", "off"]);
+    expect(r.servers.find((s: any) => s.name === "echo").config).toBeUndefined();
   });
 
   it("config requests with an OpenCode 2 binary answer opencode_v2_unsupported", async () => {
