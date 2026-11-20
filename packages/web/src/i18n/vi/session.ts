@@ -194,7 +194,7 @@ export default {
   "session.run.stop": "Dừng {label} {summary}",
   "session.run.stopFailed": "Không dừng được: {error}",
   "session.run.filesChanged": { other: "{count} tệp đã đổi" },
-  "session.run.stepsNotKept": "Các bước không được giữ lại sau khi daemon khởi động lại.",
+  "session.run.stepsNotKept": "Các bước của lần chạy này không được giữ lại.",
   "session.run.limitTurns": "Dừng do hết giới hạn lượt. Kết quả chưa đầy đủ.",
   "session.run.limitTokens": "Dừng do hết giới hạn token đầu ra. Kết quả chưa đầy đủ.",
   "session.run.limitTime": "Dừng do hết thời gian. Kết quả chưa đầy đủ.",

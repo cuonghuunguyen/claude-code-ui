@@ -82,7 +82,7 @@ Trong **Cài đặt › Phiên › Tác vụ nội tuyến**:
 
 ## Cần biết {#good-to-know}
 
-- Các bước chỉ được giữ khi daemon còn chạy. Sau khi khởi động lại hoặc tải lại, thẻ hiển thị kết quả, model, lượt, token và tệp, kèm ghi chú "Steps are not kept after the daemon restarts."
+- Trong phiên Claude Code, các bước được lưu cùng phiên như các bước của một lần chạy subagent, nên sau khi daemon khởi động lại hoặc tải lại, thẻ vẫn hiển thị chúng. Chúng không xuất hiện trong `claude --resume`. Lần chạy từ trước khi có tính năng lưu này, và lần chạy trong phiên OpenCode, hiển thị kết quả, model, lượt, token và tệp, kèm ghi chú "The steps of this run were not kept."
 - Rewind code của phiên không hoàn tác các tệp mà tác vụ nội tuyến đã sửa.
 - Danh sách tệp đã đổi lấy từ các bước Edit, Write và từ `git status`. Tệp đã bị sửa trước khi chạy tác vụ và chỉ bị lệnh Bash sửa tiếp thì không được liệt kê. Ngoài repo git chỉ tính các bước Edit và Write.
 

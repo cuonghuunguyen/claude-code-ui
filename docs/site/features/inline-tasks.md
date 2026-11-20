@@ -80,7 +80,7 @@ In **Settings › Sessions › Inline tasks**:
 
 ## Good to know
 
-- Steps are kept only while the daemon runs. After a restart or a reload the card shows the result, model, turns, tokens and files, and the note "Steps are not kept after the daemon restarts."
+- In a Claude Code session the steps are stored with the session, like the steps of a subagent run, so after a daemon restart or a reload the card still shows them. They do not appear in `claude --resume`. A run from before this was stored, and a run in an OpenCode session, shows the result, model, turns, tokens and files with the note "The steps of this run were not kept."
 - Rewinding the code of a session does not undo files an inline task changed.
 - The list of changed files comes from the Edit and Write steps and from `git status`. A file that was already modified before the task and changed again only by a Bash command is not listed. Outside a git repository only Edit and Write steps count.
 

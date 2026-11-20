@@ -276,7 +276,7 @@ it("Stop on a running inline task sends the stop request with the call id", asyn
 it("a restored inline task without child parts says its steps are not kept", async () => {
   await render(view([call("i4", INLINE, { prompt: "old" })]));
   await act(async () => runCards()[0]!.querySelector("button")!.click());
-  expect(el.querySelector('[data-testid="run-steps-note"]')?.textContent).toBe("Steps are not kept after the daemon restarts.");
+  expect(el.querySelector('[data-testid="run-steps-note"]')?.textContent).toBe("The steps of this run were not kept.");
 });
 
 it("an inline task shows its result text once: the last text step equal to it is dropped, an earlier one stays", async () => {
