@@ -661,6 +661,8 @@ export default {
   "app.main.closeGroup": "Đóng nhóm",
   "app.main.removeProject": "Gỡ dự án?",
   "app.main.removeProjectBody": "“{name}” sẽ rời khỏi danh sách. Tệp và phiên vẫn còn trên đĩa; mở lại thư mục để đưa nó trở lại.",
+  "app.main.removeRepoTitle": { other: "Gỡ {name} ({count} dự án)?" },
+  "app.main.removeRepoBody": "“{name}” và các dự án khác của cùng kho ({count} dự án) sẽ rời khỏi danh sách. Tệp và phiên vẫn còn trên đĩa; mở lại các thư mục để đưa chúng trở lại.",
   "app.main.remove": "Gỡ",
   "app.main.removeWorkerTitle": "Gỡ worker {name}?",
   "app.main.removeWorkerBody": "Phiên và bản ghi của nó bị xóa vĩnh viễn; tên được giải phóng. CLI terminal cũng mất nó.",

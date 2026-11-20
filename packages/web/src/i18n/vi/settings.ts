@@ -142,6 +142,8 @@ export default {
   "settings.sidebar.groupByHint": "Worktree nhóm các phiên của dự án theo worktree. Dự án liệt kê trực tiếp dưới dự án, với trạng thái mỗi phiên dạng văn bản. Lưu trong trình duyệt này.",
   "settings.sidebar.worktree": "Worktree",
   "settings.sidebar.project": "Dự án",
+  "settings.sidebar.merge": "Gộp các phía của một kho",
+  "settings.sidebar.mergeHint": "Một nhóm cho kho được thêm ở nhiều phía (máy này, WSL, Docker, SSH) hoặc clone hai lần, mỗi phía và worktree một hàng. Khớp theo remote origin. Lưu trong trình duyệt này.",
   "settings.tabs.title": "Tab",
   "settings.tabs.grouping": "Nhóm tab",
   "settings.tabs.groupingHint": "Cách thanh tab nhóm các tab đang mở. Lưu trong trình duyệt này.",

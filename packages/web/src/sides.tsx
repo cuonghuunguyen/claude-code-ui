@@ -89,7 +89,7 @@ export function MessageDetails({ details, testId, open, onOpenChange }: { detail
 }
 
 /** Status line under a project of a side that is not ready (Starting…, the error summary with Retry and Details, Needs an update with Update). */
-export function SideStatusLine({ cwd }: { cwd: string }) {
+export function SideStatusLine({ cwd, inset = false }: { cwd: string; inset?: boolean }) {
   const tr = useT();
   const { of, act } = use(SideState);
   // Kept here: Starting… (a Retry) has no details, so MessageDetails unmounts; the error that returns opens as the user left it.
@@ -98,7 +98,7 @@ export function SideStatusLine({ cwd }: { cwd: string }) {
   const st = sideStatus(side);
   if (!side || !st) return null;
   return (
-    <div className="py-1 pl-7 text-muted-foreground text-xs">
+    <div className={cn("py-1 text-muted-foreground text-xs", inset ? "pl-12" : "pl-7")}>
       <p role="status" className="flex items-center gap-2 max-md:min-h-11" data-testid="sidebar-side-status">
         <span className="min-w-0 truncate" title={st.text}>{st.text}</span>
         {st.action && (

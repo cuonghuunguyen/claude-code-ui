@@ -468,6 +468,19 @@ it("Terminal position: Bottom by default, Side panel saved per browser; offers M
   localStorage.removeItem("claude-ui.layout");
 });
 
+it("Sidebar section: Merge sides of one repository mirrors the sidebar menu's option: on by default, stored in the sidebarView object (GH-591)", async () => {
+  localStorage.clear();
+  const { q, pick } = await render();
+  await pick("layout");
+  const sw = q("settings-sidebar-merge")!;
+  expect(document.getElementById("settings-sidebar-merge-label")!.textContent).toBe("Merge sides of one repository");
+  expect(sw.getAttribute("aria-checked")).toBe("true");
+  await act(async () => sw.click());
+  expect(sw.getAttribute("aria-checked")).toBe("false");
+  expect(JSON.parse(localStorage.getItem("claude-ui.sidebarView")!).merge).toBe(false);
+  localStorage.clear();
+});
+
 it("Sidebar section: Show only active sessions is the sidebar's own per-browser setting, off by default (GH-159); Group by is Worktree or Project, stored in the sidebarView object, applied at once and synced from the menu (GH-222, GH-333)", async () => {
   localStorage.clear();
   const { q, pick } = await render();

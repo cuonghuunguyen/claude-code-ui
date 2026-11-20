@@ -659,6 +659,8 @@ export default {
   "app.main.closeGroup": "Close group",
   "app.main.removeProject": "Remove project?",
   "app.main.removeProjectBody": "“{name}” leaves the list. Its files and sessions stay on disk; open the folder again to bring it back.",
+  "app.main.removeRepoTitle": { one: "Remove {name} ({count} project)?", other: "Remove {name} ({count} projects)?" },
+  "app.main.removeRepoBody": "“{name}” and the other {count} projects of its repository leave the list. Their files and sessions stay on disk; open the folders again to bring them back.",
   "app.main.remove": "Remove",
   "app.main.removeWorkerTitle": "Remove worker {name}?",
   "app.main.removeWorkerBody": "Its session and transcript are removed for good; the name is free again. The terminal CLI loses it too.",
