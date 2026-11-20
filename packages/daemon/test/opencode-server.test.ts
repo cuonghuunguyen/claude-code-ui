@@ -108,6 +108,26 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     expect(listed.engines.map((e: any) => e.engine)).toEqual(["claude", "opencode"]);
     expect(listed.engines[1]).toMatchObject({ capabilities: OPENCODE_CAPABILITIES, permissionModes: ["config", "default", "acceptEdits"] });
     expect(d.starts()).toHaveLength(0);
+    await d_list(d);
+    expect(d.log().filter((l) => l.type === "version")).toHaveLength(0);
+  });
+
+  it("session.list starts OpenCode for a user whose last engine is Claude when sessions.json has an OpenCode session; an OpenCode 2 binary is never started", async () => {
+    const entry = { ses_hist: { model: "default", permissionMode: "default", effort: "default", saved: Date.now() } };
+    const d = await boot({ sessionsJson: entry });
+    expect(d.appSettings.get().sessions.engine).toBe("claude");
+    const listed = (await d_listOpenCode(d)).result;
+    expect(listed.sessions.filter((s: any) => s.engine === "opencode").map((s: any) => s.id)).toEqual(["ses_hist"]);
+    expect(d.starts()).toHaveLength(1);
+
+    const v2 = await boot({ bin: BIN2, sessionsJson: entry });
+    await d_list(v2);
+    await new Promise((r) => setTimeout(r, 500));
+    const again = (await d_list(v2)).result;
+    expect(again.sessions.filter((s: any) => s.engine === "opencode")).toEqual([]);
+    expect(v2.starts()).toHaveLength(0);
+    expect(v2.log().filter((l) => l.type === "request")).toHaveLength(0);
+    expect(JSON.parse(readFileSync(join(v2.root, "sessions.json"), "utf8"))).toHaveProperty("ses_hist");
   });
 
   it("session.create with engine opencode starts one authenticated local server, tags the session, remembers the engine and lists it", async () => {
@@ -123,6 +143,7 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     expect(requests.length).toBeGreaterThan(0);
     expect(requests.every((r) => r.authed)).toBe(true);
     expect(d.appSettings.get().sessions.engine).toBe("opencode");
+    await until(() => id in JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8")));
     const listed = (await d.ok({ type: "session.list" })).result;
     expect(listed.sessions.find((s: any) => s.id === id)).toMatchObject({ engine: "opencode", cwd: d.project });
   });

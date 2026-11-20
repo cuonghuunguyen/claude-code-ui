@@ -6,12 +6,14 @@ import { brokenState, createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABI
 import { checkLogin, listProviders, loginError } from "./opencode-providers.ts";
 import { createOpenCodeServer, OpenCodeError, type OpenCodeServer } from "./opencode-server.ts";
 import { mapLimit } from "./session-scan.ts";
-import { Session, type SessionSettings } from "./session.ts";
+import { Session, type SessionOpts, type SessionSettings } from "./session.ts";
 
 /** The longest `session.list` waits for the OpenCode server (it may start, or hang, for the first list). */
 const OPENCODE_LIST_WAIT_MS = 3000;
 /** An OpenCode session id: it reaches a request path, so only this shape does. */
 export const OPENCODE_ID = /^ses_[A-Za-z0-9]+$/;
+/** OpenCode is wanted for a session list: the last created session was OpenCode's, or `sessions.json` has an OpenCode session (a stored one of any folder). */
+export const openCodeWanted = (engine: string, linked: Map<string, SavedSession>) => engine === "opencode" || [...linked.keys()].some((id) => OPENCODE_ID.test(id));
 type OpenCodeSessionRow = { id: string; directory: string; title: string; time: { created: number; updated: number; archived?: number } };
 const OPENCODE_RESTART_BUSY = "OpenCode is busy: a turn runs, a login waits or a session is being created. Restart it when that is done.";
 const PROVIDERS_BROKEN_BUSY = "OpenCode's provider list is broken. It is reloaded when no OpenCode turn runs: press Retry then.";
@@ -96,7 +98,10 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     openCodeCreating++;
     const row = await openCode.request<OpenCodeSessionRow>("/session", { method: "POST", directory: cwd, timeoutMs: 0, resend: true, body: { permission } }).finally(() => openCodeCreating--);
     if (ctx.isRemoving(cwd) || !existsSync(cwd)) return undefined;
-    const s = ctx.track(new Session(cwd, sessionOpts(initial), { id: row.id }));
+    const opts = sessionOpts(initial);
+    const s = ctx.track(new Session(cwd, opts, { id: row.id }));
+    // The entry makes the next list start OpenCode for a user whose last engine is Claude. `fields` empty: only a session without an entry is saved (as Claude does on its first query).
+    (opts as SessionOpts).onSettings?.(s.run.settings(), s.id, []);
     openCodeMeta.set(s.id, { cwd, title: row.title });
     ctx.addProject(cwd);
     return s;
@@ -144,13 +149,13 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     return out;
   }
   /**
-   * OpenCode sessions of `cwds` (docs/spec.md "OpenCode engine"). Only when the server runs or the last created session was OpenCode's, so a Claude-only
-   * user never starts it. shortcut: a user whose last engine is Claude sees OpenCode-TUI sessions only after the server started in this daemon run.
+   * OpenCode sessions of `cwds` (docs/spec.md "OpenCode engine"). Only when the server runs or OpenCode is wanted (`openCodeWanted`), so a Claude-only
+   * user never starts it. shortcut: a user whose last engine is Claude and who has no stored OpenCode session sees OpenCode-TUI sessions only after the server started in this daemon run.
    * `ran`: the listing answered for every folder (an entry missing from it is gone); a failing OpenCode lists none and never fails the Claude list.
    */
   async function listOpenCode(cwds: string[], linked: Map<string, SavedSession>, links: (id: string) => object) {
     const none = () => ({ items: [] as SessionListItem[], ids: new Set<string>(), ran: false });
-    if (!openCode.running() && appSettings.get().sessions.engine !== openCodeEngine.name) return none();
+    if (!openCode.running() && !openCodeWanted(appSettings.get().sessions.engine, linked)) return none();
     // Not answering within the wait: no OpenCode items and no prune (`ran` false); the start goes on and the next list has them. The late result is dropped.
     // Before OpenCode's first answer the list does not wait: projects and Claude sessions show at once on page load.
     let timer: NodeJS.Timeout | undefined;

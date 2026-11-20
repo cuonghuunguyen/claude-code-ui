@@ -1,6 +1,6 @@
 // The one OpenCode Engine catalogue (ADR 0015): one `opencode serve` process shared by both adapters, and a switch by the major version of the installed binary.
 import type { CatalogueContext, EngineCatalogue, EngineRequest } from "./engine-catalogue.ts";
-import { createOpenCodeCatalogue, type OpenCodeCatalogueOpts } from "./opencode-catalogue.ts";
+import { createOpenCodeCatalogue, openCodeWanted, type OpenCodeCatalogueOpts } from "./opencode-catalogue.ts";
 import { createOpenCode2Catalogue } from "./opencode2-catalogue.ts";
 import { createOpenCodeServer } from "./opencode-server.ts";
 
@@ -65,11 +65,11 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
     startMode: (cwd, model) => pick().startMode(cwd, model),
     // Creating starts the server anyway: always read the version first.
     create: async (cwd, initial, opts) => (await known()).create(cwd, initial, opts),
-    // Only a user whose Engine is OpenCode asks the binary. The first list does not wait for it, later lists at most the normal list wait: a hung or slow
+    // Only a user whose Engine is OpenCode or who has a stored OpenCode session asks the binary. The first list does not wait for it, later lists at most the normal list wait: a hung or slow
     // `--version` lists nothing and prunes nothing (the settings entries stay), the late sessions are pushed as `sessions.changed`. While the major is unknown
     // (check pending or failed) no adapter lists. A Claude-only user never starts a check.
     list: async (lctx) => {
-      if (srv.major() === undefined && ctx.appSettings.get().sessions.engine === v1.engine.name) {
+      if (srv.major() === undefined && openCodeWanted(ctx.appSettings.get().sessions.engine, lctx.read().linked)) {
         if (recentlyFailed()) return { items: [], keep: () => true };
         let timer: NodeJS.Timeout | undefined;
         const late = new Promise<"late">((r) => (timer = setTimeout(() => r("late"), checkedOnce ? (o.server?.listWaitMs ?? LIST_WAIT_MS) : 0)));
