@@ -6,12 +6,12 @@ An inline task is not a session: it has no entry in the session list and no tran
 
 ## When to use it
 
-The agent reads these rules (the same text is its guidance):
+The tool is always loaded in a Claude Code session: its description is in the first prompt of every turn, so the agent sees it without a tool search. The agent reads these rules (the same text is its guidance):
 
-> Use inline_task when the task:
-> - needs 3-10 tool calls and only the result matters;
-> - needs no parent conversation context beyond what fits in prompt + files;
-> - is mechanical: run, extract, summarize, classify, format, small edit.
+> Prefer inline_task over Agent (haiku, Explore, general-purpose) when the task:
+> - is mechanical: search, read logs, run tests, extract, summarize, classify, format, small edit;
+> - needs no judgment or design, and no parent conversation context beyond what fits in prompt + files;
+> - needs only the result, not the raw output.
 >
 > Use a subagent instead when the task needs judgment or design, long exploration, parallel runs, or parent context.
 > Do it directly when 1-2 tool calls suffice, or when the next step needs the raw output.
@@ -61,7 +61,9 @@ The card sits under the tool call. It shows the status, the task, and `model · 
 | Time | 10 minutes |
 | Running at once | 3 per session |
 | Prompt | 20,000 characters |
-| Files given to the task | 20 files, 64 KB each, 256 KB in total |
+| Files given to the task | 20 files, about 400,000 characters in total in the prompt |
+
+A file that does not fit in the prompt is not rejected: the prompt names its path and size, and the task reads it with `Read` and `Grep` (both are added to its tools when the agent did not grant them). Files are added in the order given.
 
 At a limit the task stops and returns the partial result with the reason (turns, tokens or time).
 

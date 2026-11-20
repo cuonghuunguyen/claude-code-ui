@@ -6,19 +6,19 @@ Tác vụ nội tuyến không phải là một phiên: nó không có mục tro
 
 ## Khi nào dùng {#when-to-use}
 
-Agent đọc các quy tắc sau (cùng một văn bản với hướng dẫn của agent):
+Trong phiên Claude Code, tool này luôn được nạp sẵn: mô tả của nó nằm trong prompt đầu tiên của mỗi lượt, agent thấy nó mà không cần tìm tool. Agent đọc các quy tắc sau (cùng một văn bản với hướng dẫn của agent):
 
-> Use inline_task when the task:
-> - needs 3-10 tool calls and only the result matters;
-> - needs no parent conversation context beyond what fits in prompt + files;
-> - is mechanical: run, extract, summarize, classify, format, small edit.
+> Prefer inline_task over Agent (haiku, Explore, general-purpose) when the task:
+> - is mechanical: search, read logs, run tests, extract, summarize, classify, format, small edit;
+> - needs no judgment or design, and no parent conversation context beyond what fits in prompt + files;
+> - needs only the result, not the raw output.
 >
 > Use a subagent instead when the task needs judgment or design, long exploration, parallel runs, or parent context.
 > Do it directly when 1-2 tool calls suffice, or when the next step needs the raw output.
 >
 > Grant the least: tools default to Read, Grep, Glob; add Bash, Write, Edit or an MCP server only when needed.
 
-Tóm tắt: dùng khi cần 3-10 lần gọi tool và chỉ cần kết quả; việc mang tính cơ học; không cần ngữ cảnh hội thoại. Dùng subagent khi cần phán đoán, thiết kế, khám phá dài, chạy song song hoặc ngữ cảnh của phiên. Tự làm trực tiếp khi 1-2 lần gọi tool là đủ, hoặc khi bước tiếp theo cần đầu ra thô.
+Tóm tắt: dùng thay cho Agent (haiku, Explore, general-purpose) khi việc mang tính cơ học (tìm kiếm, đọc log, chạy test, trích xuất, tóm tắt, sửa nhỏ), không cần phán đoán hay thiết kế, không cần ngữ cảnh hội thoại, và chỉ cần kết quả. Dùng subagent khi cần phán đoán, thiết kế, khám phá dài, chạy song song hoặc ngữ cảnh của phiên. Tự làm trực tiếp khi 1-2 lần gọi tool là đủ, hoặc khi bước tiếp theo cần đầu ra thô.
 
 ## Các tình huống {#scenarios}
 
@@ -63,7 +63,9 @@ Thẻ nằm dưới lần gọi tool. Thẻ hiển thị trạng thái, nội du
 | Thời gian | 10 phút |
 | Chạy cùng lúc | 3 mỗi phiên |
 | Prompt | 20.000 ký tự |
-| Tệp đưa cho tác vụ | 20 tệp, mỗi tệp 64 KB, tổng 256 KB |
+| Tệp đưa cho tác vụ | 20 tệp, tổng khoảng 400.000 ký tự trong prompt |
+
+Tệp không vừa trong prompt không bị từ chối: prompt ghi đường dẫn và kích thước của tệp, và tác vụ đọc nó bằng `Read` và `Grep` (cả hai được thêm vào tool của tác vụ nếu agent chưa cấp). Các tệp được thêm theo thứ tự đã cho.
 
 Khi chạm giới hạn, tác vụ dừng và trả về kết quả một phần cùng lý do (lượt, token hoặc thời gian).
 

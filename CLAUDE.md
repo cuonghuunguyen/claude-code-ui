@@ -41,6 +41,7 @@ Every `Agent`/worker dispatch sets `model` explicitly, at every spawn depth. Nev
 | Task | Model |
 |---|---|
 | Search, locate code, read logs, status checks, triage/labeling | `haiku` |
+| Mechanical run/extract/summarize where only the result matters (test run, log grep, CI triage) | `inline_task` tool, no `Agent` |
 | Implement from a concrete plan, write tests, mechanical refactor, apply review findings, capture UI evidence from a checklist | `sonnet` |
 | Plan/design, ambiguous or cross-package issues, code review, review+acceptance verdict, hard root-cause debugging | `opus` |
 

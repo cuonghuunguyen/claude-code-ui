@@ -18,6 +18,10 @@ export type DaemonTool<S extends z.ZodRawShape = z.ZodRawShape> = {
   /** The card title of an "ask" tool; undefined keeps the engine's own. */
   title?: (ctx: Pick<DaemonToolCtx, "sessionId" | "cwd">, input: Record<string, unknown>) => Promise<string | undefined> | string | undefined;
   run: (ctx: DaemonToolCtx, args: z.infer<z.ZodObject<S>>) => Promise<unknown>;
+  /** Claude: keep the full schema in the first prompt instead of behind tool search (the OpenCode route ignores it). */
+  alwaysLoad?: boolean;
+  /** Claude: words that help tool search find a deferred tool. */
+  searchHint?: string;
 };
 export type DaemonToolGroup = {
   id: string;
@@ -59,7 +63,7 @@ export function createDaemonMcp(deps: { groups: DaemonToolGroup[]; session: (id:
             console.error(`${DAEMON_SERVER}: ${t.name} failed:`, err);
             return fail(`${t.name} failed: ${(err as Error).message}`);
           }
-        }),
+        }, { ...(t.alwaysLoad !== undefined && { alwaysLoad: t.alwaysLoad }), ...(t.searchHint !== undefined && { searchHint: t.searchHint }) }),
       ),
     );
   }
