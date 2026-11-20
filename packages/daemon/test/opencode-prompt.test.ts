@@ -147,8 +147,27 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 2);
     const [on, off] = d.requests("POST", `/session/${s.id}/prompt_async`).map((r) => r.body);
     expect(on.system).toEqual(expect.stringMatching(/\S/));
-    expect(on.system).toBe(visualizeSystem(visualizePluginDir()));
+    expect(on.system).toBe(visualizeSystem(visualizePluginDir(), "opencode"));
     expect(off.system).toBeUndefined();
+  });
+
+  it("/visualize sends the typed text plus a hidden directive part and the system text, never POST /command; with the setting off it is a plain prompt", async () => {
+    const d = await boot({ script: ["text", "text", "text"] });
+    const s = await d.open();
+    await s.prompt("/visualize draw x");
+    await until(() => !!s.find("turn_result"));
+    await s.prompt("/visualize");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 2);
+    await d.ok({ type: "settings.set", patch: { chat: { visualize: false } } });
+    await s.prompt("/visualize off");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 3);
+    const [a, bare, off] = d.requests("POST", `/session/${s.id}/prompt_async`).map((r) => r.body);
+    expect(a.parts).toMatchObject([{ type: "text", text: "/visualize draw x" }, { type: "text", text: "Answer this with a visualize fence: draw x", synthetic: true }]);
+    expect(a.system).toBe(visualizeSystem(visualizePluginDir(), "opencode"));
+    expect(bare.parts[1]).toMatchObject({ synthetic: true, text: expect.stringContaining("last answer") });
+    expect(off.parts).toHaveLength(1);
+    expect(off.system).toBeUndefined();
+    expect(d.requests("POST", `/session/${s.id}/command`)).toHaveLength(0);
   });
 
   it("a Bash permission shows the Claude card input, the rule and noEdit; Allow replies once and the tool finishes", async () => {
@@ -719,9 +738,9 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     const d = await boot({ script: ["text"] });
     const s = await d.open();
     await until(() => !!s.find("commands"));
-    expect(s.find("commands")!.commands.map((c) => c.name)).toEqual(["compact", "undo", "redo", "init", "review", "fail"]);
-    expect(s.find("commands")!.commands[3]).toEqual({ name: "init", description: "guided AGENTS.md setup", argumentHint: "$ARGUMENTS" });
-    expect(s.find("commands")!.commands[4]).toMatchObject({ description: "", argumentHint: "" });
+    expect(s.find("commands")!.commands.map((c) => c.name)).toEqual(["compact", "undo", "redo", "visualize", "init", "review", "fail"]);
+    expect(s.find("commands")!.commands[4]).toEqual({ name: "init", description: "guided AGENTS.md setup", argumentHint: "$ARGUMENTS" });
+    expect(s.find("commands")!.commands[5]).toMatchObject({ description: "", argumentHint: "" });
     expect((await d.ok({ type: "session.commands", cwd: d.project, engine: "opencode" })).commands.map((c: { name: string }) => c.name)).toContain("review");
 
     await s.prompt("/review main");
@@ -945,6 +964,18 @@ describe("OpenCode rewind", { timeout: TEST_MS }, () => {
     const names = (r.seen().filter((p) => p.type === "commands").at(-1) as { commands: { name: string }[] }).commands.map((c) => c.name);
     expect(names.slice(0, 3)).toEqual(["compact", "undo", "redo"]);
     expect(names).toContain("review");
+  });
+
+  it("/visualize is listed while the setting is on, not when off, and not when OpenCode has its own (that one runs as a server command)", async () => {
+    const off = await boot({ script: [] });
+    await off.ok({ type: "settings.set", patch: { chat: { visualize: false } } });
+    expect((await off.ok({ type: "session.commands", cwd: off.project, engine: "opencode" })).commands.map((c: { name: string }) => c.name)).not.toContain("visualize");
+    const own = await boot({ script: ["text"], env: { FAKE_OPENCODE_OWN_VISUALIZE: "1" } });
+    const s = await own.open();
+    await until(() => !!s.find("commands"));
+    expect(s.find("commands")!.commands.filter((c) => c.name === "visualize")).toEqual([{ name: "visualize", description: "own", argumentHint: "" }]);
+    await s.prompt("/visualize x");
+    await until(() => own.requests("POST", `/session/${s.id}/command`).length === 1);
   });
 
   it("a revert made in OpenCode shows as a rewind; its unrevert brings the messages back", async () => {

@@ -51,6 +51,19 @@ it("the shipped skill has a description and yields a non-empty system text", () 
   expect(visualizeSystem(dir)).toEqual(expect.stringMatching(/\S/));
 });
 
+it("visualizeSystem for OpenCode puts the HTML in the fence (no uploads folder, no file write); the Claude text is unchanged; a drifted SKILL.md falls back untransformed", () => {
+  const dir = visualizePluginDir()!;
+  const oc = visualizeSystem(dir, "opencode")!;
+  expect(oc).not.toMatch(/Write tool|<session id>|additional working directory|uploads\//);
+  expect(oc).toContain("directly in the fence");
+  expect(oc).toContain("Example fragment (the fence content):");
+  expect(oc).toContain("Draw one whenever the reply covers");
+  expect(visualizeSystem(dir, "claude")).toBe(visualizeSystem(dir));
+  expect(visualizeSystem(dir)).toContain("uploads");
+  const drift = pluginWith("---\nname: visualize\ndescription: D\n---\nBODY with uploads\n");
+  expect(visualizeSystem(drift, "opencode")).toBe("D\n\nBODY with uploads");
+});
+
 it("the shell script is valid and renders only a render message from the parent", () => {
   const script = /<script>([\s\S]*)<\/script>/.exec(VISUALIZE_SHELL)![1]!;
   const written: string[] = [];
