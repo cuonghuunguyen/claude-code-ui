@@ -284,6 +284,22 @@ describe("serving", () => {
       expect(r.body).toBe(".a { color: red");
     });
 
+    it("a file over the size cap is served as it is; HEAD answers with the headers only", async () => {
+      const big = ":root { --a: 1 }" + " ".repeat(512 * 1024);
+      const base = await themed({ "dusk.css": big, "dawn.css": "" });
+      const r = await fetchAddon(`${base}dusk.css?theme=dusk`, "style");
+      expect(r.status).toBe(200);
+      expect(r.body).toBe(big);
+      const head = await new Promise<{ status: number; len: string | undefined; body: string }>((resolve, reject) =>
+        httpGet({ host: "127.0.0.1", port, method: "HEAD", path: `${base}dusk.css?theme=dusk`, headers: { "sec-fetch-dest": "style" } }, (res) => {
+          let body = "";
+          res.on("data", (d) => (body += d));
+          res.on("end", () => resolve({ status: res.statusCode!, len: res.headers["content-length"], body }));
+        }).on("error", reject),
+      );
+      expect(head).toEqual({ status: 200, len: String(big.length), body: "" });
+    });
+
     it("an edit of the file shows on the next request", async () => {
       const base = await themed({ "dusk.css": ".a { x: 1 }", "dawn.css": "" });
       expect((await fetchAddon(`${base}dusk.css?theme=dusk`, "style")).body).toContain(".a { x: 1 }");

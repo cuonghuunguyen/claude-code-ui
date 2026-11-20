@@ -62,6 +62,12 @@ describe("scopeCss", () => {
     expect(() => scope(css)).toThrow(CssScanError);
   });
 
+  it("refuses groups nested far deeper than real CSS, quickly", () => {
+    const t = Date.now();
+    expect(() => scope("@media all{".repeat(40_000) + "}".repeat(40_000))).toThrow(CssScanError);
+    expect(Date.now() - t).toBeLessThan(1000);
+  });
+
   it("refuses a file over the size cap", () => {
     expect(() => scope(`.a { color: red }${" ".repeat(MAX_THEME_CSS)}`)).toThrow(CssScanError);
   });

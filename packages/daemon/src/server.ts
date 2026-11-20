@@ -54,7 +54,7 @@ import { createTerminals } from "./terminals.ts";
 import { ConfigError, createConfig, runCli, timed, type CliRunner} from "./config.ts";
 import { createPlugins } from "./plugins.ts";
 import { addonAssetHeaders, addonHeaders, createAddons } from "./addons.ts";
-import { CssScanError, scopeCss } from "./addon-css.ts";
+import { MAX_THEME_CSS, scopeCss } from "./addon-css.ts";
 import { cliTurnRunning, JsonlTail, parseJsonl, transcriptEnd, withoutForkPrefix } from "./transcript.ts";
 import type { KeepAwake } from "./keep-awake.ts";
 import { EDITORS, type Launcher, type OpenCommand } from "./open-external.ts";
@@ -1737,17 +1737,17 @@ export function createDaemon(opts: {
     let body: Buffer;
     try {
       const st = fstatSync(o.fd);
+      if (st.size > MAX_THEME_CSS) return streamFile(req, res, o.fd, o.size, { ...addonAssetHeaders, "content-type": "text/css; charset=utf-8" }); // over the cap: not read into memory, not scoped
       const key = `${path}\0${scope}\0${st.mtimeMs}\0${st.size}`;
       let hit = scopedCss.get(key);
       if (!hit) {
         const raw = readFileSync(o.fd);
         try {
           hit = Buffer.from(scopeCss(raw.toString("utf8"), scope));
-        } catch (e) {
-          if (!(e instanceof CssScanError)) throw e;
-          hit = raw;
+        } catch {
+          hit = raw; // CssScanError, or any other failure of the scan: the file as it is, and cached so a bad file costs one scan per version
         }
-        for (const k of scopedCss.keys()) if (k.startsWith(`${path}\0`)) scopedCss.delete(k);
+        for (const k of scopedCss.keys()) if (k.startsWith(`${path}\0${scope}\0`)) scopedCss.delete(k);
         scopedCss.set(key, hit);
         if (scopedCss.size > 64) scopedCss.delete(scopedCss.keys().next().value!);
       }

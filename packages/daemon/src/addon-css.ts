@@ -115,7 +115,11 @@ const rootRelative = (sel: string) => {
   return m ? "&" + s.slice(m[0].length) : s;
 };
 
-function scopeRules(css: string, hoist: string[]): string {
+/** Deepest `@media`-in-`@media` nesting that is scanned: each level re-scans its block, so depth is capped (real CSS has 2 or 3 levels). */
+const MAX_DEPTH = 32;
+
+function scopeRules(css: string, hoist: string[], depth = 0): string {
+  if (depth > MAX_DEPTH) throw new CssScanError("nested too deep");
   const out: string[] = [];
   for (const st of statements(css)) {
     const p = st.prelude;
@@ -125,7 +129,7 @@ function scopeRules(css: string, hoist: string[]): string {
       if (name === "charset" || name === "import") continue; // @charset cannot sit inside a rule; @import is refused (CSP blocks other origins, same-addon import is out of scope)
       const text = st.block === undefined ? `${p};` : `${p} {${st.block}}`;
       if (HOISTED.has(name) || (name === "layer" && st.block === undefined)) hoist.push(text);
-      else if (GROUPS.has(name) && st.block !== undefined) out.push(`${p} {\n${scopeRules(st.block, hoist)}\n}`);
+      else if (GROUPS.has(name) && st.block !== undefined) out.push(`${p} {\n${scopeRules(st.block, hoist, depth + 1)}\n}`);
       else out.push(text);
     } else if (st.block !== undefined) out.push(`${splitList(p).map(rootRelative).join(", ")} {${st.block}}`);
   }
