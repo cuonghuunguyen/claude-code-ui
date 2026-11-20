@@ -1,5 +1,5 @@
 // The one OpenCode Engine catalogue (ADR 0015): one `opencode serve` process shared by both adapters, and a switch by the major version of the installed binary.
-import type { CatalogueContext, EngineCatalogue, EngineRequest } from "./engine-catalogue.ts";
+import { EngineError, type CatalogueContext, type EngineCatalogue, type EngineRequest } from "./engine-catalogue.ts";
 import { createOpenCodeCatalogue, openCodeWanted, type OpenCodeCatalogueOpts } from "./opencode-catalogue.ts";
 import { createOpenCode2Catalogue } from "./opencode2-catalogue.ts";
 import { createOpenCodeServer } from "./opencode-server.ts";
@@ -57,6 +57,13 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
     };
   return {
     engine: v1.engine,
+    // The config dialogs of OpenCode 2 wait for its adapter (GH-863): until then the request is answered, not routed to version 1.
+    config: {
+      mcp: async (msg, cwd, c) => {
+        if ((await known()) !== v1) throw new EngineError("opencode_v2_unsupported", "OpenCode 2 does not support the MCP servers dialog in claude-ui yet.");
+        return v1.config!.mcp(msg, cwd, c);
+      },
+    },
     listScope: v1.listScope,
     ownsId: v1.ownsId,
     entry: v1.entry,

@@ -2,7 +2,7 @@
 // status allows, OAuth with paste-back, tools, add form, remove. Logic and texts in mcp.ts.
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { SearchIcon } from "lucide-react";
-import type { ConfigScope, McpAddConfig, McpAuthResult, McpListResult, McpServerInfo } from "@claude-ui/protocol";
+import type { ConfigCapabilities, ConfigScope, Engine, McpAddConfig, McpAuthResult, McpListResult, McpServerInfo } from "@claude-ui/protocol";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { Request } from "./client.ts";
@@ -17,6 +17,7 @@ import {
   errorLine,
   groupServers,
   projectScopeWarning,
+  removeGap,
   resultText,
   safeAuthUrl,
   SCOPES,
@@ -46,6 +47,8 @@ export function McpDialog({
   sessionId,
   server: initialServer,
   changed = 0,
+  engine,
+  config,
   request,
   onClose,
 }: {
@@ -54,6 +57,10 @@ export function McpDialog({
   sessionId?: string;
   server?: string;
   changed?: number;
+  /** The Engine of the shown session or tab; absent = Claude. */
+  engine?: Engine;
+  /** What the Engine's MCP dialog can do (`capabilities.config`); absent = Claude's full set. */
+  config?: ConfigCapabilities;
   request: <T>(msg: Request) => Promise<T>;
   onClose: () => void;
 }) {
@@ -70,12 +77,13 @@ export function McpDialog({
   // OAuth flow waiting for the browser: the server and its sign-in page.
   const [waiting, setWaiting] = useState<string>();
   const [authUrl, setAuthUrl] = useState<string>();
+  const [opened, setOpened] = useState(false);
   const [callbackUrl, setCallbackUrl] = useState("");
   const [adding, setAdding] = useState(false);
   const [formBusy, setFormBusy] = useState(false);
   const [filter, setFilter] = useState("");
 
-  const base = { cwd, ...(sessionId && { sessionId }) };
+  const base = { cwd, ...(sessionId && { sessionId }), ...(engine && { engine }) };
   const ask = useRef(request);
   ask.current = request;
   const where = useRef(base);
@@ -144,8 +152,9 @@ export function McpDialog({
     clear();
     setBusy({ server, action });
     try {
-      await run();
-      setSuccess(ok);
+      const r = (await run()) as McpListResult | undefined;
+      // Saved, but the Engine loads it when the folder is idle.
+      setSuccess(r?.applied === false ? t("session.mcpDialog.savedLater") : ok);
       after?.();
     } catch (e) {
       // The failure text of the action, with the CLI's reason when it gives one.
@@ -178,11 +187,12 @@ export function McpDialog({
     try {
       const r = await request<McpAuthResult>({ type: "mcp.authenticate", ...base, name });
       if (r.authUrl && !safeAuthUrl(r.authUrl)) throw new Error(t("session.mcpDialog.signInNotOpened", { url: r.authUrl }));
-      if (r.authUrl && tab) tab.location.href = r.authUrl;
+      if (r.authUrl && tab && !r.opened) tab.location.href = r.authUrl;
       else tab?.close();
       if (r.requiresUserAction) {
         setWaiting(name);
         setAuthUrl(r.authUrl);
+        setOpened(!!r.opened);
         setCallbackUrl("");
       } else {
         setSuccess(resultText.authenticate());
@@ -207,10 +217,10 @@ export function McpDialog({
     }
   }
   const remove = (name: string, scope: ConfigScope) =>
-    act(name, "remove", () => request({ type: "mcp.remove", cwd, name, scope }), resultText.remove(name, scope), toList);
+    act(name, "remove", () => request({ type: "mcp.remove", cwd, ...(engine && { engine }), name, scope }), resultText.remove(name, scope), toList);
   const add = async (name: string, scope: ConfigScope, config: McpAddConfig) => {
-    await request({ type: "mcp.add", cwd, name, scope, config });
-    setSuccess(resultText.add(name, scope));
+    const r = await request<McpListResult | undefined>({ type: "mcp.add", cwd, ...(engine && { engine }), name, scope, config });
+    setSuccess(r?.applied === false ? t("session.mcpDialog.savedLater") : resultText.add(name, scope));
     setAdding(false);
     setFilter("");
     void load();
@@ -315,7 +325,7 @@ export function McpDialog({
           {addButton}
         </>
       )}
-      {!loading && adding && <AddServer onSubmit={add} onBack={() => setAdding(false)} onBusy={setFormBusy} />}
+      {!loading && adding && <AddServer config={config} onSubmit={add} onBack={() => setAdding(false)} onBusy={setFormBusy} />}
       {!loading && !adding && current && (
         <div className="flex flex-col items-start gap-3" data-testid="mcp-detail">
           <Button
@@ -348,10 +358,11 @@ export function McpDialog({
                 {actionLabel(a, busy?.server === current.name && busy.action === a)}
               </Button>
             ))}
-            {canRemove(current) && (
+            {canRemove(current, config) && (
               <Remove key={current.name} name={current.name} scope={current.scope} disabled={!!busy} removing={busy?.server === current.name && busy.action === "remove"} onRemove={() => remove(current.name, current.scope)} />
             )}
           </div>
+          {removeGap(current, config) && <p className="text-muted-foreground text-sm" data-testid="mcp-remove-gap">{removeGap(current, config)}</p>}
           {waiting === current.name && current.status !== "connected" && (
             <div className="flex w-full flex-col gap-2 rounded-md bg-secondary/60 p-3 text-sm" data-testid="mcp-auth-wait">
               <div className="flex flex-wrap items-center gap-2">
@@ -360,9 +371,10 @@ export function McpDialog({
                   {t("session.mcpDialog.checkConnection")}
                 </Button>
               </div>
+              {opened && <span data-testid="mcp-sign-in-opened">{t("session.mcpDialog.signInOpened")}</span>}
               {/* The CLI's redirect listener is on the daemon machine: a phone's redirect fails, so its URL is pasted here. */}
-              <strong className="font-medium">{t("session.mcpDialog.callbackHint")}</strong>
-              <div className="flex gap-2">
+              {!opened && <strong className="font-medium">{t(config ? "session.mcpDialog.callbackHintOpenCode" : "session.mcpDialog.callbackHint")}</strong>}
+              {!opened && <div className="flex gap-2">
                 <input
                   type="text"
                   value={callbackUrl}
@@ -378,14 +390,15 @@ export function McpDialog({
                 <Button className="max-md:h-11" onClick={() => void submitCallback(current.name)}>
                   {t("session.mcpDialog.submit")}
                 </Button>
-              </div>
-              {authUrl && (
+              </div>}
+              {authUrl && !opened && (
                 <a href={authUrl} target="_blank" rel="noopener noreferrer" className="self-start text-muted-foreground underline underline-offset-4 hover:text-foreground max-md:inline-flex max-md:min-h-11 max-md:items-center">
                   {t("session.mcpDialog.reopenAuth")}
                 </a>
               )}
             </div>
           )}
+          {current.status === "connected" && config?.gaps.mcpTools && !current.tools?.length && <p className="text-muted-foreground text-sm" data-testid="mcp-tools-gap">{config.gaps.mcpTools}</p>}
           {current.status === "connected" && !!current.tools?.length && (
             <button type="button" className="text-muted-foreground text-sm hover:text-foreground max-md:min-h-11" onClick={() => setShowTools((v) => !v)} aria-expanded={showTools} data-testid="mcp-tools-toggle">
               {showTools ? t("session.mcpDialog.hideTools") : t("session.mcpDialog.viewTools", { count: current.tools.length })}
@@ -453,10 +466,12 @@ const inputClass =
   "w-full rounded-md bg-secondary/60 px-3 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary focus-visible:ring-2 focus-visible:ring-ring max-md:text-base";
 
 /** "Add MCP server" form. `onSubmit` rejects with the daemon's error, shown above the form. */
-function AddServer({ onSubmit, onBack, onBusy }: { onSubmit: (name: string, scope: ConfigScope, config: McpAddConfig) => Promise<void>; onBack: () => void; onBusy: (b: boolean) => void }) {
+function AddServer({ config, onSubmit, onBack, onBusy }: { config?: ConfigCapabilities; onSubmit: (name: string, scope: ConfigScope, config: McpAddConfig) => Promise<void>; onBack: () => void; onBusy: (b: boolean) => void }) {
   const t = useT();
   const [form, setForm] = useState<AddForm>({ name: "", transport: "stdio", command: "", args: "", env: "", url: "", headers: "" });
-  const [scope, setScope] = useState<ConfigScope>("local");
+  const scopes = SCOPES.filter((o) => !config || config.mcpScopes.includes(o.value)).map((o) => (config && o.value === "project" ? { ...o, description: t("session.mcp.scopeOption.projectHintOpenCode") } : o));
+  const transports = TRANSPORTS.filter((o) => !config || config.mcpTransports.includes(o.value));
+  const [scope, setScope] = useState<ConfigScope>(scopes[0]?.value ?? "local");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const set = (k: keyof AddForm) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -510,7 +525,7 @@ function AddServer({ onSubmit, onBack, onBusy }: { onSubmit: (name: string, scop
         </label>
         <input id="mcp-add-name" autoFocus className={cn(inputClass, "h-9 max-md:h-11")} placeholder={t("session.mcpDialog.namePlaceholder")} value={form.name} onChange={set("name")} autoComplete="off" spellCheck={false} />
       </div>
-      {options(t("session.mcpDialog.transport"), TRANSPORTS, form.transport, (transport) => setForm((f) => ({ ...f, transport })))}
+      {options(t("session.mcpDialog.transport"), transports, form.transport, (transport) => setForm((f) => ({ ...f, transport })))}
       {form.transport === "stdio" ? (
         <>
           <div className={field}>
@@ -548,8 +563,8 @@ function AddServer({ onSubmit, onBack, onBusy }: { onSubmit: (name: string, scop
           </div>
         </>
       )}
-      {options(t("session.mcpDialog.scope"), SCOPES, scope, setScope)}
-      {scope === "project" && <p className="rounded-md bg-warning/10 px-3 py-2 text-sm">{projectScopeWarning()}</p>}
+      {options(t("session.mcpDialog.scope"), scopes, scope, setScope)}
+      {scope === "project" && !config && <p className="rounded-md bg-warning/10 px-3 py-2 text-sm">{projectScopeWarning()}</p>}
       <Button className="self-start max-md:h-11" onClick={() => void submit()} disabled={busy} data-testid="mcp-add-submit">
         {busy ? t("session.mcpDialog.adding") : t("session.mcpDialog.addServer")}
       </Button>

@@ -1,5 +1,5 @@
 // MCP servers dialog logic, same behaviour as the Claude Code VS Code extension, own texts.
-import type { ConfigScope, McpAddConfig, McpServerInfo } from "@claude-ui/protocol";
+import type { ConfigCapabilities, ConfigScope, McpAddConfig, McpServerInfo } from "@claude-ui/protocol";
 import { t } from "./i18n.ts";
 
 const ICONS: Record<string, string> = { connected: "✓", failed: "✗", "needs-auth": "⚠", pending: "◐", disabled: "○" };
@@ -60,8 +60,10 @@ export function actionsFor(s: McpServerInfo, waiting = false): McpAction[] {
 }
 
 /** Remove only for servers saved in a scope `claude mcp remove` writes (not claude.ai, managed, enterprise, plugin or dynamic ones). */
-export const canRemove = (s: McpServerInfo): s is McpServerInfo & { scope: ConfigScope } =>
-  (s.scope === "local" || s.scope === "user" || s.scope === "project") && s.source !== "plugin";
+export const canRemove = (s: McpServerInfo, caps?: ConfigCapabilities): s is McpServerInfo & { scope: ConfigScope } =>
+  (s.scope === "local" || s.scope === "user" || s.scope === "project") && s.source !== "plugin" && (!caps || caps.mcpScopes.includes(s.scope));
+/** Why a server the Engine cannot remove shows no Remove button (its `mcpRemoveScope` gap), for a server saved in a scope the Engine does not write. */
+export const removeGap = (s: McpServerInfo, caps?: ConfigCapabilities) => (caps && !canRemove(s, caps) && (s.scope === "user" || s.scope === "local") ? caps.gaps.mcpRemoveScope : undefined);
 
 /** Error text of a server: tags stripped, first line, at most 200 characters. */
 export function errorLine(error: string) {
