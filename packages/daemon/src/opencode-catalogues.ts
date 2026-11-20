@@ -77,7 +77,11 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
         await Promise.race([ran, late]).finally(() => clearTimeout(timer));
         if (srv.major() === undefined) {
           // The answer goes on as the adapter's own list would have gone on: OpenCode 1 starts its server and pushes `sessions.changed` when it answered.
-          void ran.then(() => srv.major() !== undefined && pick().list(lctx)).catch(() => {});
+          void ran
+            .then(async () => {
+              if (srv.major() !== undefined) await pick().list(lctx);
+            })
+            .catch(() => {});
           return { items: [], keep: () => true };
         }
       }

@@ -155,6 +155,8 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   let stopRequested = false;
   /** Major version of the last successful `check()`: known before any server starts. */
   let lastMajor: 1 | 2 | undefined;
+  /** Bumped by `reset()` (the path changed): a `--version` of the previous binary that ends later is run again on the current one, its result is never kept. */
+  let gen = 0;
   let clientOf: { up: Up; client: import("@opencode/client").OpenCodeClient } | undefined;
   // The child is SERVE_WATCHER (tailscale.ts): it runs `opencode serve` in its own process group and kills that group when its stdin closes,
   // so the serve ends with the daemon even when the daemon is killed (the pipe closes). Closing stdin is the way to stop it.
@@ -170,16 +172,19 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   };
 
   /** Binary and version, never a server: throws OpenCodeError. The bound is the start timeout, not a shorter one of its own: `--version` starts the same binary, so a machine too busy to answer it in 10 s would refuse to start OpenCode although `serve` is given 20 s. */
-  async function check() {
+  async function check(): Promise<{ cmd: string[]; version: string; major: 1 | 2 }> {
+    const g = gen;
     const cmd = argv();
     if (!cmd) throw missing();
     const run = invocation(cmd[0]!, [...cmd.slice(1), "--version"]);
     const out = await new Promise<string>((resolve, reject) =>
       execFile(run.file, run.args, { env: env(), timeout: o.startTimeoutMs ?? START_TIMEOUT_MS, windowsHide: true, windowsVerbatimArguments: run.verbatim }, (err, stdout, errout) => (err ? reject(err) : resolve(`${stdout}${errout}`))),
     ).catch((err: NodeJS.ErrnoException) => {
+      if (g !== gen) return undefined;
       if (err.code === "ENOENT") throw missing();
       throw new OpenCodeError("opencode_failed", `OpenCode did not answer --version: ${err.message}`);
     });
+    if (g !== gen || out === undefined) return check();
     const version = parseVersion(out);
     if (!version) throw new OpenCodeError("opencode_failed", `OpenCode --version printed no version: ${out.trim().slice(0, 200)}`);
     const text = version.join(".");
@@ -333,6 +338,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
         const u = await ensure();
         if (!handlers.size) break;
         streamAbort = new AbortController();
+        // Version 2 route: unused until the OpenCode 2 adapter (slice 2) opens the stream with its major (ensure() here asks for version 1).
         const res = await ocFetch(`${u.url}${u.major === 2 ? "/api/event" : "/global/event"}`, { headers: { authorization: u.auth, accept: "text/event-stream" }, signal: streamAbort.signal });
         if (!res.ok || !res.body) throw new Error(`event stream answered ${res.status}`);
         if (again) for (const h of [...handlers]) h.resync();
@@ -389,7 +395,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
       return Promise.race([connected, new Promise((r) => (timer = setTimeout(r, STREAM_WAIT_MS)))]).then(() => clearTimeout(timer));
     },
     /** The path setting changed: stop, and forget crashes (the new binary gets a fresh start). */
-    reset: () => ((fastExits = []), (lastError = undefined), (lastMajor = undefined), stop()),
+    reset: () => ((gen += 1), (fastExits = []), (lastError = undefined), (lastMajor = undefined), stop()),
     running: () => !!up && !!child,
     /** Major version of the running server, else of the last successful `check()`; undefined until one of them happened. */
     major: (): 1 | 2 | undefined => (up && child ? up.major : lastMajor),

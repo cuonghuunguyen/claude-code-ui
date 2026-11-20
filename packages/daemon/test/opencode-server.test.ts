@@ -1,6 +1,6 @@
 // The OpenCode engine over the daemon's WebSocket: a real daemon, the fake `opencode` binary and its fake server (fixtures/opencode).
 import { spawn } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -307,6 +307,26 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     await d_list(d);
     await until(() => versions() > before);
     expect(d.starts()).toEqual([]);
+  }, 30_000);
+
+  // A script as the path needs a POSIX shell.
+  it.skipIf(process.platform === "win32")("a slow `opencode --version` of the previous path that ends after a path change does not decide the version of the new path", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "oc-path-")));
+    const script = (name: string, body: string) => (writeFileSync(join(dir, name), `#!/bin/sh\n${body}\n`), chmodSync(join(dir, name), 0o755), join(dir, name));
+    const ended = join(dir, "version-ended");
+    // `--version` answers after 1 s and leaves a mark once it printed.
+    const v2 = script("opencode2", `case " $* " in *" --version "*) sleep 1; ${JSON.stringify(process.execPath)} ${JSON.stringify(BIN2)} "$@"; touch ${JSON.stringify(ended)}; exit 0;; esac\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(BIN2)} "$@"`);
+    const v1 = script("opencode1", `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(BIN)} "$@"`);
+    const d = await boot({ engine: "opencode", path: v2 });
+    // The first list starts the check of the OpenCode 2 path; the user points the path at OpenCode 1 before it ends.
+    await d_list(d);
+    await d.ok({ type: "settings.set", patch: { opencode: { path: v1 } } });
+    await until(() => existsSync(ended));
+    // The daemon reads the old answer when the process exits, a moment after the mark.
+    await new Promise((r) => setTimeout(r, 300));
+    await d_list(d);
+    expect(await d.request({ type: "session.create", cwd: d.project, engine: "opencode" })).toMatchObject({ type: "reply" });
+    expect(d.starts()).toHaveLength(1);
   }, 30_000);
 
   it("the OpenCode server ends with a daemon that is killed (SIGKILL)", async () => {
