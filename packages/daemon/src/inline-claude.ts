@@ -104,21 +104,30 @@ async function grantServers(parent: Query | undefined, grants: string[]): Promis
   return { servers, disallowed };
 }
 
-/** `allow`, `deny` and `ask` rules of the parent's effective settings (`Query.getSettings()`, in the SDK code but not its d.ts); undefined when it has none. */
-async function parentPermissions(parent: Query | undefined) {
-  if (!parent) return undefined;
+/**
+ * What an inline run copies of the parent's effective settings (`Query.getSettings()`, in the SDK code but not its d.ts): the `allow`,
+ * `deny` and `ask` rules and the `PreToolUse` hooks (a hook-based deny of the parent must hold inside the run). Other hook events are
+ * never copied. Each is undefined when the parent has none.
+ */
+async function parentSettings(parent: Query | undefined): Promise<{ permissions?: { allow?: string[]; deny?: string[]; ask?: string[] }; preToolUse?: unknown[] }> {
+  if (!parent) return {};
   try {
-    const s = (await (parent as Query & { getSettings(): Promise<unknown> }).getSettings()) as { effective?: { permissions?: unknown } } | undefined;
+    const s = (await (parent as Query & { getSettings(): Promise<unknown> }).getSettings()) as { effective?: { permissions?: unknown; hooks?: { PreToolUse?: unknown } } } | undefined;
+    const out: Awaited<ReturnType<typeof parentSettings>> = {};
     const p = s?.effective?.permissions;
-    if (!p || typeof p !== "object") return undefined;
-    const out: { allow?: string[]; deny?: string[]; ask?: string[] } = {};
-    for (const k of ["allow", "deny", "ask"] as const) {
-      const v = (p as Record<string, unknown>)[k];
-      if (Array.isArray(v) && v.every((x) => typeof x === "string")) out[k] = v;
+    if (p && typeof p === "object") {
+      const perms: { allow?: string[]; deny?: string[]; ask?: string[] } = {};
+      for (const k of ["allow", "deny", "ask"] as const) {
+        const v = (p as Record<string, unknown>)[k];
+        if (Array.isArray(v) && v.every((x) => typeof x === "string")) perms[k] = v;
+      }
+      if (Object.keys(perms).length) out.permissions = perms;
     }
-    return Object.keys(out).length ? out : undefined;
+    const h = s?.effective?.hooks?.PreToolUse;
+    if (Array.isArray(h) && h.length) out.preToolUse = h;
+    return out;
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -126,7 +135,7 @@ async function parentPermissions(parent: Query | undefined) {
 export function inlineClaudeOptions(
   parent: ParentState,
   spec: InlineSpec,
-  x: { model: string; mcpServers: Record<string, McpServerConfig>; disallowedTools: string[]; abort: AbortController; env: NodeJS.ProcessEnv; canUseTool: CanUseTool; permissions?: object },
+  x: { model: string; mcpServers: Record<string, McpServerConfig>; disallowedTools: string[]; abort: AbortController; env: NodeJS.ProcessEnv; canUseTool: CanUseTool; permissions?: object; preToolUse?: unknown[] },
 ): Options {
   const disallowed = [...new Set([...(parent.disallowedTools ?? []), ...x.disallowedTools])];
   return {
@@ -145,7 +154,8 @@ export function inlineClaudeOptions(
     permissionMode: parent.permissionMode,
     allowDangerouslySkipPermissions: parent.allowBypass,
     ...(parent.allowedTools?.length && { allowedTools: parent.allowedTools }),
-    settings: { ...(x.permissions && { permissions: x.permissions }), disableAllHooks: true },
+    // Only the parent's PreToolUse hooks run (a deny hook must hold here); no other event is copied, so with none every hook stays off.
+    settings: { ...(x.permissions && { permissions: x.permissions }), ...(x.preToolUse?.length ? { hooks: { PreToolUse: x.preToolUse } } : {}), disableAllHooks: !x.preToolUse?.length },
     env: x.env,
     includePartialMessages: false,
     abortController: x.abort,
@@ -200,7 +210,7 @@ export async function runInlineClaude(deps: InlineClaudeDeps, spec: InlineSpec, 
     // Registered before these awaits: a close() or Stop during them must end the run too.
     const parentQuery = deps.parentQuery();
     const granted = await grantServers(parentQuery, spec.mcp);
-    const permissions = await parentPermissions(parentQuery);
+    const { permissions, preToolUse } = await parentSettings(parentQuery);
     before = await deps.gitDirty(parent.cwd);
     if (why) throw new Halt();
     const options = inlineClaudeOptions(parent.permissionMode === "auto" && !deps.supportsAuto?.(model) ? { ...parent, permissionMode: "default" } : parent, spec, {
@@ -210,6 +220,7 @@ export async function runInlineClaude(deps: InlineClaudeDeps, spec: InlineSpec, 
       abort,
       env: withoutApiKeys(deps.env()),
       permissions,
+      preToolUse,
       canUseTool: (tool, input, o) => deps.canUseTool(tool, input, o, { adapter, emit, stop: () => stop({ status: "stopped" }) }),
     });
     q = deps.query({ prompt: spec.text, options });

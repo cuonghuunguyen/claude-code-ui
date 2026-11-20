@@ -18,6 +18,7 @@ const toolResult = (id: string, content = "ok", isError = false) =>
 const result = (o: Record<string, unknown> = {}) =>
   ({ type: "result", subtype: "success", is_error: false, result: "final", num_turns: 2, total_cost_usd: 0.002, duration_ms: 5, duration_api_ms: 4, session_id: "x", uuid: "res", usage: usage({ input_tokens: 30, output_tokens: 12, cache_read_input_tokens: 7, cache_creation_input_tokens: 3 }), ...o }) as unknown as SDKMessage;
 
+const HOOKS = [{ matcher: "Bash", hooks: [{ type: "command", command: "deny.sh" }] }];
 type Setup = {
   messages?: (SDKMessage | (() => Promise<void>))[];
   throwAfter?: Error;
@@ -59,7 +60,7 @@ function setup(s: Setup = {}) {
             mcpServerStatus: async () => s.status ?? [],
             getSettings: async () => {
               if (s.settingsError) throw new Error("no settings");
-              return s.settings ?? { effective: { permissions: { allow: ["Read(*)"], deny: ["Bash(rm:*)"], ask: ["Edit"], defaultMode: "plan", additionalDirectories: ["/x"] }, hooks: { PreToolUse: [] } } };
+              return s.settings ?? { effective: { permissions: { allow: ["Read(*)"], deny: ["Bash(rm:*)"], ask: ["Edit"], defaultMode: "plan", additionalDirectories: ["/x"] }, hooks: { PreToolUse: HOOKS, SessionStart: [{ hooks: [{ type: "command", command: "echo hi" }] }] } } };
             },
           } as never),
     defaultModel: () => "haiku",
@@ -121,13 +122,13 @@ describe("runInlineClaude options", () => {
     await a.done;
     expect(a.optionsSeen[0]!.model).toBe("sonnet");
   });
-  it("copies only allow, deny and ask of the parent's effective permissions; hooks off", async () => {
+  it("copies only allow, deny and ask of the parent's effective permissions and its PreToolUse hooks; other hook events dropped", async () => {
     const { done, optionsSeen } = run({ messages: [result()] });
     await done;
-    expect(optionsSeen[0]!.settings).toEqual({ permissions: { allow: ["Read(*)"], deny: ["Bash(rm:*)"], ask: ["Edit"] }, disableAllHooks: true });
+    expect(optionsSeen[0]!.settings).toEqual({ permissions: { allow: ["Read(*)"], deny: ["Bash(rm:*)"], ask: ["Edit"] }, hooks: { PreToolUse: HOOKS }, disableAllHooks: false });
   });
-  it("without usable parent permissions only hooks are off (grants and mode still pass)", async () => {
-    for (const s of [{ settingsError: true }, { settings: {} }, { settings: { effective: { permissions: "x" } } }, { noParent: true }]) {
+  it("without usable parent permissions or PreToolUse hooks all hooks are off (grants and mode still pass)", async () => {
+    for (const s of [{ settingsError: true }, { settings: {} }, { settings: { effective: { permissions: "x" } } }, { settings: { effective: { hooks: { SessionStart: HOOKS, PreToolUse: [] } } } }, { noParent: true }]) {
       const { done, optionsSeen } = run({ messages: [result()], ...s });
       await done;
       expect(optionsSeen[0]!.settings).toEqual({ disableAllHooks: true });
