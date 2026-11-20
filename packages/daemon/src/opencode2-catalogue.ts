@@ -1,5 +1,5 @@
 // The OpenCode 2 adapter's catalogue (ADR 0015): creates, lists and restores sessions of the daemon's OpenCode 2 server through `@opencode/client`.
-// Slice 2: create, list, restore, models. Rename, archive, delete, Aside, agents and slash commands are later slices and answer `opencode_v2_unsupported`.
+// Create, list, restore, models, rename, archive, delete and the Aside fork. Agents and slash commands are later slices.
 import { existsSync } from "node:fs";
 import { EFFORTS, type PermissionMode, type SessionListItem } from "@claude-ui/protocol";
 import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type ListCtx, type SavedSession } from "./engine-catalogue.ts";
@@ -19,10 +19,6 @@ const MAX_PAGES = 10;
 export type OpenCode2CatalogueOpts = { server: OpenCodeServer; /** How long `session.list` waits for OpenCode (default 3 s). */ listWaitMs?: number; /** Writes the adapter record of a session (ADR 0015); throws when it cannot be saved. */ record?: (id: string) => void };
 export type OpenCode2Catalogue = Omit<EngineCatalogue, "listScope" | "ownsId" | "requests" | "settingsChanged" | "settled" | "forget" | "close">;
 
-/** Shown wherever OpenCode 2 would need an adapter feature that is not there yet. */
-export const openCode2Unsupported = (what = "OpenCode 2 sessions") =>
-  new EngineError("opencode_v2_unsupported", `${what} are not supported yet. Set Settings › OpenCode › path to an OpenCode 1 binary.`);
-
 export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2CatalogueOpts): OpenCode2Catalogue {
   const { appSettings, settings } = ctx;
   const server = o.server;
@@ -39,9 +35,7 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
   });
   const sessionOpts = (initial: Partial<SessionSettings>) => ({ ...ctx.sessionOpts(initial), engine });
   const failure = (err: unknown) => (err instanceof OpenCodeError ? new EngineError(err.code, err.message) : new EngineError("opencode_failed", (err as Error).message));
-  const unsupported = (what: string) => async (): Promise<never> => {
-    throw openCode2Unsupported(what);
-  };
+  const notFound = async () => (await import("@opencode/client")).isSessionNotFoundError;
 
   async function createSession(cwd: string, initial: { model?: string; permissionMode: PermissionMode; effort?: SessionSettings["effort"] }): Promise<Session | undefined> {
     const client = await server.client();
@@ -162,6 +156,44 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     return ctx.track(Session.restore(id, cwd, history as never, sessionOpts({ model, permissionMode, effort })));
   }
 
+  /**
+   * Where an Aside forks (as the OpenCode 1 adapter): at a rewind (OpenCode's `revert`) its message, else before the unfinished assistant message of a running turn, else
+   * after the whole history. `before` excludes that message. Nothing kept before the cut = no Aside.
+   */
+  async function asideCut(client: Awaited<ReturnType<OpenCodeServer["client"]>>, id: string): Promise<{ before?: string } | undefined> {
+    const [info, first, newest] = await Promise.all([
+      client.session.get({ sessionID: id }),
+      client.message.list({ sessionID: id, order: "asc", limit: 1 }),
+      client.message.list({ sessionID: id, order: "desc", limit: 20 }),
+    ]);
+    const oldest = first.data[0];
+    if (!oldest) return undefined;
+    const running = newest.data.find((m) => m.type === "assistant" && !(m as { time?: { completed?: number } }).time?.completed)?.id;
+    const before = info.revert?.messageID ?? running;
+    return before === oldest.id ? undefined : { ...(before && { before }) };
+  }
+
+  async function forkForAside(owner: Session, title: string): Promise<{ id: string } | { unavailable: string }> {
+    const client = await server.client();
+    const cut = await asideCut(client, owner.id);
+    if (!cut) return { unavailable: "An aside needs a message in this session first" };
+    const row = await client.session.fork({ sessionID: owner.id, ...cut });
+    try {
+      meta.set(row.id, { cwd: owner.cwd, title });
+      await client.session.update({ sessionID: row.id, title });
+      // Recorded once usable: a failed save removes the fork like any other failure here.
+      o.record?.(row.id);
+      return { id: row.id };
+    } catch (e) {
+      // The fork exists but is not usable: it is not left behind.
+      await client.session.remove({ sessionID: row.id }).then(
+        () => meta.delete(row.id),
+        () => {},
+      );
+      throw e;
+    }
+  }
+
   return {
     engine,
     // Listed, created or opened here: not a UUID (the transcript scan's shape), so it is not found by one.
@@ -190,10 +222,33 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
       return cwd && ctx.allowed(cwd) ? { cwd, transcript: false } : undefined;
     },
     title: async (s) => meta.get(s.id)?.title ?? "New session",
-    rename: unsupported("Renaming, archiving and deleting OpenCode 2 sessions"),
-    archive: unsupported("Renaming, archiving and deleting OpenCode 2 sessions"),
-    delete: unsupported("Renaming, archiving and deleting OpenCode 2 sessions"),
-    forkForAside: async () => ({ unavailable: "An aside is not available for OpenCode 2 sessions yet" }),
+    rename: async (id, cwd, title) => {
+      try {
+        await (await server.client()).session.update({ sessionID: id, title });
+      } catch (err) {
+        throw failure(err);
+      }
+      meta.set(id, { cwd, title });
+    },
+    archive: async (id, _cwd, archived) => {
+      try {
+        await (await server.client()).session.update({ sessionID: id, archived });
+      } catch (err) {
+        throw failure(err);
+      }
+    },
+    delete: async (id) => {
+      try {
+        const client = await server.client();
+        const gone = await notFound();
+        // Already gone in OpenCode 2 (deleted in its own app): the delete removes what claude-ui keeps of it.
+        await client.session.remove({ sessionID: id }).catch((err) => (gone(err) ? undefined : Promise.reject(err)));
+      } catch (err) {
+        throw failure(err);
+      }
+      meta.delete(id);
+    },
+    forkForAside: (owner, title) => forkForAside(owner, title).catch((err) => Promise.reject(failure(err))),
     commands: async () => [],
     agents: async () => [],
     models: (cwd) => engine.modelInfos(cwd),

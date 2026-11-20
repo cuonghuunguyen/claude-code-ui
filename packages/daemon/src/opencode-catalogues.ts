@@ -144,7 +144,17 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
     title: (s) => pick().title(s),
     rename: async (id, cwd, title) => (await forId(id)).rename(id, cwd, title),
     archive: async (id, cwd, archived) => (await forId(id)).archive(id, cwd, archived),
-    delete: async (id, at) => (await forId(id)).delete(id, at),
+    delete: async (id, at) => {
+      const a = await forId(id);
+      await a.delete(id, at);
+      if (a !== v2) return;
+      // The session is gone already: a record that cannot be removed only costs its line in the file.
+      try {
+        adapters.drop(id);
+      } catch (err) {
+        console.error(`session ${id}: removing its OpenCode adapter record failed:`, (err as Error).message);
+      }
+    },
     forkForAside: async (owner, title) => (await forId(owner.id)).forkForAside(owner, title),
     commands: async (cwd) => (await known()).commands(cwd),
     agents: async (cwd) => (await known()).agents(cwd),

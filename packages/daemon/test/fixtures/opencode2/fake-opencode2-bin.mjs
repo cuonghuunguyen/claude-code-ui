@@ -2,7 +2,8 @@
 // adapter and scripted turns. `--version` prints `opencode v${FAKE_OPENCODE_VERSION ?? "2.3.0"}`. `serve` checks Basic auth, prints `server listening on http://…`.
 // GET /api/info -> {version, pid, urls}; GET /api/event -> SSE (`server.connected`, the turns' events, `: heartbeat` comments). There is no /global/health: it answers 404.
 // Routes: GET /api/model, /api/model/default, /api/session, /api/session/active, /api/session/:id, /api/session/:id/message, /api/permission/request;
-// POST /api/session, /api/session/:id/prompt, /api/session/:id/model, /api/session/:id/interrupt, /api/session/:id/permission/:rid/reply; PATCH /api/session/:id.
+// POST /api/session, /api/session/:id/prompt, /api/session/:id/model, /api/session/:id/interrupt, /api/session/:id/permission/:rid/reply, /api/session/:id/fork;
+// PATCH /api/session/:id (permissions, title, archived); DELETE /api/session/:id.
 // FAKE_OPENCODE2_FAIL: see the session route.
 // FAKE_OPENCODE2_DATA: JSON `{sessions: [{id, directory, title, time, permissions?, parentID?}], messages: {<id>: [v2 messages]}, models?, default?}`.
 // FAKE_OPENCODE2_SCRIPT: comma-separated turn files, one per prompt in order (a prompt after the last one gets a plain "pong" turn). A turn is a JSON list of steps:
@@ -10,7 +11,7 @@
 //   {wait: "permission"}  holds the turn until `…/permission/:rid/reply` came; {when: "once"|"always"|"reject"|"allowed"} on a step skips it unless that was the reply (`allowed` = once or always); `$REJECT` is the reply's message
 //   {hold: true}    holds the turn until `…/interrupt`, which then ends it as the user's stop (`step.failed` aborted, `execution.interrupted`)
 //   {sleep: ms}
-// FAKE_OPENCODE2_MODEL_DELAY / _PROMPT_DELAY / _MESSAGE_DELAY: ms the model routes / the prompt route / the message read wait. FAKE_OPENCODE2_SWALLOW_STOP: an interrupt sends no end events. POST /__drop ends the event streams.
+// FAKE_OPENCODE2_MODEL_DELAY / _PROMPT_DELAY / _MESSAGE_DELAY: ms the model routes / the prompt route / the message read wait. FAKE_OPENCODE2_SWALLOW_STOP: an interrupt sends no end events. POST /__drop ends the event streams; POST /__forget/<id> drops a session.
 // FAKE_OPENCODE_LOG: JSON lines of `start`, `request` (method, path, authed, body of a write) and `version`.
 import { createServer } from "node:http";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -117,6 +118,8 @@ const server = createServer((req, res) => {
     const body = raw ? JSON.parse(raw) : undefined;
     // POST /__drop: ends every event stream (the daemon reconnects and reads the sessions again). A test seam: no authentication, no log line.
     if (url.pathname === "/__drop") return (clients.forEach((c) => c.end()), json(res, 200, {}));
+    // POST /__forget/<session id>: the session is gone, as if deleted in OpenCode's own app (a test seam like /__drop).
+    if (url.pathname.startsWith("/__forget/")) return (sessions.delete(url.pathname.slice(10)), json(res, 200, {}));
     log({ type: "request", method: req.method, path: url.pathname, authed, ...(body !== undefined && { body }) });
     if (!authed) return json(res, 401, { error: "unauthorized" });
     const p = url.pathname;
@@ -160,11 +163,34 @@ const server = createServer((req, res) => {
       if (!s) return json(res, 404, { _tag: "SessionNotFoundError", message: `Session not found: ${m[1]}` });
       const sub = m[2];
       if (!sub && req.method === "GET") return json(res, 200, { data: s });
-      if (!sub && req.method === "PATCH") return (Object.assign(s, body.permissions !== undefined && { permissions: body.permissions }), res.writeHead(204), res.end());
+      if (!sub && req.method === "PATCH") {
+        // A title "fail-title" answers 500 (a failed rename).
+        if (body.title === "fail-title") return json(res, 500, { message: "rename failed" });
+        Object.assign(s, body.permissions !== undefined && { permissions: body.permissions }, body.title !== undefined && { title: body.title });
+        if (body.archived === true) s.time.archived = Date.now();
+        if (body.archived === false) delete s.time.archived;
+        return (res.writeHead(204), res.end());
+      }
+      if (!sub && req.method === "DELETE") return (sessions.delete(s.id), messages.delete(s.id), res.writeHead(204), res.end());
+      if (sub === "fork" && req.method === "POST") {
+        // The history before `before` (all of it without), copied with new message ids; an empty session cannot be forked (as 2.3.0).
+        const list = messages.get(s.id) ?? [];
+        if (!list.length) return json(res, 400, { _tag: "InvalidRequestError", message: `Cannot fork empty session: ${s.id}` });
+        const cut = body?.before ? list.findIndex((x) => x.id === body.before) : -1;
+        const fid = id("ses");
+        const now = Date.now();
+        const f = { ...s, id: fid, title: `${s.title ?? "New session"} (fork #1)`, fork: { sessionID: s.id }, time: { created: now, updated: now } };
+        delete f.revert;
+        sessions.set(fid, f);
+        messages.set(fid, (cut < 0 ? list : list.slice(0, cut)).map((x) => ({ ...x, id: id("msg") })));
+        return json(res, 200, { data: f });
+      }
       if (sub === "model") return (s.model = body.model, res.writeHead(204), res.end());
       if (sub === "message") {
-        const list = messages.get(s.id) ?? [];
+        let list = messages.get(s.id) ?? [];
         const limit = Number(url.searchParams.get("limit") ?? 100);
+        // Stored oldest first; `order=desc` reads newest first (OpenCode's default order).
+        if (url.searchParams.get("order") === "desc") list = [...list].reverse();
         // FAKE_OPENCODE2_MESSAGE_DELAY: ms a message read waits (its answer is as of the time it was asked).
         if (process.env.FAKE_OPENCODE2_MESSAGE_DELAY) return setTimeout(() => json(res, 200, { data: list.slice(0, limit), cursor: { previous: null, next: null } }), Number(process.env.FAKE_OPENCODE2_MESSAGE_DELAY));
         return json(res, 200, { data: list.slice(0, limit), cursor: { previous: null, next: list.length >= limit ? "next" : null } });
