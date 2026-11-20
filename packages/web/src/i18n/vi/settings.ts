@@ -658,4 +658,7 @@ export default {
   "projectSettings.jira.clearTitle": "Xóa token của {origin}?",
   "projectSettings.jira.clearBody": "Cũng được dùng bởi {with}. Họ cũng mất token này và không kết nối được Jira cho đến khi lưu token mới.",
   "settings.projectSettings": "Cài đặt dự án cho {project}…",
+  "settings.overridden": "Đã ghi đè trong dự án này",
+  "settings.overridden.fields": "Đã ghi đè trong dự án này: {fields}",
+  "settings.overridden.open": "Mở cài đặt dự án",
 } satisfies Partial<Messages>;

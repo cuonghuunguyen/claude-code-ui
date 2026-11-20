@@ -18,7 +18,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function render({ project, legacy = false, sides, docker, failGet = false, tokenReset = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true; keepAwake?: { supported: boolean; error?: string }; shortcut?: { installed: boolean } } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { project?: { cwd: string; name: string }; legacy?: boolean; sides?: SideInfo[]; docker?: DockerState; failGet?: boolean; tokenReset?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true; keepAwake?: { supported: boolean; error?: string }; shortcut?: { installed: boolean } } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
+async function render({ project, overrides, legacy = false, sides, docker, failGet = false, tokenReset = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true; keepAwake?: { supported: boolean; error?: string }; shortcut?: { installed: boolean } } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { project?: { cwd: string; name: string; side?: string }; overrides?: Settings["projects"]["overrides"]; legacy?: boolean; sides?: SideInfo[]; docker?: DockerState; failGet?: boolean; tokenReset?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true; keepAwake?: { supported: boolean; error?: string }; shortcut?: { installed: boolean } } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
   const toggle = vi.fn();
   localStorage.removeItem("claude-ui.settingsGroup");
   if (group) localStorage.setItem("claude-ui.settingsGroup", group);
@@ -29,7 +29,7 @@ async function render({ project, legacy = false, sides, docker, failGet = false,
   const onShortcuts = vi.fn();
   const onAddons = vi.fn();
   const onProjectSettings = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {}, commitMessageWarm: false }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, projects: { overrides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {}, commitMessageWarm: false }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, projects: { overrides: overrides ?? {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } };
   if (legacy) (delete (settings as Partial<Settings>).power, delete (settings as Partial<Settings>).app, delete (settings as Partial<Settings>).launcher);
   let refuse: string | undefined;
   const calls: Request[] = [];
@@ -1506,4 +1506,50 @@ it("shows Fork subagents under Sessions with one switch that saves its patch, an
   await act(async () => q("settings-fork-enabled")!.click());
   expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { fork: { enabled: false } } });
   expect(q("settings-fork-enabled")?.getAttribute("aria-checked")).toBe("false");
+});
+
+const OVERRIDES = { local: { "/p/app": { mode: "plan", inlineTask: { model: "sonnet" }, history: { enabled: false }, account: "", jira: { url: "https://acme.example.com", jql: "project = A" } } }, "ssh:box": { "/p/app": { mode: "auto", account: "x" } } } as Settings["projects"]["overrides"];
+
+it("Settings marks each global row the shown Project overrides, with a button that opens its Project settings", async () => {
+  const { q, pick, onProjectSettings } = await render({ project: { cwd: "/p/app", name: "app" }, overrides: OVERRIDES });
+  await pick("sessions");
+  expect(q("settings-sessions-defaultMode-overridden")?.textContent).toContain("Overridden in this project");
+  expect(q("settings-sessions-defaultMode")!.getAttribute("aria-describedby")).toContain("settings-sessions-defaultMode-overridden-text");
+  await pick("inlineTask");
+  expect(q("settings-inlineTask-model-overridden")).not.toBeNull();
+  expect(q("settings-inlineTask-openCodeModel-overridden")).toBeNull();
+  expect(q("settings-inlineTask-maxTurns-overridden")).toBeNull();
+  await pick("history");
+  expect(q("settings-history-enabled-overridden")).not.toBeNull();
+  await act(async () => q("settings-history-enabled-overridden-open")!.click());
+  expect(onProjectSettings).toHaveBeenCalledTimes(1);
+});
+
+it("Settings marks the Claude account group and names the overridden Jira fields", async () => {
+  const { q, pick } = await render({ project: { cwd: "/p/app", name: "app" }, overrides: OVERRIDES });
+  await pick("account");
+  expect(q("settings-account-overridden")).not.toBeNull();
+  await pick("jira");
+  expect(q("settings-jira-overridden")?.textContent).toContain("Jira URL, Ticket filter (JQL)");
+  expect(q("settings-jira-overridden")?.textContent).not.toContain("Email");
+});
+
+it("Settings shows no marker without a shown Project or for a Project with no override; a Side Project reads its Side's entry only", async () => {
+  const none = await render({ overrides: OVERRIDES });
+  await none.pick("sessions");
+  expect(none.q("settings-sessions-defaultMode-overridden")).toBeNull();
+  await act(async () => root?.unmount());
+  document.body.innerHTML = "";
+  const other = await render({ project: { cwd: "/p/other", name: "other" }, overrides: OVERRIDES });
+  await other.pick("history");
+  expect(other.q("settings-history-enabled-overridden")).toBeNull();
+  await act(async () => root?.unmount());
+  document.body.innerHTML = "";
+  const side = await render({ project: { cwd: "/p/app", name: "app", side: "ssh:box" }, overrides: OVERRIDES });
+  await side.pick("sessions");
+  expect(side.q("settings-sessions-defaultMode-overridden")).not.toBeNull();
+  await side.pick("history");
+  expect(side.q("settings-history-enabled-overridden")).toBeNull();
+  await side.pick("account");
+  expect(side.q("settings-account-overridden")).toBeNull();
 });

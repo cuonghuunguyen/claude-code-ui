@@ -656,4 +656,7 @@ export default {
   "projectSettings.jira.clearTitle": "Clear the token for {origin}?",
   "projectSettings.jira.clearBody": "Also used by {with}. They lose this token too and cannot reach Jira until a new one is saved.",
   "settings.projectSettings": "Project settings for {project}…",
+  "settings.overridden": "Overridden in this project",
+  "settings.overridden.fields": "Overridden in this project: {fields}",
+  "settings.overridden.open": "Open project settings",
 } as const;

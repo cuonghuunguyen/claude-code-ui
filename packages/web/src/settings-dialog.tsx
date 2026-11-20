@@ -4,7 +4,7 @@
 // A later setting is one more row in SECTIONS or a section component; a later section joins a group in `groups`, a later group is one
 // more entry there.
 import { useContext, useEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { APP_ICON_MAX, APP_ICON_PX, APP_NAME_DEFAULT, DEFAULT_COMMIT_INSTRUCTION, LOCAL_SIDE, type ClaudeAccountInfo, type DockerState, type Engine, type Settings, type SettingsPatch, type SettingsResult, type SideInfo, type UpdateCheckResult } from "@claude-ui/protocol";
+import { APP_ICON_MAX, APP_ICON_PX, APP_NAME_DEFAULT, DEFAULT_COMMIT_INSTRUCTION, LOCAL_SIDE, type ClaudeAccountInfo, type DockerState, type Engine, type ProjectOverrides, type Settings, type SettingsPatch, type SettingsResult, type SideInfo, type UpdateCheckResult } from "@claude-ui/protocol";
 import { sideStatus, sideTitle } from "./sides.tsx";
 import { LabelDialog } from "./label-dialog.tsx";
 import { LabelIcon } from "./label-icon.tsx";
@@ -42,6 +42,7 @@ import { InstructionSetting } from "./instruction-setting.tsx";
 import { ListSetting } from "./list-setting.tsx";
 import { ClaudeAccountSection } from "./claude-account-settings.tsx";
 import { JiraSection } from "./jira-settings.tsx";
+import { overridesOf } from "./project-settings.ts";
 import { OpenCodeSection } from "./opencode-settings.tsx";
 import { OpenAppSection } from "./open-app-settings.tsx";
 import { onDaemonMachine } from "./open-external-menu.ts";
@@ -872,7 +873,35 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
 export type PushUi = { on: boolean; supported: boolean; busy: boolean; error?: string; toggle: () => void };
 
 /** `changed`: bumped when another client changed the settings (reloads them). */
-export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onAddons, onProvidersChanged, onLogin, onRestartGuide, onProjectSettings, push, sides, docker, update, onCheckUpdate, project }: { /** Opens the Project settings dialog of `project` (the Settings dialog closes). */ onProjectSettings?: () => void; /** Opens the Claude login terminal (none: no project is open). */ onLogin?: () => void; /** The project shown: its own commit message instruction gets a row in Settings › Git. */ project?: { cwd: string; name: string }; update?: UpdateInfo; onCheckUpdate?: () => Promise<UpdateCheckResult>; sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onAddons?: () => void; /** An Engine's login or logout happened: its model lists are stale. */ onProvidersChanged?: (engine: Engine) => void; onRestartGuide?: () => void }) {
+/** "Overridden in this project" with a button to the Project settings dialog: text and icon, so the state never rests on colour. `what`: the overridden fields when the marker covers a group. */
+function OverriddenMarker({ id, what, onOpen }: { id: string; what?: string; onOpen?: () => void }) {
+  const t = useT();
+  return (
+    <span className="mt-1 flex flex-wrap items-center gap-x-2 text-xs" data-testid={id}>
+      <span id={`${id}-text`} className="inline-flex items-center gap-1 font-medium text-foreground">
+        <FolderCogIcon className="size-3.5" aria-hidden />
+        {what ? t("settings.overridden.fields", { fields: what }) : t("settings.overridden")}
+      </span>
+      {onOpen && (
+        <button type="button" onClick={onOpen} className="flex h-6 items-center rounded-md px-1 underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 text-muted-foreground" data-testid={`${id}-open`}>
+          {t("settings.overridden.open")}
+        </button>
+      )}
+    </span>
+  );
+}
+
+/** The global rows (`section.key`) the Project overrides; a string is overridden when it is not empty, as the daemon reads it. */
+function overriddenRows(o: ProjectOverrides): Set<string> {
+  const rows = new Set<string>();
+  if (o.mode !== undefined) rows.add("sessions.defaultMode");
+  if (o.inlineTask?.model) rows.add("inlineTask.model");
+  if (o.inlineTask?.openCodeModel) rows.add("inlineTask.openCodeModel");
+  if (o.history?.enabled !== undefined) rows.add("history.enabled");
+  return rows;
+}
+
+export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onAddons, onProvidersChanged, onLogin, onRestartGuide, onProjectSettings, push, sides, docker, update, onCheckUpdate, project }: { /** Opens the Project settings dialog of `project` (the Settings dialog closes). */ onProjectSettings?: () => void; /** Opens the Claude login terminal (none: no project is open). */ onLogin?: () => void; /** The project shown: its own commit message instruction gets a row in Settings › Git. */ project?: { cwd: string; name: string; /** Side id of the Project; absent = `local`. */ side?: string }; update?: UpdateInfo; onCheckUpdate?: () => Promise<UpdateCheckResult>; sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onAddons?: () => void; /** An Engine's login or logout happened: its model lists are stale. */ onProvidersChanged?: (engine: Engine) => void; onRestartGuide?: () => void }) {
   const t = useT();
   const [settings, setSettings] = useState<Settings>();
   const [error, setError] = useState<string>();
@@ -885,6 +914,11 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   const [draft, setDraft] = useState<Record<string, string>>({});
   const ask = useRef(request);
   ask.current = request;
+  // What the shown Project overrides (a Worktree is passed as its Project; the Side keys the entry). None without a Project.
+  const side = project?.side ?? LOCAL_SIDE;
+  const overrides = project ? overridesOf(settings?.projects?.overrides, { [project.cwd]: side }, project.cwd) : {};
+  const overriddenIn = overriddenRows(overrides);
+  const openProject = project ? onProjectSettings : undefined;
 
   useEffect(() => {
     // A refetch (the own save's settings_changed included) keeps the drafts: a field still being edited is not overwritten.
@@ -952,6 +986,8 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
         const hint = rk(sec.id, row.key, "hint");
         const value = (settings[sec.id] as Record<string, unknown>)[row.key];
         const patch = (v: unknown) => ({ [sec.id]: { [row.key]: v } }) as SettingsPatch;
+        const marked = overriddenIn.has(`${sec.id}.${row.key}`);
+        const described = `${id}-hint${marked ? ` ${id}-overridden-text` : ""}`;
         if (row.kind === "text") return <InstructionSetting key={row.key} id={id} label={label} hint={hint} value={value as string} placeholder={DEFAULT_COMMIT_INSTRUCTION} onSave={(next) => void save(patch(next))} />;
         if (row.kind === "list") return <ListSetting key={row.key} id={id} label={label} hint={hint} value={value as string[]} saving={saving} onSave={(next) => save(patch(next), undefined, true)} />;
         return (
@@ -959,12 +995,13 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
             <div className="min-w-0 flex-1">
               <label htmlFor={id} className="block text-sm">{label}</label>
               <span id={`${id}-hint`} className="block text-muted-foreground text-xs">{hint}</span>
+              {marked && <OverriddenMarker id={`${id}-overridden`} onOpen={openProject} />}
             </div>
             {row.kind === "switch" ? (
-              <Switch on={value === true} label={label} held={saving} onToggle={(on) => void save(patch(on))} title={label} describedBy={`${id}-hint`} testId={id} />
+              <Switch on={value === true} label={label} held={saving} onToggle={(on) => void save(patch(on))} title={label} describedBy={described} testId={id} />
             ) : row.kind === "select" ? (
               <Select value={String(value)} onValueChange={(v) => v && void save(patch(row.parse ? row.parse(v) : v))}>
-                <SelectTrigger id={id} aria-describedby={`${id}-hint`} aria-label={label} data-testid={id} className="w-44 max-md:data-[size=default]:h-11">
+                <SelectTrigger id={id} aria-describedby={described} aria-label={label} data-testid={id} className="w-44 max-md:data-[size=default]:h-11">
                   <SelectValue>{(v: string) => optionLabel(row.options.find((o) => o.value === v)) ?? v}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
@@ -978,7 +1015,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
             ) : row.kind === "line" ? (
               <input
                 id={id}
-                aria-describedby={`${id}-hint`}
+                aria-describedby={described}
                 type="text"
                 spellCheck={false}
                 autoCapitalize="off"
@@ -993,7 +1030,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
             ) : (
               <input
                 id={id}
-                aria-describedby={`${id}-hint`}
+                aria-describedby={described}
                 type="number"
                 inputMode="numeric"
                 min={row.min}
@@ -1037,6 +1074,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     // A section the daemon does not know (an older daemon lacks `performance`) is left out.
     return settings && !settings[id] ? undefined : sec;
   };
+  const jiraOverridden = (["url", "email", "template", "jql"] as const).filter((k) => overrides.jira?.[k]).map((k) => t(`jira.${k}` as Key)).join(", ");
   const orchestration = daemonGroup("orchestration");
   const usageLimit = daemonGroup("usageLimit");
   const performance = daemonGroup("performance");
@@ -1105,7 +1143,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
         ]
       : []),
     ...(localHistory ? [{ id: "history", title: sectionTitle(localHistory.id), category: "Sessions" as const, body: daemonSection(localHistory) }] : []),
-    ...(settings ? [{ id: "account", title: t("settings.group.account"), category: "Integrations" as const, body: <ClaudeAccountSection active={settings.claude?.account ?? ""} accounts={claudeAccounts} envToken={!!daemon?.claudeEnvToken} request={request} onResult={(r) => (setSettings(r.settings), setClaudeAccounts(r.claudeAccounts ?? []), setError(undefined))} onError={setError} onLogin={onLogin ?? (() => {})} /> }] : []),
+    ...(settings ? [{ id: "account", title: t("settings.group.account"), category: "Integrations" as const, body: <>{project && overrides.account !== undefined && side === LOCAL_SIDE && <OverriddenMarker id="settings-account-overridden" onOpen={openProject} />}<ClaudeAccountSection active={settings.claude?.account ?? ""} accounts={claudeAccounts} envToken={!!daemon?.claudeEnvToken} request={request} onResult={(r) => (setSettings(r.settings), setClaudeAccounts(r.claudeAccounts ?? []), setError(undefined))} onError={setError} onLogin={onLogin ?? (() => {})} /></> }] : []),
     ...(git ? [{ id: "git", title: sectionTitle(git.id), category: "Integrations" as const, body: daemonSection(git) }] : []),
     // GH-646: only for a browser on the daemon machine, and a daemon that lists editors (older ones and Sides have no `editor`).
     ...(settings?.editor && daemon?.editors && onDaemonMachine()
@@ -1113,7 +1151,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       : []),
     // GH-447: an older daemon has no `jira` settings: no group.
     ...(settings?.jira
-      ? [{ id: "jira", title: "Jira", category: "Integrations" as const, body: <JiraSection jira={settings.jira} tokenSet={jiraToken} tokenReset={jiraTokenReset} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined))} onError={setError} /> }]
+      ? [{ id: "jira", title: "Jira", category: "Integrations" as const, body: <>{jiraOverridden && <OverriddenMarker id="settings-jira-overridden" what={jiraOverridden} onOpen={openProject} />}<JiraSection jira={settings.jira} tokenSet={jiraToken} tokenReset={jiraTokenReset} saving={saving} save={save} request={request} onResult={(r) => (setSettings(r.settings), setJiraToken(!!r.jiraToken), setJiraTokenReset(!!r.jiraTokenReset), setError(undefined))} onError={setError} /></> }]
       : []),
     // An older daemon has no `opencode` settings: no group.
     ...(settings?.opencode ? [{ id: "opencode", title: "OpenCode", category: "Integrations" as const, body: <OpenCodeSection opencode={settings.opencode} saving={saving} save={save} request={request} onProviders={() => onProvidersChanged?.("opencode")} /> }] : []),
