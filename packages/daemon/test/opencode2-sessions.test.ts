@@ -757,10 +757,17 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     expect(s.parts().filter((p) => p.type === "user_text" && /^\/(undo|redo)/.test((p as { text: string }).text))).toEqual([]);
   });
 
-  it("a prompt sent here, undone and redone, comes back with its user message", async () => {
+  it("a prompt sent here is not sent again by a reconnect; undone and redone, it comes back with its user message", async () => {
     const { d, s } = await opened();
     const id: string = (await s.prompt("four")).messageId ?? lastOf(s.parts(), (p) => p.type === "user_text" && (p as { text: string }).text === "four")!.id;
     await until(() => s.parts().some((p) => p.type === "turn_result"));
+    // A reconnect's read does not send it again (a listener, e.g. a brief, would take it as a new message).
+    const reads = d.requests("GET", "/api/form").length;
+    const mark = s.parts().length;
+    await d.fake("/__drop");
+    await until(() => d.requests("GET", "/api/form").length > reads);
+    await sleep(300);
+    expect(s.parts().slice(mark).some((p) => p.id === id)).toBe(false);
     await s.prompt("/undo");
     expect(lastOf(stages(d), () => true)).toMatchObject({ messageID: id });
     const before = s.parts().length;

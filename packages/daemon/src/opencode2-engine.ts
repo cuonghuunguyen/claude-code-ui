@@ -245,7 +245,7 @@ class OpenCode2Session implements EngineSession {
       .then((c) => loadOpenCode2History(c, this.id, this.cwd, (sid) => this.engine.isOurs(this.id, sid)))
       .then((h) => {
         // A revert missed as an event (stream drop): the cut is shown; a clear brings the cut messages back with the history below.
-        if (h.revert !== this.revertAt && (this.revertAt = h.revert)) this.session.emit({ type: "rewind", id: randomUUID(), userMessageId: h.revert! });
+        if (h.revert !== this.revertAt && (this.revertAt = h.revert)) (this.mapper.forgetFrom(h.revert), this.session.emit({ type: "rewind", id: randomUUID(), userMessageId: h.revert }));
         this.apply(h);
         this.requests(h);
         const state = this.session.currentState();
@@ -436,6 +436,7 @@ class OpenCode2Session implements EngineSession {
     const before = this.revertAt;
     this.revertAt = id; // the `session.revert.staged` of this revert is not an external one
     await client.session.revert.stage({ sessionID: this.id, messageID: id, files: mode === "both" }).catch((err) => ((this.revertAt = before), Promise.reject(err)));
+    this.mapper.forgetFrom(id);
     this.session.emit({ type: "rewind", id: randomUUID(), userMessageId: id });
     // The context in use is the last step's before the cut.
     const kept = await this.shown(client).catch(() => []);
@@ -579,6 +580,7 @@ class OpenCode2Session implements EngineSession {
         const at: string | undefined = d.revert?.messageID;
         if (!at || at === this.revertAt) return;
         this.revertAt = at;
+        this.mapper.forgetFrom(at);
         this.session.emit({ type: "rewind", id: randomUUID(), userMessageId: at });
         // A cut moved to a later message brings back the messages between: read them again.
         return void (this.resyncing?.then(() => this.resync()) ?? this.resync());

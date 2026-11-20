@@ -71,8 +71,12 @@ export class OpenCode2Mapper {
   private readonly steps = new Map<string, { tokens: Json; cost: number }>();
   /** The compaction running now: its inbox id (`session.compaction.ended` and `failed` do not carry it). */
   private compacting: { id: string; reason?: string } | undefined;
-  /** Message ids of prompts this daemon sent: their echo adds nothing (user_text was emitted at once). */
+  /** Message ids of prompts this daemon sent: their echo and a re-read add nothing (user_text was emitted at once; a re-emit would look like a new message). */
   readonly own = new Set<string>();
+  /** A revert cut at `id`: the prompts sent here from it on are hidden, a later read (redo) must show them again. Ids ascend with time (`opencode-id.ts`). */
+  forgetFrom(id: string) {
+    for (const o of this.own) if (o >= id) this.own.delete(o);
+  }
 
   /** The OpenCode name and input of each call (the card has the mapped ones): later events of a call carry only its id. */
   private readonly raw = new Map<string, { name: string; input: Json }>();
@@ -126,8 +130,9 @@ export class OpenCode2Mapper {
     });
   }
 
-  /** A stored user message, also one sent here: a read after a revert clear must bring its bubble back (same id, so a re-emit replaces). */
+  /** A stored user message; one sent here only after a cut forgot it (its bubble was taken away: a read after the clear brings it back). */
   private user(m: OpenCode2Message): Part[] {
+    if (this.own.has(m.id)) return [];
     const images = (m.files ?? []).filter((f) => f.mime?.startsWith("image/") && f.data).map((f) => `data:${f.mime};base64,${f.data}`);
     return m.text || images.length ? [{ type: "user_text", id: m.id, text: m.text ?? "", images }] : [];
   }
