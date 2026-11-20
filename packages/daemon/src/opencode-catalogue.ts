@@ -2,7 +2,8 @@
 import { existsSync } from "node:fs";
 import { EFFORTS, type ClientMessage, type ModelInfo, type PermissionMode, type SessionListItem } from "@claude-ui/protocol";
 import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx, type SavedSession, type Settings } from "./engine-catalogue.ts";
-import { brokenState, createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels, primaryAgents, ProviderStateBroken, type OpenCodeMcpRoute } from "./opencode-engine.ts";
+import { brokenState, createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels, primaryAgents, ProviderStateBroken, type ForkLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
+import { forkAt } from "./opencode-fork.ts";
 import { createOpenCodeMcpConfig } from "./opencode-config-mcp.ts";
 import { createOpenCodeSkillsConfig } from "./opencode-config-skills.ts";
 import { checkLogin, listProviders, loginError } from "./opencode-providers.ts";
@@ -34,6 +35,8 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
   /** Directory and title of each OpenCode session this daemon listed, created or opened. */
   const openCodeMeta = new Map<string, { cwd: string; title: string }>();
   const openCodeFail = (err: unknown) => (err instanceof OpenCodeError ? { code: err.code, message: err.message } : { code: "opencode_failed", message: (err as Error).message });
+  /** The forks of the Fork runs of session `id` (sessions.json). */
+  const forksOf = (id: string): ForkLink[] => settings.entries().flatMap(([forkId, l]) => (l.forkOf?.sessionId === id ? [{ forkId, callId: l.forkOf.callId, prefix: l.forkOf.prefix }] : []));
   const openCodeEngine = createOpenCodeEngine(openCode, {
     onTitle: (id, title) => {
       const m = openCodeMeta.get(id);
@@ -43,6 +46,8 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     },
     mcp: o.mcp,
     visualizeOn: () => appSettings.get().chat.visualize,
+    onFork: (id, forkOf) => ctx.saveSettings(() => settings.set(id, { forkOf })),
+    forksOf,
   });
   const ownsId = (id: string) => OPENCODE_ID.test(id);
   const sessionOpts = (initial: Partial<SessionSettings>) => ({ ...ctx.sessionOpts(initial), engine: openCodeEngine });
@@ -139,6 +144,11 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
         for (const row of list) {
           const loaded = ctx.session(row.id);
           const saved = linked.get(row.id);
+          // The fork of a Fork run shows in its parent's card only; its id stays known so its link is kept (`keep`).
+          if (saved?.forkOf) {
+            out.ids.add(row.id);
+            continue;
+          }
           const savedMode = OPENCODE_MODES.find((m) => m === saved?.permissionMode) ?? "default";
           // Plan is the plan agent (GH-684): a saved plan mode lists as default + agent plan.
           const mode = savedMode === "plan" ? "default" : savedMode;
@@ -195,7 +205,7 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     const row = await openCode.request<OpenCodeSessionRow>(`/session/${id}`, { directory: known?.cwd, timeoutMs: 0 }).catch(() => undefined);
     const cwd = row && ctx.allowed(known?.cwd ?? row.directory);
     if (!row || !cwd || ctx.isRemoving(cwd)) return undefined;
-    const history = await loadOpenCodeHistory(openCode, id, cwd);
+    const history = await loadOpenCodeHistory(openCode, id, cwd, forksOf(id));
     openCodeMeta.set(id, { cwd, title: row.title });
     const saved = settings.get(id);
     const permissionMode = OPENCODE_MODES.includes(saved?.permissionMode as never) ? (saved!.permissionMode as SessionSettings["permissionMode"]) : undefined;
@@ -309,26 +319,21 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     delete: async (id, at) => {
       await openCode.request(`/session/${id}`, { method: "DELETE", directory: at.cwd });
       openCodeMeta.delete(id);
+      // The forks of its Fork runs go with it (they show nowhere else); a fork already gone is no failure.
+      const forks = settings.entries().filter(([, l]) => l.forkOf?.sessionId === id).map(([forkId]) => forkId);
+      await Promise.all(forks.map((forkId) => openCode.request(`/session/${forkId}`, { method: "DELETE", directory: at.cwd }).catch(() => undefined)));
+      if (forks.length) ctx.saveSettings(() => settings.delete(forks));
     },
     forkForAside: async (owner, title) => {
-      let forkId: string | undefined;
+      const at = await forkAt(openCode, owner, "An aside");
+      if ("unavailable" in at) return at;
       try {
-        const at = { directory: owner.cwd };
-        const stored = await openCode.request<{ info: { id: string; role: string; time?: { completed?: number } } }[]>(`/session/${owner.id}/message`, at);
-        // After a rewind the cut messages stay stored until the next prompt: the fork ends before the cut.
-        const revert = (await openCode.request<{ revert?: { messageID: string } | null }>(`/session/${owner.id}`, at)).revert?.messageID;
-        const cut = revert ? stored.findIndex((m) => m.info.id === revert) : -1;
-        const kept = cut < 0 ? stored : stored.slice(0, cut);
-        if (!kept.length) return { unavailable: "An aside needs a message in this session first" };
-        // A running turn is cut off at its unfinished assistant message; a finished history is forked whole.
-        const messageID = cut < 0 ? stored.find((m) => m.info.role === "assistant" && !m.info.time?.completed)?.info.id : revert;
-        forkId = (await openCode.request<OpenCodeSessionRow>(`/session/${owner.id}/fork`, { ...at, method: "POST", body: { messageID } })).id;
-        openCodeMeta.set(forkId, { cwd: owner.cwd, title });
-        await openCode.request(`/session/${forkId}`, { ...at, method: "PATCH", body: { title } });
-        return { id: forkId };
+        openCodeMeta.set(at.id, { cwd: owner.cwd, title });
+        await openCode.request(`/session/${at.id}`, { directory: owner.cwd, method: "PATCH", body: { title } });
+        return { id: at.id };
       } catch (e) {
         // The fork exists but is not usable: it is not left behind.
-        if (forkId) await openCode.request(`/session/${forkId}`, { method: "DELETE", directory: owner.cwd }).then(() => openCodeMeta.delete(forkId!), () => {});
+        await openCode.request(`/session/${at.id}`, { method: "DELETE", directory: owner.cwd }).then(() => openCodeMeta.delete(at.id), () => {});
         throw e;
       }
     },

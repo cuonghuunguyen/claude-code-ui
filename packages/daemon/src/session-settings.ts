@@ -20,6 +20,8 @@ export type Link = { coordinatorId?: string; name?: string; cwd?: string; port?:
   ownerId?: string;
   /** Aside: until the user changes its permission mode (stays after Keep as session). */
   readOnly?: true;
+  /** OpenCode fork run (docs/spec.md "Fork runs"): the OpenCode session that is the fork of `callId` of session `sessionId`; `prefix` = the messages copied from the parent (not part of the run). The list hides it; it is deleted with its parent. */
+  forkOf?: { sessionId: string; callId: string; prefix: number };
   /** GH-574: worker_start / worker_keep_open keepOpen: no auto-close after a turn. */
   keepOpen?: true;
 };

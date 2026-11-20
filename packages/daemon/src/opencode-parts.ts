@@ -2,6 +2,7 @@
 // give the same part ids. User message = one `user_text` (id = message id); text/reasoning/tool part ids = the OpenCode part id; a tool call's id = its callID.
 import type { Part, ToolStatus, TodoItem } from "@claude-ui/protocol";
 import { errorText, type OpenCodeError } from "./opencode-errors.ts";
+import { FORK_TOOL } from "./opencode-fork.ts";
 
 type ToolState = { status: string; title?: string; input?: Record<string, unknown>; output?: string; error?: string; metadata?: Record<string, unknown>; time?: { start?: number; end?: number } };
 export type OpenCodePart = {
@@ -83,6 +84,8 @@ export class OpenCodeMapper {
   private readonly denied = new Set<string>();
   /** child session id -> the task call that started it. */
   private readonly children = new Map<string, string>();
+  /** Input of each Fork run's call (a Fork run shows as a `subagent` part, which has none): `runningFork` matches a run to its call by it. */
+  private readonly forkInputs = new Map<string, Record<string, unknown>>();
   private readonly finishes = new Map<string, OpenCodePart>();
   /** Message ids of prompts this daemon sent: their echo adds nothing (user_text was emitted at once). */
   readonly own = new Set<string>();
@@ -105,6 +108,11 @@ export class OpenCodeMapper {
   runningCall(tool: string, input: Record<string, unknown> | undefined, skip: ReadonlySet<string>): string | undefined {
     const want = JSON.stringify(canon(input ?? {}));
     return [...this.calls.values()].reverse().find((c) => c.type === "tool_call" && c.tool === tool && (c.status === "running" || c.status === "pending") && !skip.has(c.id) && JSON.stringify(canon(c.input)) === want)?.id;
+  }
+  /** The newest running Fork run call (`fork` tool) whose input equals `input` and is not in `skip`. */
+  runningFork(input: Record<string, unknown> | undefined, skip: ReadonlySet<string>): string | undefined {
+    const want = JSON.stringify(canon(input ?? {}));
+    return [...this.calls.values()].reverse().find((c) => c.type === "subagent" && c.agentType === "fork" && (c.status === "running" || c.status === "pending") && !skip.has(c.id) && JSON.stringify(canon(this.forkInputs.get(c.id))) === want)?.id;
   }
   /** The mapped call of a tool call id (Claude card name and input). */
   call = (callId: string) => this.calls.get(callId);
@@ -185,6 +193,13 @@ export class OpenCodeMapper {
       return [sub];
     }
     const { tool, input } = mapTool(p.tool ?? "", s.input);
+    // A Fork run (docs/spec.md "Fork runs"): the `fork` tool of the claude-ui server shows as the Fork run card (a `subagent` part), as Claude's fork does.
+    if (tool === FORK_TOOL) {
+      this.forkInputs.set(callId, input);
+      const run = { type: "subagent" as const, id: callId, toolUseId: callId, description: String(input.description ?? s.title ?? ""), status, startedAt: s.time?.start ?? 0, agentType: "fork", ...(s.time?.end && { endedAt: s.time.end }) };
+      this.calls.set(callId, run);
+      return [run];
+    }
     const exit = s.metadata?.exit;
     const call = { type: "tool_call" as const, id: callId, toolUseId: callId, tool, input, status, ...times, ...(typeof exit === "number" && { exitCode: exit }) };
     this.calls.set(callId, call);
@@ -212,14 +227,20 @@ export class OpenCodeMapper {
  * History of a session: its messages in order, a task call's child session (`children`: child id -> its messages) right after the call.
  * Nothing streams (an unfinished part shows as it was stored).
  */
-export function openCodeParts(messages: readonly OpenCodeMessage[], children: Readonly<Record<string, readonly OpenCodeMessage[]>> = {}, m = new OpenCodeMapper()): Part[] {
+export function openCodeParts(messages: readonly OpenCodeMessage[], children: Readonly<Record<string, readonly OpenCodeMessage[]>> = {}, m = new OpenCodeMapper(), forks: readonly { forkId: string; callId: string; prefix: number; messages: readonly OpenCodeMessage[] }[] = []): Part[] {
   const walk = (list: readonly OpenCodeMessage[], sessionID?: string): Part[] =>
     list.flatMap((msg) => [
       ...m.message(msg.info, false),
       ...msg.parts.flatMap((p) => {
         const out = m.part({ ...p, messageID: p.messageID ?? msg.info.id, sessionID: p.sessionID ?? sessionID }, false);
         const child = p.state?.metadata?.sessionId;
-        return typeof child === "string" && children[child] ? [...out, ...walk(children[child]!, child)] : out;
+        if (typeof child === "string" && children[child]) return [...out, ...walk(children[child]!, child)];
+        // A Fork run: its fork session holds a copy of the parent's history first (`prefix` messages), which is no step of the run.
+        const fork = p.callID ? forks.find((f) => f.callId === p.callID) : undefined;
+        if (!fork) return out;
+        m.adopt(fork.forkId, fork.callId);
+        // The fork's prompt (a user message) is the card's task, not a step: live it is not echoed either (`own`).
+        return [...out, ...walk(fork.messages.slice(fork.prefix).filter((x) => x.info.role === "assistant"), fork.forkId)];
       }),
       // Why the turn failed (the live `session.error` shows the same notice, same id); an aborted message is a Stop or OpenCode's own abort, shown elsewhere.
       ...(!sessionID ? failure(msg.info) : []),

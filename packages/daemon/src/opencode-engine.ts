@@ -10,7 +10,8 @@ import { DAEMON_SERVER } from "./daemon-mcp.ts";
 import { errorKey, errorText, firstLine } from "./opencode-errors.ts";
 import { ascending } from "./opencode-id.ts";
 import { INLINE_SYSTEM, InlineCollector, clip, inlineTools, lastAssistantText } from "./opencode-inline.ts";
-import { INLINE_TIMEOUT_MS, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
+import { INLINE_TIMEOUT_MS, type ForkResult, type ForkSpec, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
+import { FORK_PREAMBLE, forkAt } from "./opencode-fork.ts";
 import { mapTool, openCodeParts, OpenCodeMapper, type OpenCodeMessage, type OpenCodeTodo } from "./opencode-parts.ts";
 import { OpenCodeHttpError, type OpenCodeServer } from "./opencode-server.ts";
 import { contentBefore, type PatchPart, type SnapshotSource } from "./opencode-snapshot.ts";
@@ -132,12 +133,14 @@ type Retry = { attempt: number; message: string; next?: number };
 type Payload = { type: string; properties: Record<string, any> };
 
 /** What `begin()` and `resync()` read of a session: stored messages (and those of its subagents), busy state, pending requests of the folder. */
-export type OpenCodeHistory = { messages: OpenCodeMessage[]; children: Record<string, OpenCodeMessage[]>; busy: boolean; /** OpenCode is waiting to retry the model call (its status `retry`: counts as busy). */ retry?: Retry; /** The message OpenCode's `revert` cuts the conversation at (it and everything after are hidden). */ revert?: string; permission: Rule[]; permissions: PermissionAsked[]; questions: QuestionAsked[] };
+/** A Fork run's fork session (sessions.json `forkOf`): its messages after `prefix` show under the call `callId`. */
+export type ForkLink = { forkId: string; callId: string; prefix: number };
+export type OpenCodeHistory = { messages: OpenCodeMessage[]; children: Record<string, OpenCodeMessage[]>; /** The fork sessions of the Fork runs of this session with their messages. */ forks: (ForkLink & { messages: OpenCodeMessage[] })[]; busy: boolean; /** OpenCode is waiting to retry the model call (its status `retry`: counts as busy). */ retry?: Retry; /** The message OpenCode's `revert` cuts the conversation at (it and everything after are hidden). */ revert?: string; permission: Rule[]; permissions: PermissionAsked[]; questions: QuestionAsked[] };
 
 /** The `model_retry` state of a `retry` status: the first line of the reason (OpenCode may append more). */
 const retryOf = (s: Status): Retry => ({ attempt: s.attempt ?? 1, message: firstLine(s.message ?? ""), ...(typeof s.next === "number" && { next: s.next }) });
 
-export async function loadOpenCodeHistory(server: OpenCodeServer, id: string, cwd: string): Promise<OpenCodeHistory> {
+export async function loadOpenCodeHistory(server: OpenCodeServer, id: string, cwd: string, forkLinks: ForkLink[] = []): Promise<OpenCodeHistory> {
   // No timeout: reopening a session after a restart reads a cold folder, whose first answer takes more than 3 s; giving up would lose the session.
   const at = { directory: cwd, timeoutMs: 0 };
   const [all, row, status, permissions, questions] = await Promise.all([
@@ -152,8 +155,11 @@ export async function loadOpenCodeHistory(server: OpenCodeServer, id: string, cw
   const messages = cut < 0 ? all : all.slice(0, cut);
   const childIds = messages.flatMap((m) => m.parts.map((p) => p.state?.metadata?.sessionId).filter((c): c is string => typeof c === "string"));
   const children = Object.fromEntries(await mapLimit(childIds, 4, async (c) => [c, await server.request<OpenCodeMessage[]>(`/session/${c}/message`, at).catch(() => [])] as const));
+  // A fork whose session is gone (deleted in OpenCode) shows as its call only.
+  const calls = new Set(messages.flatMap((m) => m.parts.flatMap((p) => (p.callID ? [p.callID] : []))));
+  const forks = (await mapLimit(forkLinks.filter((f) => calls.has(f.callId)), 4, async (f) => ({ ...f, messages: await server.request<OpenCodeMessage[]>(`/session/${f.forkId}/message`, at).catch(() => undefined) }))).flatMap((f) => (f.messages ? [{ ...f, messages: f.messages }] : []));
   const st = status[id];
-  return { messages, children, busy: st?.type === "busy" || st?.type === "retry", ...(st?.type === "retry" && { retry: retryOf(st) }), revert, permission: row.permission ?? [], permissions, questions };
+  return { messages, children, forks, busy: st?.type === "busy" || st?.type === "retry", ...(st?.type === "retry" && { retry: retryOf(st) }), revert, permission: row.permission ?? [], permissions, questions };
 }
 
 /** `GET /config/providers`: the connected providers with their models (`variants`: the model's reasoning variants by name) and the default model per provider. */
@@ -347,7 +353,7 @@ class OpenCodeSession implements EngineSession {
   private apply(h: OpenCodeHistory) {
     // A revert or unrevert missed as an event (stream drop): parts of an unrevert are re-emitted below, a revert drops them.
     if (h.revert !== this.revertAt && (this.revertAt = h.revert)) this.session.emit({ type: "rewind", id: randomUUID(), userMessageId: h.revert! });
-    for (const part of openCodeParts(h.messages, h.children, this.mapper)) this.session.emit(part);
+    for (const part of openCodeParts(h.messages, h.children, this.mapper, h.forks)) this.session.emit(part);
     for (const m of h.messages) this.noteUsage(m.info);
     void this.emitUsage();
   }
@@ -391,7 +397,7 @@ class OpenCodeSession implements EngineSession {
 
   resync(): Promise<void> {
     const seen = this.statusEvents;
-    return (this.resyncing ??= loadOpenCodeHistory(this.server, this.id, this.cwd)
+    return (this.resyncing ??= loadOpenCodeHistory(this.server, this.id, this.cwd, this.engine.forksOf?.(this.id))
       .then((h) => {
         this.apply(h);
         // A status event that came while the read ran is newer than the read.
@@ -807,7 +813,7 @@ class OpenCodeSession implements EngineSession {
     let callId: string | undefined;
     let messageID: string | undefined;
     try {
-      callId = await this.findInlineCall(hooks);
+      callId = await this.findCall(() => this.mapper.runningCall(`mcp__${DAEMON_SERVER}__inline_task`, hooks.input, this.inlineClaimed));
       if (callId) this.inlineClaimed.add(callId);
       const model = await this.inlineModel(spec, hooks);
       const agent = await this.agentName();
@@ -866,14 +872,95 @@ class OpenCodeSession implements EngineSession {
     }
   };
 
-  /** The running `inline_task` call this run belongs to: the newest one with an equal input that no run took. Its event may come after the tool request, so it is awaited a moment. */
-  private async findInlineCall(hooks: InlineHooks) {
+  /** The running call a run belongs to (`find` reads the mapper). Its event may come after the tool request, so it is awaited a moment. */
+  private async findCall(find: () => string | undefined) {
     for (let i = 0; i < 20; i++) {
-      const id = this.mapper.runningCall(`mcp__${DAEMON_SERVER}__inline_task`, hooks.input, this.inlineClaimed);
+      const id = find();
       if (id || i === 19) return id;
       await new Promise((r) => setTimeout(r, 50));
     }
   }
+
+  /**
+   * Fork run (docs/spec.md "Fork runs"): a fork of this session (OpenCode's own fork route, cut at the running step: `forkAt`) runs the prompt with the
+   * history, foreground: the tool call returns when the fork's turn ended. Its parts show under the running `fork` call; permission asks go to this
+   * session's UI (`owns`). Ends at the fork's idle or error, a time limit or `hooks.signal`; no turn or token cap (the parent decided to fork).
+   */
+  forkRun = async (spec: ForkSpec, hooks: InlineHooks): Promise<ForkResult> => {
+    const t0 = Date.now();
+    const result = (r: Partial<ForkResult> & Pick<ForkResult, "status">, col?: InlineCollector): ForkResult => ({ text: "", filesChanged: col?.filesChanged() ?? [], durationMs: Date.now() - t0, ...r });
+    let forkId: string | undefined;
+    let col: InlineCollector | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    let callId: string | undefined;
+    let messageID: string | undefined;
+    let linked = false;
+    try {
+      callId = await this.findCall(() => this.mapper.runningFork(hooks.input, this.inlineClaimed));
+      if (callId) this.inlineClaimed.add(callId);
+      const agent = await this.agentName();
+      const own = await this.agentPermission(agent).catch(() => [] as Rule[]);
+      // The parent's mode, agent denials and "always" rules; no `task`, and the claude-ui and orchestration tools denied last (an "always" rule of the parent must not allow them again): a fork does not nest.
+      const permission = [...modeBlock(this.permissionMode, this.always, denialsOf(own), { agent, readOnly: this.readOnly(), ...(this.permissionMode === "config" && { config: own }), ...(this.permissionMode === "dontAsk" && { agentAsks: own.filter((a) => a.action === "ask") }) }), { permission: "task", pattern: "*", action: "deny" as const }, ...["claude-ui-*", "orchestration-*"].map((permission) => ({ permission, pattern: "*", action: "deny" as const }))];
+      const levels = this.effort !== "default" ? await this.engine.effortLevels(this.model, this.cwd) : [];
+      const point = await forkAt(this.server, { id: this.id, cwd: this.cwd }, "A fork");
+      if ("unavailable" in point) return result({ status: "error", error: point.unavailable });
+      forkId = point.id;
+      await this.server.request(`/session/${forkId}`, { method: "PATCH", directory: this.cwd, body: { title: `Fork: ${spec.description}`.slice(0, 80), permission } });
+      // Without a call to hang under (or when the PATCH failed) the fork is deleted below instead of kept: it has no link, so it would list as a session without rules.
+      if (callId) {
+        this.engine.onFork?.(forkId, { sessionId: this.id, callId, prefix: point.prefix });
+        linked = true;
+        this.mapper.adopt(forkId, callId);
+      }
+      const collector = (col = new InlineCollector(forkId));
+      const outcome = new Promise<{ status: ForkResult["status"]; limit?: ForkResult["limit"]; error?: string }>((resolve) => {
+        this.inlines.set(forkId!, {
+          ui: !!callId,
+          notify: (e) => {
+            collector.feed(e);
+            if (collector.error) resolve({ status: "error", error: collector.error });
+            else if (collector.idle) resolve({ status: "done" });
+          },
+        });
+        timer = setTimeout(() => resolve({ status: "limit", limit: "time" }), INLINE_TIMEOUT_MS);
+        onAbort = () => resolve({ status: "stopped" });
+        if (callId) this.inlineStops.set(callId, onAbort);
+        if (hooks.signal.aborted) onAbort();
+        else hooks.signal.addEventListener("abort", onAbort, { once: true });
+      });
+      messageID = ascending("msg");
+      this.mapper.own.add(messageID);
+      await this.server.streamReady();
+      const [providerID, ...rest] = this.model.split("/");
+      // A Stop that came while the fork was made sends no prompt.
+      if (!hooks.signal.aborted) await this.server.request(`/session/${forkId}/prompt_async`, {
+        method: "POST",
+        directory: this.cwd,
+        timeoutMs: 0,
+        body: { messageID, agent, ...(this.effort !== "default" && levels.includes(this.effort as EffortLevel) && { variant: this.effort }), ...(this.model !== "default" && rest.length && { model: { providerID, modelID: rest.join("/") } }), parts: [{ id: ascending("prt"), type: "text", text: `${FORK_PREAMBLE}\n\n${spec.prompt}` }] },
+      });
+      const end = await outcome;
+      if (end.status !== "done" && end.status !== "error") await this.server.request(`/session/${forkId}/abort`, { method: "POST", directory: this.cwd }).catch(() => undefined);
+      let text = collector.text();
+      if (!text && end.status === "done") text = lastAssistantText(await this.server.request<OpenCodeMessage[]>(`/session/${forkId}/message`, { directory: this.cwd }).catch(() => []));
+      return result({ ...end, ...clip(text) }, collector);
+    } catch (err) {
+      return result({ status: "error", error: (err as Error).message, ...(col && clip(col.text())) }, col);
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (onAbort) hooks.signal.removeEventListener("abort", onAbort);
+      if (forkId) {
+        this.inlines.delete(forkId);
+        this.mapper.release(forkId);
+        if (!linked) await this.server.request(`/session/${forkId}`, { method: "DELETE", directory: this.cwd }).catch(() => undefined);
+      }
+      if (callId) this.inlineStops.delete(callId);
+      for (const id of this.inlineClaimed) if (!this.mapper.isRunning(id)) this.inlineClaimed.delete(id);
+      if (messageID) this.mapper.own.delete(messageID);
+    }
+  };
 
   /** Model of the child: the input, else setting `openCodeModel`, else OpenCode's `small_model`, else the parent's (none: OpenCode's default). */
   private async inlineModel(spec: InlineSpec, hooks: InlineHooks) {
@@ -1309,6 +1396,9 @@ class OpenCodeEngineImpl implements Engine {
     readonly onTitle?: (id: string, title: string) => void,
     readonly mcp?: OpenCodeMcpRoute,
     readonly visualizeOn?: () => boolean,
+    /** A Fork run made its fork session: the link is saved (hidden from the list, deleted with the parent, restored under the call). */
+    readonly onFork?: (forkId: string, link: { sessionId: string; callId: string; prefix: number }) => void,
+    readonly forksOf?: (id: string) => ForkLink[],
   ) {}
 
   /** OpenCode's snapshot store: the data folder, and `projectID` and `worktree` per folder (cached; a failed read is not). */
@@ -1513,4 +1603,4 @@ class OpenCodeEngineImpl implements Engine {
 /** The daemon's `/opencode-mcp` route (server.ts): its URL (undefined while the daemon does not listen), the bearer token of a session (made on first use), dropped at close. */
 export type OpenCodeMcpRoute = { url: () => string | undefined; token: (id: string, server: McpServerKey) => string; drop: (id: string) => void };
 export type OpenCodeEngine = OpenCodeEngineImpl;
-export const createOpenCodeEngine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; mcp?: OpenCodeMcpRoute; visualizeOn?: () => boolean } = {}): OpenCodeEngine => new OpenCodeEngineImpl(server, o.onTitle, o.mcp, o.visualizeOn);
+export const createOpenCodeEngine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; mcp?: OpenCodeMcpRoute; visualizeOn?: () => boolean; onFork?: (forkId: string, link: { sessionId: string; callId: string; prefix: number }) => void; forksOf?: (id: string) => ForkLink[] } = {}): OpenCodeEngine => new OpenCodeEngineImpl(server, o.onTitle, o.mcp, o.visualizeOn, o.onFork, o.forksOf);

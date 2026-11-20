@@ -1488,7 +1488,7 @@ it("shows Fork subagents under Sessions with one switch that saves its patch, an
   await pick("fork");
   expect(q("settings-group-fork")?.textContent).toContain("Fork subagents");
   expect(document.querySelector('label[for="settings-fork-enabled"]')?.textContent).toBe("Let the agent fork itself");
-  expect(q("settings-fork")?.textContent).toContain("Claude Code sessions only");
+  expect(q("settings-fork")?.textContent).toContain("The agent may start a subagent as a fork");
   expect(q("settings-fork-enabled")?.getAttribute("aria-checked")).toBe("true");
   await act(async () => q("settings-fork-enabled")!.click());
   expect(calls.at(-1)).toEqual({ type: "settings.set", patch: { fork: { enabled: false } } });

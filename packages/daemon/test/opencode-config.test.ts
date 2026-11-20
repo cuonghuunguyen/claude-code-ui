@@ -45,7 +45,7 @@ async function boot(o: { file?: string; fileName?: string; env?: Record<string, 
   writeFileSync(dataFile, JSON.stringify({ sessions: [], messages: {} }));
   const env: Record<string, string> = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_DATA: dataFile, FAKE_OPENCODE_SCRIPT: "", XDG_CONFIG_HOME: join(root, "xdg"), ...o.env };
   const appSettings = createSettings();
-  appSettings.set({ terminalAccess: { enabled: false }, inlineTask: { enabled: false }, ...(o.orchestration && { orchestration: { enabled: true, workerCap: 20 } }) } as never);
+  appSettings.set({ terminalAccess: { enabled: false }, inlineTask: { enabled: false }, fork: { enabled: false }, ...(o.orchestration && { orchestration: { enabled: true, workerCap: 20 } }) } as never);
   const http = createDaemon({
     webRoot: root,
     roots: [root],
