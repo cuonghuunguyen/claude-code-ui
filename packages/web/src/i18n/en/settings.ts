@@ -654,4 +654,7 @@ export default {
   "projectSettings.jira.sharedGlobal": "the global settings",
   "projectSettings.jira.sharedProjects": "{count} other projects",
   "settings.projectSettings": "Project settings for {project}…",
+  "settings.overridden": "Overridden in this project",
+  "settings.overridden.fields": "Overridden in this project: {fields}",
+  "settings.overridden.open": "Open project settings",
 } as const;

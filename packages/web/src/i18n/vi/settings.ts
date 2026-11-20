@@ -656,4 +656,7 @@ export default {
   "projectSettings.jira.sharedGlobal": "cài đặt chung",
   "projectSettings.jira.sharedProjects": "{count} dự án khác",
   "settings.projectSettings": "Cài đặt dự án cho {project}…",
+  "settings.overridden": "Đã ghi đè trong dự án này",
+  "settings.overridden.fields": "Đã ghi đè trong dự án này: {fields}",
+  "settings.overridden.open": "Mở cài đặt dự án",
 } satisfies Partial<Messages>;
