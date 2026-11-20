@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { ToolError } from "../src/daemon-mcp.ts";
-import { createInlineTask, INLINE_INSTRUCTIONS } from "../src/inline-task.ts";
+import { createInlineTask, INLINE_FILES_BUDGET_BYTES, INLINE_INSTRUCTIONS } from "../src/inline-task.ts";
 import { INLINE_MAX_PER_SESSION, type InlineResult, type InlineSpec } from "../src/inline-types.ts";
 
 const RESULT: InlineResult = { status: "done", text: "found", model: "claude-haiku-4-5", turns: 2, tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 }, filesChanged: [], durationMs: 1 };
@@ -45,16 +45,18 @@ describe("inline_task group", () => {
     expect(group.id).toBe("inline");
     expect(group.tools.map((t) => t.name)).toEqual(["inline_task"]);
     expect(tool.permission).toBe("allow");
+    // Always in the first prompt: behind tool search the agents rarely found it.
+    expect(tool.alwaysLoad).toBe(true);
     expect(group.enabled()).toBe(true);
     on = false;
     expect(group.enabled()).toBe(false);
     expect(group.timeoutMs).toBe(600_000 + 60_000);
   });
 
-  it("instructions carry the when-to-use rules and the scenarios (at most 1200 chars)", () => {
+  it("instructions carry the when-to-use rules and the scenarios (at most 1300 chars)", () => {
     expect(INLINE_INSTRUCTIONS.length).toBeLessThanOrEqual(1300);
     expect(INLINE_INSTRUCTIONS).toMatch(/inline_task/);
-    expect(INLINE_INSTRUCTIONS).toMatch(/3-10 tool calls/);
+    expect(INLINE_INSTRUCTIONS).toMatch(/instead of Agent|over Agent/);
     expect(INLINE_INSTRUCTIONS).toMatch(/Use a subagent instead/);
     expect(INLINE_INSTRUCTIONS).toMatch(/Do it directly when 1-2 tool calls/);
     for (const e of ["Test run", "CI failure triage", "Log extraction", "Mechanical edit"]) expect(INLINE_INSTRUCTIONS).toContain(e);
@@ -124,12 +126,40 @@ describe("inline_task group", () => {
       await expect(call({ prompt: "p", files: ["sub"] })).rejects.toThrow(/not a file/);
       await expect(call({ prompt: "p", files: ["bin.dat"] })).rejects.toThrow(/binary/);
     });
-    it("refuses a file over 64 KB and files over 256 KB together", async () => {
-      const { call } = make();
-      writeFileSync(join(cwd, "big.txt"), "x".repeat(64 * 1024 + 1));
-      writeFileSync(join(cwd, "ok.txt"), "x".repeat(64 * 1024));
-      await expect(call({ prompt: "p", files: ["big.txt"] })).rejects.toThrow(/64 KB/);
-      await expect(call({ prompt: "p", files: ["ok.txt", "ok.txt", "ok.txt", "ok.txt", "ok.txt"] })).rejects.toThrow(/256 KB/);
+    // Regression: a file over 64 KB (256 KB together) was a tool error; 2 of 104 calls failed that way.
+    it("runs with a file over the budget: the prompt names its path and size, the run gets Read and Grep", async () => {
+      const { call, calls } = make();
+      writeFileSync(join(cwd, "huge.log"), "x".repeat(INLINE_FILES_BUDGET_BYTES + 1));
+      await call({ prompt: "p", files: ["a.ts", "huge.log"] });
+      const spec = calls[0]!.spec;
+      expect(spec.text).toContain('<file path="a.ts">');
+      expect(spec.text).toContain('<file path="huge.log" size="244 KB" not-included>Too large to include: read it with Grep or Read.</file>');
+      expect(spec.text).not.toContain("xxxx");
+      expect(spec.tools).toEqual(["Read", "Grep", "Glob"]);
+      await call({ prompt: "p", files: ["huge.log"], tools: ["Bash"] });
+      expect(calls[1]!.spec.tools).toEqual(["Bash", "Read", "Grep"]);
+    });
+    it("appends files in order while they fit, leaves out the first that does not and every later one that does not", async () => {
+      const { call, calls } = make();
+      writeFileSync(join(cwd, "half.txt"), "h".repeat(INLINE_FILES_BUDGET_BYTES / 2 + 1));
+      await call({ prompt: "p", files: ["half.txt", "half.txt", "a.ts"] });
+      const t = calls[0]!.spec.text;
+      expect(t).toContain('<file path="half.txt">');
+      expect(t).toContain('<file path="half.txt" size="122 KB" not-included>');
+      expect(t).toContain('<file path="a.ts">');
+    });
+    it("adds no tools when every file fits", async () => {
+      const { call, calls } = make();
+      await call({ prompt: "p", files: ["a.ts"], tools: ["Bash"] });
+      expect(calls[0]!.spec.tools).toEqual(["Bash"]);
+    });
+    it("does not read a file that is left out, and does not check it for binary", async () => {
+      const { call, calls } = make();
+      const bin = Buffer.alloc(INLINE_FILES_BUDGET_BYTES + 1, 1);
+      bin[5] = 0;
+      writeFileSync(join(cwd, "huge.bin"), bin);
+      await call({ prompt: "p", files: ["huge.bin"] });
+      expect(calls[0]!.spec.text).toContain("not-included");
     });
   });
 

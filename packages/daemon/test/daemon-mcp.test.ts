@@ -56,6 +56,15 @@ describe("createDaemonMcp", () => {
     expect(await instructions(mixed.mcpServerFor("s") as never)).toBe("Demo tools.");
     expect(make([{ ...only, enabled: () => false }]).mcpServers("s")).toBeUndefined();
   });
+  it("a tool with alwaysLoad is listed with _meta anthropic/alwaysLoad; the others are not", async () => {
+    const g = group({ tools: [{ name: "first", description: "d", shape: {}, permission: "allow", alwaysLoad: true, run: async () => "ok" }, { name: "second", description: "d", shape: {}, permission: "allow", run: async () => "ok" }] });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await make([g]).mcpServerFor("s")!.connect(a);
+    const c = new Client({ name: "t", version: "1" });
+    await c.connect(b);
+    const listed = Object.fromEntries((await c.listTools()).tools.map((t) => [t.name, t._meta?.["anthropic/alwaysLoad"]]));
+    expect(listed).toEqual({ first: true, second: undefined });
+  });
   it("serves nothing while no group is enabled (read at each call)", () => {
     let on = false;
     const mcp = make([group({ enabled: () => on })]);
