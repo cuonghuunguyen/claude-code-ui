@@ -471,8 +471,12 @@ it("projects.overrides: a patch with an invalid override is refused with the fie
 
 it("projects.overrides: one invalid stored entry is dropped, the others stay", () => {
   const f = file();
-  writeFileSync(f, JSON.stringify({ projects: { overrides: { local: { "/ok": { mode: "plan" }, "/bypass": { mode: "bypassPermissions" }, "/junk": "x", "/mixed": { engine: "nope", model: "m" } }, "ssh:box": { "/b": { effort: "high" } } } } }));
-  expect(createSettings({ file: f }).get().projects.overrides).toEqual({ local: { "/ok": { mode: "plan" } }, "ssh:box": { "/b": { effort: "high" } } });
+  writeFileSync(f, JSON.stringify({ projects: { overrides: { local: { "/ok": { mode: "plan" }, "/bypass": { mode: "bypassPermissions" }, "/junk": "x", "/mixed": { engine: "nope", model: "m" }, "/http": { jira: { url: "http://jira.example.com" } } }, "ssh:box": { "/b": { effort: "high" } } } } }));
+  const stored = createSettings({ file: f }).get();
+  expect(stored.projects.overrides).toEqual({ local: { "/ok": { mode: "plan" } }, "ssh:box": { "/b": { effort: "high" } } });
+  // What is kept is always a valid patch: a Hub sync and every later whole-map write pass.
+  expect(checkPatch({ projects: stored.projects })).toBeUndefined();
+  expect(checkPatch(sideSettings(stored, "ssh:box"))).toBeUndefined();
 });
 
 it("sideSettings: a Side gets only its own project overrides as local, never the Claude account or another Side's entries (contract)", () => {

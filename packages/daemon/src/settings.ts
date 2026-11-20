@@ -112,7 +112,8 @@ const overrides = (label: string): Check => ({
   label,
   rule: `at most ${PROJECT_OVERRIDES_SIDES_MAX} machines with at most ${LABEL_ENTRIES_MAX} projects each, a project holding only known fields of valid values`,
   // A hand-edited entry that fails drops alone; the others stay.
-  stored: (v) => (isObj(v) ? overridesMap(v, (o) => overridesOk(o, false)) : undefined),
+  // The rule of a new value too: the whole map is written back on every change, and one entry a patch would refuse would refuse every later write (overrides have no legacy values).
+  stored: (v) => (isObj(v) ? overridesMap(v, (o) => overridesOk(o, true)) : undefined),
   normalize: (v) => overridesMap(v as Record<string, unknown>, () => true),
 });
 const intIn = (label: string, min: number, max: number): Check => ({ valid: (v) => Number.isInteger(v) && (v as number) >= min && (v as number) <= max, label, rule: `a whole number from ${min} to ${max}` });

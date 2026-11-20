@@ -588,4 +588,18 @@ describe("settings sync only to a Hub an attach started", () => {
     expect(s.attachStarted("wsl:A")).toBe(!!startedBy);
     s.close();
   });
+  it("a Side too old to know `projects` refuses the patch: the rest of the settings are sent again without it", async () => {
+    const p = pipe();
+    p.out({ ...READY, startedBy: "attach" });
+    const s = createSides({ targets: [wslSide("A")], spawn: async () => p.proc });
+    const h = hub(s);
+    await h.ask({ type: "side.start", side: "wsl:A" });
+    await new Promise((r) => setTimeout(r, 50));
+    const first = settingsFrames(p)[0];
+    p.out({ c: first.c, m: { type: "error", reqId: first.m.reqId, code: "bad_settings", message: "unknown setting projects" } });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(settingsFrames(p)).toHaveLength(2);
+    expect(settingsFrames(p)[1].m.patch).toEqual({ orchestration: { enabled: true } });
+    s.close();
+  });
 });
