@@ -1,11 +1,11 @@
 import { delimiter, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { daemonEnv, freePort, killCommand, ownerPorts, realConfigDirs, TOKEN_RE } from "../support/daemon.ts";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { daemonEnv, forgetEngine, freePort, killCommand, ownerPorts, realConfigDirs, TOKEN_RE } from "../support/daemon.ts";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { assertUploadsIsolated, isolationBreaches, leakedUploads, sessionIds } from "../support/isolation.ts";
 import { commandLineMentions, stopRun } from "../support/stop.ts";
-import { runDir, slug } from "../support/paths.ts";
+import { daemonConfigDir, runDir, slug } from "../support/paths.ts";
 
 describe("freePort", () => {
   it("skips excluded ports", async () => {
@@ -207,6 +207,22 @@ describe("stop", () => {
       expect(() => stopRun(join(base, "nope"), () => {}, () => "")).toThrow(/no such run/);
     } finally {
       rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("forgetEngine", () => {
+  it("drops the remembered engine, keeps the other settings, and ignores a run without settings", () => {
+    const run = mkdtempSync(join(tmpdir(), "e2e-engine-"));
+    try {
+      expect(() => forgetEngine(run)).not.toThrow();
+      const file = join(daemonConfigDir(run), "settings.json");
+      mkdirSync(daemonConfigDir(run), { recursive: true });
+      writeFileSync(file, JSON.stringify({ sessions: { engine: "opencode", defaultMode: "plan" }, chat: { visualize: false } }));
+      forgetEngine(run);
+      expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ sessions: { defaultMode: "plan" }, chat: { visualize: false } });
+    } finally {
+      rmSync(run, { recursive: true, force: true });
     }
   });
 });

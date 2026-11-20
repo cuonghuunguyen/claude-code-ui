@@ -34,6 +34,7 @@ Everything after `--` goes to `playwright test`. Environment:
 
 - Builds the web app, then starts its **own daemon**: a free port, `XDG_CONFIG_HOME=<run>/ui-config`, `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` unset (subscription login only), `ANTHROPIC_MODEL=haiku`, every inherited `CLAUDE_UI_*` unset, on Windows `LOCALAPPDATA=<run>/localappdata` (the daemon keeps uploads there, not under `XDG_CONFIG_HOME`), roots `<run>/projects`. The daemon is stopped by PID tree (`taskkill /T /F /PID` on Windows, the process group elsewhere), never by name.
 - Each scenario gets a scratch project `<run>/projects/<scenario>-r<retry>` whose `.claude/settings.json` sets `permissions.defaultMode` to `default`, so a write asks first whatever your own Claude settings say. The session picks Haiku in the model chooser.
+- Before each scenario the remembered new-session engine (Settings `sessions.engine`) is reset, so scenario order does not change the engine.
 - A guard fails the run if the run folder shows up in your real claude-ui config (`%APPDATA%\claude-ui`, `~/.config/claude-ui`) or if the daemon did not write its `daemon.json` under `<run>/ui-config`.
 - Claude Code keeps transcripts of the scratch projects in `~/.claude/projects/<encoded path>` (the login lives there); the run does not delete them.
 - One worker, one retry at most, 240 s per scenario, 120 s for each turn. Assertions are on structure (reply shown, card shown, turn ended), never on reply wording.

@@ -1,6 +1,6 @@
 Feature: OpenCode prompting (GH-656)
 
-  # The engine choice is remembered per run folder: every scenario picks OpenCode itself.
+  # A Before hook resets the remembered engine to Claude; every scenario picks OpenCode itself.
   # Needs a real OpenCode binary (E2E_OPENCODE_BIN). Prompts name the tool; only structure is asserted.
   # @model: DeepSeek V4.1 Flash with the owner's login (E2E_OPENCODE_AUTH names a copy of its auth file).
   # A skipped tool call fails the scenario once; the runner retries it once.
