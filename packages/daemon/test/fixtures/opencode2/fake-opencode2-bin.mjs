@@ -10,6 +10,11 @@
 // POST …/compact: a compaction turn (`summary` stored; a session without messages fails "Nothing to compact yet"). POST …/shell {id, command}: answers when the
 // command ends (FAKE_OPENCODE2_SHELL_START_MS delays `session.shell.started`); output `out:<command>`, `exit <n>` in the command = that exit code, `sleep` in it runs until DELETE /api/shell/:sh (killed). GET /api/shell/:sh/output.
 // Forms: GET …/form, GET /api/form, POST …/form/:fid/reply {answer}, DELETE …/form/:fid (cancel: the turn ends interrupted, as 2.3.0).
+// Agents and commands (as 2.3.0): GET /api/agent (FAKE_OPENCODE2_COLD_AGENTS: the first n reads list none, a folder not loaded yet), GET /api/command, GET /api/config
+// (the config documents: `data.config`), POST …/agent {agent} (`session.agent.selected`; an unknown agent is taken too), POST …/command {name, text}: the
+// command's template is stored as the user prompt and runs a turn (a command `fail` answers 500 CommandExecutionError, an unknown one 404 CommandNotFoundError).
+// PUT /api/experimental/session/:id/instructions/entries/:key {value}. POST /__agent/<sid>/<agent>: an agent chosen in OpenCode's own app; POST /__lists: the
+// agents and commands changed (`agent.updated`, `command.updated`; `data.commands2` and `data.agents2` replace them).
 // FAKE_OPENCODE2_FAIL: see the session route.
 // FAKE_OPENCODE2_DATA: JSON `{sessions: [{id, directory, title, time, permissions?, parentID?}], messages: {<id>: [v2 messages]}, models?, default?}`.
 // FAKE_OPENCODE2_SCRIPT: comma-separated turn files, one per prompt in order (a prompt after the last one gets a plain "pong" turn). A turn is a JSON list of steps:
@@ -48,6 +53,16 @@ const messages = new Map(Object.entries(data.messages ?? {}));
 const model = (id, name, extra = {}) => ({ id, modelID: id, providerID: "fake", type: "chat", name, capabilities: { tools: true, input: ["text"], output: ["text"] }, variants: [], enabled: true, status: "active", limit: { context: 1000, output: 100 }, ...extra });
 const models = data.models ?? [model("m", "Fake M", { variants: [{ id: "low" }, { id: "high" }] }), model("n", "Fake N")];
 const defaultModel = data.default ?? models[0];
+const rule = (action, effect, resource = "*") => ({ action, resource, effect });
+const base = [rule("*", "allow"), rule("read", "ask", "*.env"), rule("question", "allow")];
+let agents = data.agents ?? [
+  { id: "plan", name: "Plan", description: "Read-only agent", mode: "primary", hidden: false, permissions: [...base, rule("edit", "deny"), rule("edit", "allow", "/plans/*"), rule("browser", "deny")] },
+  { id: "build", name: "Build", description: "The default agent", mode: "primary", hidden: false, permissions: [...base, rule("browser", "deny")] },
+  { id: "general", name: "General", mode: "subagent", hidden: false, permissions: base },
+  { id: "title", name: "Title", mode: "primary", hidden: true, permissions: [] },
+];
+let commands = data.commands ?? [{ name: "init", description: "guided AGENTS.md setup" }, { name: "review", description: "review changes" }, { name: "hello", description: "Say hello" }];
+let agentReads = 0;
 const scripts = (process.env.FAKE_OPENCODE2_SCRIPT ?? "").split(",").filter(Boolean);
 const pongTurn = [
   { event: "session.execution.started", data: { sessionID: "$SESSION" } },
@@ -128,7 +143,7 @@ async function runTurn(sid, userId, steps) {
 }
 
 /** The prompt is stored, its turn starts (registered at once, so an interrupt after the answer finds it) and the request is answered. */
-function takePrompt(s, body, res) {
+function takePrompt(s, body, res, command = false) {
   if (s.revert) commitRevert(s);
   const userId = body.id ?? id("msg");
   const user = { id: userId, time: { created: Date.now() }, text: body.text, ...(body.files && { files: body.files.map((f) => ({ data: f.uri.split(",")[1], mime: /^data:([^;,]+)/.exec(f.uri)?.[1], source: f.source, name: f.name })) }), type: "user" };
@@ -138,6 +153,7 @@ function takePrompt(s, body, res) {
   const steps = file ? JSON.parse(readFileSync(file, "utf8")) : pongTurn;
   emit("session.inbox.enqueued", { inboxID: userId, sessionID: s.id, item: { type: "user", payload: { text: body.text }, delivery: "steer" } }, s.directory);
   void runTurn(s.id, userId, steps);
+  if (command) return (res.writeHead(204), res.end());
   json(res, 200, { data: { id: userId, sessionID: s.id, time: user.time, type: "user", payload: { text: body.text } } });
 }
 
@@ -235,6 +251,20 @@ const server = createServer((req, res) => {
       emit("session.revert.staged", { sessionID: sid, revert: s.revert }, s.directory);
       return json(res, 200, {});
     }
+    if (url.pathname.startsWith("/__agent/")) {
+      const [sid, agent] = url.pathname.slice(9).split("/");
+      const s = sessions.get(sid);
+      emit("session.agent.selected", { sessionID: sid, agent, previous: s.agent }, s.directory);
+      s.agent = agent;
+      return json(res, 200, {});
+    }
+    if (url.pathname === "/__lists") {
+      if (data.commands2) commands = data.commands2;
+      if (data.agents2) agents = data.agents2;
+      emit("agent.updated", {});
+      emit("command.updated", {});
+      return json(res, 200, {});
+    }
     if (url.pathname.startsWith("/__clear/")) {
       const s = sessions.get(url.pathname.slice(9));
       delete s.revert;
@@ -260,6 +290,14 @@ const server = createServer((req, res) => {
     if (p === "/api/model") return later(() => json(res, 200, { location: { directory: dir }, data: models }));
     if (p === "/api/model/default") return later(() => json(res, 200, { location: { directory: dir }, data: defaultModel }));
 
+    // FAKE_OPENCODE2_PARTIAL_AGENTS: the next n reads (after the cold ones) list all but the last agent, as 2.3.0 lists a folder's built-ins before its own agents.
+    if (p === "/api/agent") {
+      const n = ++agentReads - Number(process.env.FAKE_OPENCODE2_COLD_AGENTS ?? 0);
+      return json(res, 200, { location: { directory: dir }, data: n <= 0 ? [] : n <= Number(process.env.FAKE_OPENCODE2_PARTIAL_AGENTS ?? 0) ? agents.slice(0, -1) : agents });
+    }
+    if (p === "/api/command") return json(res, 200, { location: { directory: dir }, data: commands });
+    if (p === "/api/config") return json(res, 200, data.config ?? []);
+    if ((m = /^\/api\/experimental\/session\/([^/]+)\/instructions\/entries\/([^/]+)$/.exec(p)) && req.method === "PUT") return (res.writeHead(204), res.end());
     if (p === "/api/form") return json(res, 200, { location: { directory: dir }, data: [...forms.values()].map((f) => f.form).filter((f) => sessions.get(f.sessionID)?.directory === dir || !dir) });
     if ((m = /^\/api\/shell\/([^/]+)(\/output)?$/.exec(p))) {
       if (m[2]) return shellOut.has(m[1]) ? json(res, 200, { location: { directory: dir }, data: { output: shellOut.get(m[1]), cursor: 0, size: 0, truncated: false } }) : json(res, 404, { message: "shell not found" });
@@ -270,7 +308,7 @@ const server = createServer((req, res) => {
     if (p === "/api/session" && req.method === "POST") {
       const sid = id("ses");
       const now = Date.now();
-      const s = { id: sid, projectID: "global", cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: now, updated: now }, permissions: body.permissions ?? [], location: { directory: body.location.directory }, directory: body.location.directory };
+      const s = { id: sid, projectID: "global", cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: now, updated: now }, permissions: body.permissions ?? [], location: { directory: body.location.directory }, directory: body.location.directory, ...(body.agent && { agent: body.agent }), ...(body.model && { model: body.model }), ...(body.title && { title: body.title }), ...(body.metadata && { metadata: body.metadata }) };
       sessions.set(sid, s);
       messages.set(sid, []);
       return json(res, 200, { data: s });
@@ -313,6 +351,16 @@ const server = createServer((req, res) => {
         return json(res, 200, { data: f });
       }
       if (sub === "model") return (s.model = body.model, res.writeHead(204), res.end());
+      if (sub === "agent") {
+        emit("session.agent.selected", { sessionID: s.id, agent: body.agent, previous: s.agent }, s.directory);
+        s.agent = body.agent;
+        return (res.writeHead(204), res.end());
+      }
+      if (sub === "command") {
+        if (body.name === "fail") return json(res, 500, { _tag: "CommandExecutionError", command: body.name, message: "Usage: /fail <what>" });
+        if (!commands.some((c) => c.name === body.name)) return json(res, 404, { _tag: "CommandNotFoundError", command: body.name, message: `Command not found: ${body.name}` });
+        return takePrompt(s, { text: `Run ${body.name}: ${body.text}`, files: body.files }, res, true);
+      }
       if (sub === "revert/stage") {
         const list = messages.get(s.id) ?? [];
         if (!list.some((x) => x.id === body.messageID)) return json(res, 404, { _tag: "MessageNotFoundError", message: `Message not found: ${body.messageID}` });

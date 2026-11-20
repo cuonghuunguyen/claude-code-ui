@@ -1,12 +1,13 @@
 // The OpenCode 2 adapter's catalogue (ADR 0015): creates, lists and restores sessions of the daemon's OpenCode 2 server through `@opencode/client`.
-// Create, list, restore, models, rename, archive, delete, the Aside fork and the daemon's own slash commands. Agents and server slash commands are later slices.
+// Create, list, restore, models, rename, archive, delete, the Aside fork, agents and the slash commands (the daemon's and OpenCode's).
 import { existsSync } from "node:fs";
 import { EFFORTS, type PermissionMode, type SessionListItem } from "@claude-ui/protocol";
 import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type ListCtx, type SavedSession } from "./engine-catalogue.ts";
-import { LOCAL_COMMANDS, OPENCODE_MODES } from "./opencode-engine.ts";
+import { OPENCODE_MODES } from "./opencode-engine.ts";
 import { openCodeWanted } from "./opencode-catalogue.ts";
 import { OpenCodeError, type OpenCodeServer } from "./opencode-server.ts";
-import { createOpenCode2Engine, loadOpenCode2History, modeRules, OPENCODE2_CAPABILITIES } from "./opencode2-engine.ts";
+import { createOpenCode2Engine, loadOpenCode2History, OPENCODE2_CAPABILITIES } from "./opencode2-engine.ts";
+import { INLINE_META } from "./opencode2-inline.ts";
 import { mapLimit } from "./session-scan.ts";
 import { Session, type SessionOpts, type SessionSettings } from "./session.ts";
 
@@ -39,13 +40,14 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
 
   async function createSession(cwd: string, initial: { model?: string; permissionMode: PermissionMode; effort?: SessionSettings["effort"] }): Promise<Session | undefined> {
     const client = await server.client();
-    // `plan` is the plan agent (a later slice): it starts as the default mode.
-    const mode = initial.permissionMode === "plan" ? "default" : initial.permissionMode;
-    const row = await client.session.create({ location: { directory: cwd }, permissions: modeRules(mode) });
+    // `plan` is the plan agent in the default mode; the rules have the agent's denials (a folder whose agents cannot be read fails the create).
+    const created = await engine.createRules(initial.permissionMode, cwd);
+    const row = await client.session.create({ location: { directory: cwd }, permissions: created.rules, ...(created.agent && { agent: created.agent }) });
+    engine.noteCreated(row.id, created);
     // A session of OpenCode 2 is recorded at once: an OpenCode 1 binary must not open it. A failed save fails the create (the empty session stays in OpenCode).
     o.record?.(row.id);
     if (ctx.isRemoving(cwd) || !existsSync(cwd)) return undefined;
-    const opts = sessionOpts({ ...initial, permissionMode: mode });
+    const opts = sessionOpts(initial);
     const s = ctx.track(new Session(cwd, opts, { id: row.id }));
     // The entry makes the next list start OpenCode for a user whose last session was Claude's. `fields` empty: only a session without an entry is saved.
     (opts as SessionOpts).onSettings?.(s.run.settings(), s.id, []);
@@ -59,7 +61,8 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
   let answered = false;
   let lateRefresh: Promise<unknown> | undefined;
   /** The list of a folder in flight: concurrent lists share it (the requests are never aborted, so they would pile up on a slow OpenCode). */
-  const reads = new Map<string, Promise<{ id: string; title: string; updated: number; archived: boolean }[]>>();
+  type Row = { id: string; title: string; updated: number; archived: boolean; agent?: string };
+  const reads = new Map<string, Promise<Row[]>>();
   const readFolder = (cwd: string) => {
     let p = reads.get(cwd);
     if (!p)
@@ -67,11 +70,12 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
         cwd,
         (p = (async () => {
           const client = await server.client();
-          const rows: { id: string; title: string; updated: number; archived: boolean }[] = [];
+          const rows: Row[] = [];
           let cursor: string | undefined;
           for (let page = 0; page < MAX_PAGES; page++) {
             const r = await client.session.list({ directory: cwd, parentID: null, limit: PAGE, ...(cursor && { cursor }) });
-            rows.push(...r.data.map((x) => ({ id: x.id, title: x.title ?? "New session", updated: x.time.updated, archived: !!x.time.archived })));
+            // An inline task's session (opencode2-inline.ts) is no session of the user's.
+            rows.push(...r.data.filter((x) => !x.metadata?.[INLINE_META]).map((x) => ({ id: x.id, title: x.title ?? "New session", updated: x.time.updated, archived: !!x.time.archived, ...(x.agent && { agent: x.agent }) })));
             cursor = r.data.length >= PAGE ? (r.cursor.next ?? undefined) : undefined;
             if (!cursor) break;
           }
@@ -93,7 +97,9 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
           const saved = linked.get(row.id);
           const savedMode = OPENCODE_MODES.find((m) => m === saved?.permissionMode) ?? "default";
           const mode = savedMode === "plan" ? "default" : savedMode;
-          const info = loaded?.info() ?? { id: row.id, cwd, state: "closed" as const, model: saved?.model ?? "default", permissionMode: mode, agent: "build", effort: saved?.effort ?? "default", permissionModes: engine.permissionModes({ allowBypass: ctx.allowBypass }), capabilities: OPENCODE2_CAPABILITIES, engine: engine.name };
+          // The agent OpenCode has for it, else the folder's default as last read.
+          const agent = savedMode === "plan" ? "plan" : (row.agent ?? engine.defaultAgentKnown(cwd));
+          const info = loaded?.info() ?? { id: row.id, cwd, state: "closed" as const, model: saved?.model ?? "default", permissionMode: mode, agent, effort: saved?.effort ?? "default", permissionModes: engine.permissionModes({ allowBypass: ctx.allowBypass }), capabilities: OPENCODE2_CAPABILITIES, engine: engine.name };
           meta.set(row.id, { cwd, title: row.title });
           out.ids.add(row.id);
           out.items.push({ ...info, id: row.id, cwd, title: row.title, lastActivity: row.updated, archived: row.archived, transcript: true, live: false, ...links(row.id) });
@@ -249,9 +255,8 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
       meta.delete(id);
     },
     forkForAside: (owner, title) => forkForAside(owner, title).catch((err) => Promise.reject(failure(err))),
-    // The daemon's own `/compact`, `/undo`, `/redo`; OpenCode 2's server commands are a later slice.
-    commands: async () => LOCAL_COMMANDS,
-    agents: async () => [],
+    commands: (cwd) => engine.commands(cwd),
+    agents: async (cwd) => (await engine.primaryFirst(cwd)).map(({ id, description }) => ({ name: id, ...(description && { description }) })),
     models: (cwd) => engine.modelInfos(cwd),
   };
 }

@@ -1,21 +1,25 @@
 // The OpenCode 2 Engine (ADR 0015, docs/spec.md "OpenCode engine"): sessions run on the daemon's OpenCode 2 server through `@opencode/client`. One event stream
 // (`GET /api/event`, opencode-server.ts) feeds every open session; prompts, Stop and permission replies go back as client calls.
-// Has: create, list, prompt, stream, stop, permissions, models, the read-only rules of an Aside, rewind, /undo /redo /compact, bash mode and questions. Agents,
-// server slash commands, inline tasks and MCP are later slices: their calls answer that OpenCode 2 does not have them in claude-ui yet.
+// Has: create, list, prompt, stream, stop, permissions, models, the read-only rules of an Aside, rewind, /undo /redo /compact, bash mode, questions, agents, OpenCode's
+// slash commands and inline tasks. MCP is a later slice.
 import { randomUUID } from "node:crypto";
 import type { OpenCodeClient } from "@opencode/client";
-import { permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview } from "@claude-ui/protocol";
+import { permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT } from "./aside.ts";
+import { DAEMON_SERVER } from "./daemon-mcp.ts";
 import { DeniedRetryError } from "./denied-retry.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
+import { INLINE_TIMEOUT_MS, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
 import { ascending } from "./opencode-id.ts";
+import { INLINE_SYSTEM, clip } from "./opencode-inline.ts";
 import { LOCAL_COMMANDS, OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels } from "./opencode-engine.ts";
+import { INLINE_META, InlineCollector2, inlineRules } from "./opencode2-inline.ts";
 import { OpenCode2Mapper, bashPart, failureText, mapTool2, type Failure, type OpenCode2Message, type Shell2 } from "./opencode2-parts.ts";
 import type { OpenCodeServer } from "./opencode-server.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
-/** What this version of the OpenCode 2 adapter has: no agents or server slash commands yet (`/compact`, `/undo`, `/redo` are the daemon's). `fork`: the Aside. */
-export const OPENCODE2_CAPABILITIES: EngineCapabilities = { ...OPENCODE_CAPABILITIES, agents: false, slashCommands: false };
+/** What the OpenCode 2 adapter has: as OpenCode 1's (`/compact`, `/undo`, `/redo` are the daemon's commands, the others OpenCode's; `fork`: the Aside). */
+export const OPENCODE2_CAPABILITIES: EngineCapabilities = { ...OPENCODE_CAPABILITIES };
 
 /** A permission rule of OpenCode 2. */
 export type Rule2 = { action: string; resource: string; effect: "allow" | "deny" | "ask" };
@@ -31,14 +35,36 @@ export function modeRules(mode: PermissionMode): Rule2[] {
 }
 /** Last, so it wins (OpenCode 2 applies the last matching rule): a read-only Aside changes no file. `edit` is also the action of the `write` tool (checked on 2.3.0). */
 const READ_ONLY: Rule2 = rule("edit", "deny");
-/** The session's rules: its mode's, and the read-only denial of an Aside. */
-const rulesOf = (mode: PermissionMode, readOnly: boolean): Rule2[] => [...modeRules(mode), ...(readOnly ? [READ_ONLY] : [])];
-/** The mode whose rules a session has (read-only or not), undefined for rules of another origin. */
-export const modeOfRules = (rules: readonly Rule2[] | undefined): PermissionMode | undefined =>
-  (["config", "default", "acceptEdits", "bypassPermissions"] as const).find((m) => [false, true].some((ro) => JSON.stringify(rulesOf(m, ro)) === JSON.stringify(rules ?? [])));
+/**
+ * The session's rules: its mode's, the agent's denials after them (OpenCode 2 applies the session's rules after the agent's, so without them a mode's `edit ask` would
+ * beat plan's `edit deny`), and the read-only denial of an Aside. `config` has no rules of its own: the agent's apply as they are.
+ */
+export const rulesOf = (mode: PermissionMode, readOnly: boolean, denials: readonly Rule2[] = []): Rule2[] => [...(mode === "config" ? [] : [...modeRules(mode), ...denials]), ...(readOnly ? [READ_ONLY] : [])];
+/** The mode whose rules a session has (its rules start with them; `config`: none or only the read-only denial), undefined for rules of another origin. */
+export const modeOfRules = (rules: readonly Rule2[] | undefined): PermissionMode | undefined => {
+  const r = JSON.stringify(rules ?? []);
+  const starts = (m: PermissionMode) => r.startsWith(JSON.stringify(modeRules(m)).slice(0, -1));
+  return (["bypassPermissions", "acceptEdits", "default"] as const).find(starts) ?? ([JSON.stringify([]), JSON.stringify([READ_ONLY])].includes(r) ? "config" : undefined);
+};
 
-/** The unsupported-feature error of this slice: the text names the feature. */
-export const notYet = (what: string) => new Error(`OpenCode 2 does not support ${what} in claude-ui yet.`);
+/** An entry of `GET /api/agent`: `id` is what a session switches to. */
+export type Agent2 = { id: string; name?: string; description?: string; mode?: string; hidden?: boolean; permissions?: Rule2[] };
+/** The agents a user chooses from (OpenCode's own filter): primary or all, not hidden. */
+export const primaryAgents2 = (list: readonly Agent2[]) => list.filter((a) => !a.hidden && a.mode !== "subagent");
+/** An agent's denials: from its first deny of an action on, every rule of that action (so the exceptions after it hold: plan's plan-file `edit` allow). */
+export const denialsOf2 = (rules: readonly Rule2[]): Rule2[] => {
+  const first = new Map<string, number>();
+  rules.forEach((r, i) => r.effect === "deny" && !first.has(r.action) && first.set(r.action, i));
+  return rules.filter((r, i) => i >= (first.get(r.action) ?? Infinity));
+};
+const LOCAL_NAMES = LOCAL_COMMANDS.map((c) => c.name);
+/** How often, and how many times, an agent list is read again while OpenCode has not loaded the folder (2.3.0 lists no agent then). */
+const AGENT_POLL_MS = 250;
+const AGENT_POLLS = 120;
+/** How long after a first non-empty agent list it is read again while no event stream runs. */
+const SETTLE_MS = 500;
+/** The instruction entry that carries an inline task's system text. */
+const INLINE_ENTRY = "claude-ui-inline";
 
 type Json = Record<string, any>;
 /** A model of `GET /api/model` and its default. */
@@ -72,6 +98,8 @@ export type OpenCode2History = {
   rules?: Rule2[];
   /** The message OpenCode's staged revert cuts at: it and everything after are hidden (OpenCode still lists them until a prompt commits the revert). */
   revert?: string;
+  /** The agent OpenCode runs the session as (`session.switchAgent`); none: OpenCode's default agent. */
+  agent?: string;
 };
 const PAGE = 100;
 
@@ -99,7 +127,7 @@ export async function loadOpenCode2History(client: OpenCodeClient, id: string, c
   const ours = async (list: Json[]) => (await Promise.all(list.map(async (r) => ((await isOurs(r.sessionID)) ? [r] : [])))).flat();
   const revert = info.revert?.messageID;
   const cut = revert ? all.findIndex((m) => m.id === revert) : -1;
-  return { messages: cut < 0 ? all : all.slice(0, cut), busy: id in active, permissions: await ours(requests), forms: await ours(forms), rules: (info.permissions ?? []) as Rule2[], ...(revert && { revert }) };
+  return { messages: cut < 0 ? all : all.slice(0, cut), busy: id in active, permissions: await ours(requests), forms: await ours(forms), rules: (info.permissions ?? []) as Rule2[], ...(revert && { revert }), ...(info.agent && { agent: info.agent }) };
 }
 
 type TurnEnd = { done: Promise<void>; resolve: () => void };
@@ -114,7 +142,17 @@ const SHELL_POLL_MS = 500;
 const CLEAR_EXECUTION_MS = 2000;
 /** A user message that shows in the timeline (text or an image). */
 const shownUser = (m: OpenCode2Message) => m.type === "user" && (!!m.text || !!m.files?.some((f) => f.mime?.startsWith("image/") && f.data));
-type Req = { kind: "permission"; callId?: string; sessionID: string } | { kind: "question"; sessionID: string; questions: Question[]; fields: { key: string; type: string }[] };
+type Req = { kind: "permission"; callId?: string; sessionID: string; /** The mapper of the call: an inline run's own. */ mapper: OpenCode2Mapper; /** An inline run's call: its denied card shows under it. */ parentId?: string } | { kind: "question"; sessionID: string; questions: Question[]; fields: { key: string; type: string }[] };
+/** A running inline task: its child session's events feed `notify`; `callId` = the call its steps show under. */
+type InlineRun = { callId?: string; mapper: OpenCode2Mapper; notify: (type: string, d: Json) => void; /** Its prompt reached OpenCode: a check that finds it not running ends it. */ posted?: boolean; /** Ends the run as it is in OpenCode (an end event lost with a stream drop). */ settle: () => void };
+/** The text of the last assistant message of a stored child session (the fallback when its events were missed). */
+const lastAssistantText2 = (messages: readonly OpenCode2Message[]) => {
+  for (const m of [...messages].reverse()) {
+    const t = m.type === "assistant" ? (m.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("") : "";
+    if (t) return t;
+  }
+  return "";
+};
 
 class OpenCode2Session implements EngineSession {
   private model: string;
@@ -164,6 +202,18 @@ class OpenCode2Session implements EngineSession {
   private errorKeys = new Set<string>();
   /** Model and tokens of the last step: the context window in use. */
   private usage: { tokens: Json; providerID: string; id: string } | undefined;
+  /** The agent chosen here (`setAgent`, the plan mode alias, or followed from OpenCode's own app); else the worker link's agent, else OpenCode's default. */
+  private chosen: string | undefined;
+  /** The agent OpenCode has for the session (`switchAgent`); undefined: OpenCode's default agent. */
+  private agentInOpenCode: string | undefined;
+  /** Names of OpenCode's commands last listed: `/name` of one of them runs it. */
+  private commandNames = new Set<string>();
+  /** Running inline tasks by child session id. */
+  private readonly inlineRuns = new Map<string, InlineRun>();
+  /** The `inline_task` calls an inline run already took. */
+  private readonly inlineClaimed = new Set<string>();
+  /** Stop per running inline call id (the card's Stop agent): ends the run as stopped. */
+  private readonly inlineStops = new Map<string, () => void>();
   private retrying: { attempt: number; message: string; next?: number } | undefined;
   /** The model of the running step (`session.step.started`). */
   private stepModel: { id: string; providerID: string } | undefined;
@@ -177,11 +227,14 @@ class OpenCode2Session implements EngineSession {
     this.model = opts.model ?? "default";
     const marked = history && modeOfRules(history.rules);
     const mode = opts.permissionMode ?? marked ?? "config";
-    // Plan is OpenCode's plan agent (a later slice): a saved plan mode opens as the default mode.
+    // Plan is OpenCode's plan agent: a saved, restored or requested plan mode opens as agent `plan` with the default mode.
     this.permissionMode = mode === "plan" || (mode === "bypassPermissions" && !opts.allowBypass) ? "default" : mode;
+    const created = history ? undefined : engine.createdAs(session.id);
+    this.agentInOpenCode = history ? history.agent : created?.agent;
+    this.chosen = mode === "plan" ? "plan" : history?.agent;
     this.effort = opts.effort ?? "default";
-    // A new session got its mode's rules with `POST /api/session`; a restored one has what OpenCode kept (a fork: its owner's).
-    this.written = JSON.stringify(history ? (history.rules ?? []) : modeRules(this.permissionMode));
+    // A new session got its rules with `POST /api/session`; a restored one has what OpenCode kept (a fork: its owner's).
+    this.written = JSON.stringify(history ? (history.rules ?? []) : (created?.rules ?? modeRules(this.permissionMode)));
     this.modelDirty = this.model !== "default" || this.effort !== "default";
   }
 
@@ -191,15 +244,17 @@ class OpenCode2Session implements EngineSession {
   get id() {
     return this.session.id;
   }
-  private get cwd() {
+  get cwd() {
     return this.session.cwd;
   }
 
   begin() {
     this.engine.add(this);
     this.revertAt = this.history?.revert;
-    // The slash menu of an open session: the daemon's own commands (OpenCode 2's server commands are a later slice).
+    // The slash menu of an open session: the daemon's own commands at once, OpenCode's once it listed them.
     this.session.emit({ type: "commands", id: "commands", commands: LOCAL_COMMANDS });
+    void this.emitCommands();
+    void this.refreshAgents();
     if (!this.history) return;
     this.apply(this.history);
     this.session.setState(this.history.busy ? "running" : "idle");
@@ -233,12 +288,27 @@ class OpenCode2Session implements EngineSession {
   /** Asks again what OpenCode still waits for (permission requests and questions of this session); settles what it no longer lists. */
   private requests(h: OpenCode2History) {
     const live = new Set<string>();
-    for (const p of h.permissions) (live.add(p.id), this.askPermission(p));
+    for (const p of h.permissions) {
+      live.add(p.id);
+      // An inline run's ask keeps its own call data (its denied card shows under the inline task).
+      const run = this.inlineRuns.get(p.sessionID);
+      if (run) this.askPermission(p, run.mapper, run.callId);
+      else this.askPermission(p);
+    }
     for (const f of h.forms ?? []) (live.add(f.id), this.askForm(f));
     for (const id of [...this.reqs.keys()]) if (!live.has(id) && this.session.pendingRequest(id)) this.session.cancel(id, ANSWERED);
   }
 
+  /** After a reconnect: an inline run OpenCode no longer runs lost its end event; it ends (its text from the stored messages). */
+  private async checkInlines(client: OpenCodeClient) {
+    const posted = [...this.inlineRuns].filter(([, r]) => r.posted);
+    if (!posted.length) return;
+    const active = await client.session.active().catch(() => undefined);
+    if (active) for (const [id, r] of posted) if (!(id in active)) r.settle();
+  }
+
   resync(): Promise<void> {
+    void this.server.client().then((c) => this.checkInlines(c), () => undefined);
     const posts = this.posts;
     return (this.resyncing ??= this.server
       .client()
@@ -258,9 +328,27 @@ class OpenCode2Session implements EngineSession {
       .finally(() => (this.resyncing = undefined)));
   }
 
+  /** The `commands` part: the daemon's commands, then OpenCode's (built-ins, project and user commands). */
+  emitCommands = async () => {
+    const list = await this.engine.commands(this.cwd).catch(() => undefined);
+    if (!list) return;
+    this.commandNames = new Set(list.map((c) => c.name).filter((n) => !LOCAL_NAMES.includes(n)));
+    this.session.emit({ type: "commands", id: "commands", commands: list });
+  };
+  /** The `agents` part, the default agent first; `failed: true` when OpenCode did not answer (the web offers a retry, which calls this again). */
+  refreshAgents = async () => {
+    const list = await this.engine.primaryFirst(this.cwd).catch(() => undefined);
+    if (!list) return void this.session.emit({ type: "agents", id: "agents", agents: [], failed: true });
+    this.session.emit({ type: "agents", id: "agents", agents: list.map(({ id, description }) => ({ name: id, ...(description && { description }) })) });
+  };
+
   settings(): SessionSettings {
-    return { model: this.model, permissionMode: this.permissionMode, effort: this.effort, agent: "build" };
+    return { model: this.model, permissionMode: this.permissionMode, effort: this.effort, agent: this.agentNow() };
   }
+  /** The agent prompts run as. `opts.agent` (the worker link) is read lazily: orchestration writes it after the session is created. */
+  private agentName = async () => this.chosen ?? this.opts.agent?.(this.id) ?? (await this.engine.defaultAgent(this.cwd));
+  /** `agentName` without waiting: the default agent as last read (`build` before the first read). */
+  private agentNow = () => this.chosen ?? this.opts.agent?.(this.id) ?? this.engine.defaultAgentKnown(this.cwd);
   private changed(...fields: (keyof SessionSettings)[]) {
     this.opts.onSettings?.(this.settings(), this.id, fields);
   }
@@ -289,16 +377,48 @@ class OpenCode2Session implements EngineSession {
     this.changed("effort");
   }
   async setPermissionMode(mode: PermissionMode) {
+    if (mode === "plan") return this.setAgent("plan");
     if (!this.session.info().permissionModes.includes(mode)) throw new Error(`permission mode ${mode} is not enabled`);
     await this.writeRules(mode);
     this.permissionMode = mode;
     this.session.emit({ type: "session_permission_mode", id: "session_permission_mode", mode });
     this.changed("permissionMode");
   }
-  async setAgent(_agent: string): Promise<void> {
-    throw notYet("agents");
+  /** OpenCode runs the next turns as `agent` (a primary agent of OpenCode here); the rules get its denials. */
+  async setAgent(agent: string) {
+    const list = primaryAgents2(await this.engine.agents(this.cwd));
+    if (!list.some((a) => a.id === agent)) throw new Error(`unknown agent ${agent}. OpenCode agents here: ${list.map((a) => a.id).join(", ")}`);
+    await this.writeRules(this.permissionMode, agent);
+    await this.switchAgent(await this.server.client(), agent);
+    this.chosen = agent;
+    this.session.emit({ type: "session_agent", id: "session_agent", agent });
+    this.changed("agent", "permissionMode"); // a saved legacy `plan` mode must not win over the agent at the next restore
   }
-  refreshAgents = async () => {};
+  /** `POST …/agent` unless OpenCode runs the session as `agent` already. */
+  private async switchAgent(client: OpenCodeClient, agent: string) {
+    if (agent === (this.agentInOpenCode ?? (await this.engine.defaultAgent(this.cwd)))) return;
+    const before = this.agentInOpenCode;
+    this.agentInOpenCode = agent; // its `session.agent.selected` is no switch from elsewhere
+    await client.session.switchAgent({ sessionID: this.id, agent }).catch((err) => ((this.agentInOpenCode = before), Promise.reject(err)));
+  }
+  /** The agent of the next turn: the session's, or OpenCode's default when the config no longer has it (a notice; the chosen agent stays, it may come back). */
+  private async turnAgent() {
+    const agent = await this.agentName();
+    if (primaryAgents2(await this.engine.agents(this.cwd)).some((a) => a.id === agent)) return agent;
+    const fallback = await this.engine.defaultAgent(this.cwd);
+    this.notice("agent_missing", `OpenCode has no agent ${agent} here any more; this prompt runs as ${fallback}`);
+    return fallback;
+  }
+  /** An agent chosen in OpenCode's own app (`session.agent.selected`): followed when it is a primary agent here. */
+  private async followAgent(agent: unknown) {
+    if (typeof agent !== "string" || agent === this.agentInOpenCode) return;
+    this.agentInOpenCode = agent;
+    const list = await this.engine.agents(this.cwd).catch(() => []);
+    if (!primaryAgents2(list).some((a) => a.id === agent) || agent === this.agentNow()) return;
+    this.chosen = agent;
+    this.session.emit({ type: "session_agent", id: "session_agent", agent });
+    this.changed("agent");
+  }
   allowDenied(_toolUseId: string): string | undefined {
     throw new DeniedRetryError("unsupported", "this session's engine has no auto mode");
   }
@@ -306,15 +426,20 @@ class OpenCode2Session implements EngineSession {
     throw new DeniedRetryError("unsupported", "this session's engine has no auto mode");
   }
 
-  /** Replaces the session's rules in OpenCode with the ones of `mode`. */
-  private async writeRules(mode: PermissionMode) {
+  /** Replaces the session's rules in OpenCode with the ones of `mode` and `agent` (default: the session's). */
+  private async writeRules(mode: PermissionMode, agent?: string) {
     const client = await this.server.client();
-    const permissions = this.rules(mode);
+    const permissions = await this.rules(mode, agent);
     await client.session.update({ sessionID: this.id, permissions });
     this.written = JSON.stringify(permissions);
   }
-  /** The rules of `mode` for this session: read-only while it is an Aside that may not edit (aside.ts). */
-  private rules = (mode: PermissionMode) => rulesOf(mode, !!this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_EDIT.includes(t)));
+  /** The rules of `mode` for this session as `agent`: with the agent's denials, read-only while it is an Aside that may not edit (aside.ts). */
+  private async rules(mode: PermissionMode, agent?: string) {
+    agent ??= await this.agentName();
+    const own = (await this.engine.agents(this.cwd)).find((a) => a.id === agent)?.permissions ?? [];
+    return rulesOf(mode, this.readOnly(), denialsOf2(own));
+  }
+  private readOnly = () => !!this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_EDIT.includes(t));
 
   /** Makes OpenCode run the next prompt on the session's model and effort (`POST …/model`); only when one of them changed here. */
   private async applyModel(client: OpenCodeClient) {
@@ -337,6 +462,10 @@ class OpenCode2Session implements EngineSession {
       this.localRun = local === "undo" ? run : undefined;
       return undefined;
     }
+    // `/name args` of an OpenCode command, while no turn runs (else it is a plain prompt that joins the turn).
+    const cmd = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
+    // Like a local command it has no message of ours (no draft; the web drops its pending bubble): the prompt OpenCode makes of it shows.
+    if (cmd && this.commandNames.has(cmd[1]!) && this.session.currentState() === "idle") return void ((this.localRun = undefined), this.runCommand(cmd[1]!, cmd[2] ?? "", images));
     // OpenCode commits a staged revert at the next prompt: the cut messages are gone.
     this.revertAt = undefined;
     this.clearedAt = 0;
@@ -445,19 +574,47 @@ class OpenCode2Session implements EngineSession {
     void this.emitUsage();
   };
 
+  /**
+   * Gets OpenCode ready for a turn of this session: the stream open, the session's agent (`switchAgent`), its rules and model. False when a Stop came meanwhile.
+   * The record comes before anything of the turn reaches OpenCode 2: a failed save fails the prompt, never leaves a version 2 turn with no record.
+   */
+  private async prepare(client: OpenCodeClient, live: () => boolean) {
+    this.engine.record(this.id);
+    await this.server.streamReady();
+    if (!live()) return false;
+    const agent = await this.turnAgent();
+    const rules = await this.rules(this.permissionMode, agent);
+    if (!live()) return false;
+    if (this.written !== JSON.stringify(rules)) await this.writeRules(this.permissionMode, agent);
+    await this.switchAgent(client, agent);
+    if (!live()) return false;
+    await this.applyModel(client);
+    return live();
+  }
+
+  /**
+   * An OpenCode command (`POST …/command`): OpenCode expands it into the prompt it stores (shown by its `session.inbox.enqueued`) and runs the turn, whose
+   * `session.execution.started` starts it here; a command that runs no turn (`/goal pause`) starts none. A failure (an unknown argument) is a notice.
+   */
+  private runCommand(name: string, args: string, images: string[]) {
+    const stops = this.stops;
+    void (async () => {
+      const client = await this.server.client();
+      if (!(await this.prepare(client, () => this.stops === stops))) return;
+      this.revertAt = undefined;
+      this.clearedAt = 0;
+      const files = images.map((uri) => ({ uri, source: { type: "inline" as const }, name: "image" }));
+      this.posts++;
+      await client.session.command({ sessionID: this.id, name, text: args, ...(files.length && { files }) });
+    })().catch((err) => this.notice(`command_failed:${ascending("msg")}`, `/${name} failed: ${(err as Error).message}`));
+  }
+
   private async send(messageID: string, text: string, images: string[]) {
     const stops = this.stops;
     // A Stop while the prompt is prepared ends the wait: nothing was posted, interrupt() ended the turn.
     const live = () => this.stops === stops;
-    // The record comes before anything of this turn reaches OpenCode 2: a failed save fails the prompt, never leaves a version 2 turn with no record.
-    this.engine.record(this.id);
-    await this.server.streamReady();
-    if (!live()) return;
     const client = await this.server.client();
-    if (this.written !== JSON.stringify(this.rules(this.permissionMode))) await this.writeRules(this.permissionMode);
-    if (!live()) return;
-    await this.applyModel(client);
-    if (!live()) return;
+    if (!(await this.prepare(client, live))) return;
     this.turnPosted = true;
     const files = images.map((uri) => ({ uri, source: { type: "inline" as const }, name: "image" }));
     this.posts++;
@@ -607,6 +764,8 @@ class OpenCode2Session implements EngineSession {
         return this.session.pendingRequest(d.id) ? this.session.cancel(d.id, ANSWERED) : undefined;
       case "session.renamed":
         return typeof d.title === "string" ? this.engine.onTitle?.(this.id, d.title) : undefined;
+      case "session.agent.selected":
+        return void this.followAgent(d.agent);
       default:
         return this.emitAll(this.mapper.event(type, d));
     }
@@ -629,10 +788,10 @@ class OpenCode2Session implements EngineSession {
     for (const part of parts) this.session.emit(part);
   }
 
-  private askPermission(e: Json) {
+  private askPermission(e: Json, mapper = this.mapper, parentId?: string) {
     if (this.session.pendingRequest(e.id) || this.reqs.has(e.id)) return;
     const callId: string | undefined = e.source?.type === "tool" ? e.source.id : undefined;
-    const call = callId ? this.mapper.call(callId) : undefined;
+    const call = callId ? mapper.call(callId) : undefined;
     const mapped = call?.type === "tool_call" ? call : undefined;
     const resources: string[] = e.resources ?? [];
     // The ask can come before the call has its input: the permission's own data then names the command (shell: the resource).
@@ -641,7 +800,7 @@ class OpenCode2Session implements EngineSession {
     const input: Record<string, unknown> = mapped && Object.keys(mapped.input as object).length ? (mapped.input as Record<string, unknown>) : { ...(!mapped && { patterns: resources }), ...fallback.input };
     // OpenCode saves the "always" patterns itself (per project).
     const suggestions: PermissionUpdate[] = e.save?.length ? [{ type: "addRules", rules: (e.save as string[]).map((ruleContent) => ({ toolName: tool, ruleContent })), behavior: "allow", destination: "session" }] : [];
-    this.reqs.set(e.id, { kind: "permission", callId, sessionID: e.sessionID });
+    this.reqs.set(e.id, { kind: "permission", callId, sessionID: e.sessionID, mapper, ...(parentId && { parentId }) });
     this.session.request({
       part: { type: "permission_request", id: e.id, requestId: e.id, toolUseId: callId ?? e.id, tool, input, ...(!mapped && { title: `OpenCode asks to use ${e.action}: ${resources.join(", ")}` }), noEdit: true as const, suggestions, settled: false, at: Date.now() },
       reply: (r) => this.answer(e.id, r),
@@ -662,8 +821,8 @@ class OpenCode2Session implements EngineSession {
         return send(r.decision === "allow" ? "once" : "always");
       case "deny":
       case "interrupt": {
-        const card = req.callId && this.mapper.deny(req.callId);
-        if (card) this.session.emit(card);
+        const card = req.callId && req.mapper.deny(req.callId);
+        if (card) this.session.emit({ ...card, ...(req.parentId && { parentId: req.parentId }) });
         return send("reject", r.kind === "deny" ? r.message : undefined);
       }
       case "cancel":
@@ -671,8 +830,116 @@ class OpenCode2Session implements EngineSession {
     }
   }
 
-  async inlineTask(): Promise<never> {
-    throw notYet("inline tasks");
+  /**
+   * Inline task (GH-734): a session of its own runs the prompt with only the granted tools (its rules: inlineRules), the system text as an instruction entry, on the
+   * input's model, else setting `openCodeModel`, else this session's. A root session, not a child: OpenCode 2 sends a child's report to its parent's inbox and starts a
+   * turn there. The session list hides it (`INLINE_META`); it is deleted at the end. Its steps show under the running `inline_task` call; its permission asks in this
+   * session. Ends at its execution's end, an error, a cap (turns, output tokens, time) or `hooks.signal`.
+   */
+  inlineTask = async (spec: InlineSpec, hooks: InlineHooks): Promise<InlineResult> => {
+    const t0 = Date.now();
+    const fallback = this.model;
+    const result = (r: Partial<InlineResult> & Pick<InlineResult, "status">, col?: InlineCollector2): InlineResult => ({
+      text: "",
+      model: col?.modelName(fallback) ?? fallback,
+      turns: col?.turns ?? 0,
+      tokens: col?.tokens() ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      ...(col && col.cost() > 0 && { costUsd: col.cost() }),
+      filesChanged: col?.filesChanged() ?? [],
+      durationMs: Date.now() - t0,
+      ...r,
+    });
+    // OpenCode 2's MCP tools are a later slice of claude-ui: a grant of one fails at once, the caller can retry with built-ins.
+    if (spec.mcp.length) return result({ status: "error", error: "OpenCode 2 does not support MCP tools in an inline task in claude-ui yet: grant only built-in tools." });
+    let childId: string | undefined;
+    let col: InlineCollector2 | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    let callId: string | undefined;
+    let client: OpenCodeClient | undefined;
+    try {
+      callId = await this.findCall(() => this.mapper.runningCall(`mcp__${DAEMON_SERVER}__inline_task`, hooks.input, this.inlineClaimed));
+      if (callId) this.inlineClaimed.add(callId);
+      client = await this.server.client();
+      const agent = await this.agentName();
+      const own = (await this.engine.agents(this.cwd)).find((a) => a.id === agent)?.permissions ?? [];
+      // The agent's rules, then this session's (its mode, the agent's denials, an Aside's read-only rule): applied to the granted tools only.
+      const permissions = inlineRules(spec, [...own, ...(await this.rules(this.permissionMode, agent))]);
+      const model = refOf(spec.model || hooks.settings?.openCodeModel || this.model);
+      const row = await client.session.create({ location: { directory: this.cwd }, title: `Inline: ${spec.title}`.slice(0, 80), agent, ...(model && { model }), permissions, metadata: { [INLINE_META]: this.id } });
+      const id = (childId = row.id);
+      const collector = (col = new InlineCollector2());
+      const mapper = new OpenCode2Mapper();
+      const outcome = new Promise<{ status: InlineResult["status"]; limit?: InlineResult["limit"]; error?: string }>((resolve) => {
+        this.inlineRuns.set(id, {
+          ...(callId && { callId }),
+          mapper,
+          notify: (type, d) => {
+            collector.feed(type, d);
+            const cap = collector.cap(spec.maxTurns);
+            if (cap) resolve({ status: "limit", limit: cap });
+            else if (collector.error) resolve({ status: "error", error: collector.error });
+            else if (collector.idle) resolve({ status: "done" });
+            else if (collector.interrupted) resolve({ status: "stopped" });
+          },
+          settle: () => resolve({ status: "done" }),
+        });
+        this.engine.adoptInline(id, this);
+        timer = setTimeout(() => resolve({ status: "limit", limit: "time" }), INLINE_TIMEOUT_MS);
+        onAbort = () => resolve({ status: "stopped" });
+        if (callId) this.inlineStops.set(callId, onAbort);
+        if (hooks.signal.aborted) onAbort();
+        else hooks.signal.addEventListener("abort", onAbort, { once: true });
+      });
+      await client.experimental.session.instructions.entry.put({ sessionID: id, key: INLINE_ENTRY, value: INLINE_SYSTEM });
+      await this.server.streamReady();
+      // A Stop that came while the session was made sends no prompt.
+      if (!hooks.signal.aborted && !(callId && !this.inlineStops.has(callId))) {
+        await client.session.prompt({ sessionID: id, text: spec.text });
+        const run = this.inlineRuns.get(id);
+        if (run) run.posted = true;
+      }
+      const end = await outcome;
+      if (end.status !== "done" && end.status !== "error") await client.session.interrupt({ sessionID: id }).catch(() => undefined);
+      let text = collector.text();
+      if (!text && end.status === "done") text = lastAssistantText2(await loadMessages(client, id).catch(() => []));
+      return result({ ...end, ...clip(text) }, collector);
+    } catch (err) {
+      return result({ status: "error", error: (err as Error).message, ...(col && clip(col.text())) }, col);
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (onAbort) hooks.signal.removeEventListener("abort", onAbort);
+      if (childId) {
+        const gone = childId;
+        this.inlineRuns.delete(gone);
+        this.engine.releaseInline(gone);
+        // Its asks wait for no one any more.
+        for (const [rid, r] of this.reqs) if (r.sessionID === gone && this.session.pendingRequest(rid)) this.session.cancel(rid, "The inline task ended");
+        void client?.session.remove({ sessionID: gone }).catch(() => undefined);
+      }
+      if (callId) this.inlineStops.delete(callId);
+      // A claim stays while its call still runs (a second run must not take it); finished calls are dropped.
+      for (const id of this.inlineClaimed) if (!this.mapper.isRunning(id)) this.inlineClaimed.delete(id);
+    }
+  };
+
+  /** One event of an inline run's session: its result, its permission asks (answered under its id), its steps under the call. */
+  inlineEvent(childId: string, type: string, d: Json) {
+    const run = this.inlineRuns.get(childId);
+    if (!run) return;
+    run.notify(type, d);
+    if (type === "permission.asked") return this.askPermission(d, run.mapper, run.callId);
+    if (type === "permission.replied") return this.session.pendingRequest(d.requestID) ? this.session.cancel(d.requestID, ANSWERED) : undefined;
+    if (run.callId) for (const part of run.mapper.event(type, d)) this.session.emit({ ...part, parentId: run.callId });
+  }
+
+  /** The running call a run belongs to (`find` reads the mapper). Its event may come after the tool request, so it is awaited a moment. */
+  private async findCall(find: () => string | undefined) {
+    for (let i = 0; i < 20; i++) {
+      const id = find();
+      if (id || i === 19) return id;
+      await new Promise((r) => setTimeout(r, 50));
+    }
   }
   /** A question form of OpenCode 2 (`form.created`, metadata kind `question`: the `question` tool) as a question part under its call. Another form: a notice. */
   private askForm(form: Json) {
@@ -781,7 +1048,14 @@ class OpenCode2Session implements EngineSession {
   beforeStateEvent() {}
   idle() {}
   bashCwdPinned = () => false;
-  stopSubagent = async () => false;
+  /** Stop agent of a running inline task's card: the run ends as stopped (its session is interrupted). */
+  stopSubagent = async (callId: string) => {
+    const stop = this.inlineStops.get(callId);
+    if (!stop) return false;
+    this.inlineStops.delete(callId);
+    stop();
+    return true;
+  };
   /** Run in background: the session is free at once; OpenCode runs the command on (its request answers at the end, the card then shows the result). */
   backgroundShell = async (id: string) => {
     const run = this.shellRun;
@@ -836,24 +1110,32 @@ class OpenCode2EngineImpl implements Engine {
   add(s: OpenCode2Session) {
     this.sessions.set(s.id, s);
     this.owners.clear();
+    const first = !this.unsubscribe;
     this.unsubscribe ??= this.server.events(
       {
-        event: (_dir, payload) => {
+        event: (dir, payload) => {
+          // OpenCode loaded or changed a folder's agents or commands (its first load included): read them again.
+          if (payload.type === "agent.updated" || payload.type === "command.updated") return this.listsChanged(dir);
           // A form names its session inside the form.
           const sid: unknown = payload.properties.sessionID ?? payload.properties.form?.sessionID;
           if (typeof sid !== "string") return;
           const own = this.sessions.get(sid);
           if (own) return own.event(payload.type, payload.properties);
+          const inline = this.inlineOwners.get(sid);
+          if (inline) return inline.inlineEvent(sid, payload.type, payload.properties);
           // A subagent's session: only its permission requests and questions are shown (the user must be able to answer them, or the turn waits for ever).
           if (payload.type === "permission.asked" || payload.type === "form.created")
             void this.ownerOf(sid).then((owner) => owner && this.sessions.get(owner)?.event(payload.type, payload.properties));
           else if (payload.type === "permission.replied" || payload.type === "form.replied" || payload.type === "form.cancelled")
             for (const o of this.sessions.values()) o.event(payload.type, payload.properties);
         },
-        resync: () => (this.modelLists.clear(), this.sessions.forEach((o) => void o.resync())),
+        resync: () => (this.modelLists.clear(), this.listsChanged(undefined), this.sessions.forEach((o) => void o.resync())),
       },
       2,
     );
+    // OpenCode lists a folder's built-in agents and commands before its own ones, then says `agent.updated`: an event sent before this stream opened is lost, so the
+    // lists read before (a session create or the chooser) are read again once it is open.
+    if (first) void this.server.streamReady().then(() => this.listsChanged(undefined));
   }
   remove(s: OpenCode2Session) {
     this.sessions.delete(s.id);
@@ -877,7 +1159,108 @@ class OpenCode2EngineImpl implements Engine {
     }
     return hit;
   }
-  isOurs = async (own: string, sid: string) => sid === own || (await this.ownerOf(sid)) === own;
+  isOurs = async (own: string, sid: string) => sid === own || this.inlineOwners.get(sid)?.id === own || (await this.ownerOf(sid)) === own;
+
+  /** Inline runs' sessions and the session each belongs to: their events go to it. */
+  private readonly inlineOwners = new Map<string, OpenCode2Session>();
+  adoptInline = (id: string, owner: OpenCode2Session) => void this.inlineOwners.set(id, owner);
+  releaseInline = (id: string) => void this.inlineOwners.delete(id);
+
+  /** The agent lists and commands of `dir` (none: of every folder) are read again; its open sessions show the new ones. */
+  private listsChanged(dir: string | undefined) {
+    // OpenCode names the folder by its real path: a folder opened through a link matches none, then every folder is read again.
+    if (dir && ![...this.agentLists.keys(), ...this.commandLists.keys(), ...[...this.sessions.values()].map((s) => s.cwd)].includes(dir)) dir = undefined;
+    for (const map of [this.agentLists, this.commandLists, this.defaults]) for (const k of [...map.keys()]) if (!dir || k === dir) map.delete(k);
+    for (const s of this.sessions.values()) if (!dir || s.cwd === dir) (void s.refreshAgents(), void s.emitCommands());
+  }
+  private agentLists = new Map<string, { at: number; list: Promise<Agent2[]> }>();
+  /**
+   * `GET /api/agent` of a folder (project agents differ per folder), cached 60 s and until OpenCode says they changed. A folder OpenCode has not loaded yet lists
+   * no agent (2.3.0): read again until it lists some. A failure drops the entry, so the next call (session open, the chooser's retry) asks again.
+   */
+  agents(cwd: string): Promise<Agent2[]> {
+    const hit = this.agentLists.get(cwd);
+    if (hit && Date.now() - hit.at < 60_000) return hit.list;
+    const list = (async () => {
+      const c = await this.server.client();
+      for (let i = 0; ; i++) {
+        const l = (await c.agent.list({ location: { directory: cwd } })).data as unknown as Agent2[];
+        // Without an event stream no `agent.updated` says the folder's own agents came (2.3.0 lists them ~0.2 s after its built-ins): read once more a moment later.
+        if (l.length && !this.unsubscribe) await new Promise((r) => setTimeout(r, SETTLE_MS));
+        if (l.length) return !this.unsubscribe ? ((await c.agent.list({ location: { directory: cwd } })).data as unknown as Agent2[]) : l;
+        if (i >= AGENT_POLLS) throw new Error("OpenCode lists no agent for this folder");
+        await new Promise((r) => setTimeout(r, AGENT_POLL_MS));
+      }
+    })();
+    this.agentLists.set(cwd, { at: Date.now(), list });
+    list.catch(() => this.agentLists.get(cwd)?.list === list && this.agentLists.delete(cwd));
+    return list;
+  }
+  private defaults = new Map<string, { at: number; name: Promise<string> }>();
+  /** The last known default agent per folder: the synchronous reads (session info) use it until the first `defaultAgent` answers. */
+  private defaultKnown = new Map<string, string>();
+  defaultAgentKnown = (cwd: string) => this.defaultKnown.get(cwd) ?? "build";
+  /**
+   * The agent OpenCode runs a session as when none is chosen: the config's `default_agent` (its highest-priority document that sets one, `GET /api/config`) when it
+   * is a visible primary agent, else `build`, else the first primary agent, else `build`. Cached with the agent list; a failed read falls back without a notice.
+   */
+  defaultAgent(cwd: string): Promise<string> {
+    const hit = this.defaults.get(cwd);
+    if (hit && Date.now() - hit.at < 60_000) return hit.name;
+    const name = (async () => {
+      let failed = false;
+      const primary = primaryAgents2(await this.agents(cwd).catch(() => ((failed = true), [])));
+      const docs = await this.server
+        .client()
+        .then((c) => c.config.get({ location: { directory: cwd } }))
+        .catch(() => [] as unknown[]);
+      const configured = (docs as { info?: { default_agent?: string } }[]).map((d) => d.info?.default_agent).filter(Boolean).at(-1);
+      const pick = primary.find((a) => a.id === configured)?.id ?? primary.find((a) => a.id === "build")?.id ?? primary[0]?.id ?? "build";
+      if (failed) this.defaults.delete(cwd);
+      else this.defaultKnown.set(cwd, pick);
+      return pick;
+    })();
+    this.defaults.set(cwd, { at: Date.now(), name });
+    return name;
+  }
+  /** The primary agents of a folder, the default agent first (the chooser preselects the first). */
+  async primaryFirst(cwd: string): Promise<Agent2[]> {
+    const [list, first] = [primaryAgents2(await this.agents(cwd)), await this.defaultAgent(cwd)];
+    return [...list.filter((a) => a.id === first), ...list.filter((a) => a.id !== first)];
+  }
+  private commandLists = new Map<string, { at: number; list: Promise<SlashCommand[]> }>();
+  /**
+   * The slash menu of a folder: the daemon's `/compact`, `/undo`, `/redo`, then `GET /api/command` (built-ins, project and user commands), cached as the agents.
+   * Read after the agents: a folder OpenCode has not loaded yet lists only the built-in commands.
+   */
+  commands(cwd: string): Promise<SlashCommand[]> {
+    const hit = this.commandLists.get(cwd);
+    if (hit && Date.now() - hit.at < 60_000) return hit.list;
+    const list = (async () => {
+      await this.agents(cwd).catch(() => undefined);
+      const c = await this.server.client();
+      const raw = (await c.command.list({ location: { directory: cwd } })).data as unknown as { name: string; description?: string }[];
+      return [...LOCAL_COMMANDS, ...raw.filter((x) => !LOCAL_NAMES.includes(x.name)).map((x) => ({ name: x.name, description: x.description ?? "", argumentHint: "" }))];
+    })();
+    this.commandLists.set(cwd, { at: Date.now(), list });
+    list.catch(() => this.commandLists.get(cwd)?.list === list && this.commandLists.delete(cwd));
+    return list;
+  }
+  /** The rules and agent of a new session in `mode` (`plan` = agent plan in the default mode): the mode's rules with the agent's denials. Rejects when the agents cannot be read. */
+  async createRules(mode: PermissionMode, cwd: string): Promise<{ rules: Rule2[]; agent?: string }> {
+    const list = await this.agents(cwd);
+    const agent = mode === "plan" ? "plan" : await this.defaultAgent(cwd);
+    const rules = rulesOf(mode === "plan" ? "default" : mode, false, denialsOf2(list.find((a) => a.id === agent)?.permissions ?? []));
+    return { rules, ...(mode === "plan" && { agent }) };
+  }
+  /** What each new session was created with, until its OpenCode2Session takes it. */
+  private readonly created = new Map<string, { rules: Rule2[]; agent?: string }>();
+  noteCreated = (id: string, c: { rules: Rule2[]; agent?: string }) => void this.created.set(id, c);
+  createdAs = (id: string) => {
+    const c = this.created.get(id);
+    this.created.delete(id);
+    return c;
+  };
 
   /** `GET /api/model` and `GET /api/model/default` of a folder (providers and the default can differ per folder), read once per provider set. Rejects when it fails. */
   models(cwd?: string): Promise<Models> {
