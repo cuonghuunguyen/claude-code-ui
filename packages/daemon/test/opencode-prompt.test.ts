@@ -61,6 +61,8 @@ async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object
     claudeDir: join(root, "claude"),
     projectsDir: join(root, "claude", "projects"),
     uploadSweepMs: 0,
+    // No transcript scan of the real ~/.claude (history defaults to the SDK's, which ignores projectsDir): on a machine with many projects every session.list scanned thousands of folders and the tests timed out under load.
+    history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
     allowBypass: o.allowBypass,
     // session.list budget: no wait for the model list (fakeQuery has none) and a short wait for OpenCode, whose start (seconds under load) the helpers wait for themselves.
     modelListWaitMs: 0,
@@ -233,14 +235,17 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
       await s.prompt("edit a.txt");
       await until(() => !!s.find("permission_request"));
       await d.ok({ type: "permission.respond", requestId: s.find("permission_request")!.requestId, decision: "allow_always" });
-      await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result") && d.requests("PATCH", `/session/${s.id}`).length > n);
+      // The persist PATCH (the first with an allow rule for edit) is the one to wait for: it is sent without being awaited, so the block PATCH of the prompt can satisfy a plain count and the persist then lands after the next mode change.
+      await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result") && d.requests("PATCH", `/session/${s.id}`).slice(n).some((r) => (r.body.permission as { permission: string; pattern: string; action: string }[]).some((x) => x.permission === "edit" && x.pattern === "*" && x.action === "allow")));
     };
     const d = await boot({ script: ["edit"] });
     const s = await d.open();
     await allowAlways(d, s);
     expect(lastEdit(d, s.id)).toMatchObject({ action: "allow" });
     await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "plan" });
-    expect(lastEdit(d, s.id)).toMatchObject({ action: "deny" });
+    // The block the switch wrote, not the last one: the rest of the recorded turn has user messages of agent build, and OpenCode's stream may deliver one after the switch, which the session follows with a block of its own.
+    const plan = d.requests("PATCH", `/session/${s.id}`).map((r) => r.body.permission as { permission: string; pattern: string; action: string }[]).find((p) => p.some((r) => r.pattern === "agent:plan"))!;
+    expect(plan.filter((r) => r.permission === "edit" && r.pattern === "*").at(-1)).toMatchObject({ action: "deny" });
     // docs denies edits: the saved rule is followed by that denial again.
     const d2 = await boot({ script: ["edit"] });
     const s2 = await d2.open();
@@ -1596,6 +1601,8 @@ describe("OpenCode: Stop, shared list reads, reload after a busy folder, slow pr
     const ids = ["la", "lb", "lc", "ld"];
     for (const reqId of ids) d.ws.send(JSON.stringify({ type: "session.list", reqId }));
     await until(() => ids.every((id) => d.inbox.some((m) => m.type === "reply" && m.reqId === id)), 25_000);
+    // The lists may answer before OpenCode has started (their wait is bounded): the read is logged once the server is up.
+    await until(() => d.requests("GET", "/session").length > 0, 25_000);
     expect(d.requests("GET", "/session")).toHaveLength(1);
     await until(() => changed() > before, 15_000);
     await new Promise((r) => setTimeout(r, 1500));
