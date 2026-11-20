@@ -878,7 +878,7 @@ function OverriddenMarker({ id, what, onOpen }: { id: string; what?: string; onO
   const t = useT();
   return (
     <span className="mt-1 flex flex-wrap items-center gap-x-2 text-xs" data-testid={id}>
-      <span className="inline-flex items-center gap-1 font-medium text-foreground">
+      <span id={`${id}-text`} className="inline-flex items-center gap-1 font-medium text-foreground">
         <FolderCogIcon className="size-3.5" aria-hidden />
         {what ? t("settings.overridden.fields", { fields: what }) : t("settings.overridden")}
       </span>
@@ -986,6 +986,8 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
         const hint = rk(sec.id, row.key, "hint");
         const value = (settings[sec.id] as Record<string, unknown>)[row.key];
         const patch = (v: unknown) => ({ [sec.id]: { [row.key]: v } }) as SettingsPatch;
+        const marked = overriddenIn.has(`${sec.id}.${row.key}`);
+        const described = `${id}-hint${marked ? ` ${id}-overridden-text` : ""}`;
         if (row.kind === "text") return <InstructionSetting key={row.key} id={id} label={label} hint={hint} value={value as string} placeholder={DEFAULT_COMMIT_INSTRUCTION} onSave={(next) => void save(patch(next))} />;
         if (row.kind === "list") return <ListSetting key={row.key} id={id} label={label} hint={hint} value={value as string[]} saving={saving} onSave={(next) => save(patch(next), undefined, true)} />;
         return (
@@ -993,13 +995,13 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
             <div className="min-w-0 flex-1">
               <label htmlFor={id} className="block text-sm">{label}</label>
               <span id={`${id}-hint`} className="block text-muted-foreground text-xs">{hint}</span>
-              {overriddenIn.has(`${sec.id}.${row.key}`) && <OverriddenMarker id={`${id}-overridden`} onOpen={openProject} />}
+              {marked && <OverriddenMarker id={`${id}-overridden`} onOpen={openProject} />}
             </div>
             {row.kind === "switch" ? (
-              <Switch on={value === true} label={label} held={saving} onToggle={(on) => void save(patch(on))} title={label} describedBy={`${id}-hint`} testId={id} />
+              <Switch on={value === true} label={label} held={saving} onToggle={(on) => void save(patch(on))} title={label} describedBy={described} testId={id} />
             ) : row.kind === "select" ? (
               <Select value={String(value)} onValueChange={(v) => v && void save(patch(row.parse ? row.parse(v) : v))}>
-                <SelectTrigger id={id} aria-describedby={`${id}-hint`} aria-label={label} data-testid={id} className="w-44 max-md:data-[size=default]:h-11">
+                <SelectTrigger id={id} aria-describedby={described} aria-label={label} data-testid={id} className="w-44 max-md:data-[size=default]:h-11">
                   <SelectValue>{(v: string) => optionLabel(row.options.find((o) => o.value === v)) ?? v}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
@@ -1013,7 +1015,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
             ) : row.kind === "line" ? (
               <input
                 id={id}
-                aria-describedby={`${id}-hint`}
+                aria-describedby={described}
                 type="text"
                 spellCheck={false}
                 autoCapitalize="off"
@@ -1028,7 +1030,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
             ) : (
               <input
                 id={id}
-                aria-describedby={`${id}-hint`}
+                aria-describedby={described}
                 type="number"
                 inputMode="numeric"
                 min={row.min}
@@ -1141,7 +1143,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
         ]
       : []),
     ...(localHistory ? [{ id: "history", title: sectionTitle(localHistory.id), category: "Sessions" as const, body: daemonSection(localHistory) }] : []),
-    ...(settings ? [{ id: "account", title: t("settings.group.account"), category: "Integrations" as const, body: <>{project && overrides.account !== undefined && side === LOCAL_SIDE && <OverriddenMarker id="settings-account-overridden" onOpen={openProject} />}<ClaudeAccountSection active={settings.claude?.account ?? ""} accounts={claudeAccounts} envToken={!!daemon?.claudeEnvToken} request={request} onResult={(r) => (setSettings(r.settings), setClaudeAccounts(r.claudeAccounts ?? []), setError(undefined))} onError={setError} onLogin={onLogin ?? (() => {})} /></> }]  : []),
+    ...(settings ? [{ id: "account", title: t("settings.group.account"), category: "Integrations" as const, body: <>{project && overrides.account !== undefined && side === LOCAL_SIDE && <OverriddenMarker id="settings-account-overridden" onOpen={openProject} />}<ClaudeAccountSection active={settings.claude?.account ?? ""} accounts={claudeAccounts} envToken={!!daemon?.claudeEnvToken} request={request} onResult={(r) => (setSettings(r.settings), setClaudeAccounts(r.claudeAccounts ?? []), setError(undefined))} onError={setError} onLogin={onLogin ?? (() => {})} /></> }] : []),
     ...(git ? [{ id: "git", title: sectionTitle(git.id), category: "Integrations" as const, body: daemonSection(git) }] : []),
     // GH-646: only for a browser on the daemon machine, and a daemon that lists editors (older ones and Sides have no `editor`).
     ...(settings?.editor && daemon?.editors && onDaemonMachine()

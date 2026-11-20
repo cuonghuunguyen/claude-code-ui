@@ -1508,12 +1508,13 @@ it("shows Fork subagents under Sessions with one switch that saves its patch, an
   expect(q("settings-fork-enabled")?.getAttribute("aria-checked")).toBe("false");
 });
 
-const OVERRIDES = { local: { "/p/app": { mode: "plan", inlineTask: { model: "sonnet" }, history: { enabled: false }, account: "", jira: { url: "https://acme.example.com", jql: "project = A" } } }, "ssh:box": { "/p/app": { mode: "auto" } } } as Settings["projects"]["overrides"];
+const OVERRIDES = { local: { "/p/app": { mode: "plan", inlineTask: { model: "sonnet" }, history: { enabled: false }, account: "", jira: { url: "https://acme.example.com", jql: "project = A" } } }, "ssh:box": { "/p/app": { mode: "auto", account: "x" } } } as Settings["projects"]["overrides"];
 
 it("Settings marks each global row the shown Project overrides, with a button that opens its Project settings", async () => {
   const { q, pick, onProjectSettings } = await render({ project: { cwd: "/p/app", name: "app" }, overrides: OVERRIDES });
   await pick("sessions");
   expect(q("settings-sessions-defaultMode-overridden")?.textContent).toContain("Overridden in this project");
+  expect(q("settings-sessions-defaultMode")!.getAttribute("aria-describedby")).toContain("settings-sessions-defaultMode-overridden-text");
   await pick("inlineTask");
   expect(q("settings-inlineTask-model-overridden")).not.toBeNull();
   expect(q("settings-inlineTask-openCodeModel-overridden")).toBeNull();
