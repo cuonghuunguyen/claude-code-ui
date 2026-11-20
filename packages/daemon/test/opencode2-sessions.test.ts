@@ -544,6 +544,109 @@ describe("OpenCode 2 sessions: adapter record and version mismatch", { timeout: 
   });
 });
 
+describe("OpenCode 2 sessions: rename, archive, delete and Aside", { timeout: TEST_MS }, () => {
+  const done = { time: { created: 2, completed: 3 } };
+  const msg = (id: string, type: "user" | "assistant", extra: object = {}) => ({ id, type, time: { created: 1 }, ...(type === "user" ? { text: "q" } : { agent: "build", model: { id: "m", providerID: "fake" }, content: [{ type: "text", text: "a" }] }), ...extra });
+  /** A daemon whose OpenCode 2 holds `ses_own` (in the project) with `messages`, listed once. */
+  async function owned(messages: object[], extra: object = {}, o: Parameters<typeof boot>[0] = {}) {
+    const d = await boot(o);
+    writeFileSync(join(d.root, "data.json"), JSON.stringify({ sessions: [row("ses_own", d.project, "Owner", 5000, extra)], messages: { ses_own: messages } }));
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    await until(() => d.log().some((l) => l.type === "start"));
+    for (let i = 0; i < 80 && !(await d.ok({ type: "session.list" })).sessions.some((x: any) => x.id === "ses_own"); i++) await sleep(50);
+    return d;
+  }
+  const link = (d: Awaited<ReturnType<typeof boot>>, id: string) => JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8"))[id];
+
+  it("rename, archive, unarchive and delete go to OpenCode 2; the list shows them and the delete drops the adapter record", async () => {
+    const d = await owned([msg("msg_u1", "user")]);
+    await d.ok({ type: "session.subscribe", sessionId: "ses_own", sinceSeq: 0 });
+    await d.ok({ type: "session.prompt", sessionId: "ses_own", text: "hi" });
+    await until(() => d.recorded().ses_own === 2);
+    await d.ok({ type: "session.rename", sessionId: "ses_own", title: " New name " });
+    expect(d.requests("PATCH", "/api/session/ses_own").map((r) => r.body).filter((b) => b.title)).toEqual([{ title: "New name" }]);
+    await d.ok({ type: "session.archive", sessionId: "ses_own", archived: true });
+    expect((await d.ok({ type: "session.list" })).sessions.find((x: any) => x.id === "ses_own")).toMatchObject({ title: "New name", archived: true });
+    await d.ok({ type: "session.archive", sessionId: "ses_own", archived: false });
+    expect(d.requests("PATCH", "/api/session/ses_own").map((r) => r.body).filter((b) => "archived" in b)).toEqual([{ archived: true }, { archived: false }]);
+    expect((await d.ok({ type: "session.list" })).sessions.find((x: any) => x.id === "ses_own").archived).toBe(false);
+    await until(() => (d.view("ses_own").states().at(-1) === "idle"));
+    await d.ok({ type: "session.delete", sessionId: "ses_own" });
+    expect(d.requests("DELETE", "/api/session/ses_own")).toHaveLength(1);
+    expect((await d.ok({ type: "session.list" })).sessions).toEqual([]);
+    expect(d.recorded()).toEqual({});
+  });
+
+  it("deleting a session OpenCode 2 no longer has removes it from claude-ui", async () => {
+    const d = await owned([msg("msg_u1", "user")]);
+    await d.ok({ type: "session.subscribe", sessionId: "ses_own", sinceSeq: 0 });
+    // Deleted in OpenCode 2's own app after this daemon opened it.
+    await d.fake("/__forget/ses_own");
+    await d.ok({ type: "session.delete", sessionId: "ses_own" });
+    expect(d.requests("DELETE", "/api/session/ses_own")).toHaveLength(1);
+    expect(await d.request({ type: "session.subscribe", sessionId: "ses_own", sinceSeq: 0 })).toMatchObject({ type: "error" });
+  });
+
+  it("an Aside forks the whole history, titles and records the fork, denies edits before its prompt; closing deletes it", async () => {
+    const d = await owned([msg("msg_u1", "user"), msg("msg_a1", "assistant", done)]);
+    await d.ok({ type: "session.subscribe", sessionId: "ses_own", sinceSeq: 0 });
+    const { session } = await d.ok({ type: "aside.open", sessionId: "ses_own", text: "what is this?\nmore" });
+    expect(d.requests("POST", "/api/session/ses_own/fork")[0]!.body ?? {}).toEqual({});
+    expect(session.id).not.toBe("ses_own");
+    expect(d.requests("PATCH", `/api/session/${session.id}`)[0]!.body).toEqual({ title: "what is this?" });
+    expect(d.recorded()[session.id]).toBe(2);
+    expect(link(d, session.id)).toMatchObject({ ownerId: "ses_own", readOnly: true });
+    await until(() => d.requests("POST", `/api/session/${session.id}/prompt`).length === 1);
+    // The rules of the Aside's mode, edits denied last (the last matching rule wins in OpenCode 2), written before the prompt.
+    const writes = d.log().filter((l) => l.type === "request" && l.path.startsWith(`/api/session/${session.id}`) && (l.method === "PATCH" ? !!l.body.permissions : l.path.endsWith("/prompt")));
+    expect(writes.map((l) => l.method)).toEqual(["PATCH", "POST"]);
+    expect(writes[0]!.body.permissions).toEqual([...modeRules("default"), { action: "edit", resource: "*", effect: "deny" }]);
+    await d.ok({ type: "aside.close", sessionId: session.id });
+    await until(() => d.requests("DELETE", `/api/session/${session.id}`).length > 0);
+    expect((await d.ok({ type: "session.list" })).sessions.map((s: any) => s.id)).toEqual(["ses_own"]);
+  });
+
+  it("a mode change of an Aside drops the edit denial at its next prompt", async () => {
+    const d = await owned([msg("msg_u1", "user"), msg("msg_a1", "assistant", done)]);
+    const { session } = await d.ok({ type: "aside.open", sessionId: "ses_own", text: "q" });
+    await d.ok({ type: "session.subscribe", sessionId: session.id, sinceSeq: 0 });
+    await until(() => d.view(session.id).states().at(-1) === "idle");
+    await d.ok({ type: "session.setPermissionMode", sessionId: session.id, mode: "acceptEdits" });
+    await d.ok({ type: "session.prompt", sessionId: session.id, text: "now edit" });
+    await until(() => d.requests("POST", `/api/session/${session.id}/prompt`).length === 2);
+    const rules = d.requests("PATCH", `/api/session/${session.id}`).map((r) => r.body.permissions).filter(Boolean);
+    expect(rules.at(-1)).toEqual(modeRules("acceptEdits"));
+  });
+
+  it("an Aside of a running owner forks before the unfinished assistant message; after a rewind in OpenCode it forks at the revert message", async () => {
+    const d = await owned([msg("msg_u1", "user"), msg("msg_a1", "assistant", done), msg("msg_u2", "user"), msg("msg_a2", "assistant")]);
+    await d.ok({ type: "aside.open", sessionId: "ses_own", text: "q" });
+    expect(d.requests("POST", "/api/session/ses_own/fork")[0]!.body).toEqual({ before: "msg_a2" });
+    const r = await owned([msg("msg_u1", "user"), msg("msg_a1", "assistant", done), msg("msg_u2", "user"), msg("msg_a2", "assistant", done)], { revert: { messageID: "msg_u2" } });
+    await r.ok({ type: "aside.open", sessionId: "ses_own", text: "q" });
+    expect(r.requests("POST", "/api/session/ses_own/fork")[0]!.body).toEqual({ before: "msg_u2" });
+  });
+
+  it("an owner without messages, or rewound to its first message, is refused and nothing is forked", async () => {
+    const d = await owned([]);
+    expect(await d.request({ type: "aside.open", sessionId: "ses_own", text: "q" })).toMatchObject({ type: "error", code: "aside_unavailable" });
+    const r = await owned([msg("msg_u1", "user"), msg("msg_a1", "assistant", done)], { revert: { messageID: "msg_u1" } });
+    expect(await r.request({ type: "aside.open", sessionId: "ses_own", text: "q" })).toMatchObject({ type: "error", code: "aside_unavailable" });
+    expect([...d.requests("POST", /\/fork$/), ...r.requests("POST", /\/fork$/)]).toEqual([]);
+  });
+
+  it("a failure after the fork deletes the fork and its record", async () => {
+    const d = await owned([msg("msg_u1", "user"), msg("msg_a1", "assistant", done)]);
+    expect(await d.request({ type: "aside.open", sessionId: "ses_own", text: "fail-title" })).toMatchObject({ type: "error", code: "aside_failed" });
+    expect(d.requests("POST", "/api/session/ses_own/fork")).toHaveLength(1);
+    const deleted = d.requests("DELETE", /^\/api\/session\/ses_/);
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]!.path).not.toBe("/api/session/ses_own");
+    expect(d.recorded()).toEqual({});
+  });
+});
+
 describe("OpenCode 2 sessions: owner of a subagent's session", () => {
   /** An engine over a stub server whose session rows are `parents` (id -> parentID) and whose read of `failing` fails once. */
   function engineOver(parents: Record<string, string | undefined>, failing: string) {

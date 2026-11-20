@@ -1,9 +1,10 @@
 // The OpenCode 2 Engine (ADR 0015, docs/spec.md "OpenCode engine"): sessions run on the daemon's OpenCode 2 server through `@opencode/client`. One event stream
 // (`GET /api/event`, opencode-server.ts) feeds every open session; prompts, Stop and permission replies go back as client calls.
-// Slice 2 of the OpenCode 2 support: create, list, prompt, stream, stop, permissions, models. Agents, slash commands, rewind, bash mode, questions, rename,
-// archive, delete, Aside and MCP are later slices: their calls answer that OpenCode 2 does not have them in claude-ui yet.
+// Has: create, list, prompt, stream, stop, permissions, models, and the read-only rules of an Aside. Agents, slash commands, rewind, bash mode, questions and MCP
+// are later slices: their calls answer that OpenCode 2 does not have them in claude-ui yet.
 import type { OpenCodeClient } from "@opencode/client";
 import { permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate } from "@claude-ui/protocol";
+import { ASIDE_NO_EDIT } from "./aside.ts";
 import { DeniedRetryError } from "./denied-retry.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 import { ascending } from "./opencode-id.ts";
@@ -12,8 +13,8 @@ import { OpenCode2Mapper, failureText, mapTool2, type Failure, type OpenCode2Mes
 import type { OpenCodeServer } from "./opencode-server.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
-/** What this version of the OpenCode 2 adapter has: no agents, commands, rewind, fork or bash mode yet. */
-export const OPENCODE2_CAPABILITIES: EngineCapabilities = { ...OPENCODE_CAPABILITIES, agents: false, rewind: false, fork: false, slashCommands: false, shell: false };
+/** What this version of the OpenCode 2 adapter has: no agents, commands, rewind or bash mode yet. `fork`: the Aside. */
+export const OPENCODE2_CAPABILITIES: EngineCapabilities = { ...OPENCODE_CAPABILITIES, agents: false, rewind: false, slashCommands: false, shell: false };
 
 /** A permission rule of OpenCode 2. */
 export type Rule2 = { action: string; resource: string; effect: "allow" | "deny" | "ask" };
@@ -27,9 +28,13 @@ export function modeRules(mode: PermissionMode): Rule2[] {
   if (mode === "bypassPermissions") return [rule("*", "allow")];
   return [rule("shell", "ask"), rule("edit", mode === "acceptEdits" ? "allow" : "ask"), rule("webfetch", "ask"), rule("websearch", "ask")];
 }
-/** The mode whose rules a session has, undefined for rules of another origin. */
+/** Last, so it wins (OpenCode 2 applies the last matching rule): a read-only Aside changes no file. `edit` is also the action of the `write` tool (checked on 2.3.0). */
+const READ_ONLY: Rule2 = rule("edit", "deny");
+/** The session's rules: its mode's, and the read-only denial of an Aside. */
+const rulesOf = (mode: PermissionMode, readOnly: boolean): Rule2[] => [...modeRules(mode), ...(readOnly ? [READ_ONLY] : [])];
+/** The mode whose rules a session has (read-only or not), undefined for rules of another origin. */
 export const modeOfRules = (rules: readonly Rule2[] | undefined): PermissionMode | undefined =>
-  (["config", "default", "acceptEdits", "bypassPermissions"] as const).find((m) => JSON.stringify(modeRules(m)) === JSON.stringify(rules ?? []));
+  (["config", "default", "acceptEdits", "bypassPermissions"] as const).find((m) => [false, true].some((ro) => JSON.stringify(rulesOf(m, ro)) === JSON.stringify(rules ?? [])));
 
 /** The unsupported-feature error of this slice: the text names the feature. */
 export const notYet = (what: string) => new Error(`OpenCode 2 does not support ${what} in claude-ui yet.`);
@@ -96,8 +101,8 @@ class OpenCode2Session implements EngineSession {
   private effort: Effort;
   staleLogin = false;
   private readonly mapper = new OpenCode2Mapper();
-  /** The mode whose rules OpenCode has for this session (undefined: not known to match any). */
-  private written: PermissionMode | undefined;
+  /** The rules OpenCode has for this session, as JSON. */
+  private written: string;
   /** The model or effort changed here since it was last sent to OpenCode (or the session was made with one). */
   private modelDirty: boolean;
   /** The pending permission requests by id: the session each belongs to (a subagent's session answers under its own id). */
@@ -138,8 +143,8 @@ class OpenCode2Session implements EngineSession {
     // Plan is OpenCode's plan agent (a later slice): a saved plan mode opens as the default mode.
     this.permissionMode = mode === "plan" || (mode === "bypassPermissions" && !opts.allowBypass) ? "default" : mode;
     this.effort = opts.effort ?? "default";
-    // A new session got its rules with `POST /api/session`; a restored one has what OpenCode kept.
-    this.written = history ? marked : this.permissionMode;
+    // A new session got its mode's rules with `POST /api/session`; a restored one has what OpenCode kept (a fork: its owner's).
+    this.written = JSON.stringify(history ? (history.rules ?? []) : modeRules(this.permissionMode));
     this.modelDirty = this.model !== "default" || this.effort !== "default";
   }
 
@@ -260,9 +265,12 @@ class OpenCode2Session implements EngineSession {
   /** Replaces the session's rules in OpenCode with the ones of `mode`. */
   private async writeRules(mode: PermissionMode) {
     const client = await this.server.client();
-    await client.session.update({ sessionID: this.id, permissions: modeRules(mode) });
-    this.written = mode;
+    const permissions = this.rules(mode);
+    await client.session.update({ sessionID: this.id, permissions });
+    this.written = JSON.stringify(permissions);
   }
+  /** The rules of `mode` for this session: read-only while it is an Aside that may not edit (aside.ts). */
+  private rules = (mode: PermissionMode) => rulesOf(mode, !!this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_EDIT.includes(t)));
 
   /** Makes OpenCode run the next prompt on the session's model and effort (`POST …/model`); only when one of them changed here. */
   private async applyModel(client: OpenCodeClient) {
@@ -308,7 +316,7 @@ class OpenCode2Session implements EngineSession {
     await this.server.streamReady();
     if (!live()) return;
     const client = await this.server.client();
-    if (this.written !== this.permissionMode) await this.writeRules(this.permissionMode);
+    if (this.written !== JSON.stringify(this.rules(this.permissionMode))) await this.writeRules(this.permissionMode);
     if (!live()) return;
     await this.applyModel(client);
     if (!live()) return;
