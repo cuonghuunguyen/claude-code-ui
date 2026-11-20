@@ -32,7 +32,7 @@ Addon giao diện tạo kiểu cho claude-ui bằng CSS. Để tìm phần tử 
 | `work-area` | Cột chứa vùng phiên và bảng dưới | | 1.5 |
 | `session-area` | Phiên đang mở: tiêu đề, dòng thời gian, ô nhập | | 1.5 |
 | `session-header` | Tiêu đề của phiên đang mở | | 1.5 |
-| `tab` | Một tab trong dải tab | `data-state`: giá trị như `session-item`; `data-active` trên tab đang mở | 1.5 |
+| `tab` | Một tab trong dải tab | `data-state`: `new`, `running`, `needs_input`, `unread`, `idle`; `data-active` trên tab đang mở | 1.5 |
 | `focus-tab` | Tab Focus | | 1.5 |
 | `terminal-tab` | Một tab terminal | | 1.5 |
 | `side-panel` | Bảng cạnh cuộc trò chuyện (tệp, thay đổi, đồ thị) | | 1.5 |
@@ -46,7 +46,7 @@ Addon giao diện tạo kiểu cho claude-ui bằng CSS. Để tìm phần tử 
 | `tool-card` | Một lần gọi công cụ | `data-status`: `pending`, `running`, `done`, `error`, `denied`, `stopped` | 1.5 |
 | `permission-panel` | Câu hỏi quyền phía trên ô nhập | | 1.5 |
 | `question-panel` | Câu hỏi của Claude phía trên ô nhập | | 1.5 |
-| `plan-window` | Một dòng cửa sổ mức dùng của đồng hồ gói | `data-level` | 1.5 |
+| `plan-window` | Một dòng cửa sổ mức dùng của đồng hồ gói | `data-level`: `ok`, `warning`, `limit` | 1.5 |
 | `prompt-box` | Ô nhập | | 1.5 |
 | `prompt-toolbar` | Hàng công cụ của ô nhập | | 1.5 |
 | `markdown-toolbar` | Thanh định dạng markdown | | 1.5 |

@@ -104,11 +104,9 @@ SDK cũng đặt `color-scheme` của trang theo chế độ sáng hoặc tối 
 
 ## Giao diện màu {#themes}
 
-Giao diện màu có bảng `light` và `dark`; bạn có thể bỏ một chế độ (như Dracula không có light), nhưng chế độ đã khai báo phải đầy đủ: cài addon có bảng màu thiếu khóa hoặc không phải `#rrggbb` sẽ thất bại và nêu khóa còn thiếu. Bảng màu có đủ các khóa sau, mỗi khóa là màu `#rrggbb`: `bg`, `card`, `side`, `fg`, `muted`, `border`, `primary`, `pfg`, `kw`, `str`, `fn`, `type`, `num`, `cmt`, `varc`, `err`, `warn`, `ok`, `info`. Giao diện hiện trong **Cài đặt › Giao diện** sau các giao diện có sẵn, chỉ khi addon của nó đang bật. Nếu bạn tắt addon khi giao diện của nó đang chọn, giao diện mặc định hiện ra đến khi bạn chọn cái khác. Diff và terminal giữ màu mặc định với giao diện của addon.
+Giao diện màu có bảng `light` và `dark`; bạn có thể bỏ một chế độ (như Dracula không có light), nhưng chế độ đã khai báo phải đầy đủ: cài addon có bảng màu thiếu khóa hoặc không phải `#rrggbb` sẽ thất bại và nêu khóa còn thiếu. Bảng màu có đủ các khóa sau, mỗi khóa là màu `#rrggbb`: `bg`, `card`, `side`, `fg`, `muted`, `border`, `primary`, `pfg`, `kw`, `str`, `fn`, `type`, `num`, `cmt`, `varc`, `err`, `warn`, `ok`, `info`. Giao diện hiện trong **Cài đặt › Giao diện** sau các giao diện có sẵn, chỉ khi addon của nó đang bật. Nếu bạn tắt addon khi giao diện của nó đang chọn, giao diện mặc định hiện ra đến khi bạn chọn cái khác. Diff và terminal giữ màu mặc định với giao diện của addon. Để tạo kiểu cho giao diện ngoài màu sắc bằng `css`, hãy chọn các [phần](addon-parts) ổn định (`[data-part="tab"]`), không chọn tên class hay `data-testid`.
 
 Giao diện màu có thể khai báo tối đa 4 `options` bật/tắt: `[{id, label, default?}]` (`id` là các từ chữ thường nối bằng `-`, tối đa 24 ký tự; `label` 1 đến 40 ký tự; thiếu `default` nghĩa là `true`). **Settings › Appearance** hiện một công tắc cho mỗi tùy chọn khi giao diện đang được chọn. Khi đó `<html>` có `data-opt-<id>="on"` hoặc `"off"` (thuộc tính của tùy chọn giao diện khác bị xóa), nên CSS của addon có thể phản ứng: `:root[data-opt-rain="off"] .rain { display: none }`.
-
-Để tạo kiểu cho giao diện ngoài màu sắc bằng `css`, hãy chọn các [phần](addon-parts) ổn định (`[data-part="tab"]`), không chọn tên class hay `data-testid`.
 
 ## Pane, băng và lệnh {#views}
 

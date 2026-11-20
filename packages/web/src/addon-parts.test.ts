@@ -5,7 +5,7 @@ import { PARTS } from "@claude-ui/protocol";
 import { expect, it } from "vitest";
 
 const dir = new URL(".", import.meta.url);
-const sources = readdirSync(dir).filter((f) => /\.tsx$/.test(f) && !/\.test\./.test(f));
+const sources = readdirSync(dir, { recursive: true }).map(String).filter((f) => /\.tsx$/.test(f) && !/\.test\./.test(f));
 
 /** Every name a source writes as `data-part="x"` or `data-part={cond ? "x" : undefined}`. */
 function used(): Set<string> {

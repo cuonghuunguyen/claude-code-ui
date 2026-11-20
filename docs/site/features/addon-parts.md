@@ -32,7 +32,7 @@ A theme addon styles claude-ui with CSS. To find the element to style, select a 
 | `work-area` | Column that holds the session area and the bottom panel | | 1.5 |
 | `session-area` | The open session: header, timeline, prompt box | | 1.5 |
 | `session-header` | Header of the open session | | 1.5 |
-| `tab` | One tab in the tab strip | `data-state`: same values as `session-item`; `data-active` on the open tab | 1.5 |
+| `tab` | One tab in the tab strip | `data-state`: `new`, `running`, `needs_input`, `unread`, `idle`; `data-active` on the open tab | 1.5 |
 | `focus-tab` | The Focus tab | | 1.5 |
 | `terminal-tab` | One terminal tab | | 1.5 |
 | `side-panel` | Panel next to the chat (files, changes, graph) | | 1.5 |
@@ -46,7 +46,7 @@ A theme addon styles claude-ui with CSS. To find the element to style, select a 
 | `tool-card` | A tool call | `data-status`: `pending`, `running`, `done`, `error`, `denied`, `stopped` | 1.5 |
 | `permission-panel` | Permission question above the prompt box | | 1.5 |
 | `question-panel` | Question from Claude above the prompt box | | 1.5 |
-| `plan-window` | One usage window row of the plan meter | `data-level` | 1.5 |
+| `plan-window` | One usage window row of the plan meter | `data-level`: `ok`, `warning`, `limit` | 1.5 |
 | `prompt-box` | The prompt box | | 1.5 |
 | `prompt-toolbar` | Toolbar row of the prompt box | | 1.5 |
 | `markdown-toolbar` | Markdown formatting toolbar | | 1.5 |
