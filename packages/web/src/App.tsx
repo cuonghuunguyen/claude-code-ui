@@ -6271,7 +6271,7 @@ function PromptBox({
     if (aside !== undefined && onAside) {
       if (!aside) return setSendError(tr("app.prompt.asideNeedsQuestion"));
       setSendError(undefined);
-      onAside(aside).catch((e: Error) => (restore(t), setSendError(tr("app.prompt.asideNotOpened", { message: e.message }))));
+      onAside(aside).catch((e: Error) => setSendError(tr("app.prompt.asideNotOpened", { message: e.message })));
       return setPastes({}), edit("");
     }
     const dialog = onDialog && dialogOf(t, commands);

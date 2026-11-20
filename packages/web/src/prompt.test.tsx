@@ -1515,13 +1515,17 @@ it("/btw alone asks for a question and opens nothing", async () => {
   expect(d.el.querySelector('[data-testid="prompt-error"]')?.textContent).toContain("Type a question after /btw");
 });
 
-it("a rejected Aside puts the text back and shows the reason", async () => {
+it("GH-908 a refused Aside shows the reason and leaves the box empty, so the next /btw is not appended to the old one", async () => {
   const onAside = vi.fn(() => Promise.reject(new Error("An aside needs a reply in this session first")));
   const d = await render({ onAside });
   await type(d.box, "/btw hi");
   await key(d.box, { key: "Enter" });
-  expect(d.box.value).toBe("/btw hi");
+  expect(d.box.value).toBe("");
   expect(d.el.querySelector('[data-testid="prompt-error"]')?.textContent).toContain("needs a reply");
+  await type(d.box, "/btw again");
+  await key(d.box, { key: "Enter" });
+  expect(onAside).toHaveBeenLastCalledWith("again");
+  expect(d.box.value).toBe("");
 });
 
 it("an Aside pane shows no Ask aside input behind its own permission card (no nested aside)", async () => {
