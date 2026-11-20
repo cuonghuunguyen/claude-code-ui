@@ -21,9 +21,10 @@ Addon giao diện tạo kiểu cho claude-ui bằng CSS. Để tìm phần tử 
 
 ## Cascade {#cascade}
 
-Tệp CSS của addon (`css` trong `addon.json`) được tải trong một lớp cascade riêng, `addon.<name>`, sau mọi style của ứng dụng. Thứ tự: `theme, base, components, utilities, host, addon`.
+Tệp CSS của addon (`css` trong `addon.json`) được tải trong một lớp cascade riêng, `addon.<name>`, sau các style của chính ứng dụng. Thứ tự: `theme, base, components, utilities, host, addon`.
 
 - Quy tắc của bạn thắng quy tắc của ứng dụng mà không cần `!important` hay bộ chọn dài. Đừng thêm `!important` chỉ để thắng ứng dụng.
+- Ngoại lệ, thư viện: style của CodeMirror (`.cm-*`, trình soạn tệp), terminal (`.xterm*`), KaTeX (`.katex*`) và bộ tô màu mã không nằm trong lớp nào, nên thắng quy tắc của bạn bất kể bộ chọn. Hãy thêm `!important` để ghi đè.
 - Ngoại lệ: khai báo có `!important` trong giao diện Neon tích hợp thắng quy tắc của bạn, và chỉ khi Neon đang được chọn.
 - Thuộc tính `style` nội tuyến của phần tử vẫn thắng lớp. Hãy thêm `!important` trong quy tắc của bạn để ghi đè.
 - Lớp riêng trong tệp của bạn vẫn dùng bình thường, ví dụ `@layer base, effects;`; chúng nằm trong `addon.<name>`.

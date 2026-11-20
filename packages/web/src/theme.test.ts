@@ -165,4 +165,10 @@ describe("index.css cascade layers", () => {
     const blocks = topLevel.filter((s) => s.kind === "@layer" && !s.prelude.includes(","));
     expect([...new Set(blocks.map((s) => s.prelude))].sort()).toEqual(["@layer base", "@layer host"]);
   });
+
+  it("a host rule on CodeMirror (.cm-*) is !important: its theme is injected unlayered and beats every layer", () => {
+    const rules = [...css.matchAll(/^[^\s@/][^{\n]*\.cm-[^{]*\{([^}]*)\}/gm)];
+    expect(rules.length).toBeGreaterThan(0);
+    for (const r of rules) for (const d of r[1]!.split(";").filter((x) => x.trim() && !x.includes("/*"))) expect(d, d).toContain("!important");
+  });
 });
