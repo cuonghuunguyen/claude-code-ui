@@ -332,6 +332,10 @@ export class ClaudeSession implements EngineSession {
   private commandsAsked = false;
   /** After a failed load no new throwaway starts before this time (ms). */
   private commandsRetryAt = 0;
+  /** The env of this session's CLI processes: the Project's Claude account when it sets one, else the daemon's. */
+  private cliEnv() {
+    return this.opts.claudeEnv?.(this.cwd) ?? claudeEnv();
+  }
   constructor(
     private readonly session: Session,
     private readonly opts: SessionOpts,
@@ -633,7 +637,7 @@ export class ClaudeSession implements EngineSession {
           CLAUDE_CODE_ENABLE_TODO_TOOLS: "1",
           CLAUDE_CODE_ENABLE_TASKS: "0",
           CLAUDE_CODE_ARTIFACT: "1",
-          ...claudeEnv(),
+          ...this.cliEnv(),
           // The CLI's fork gate (CLI 2.1.285, undocumented): unset it is on only for an interactive CLI. Explicit "0" so an inherited value cannot turn it on.
           CLAUDE_CODE_FORK_SUBAGENT: this.opts.fork?.() ? "1" : "0",
           ...(this.bashPinned ? { CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: "1" } : {}),
@@ -984,7 +988,7 @@ export class ClaudeSession implements EngineSession {
         emit: (p) => this.session.emit(p),
         canUseTool: (tool, input, o, bridge) => this.askPermission(tool, input, o, bridge),
         gitDirty,
-        env: () => claudeEnv(),
+        env: () => this.cliEnv(),
         runs: this.inlineRuns,
         transcript: (toolUseId, title) => {
           const dir = this.opts.subagentsDir?.(this.id, this.cwd);

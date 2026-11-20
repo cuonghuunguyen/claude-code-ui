@@ -36,7 +36,7 @@ const parse = (raw: unknown): Store => {
 const hashOf = (s: string) => createHash("sha256").update(s).digest("hex");
 const labelOk = (l: unknown): l is string => typeof l === "string" && l.length >= 1 && l.length <= 100 && !/[\0-\x1f\x7f]/.test(l);
 
-export function createLocalHistory(opts: { dir: string; settings: () => { enabled: boolean; exclude: string[] }; allowed: (path: string) => string | undefined; now?: () => number }) {
+export function createLocalHistory(opts: { dir: string; settings: (path: string) => { enabled: boolean; exclude: string[] }; allowed: (path: string) => string | undefined; now?: () => number }) {
   const now = opts.now ?? Date.now;
   const queue: Item[] = [];
   let pendingBytes = 0;
@@ -48,11 +48,11 @@ export function createLocalHistory(opts: { dir: string; settings: () => { enable
     const dir = join(opts.dir, createHash("sha256").update(path).digest("hex").slice(0, 16));
     return { dir, json: createJsonFile<Store>(join(dir, "entries.json"), parse, "local history") };
   };
-  const excluded = (path: string) => {
+  const excluded = (path: string, exclude: string[]) => {
     // matchesGlob lets `**` skip dot folders only if the glob names them: hide the dots on both sides (.claude/worktrees/..).
     const hide = (x: string) => x.replaceAll("\\", "/").replaceAll("/.", "/\u0001");
     const p = hide(path);
-    return opts.settings().exclude.some((g) => matchesGlob(p, hide(g)));
+    return exclude.some((g) => matchesGlob(p, hide(g)));
   };
   const known = (path: string) => {
     const p = opts.allowed(path);
@@ -122,9 +122,10 @@ export function createLocalHistory(opts: { dir: string; settings: () => { enable
      */
     before(path: string, reason: HistoryReason, content?: string) {
       try {
-        const s = opts.settings();
-        const p = s.enabled ? opts.allowed(path) : undefined;
-        if (!p || excluded(p)) return;
+        const p = opts.allowed(path);
+        // The Project of the file decides (Project override of `enabled`), looked up on the resolved path.
+        const s = p ? opts.settings(p) : undefined;
+        if (!p || !s?.enabled || excluded(p, s.exclude)) return;
         const text = content ?? readDisk(p);
         if (text === undefined || Buffer.byteLength(text) > MAX_BYTES) return;
         if (queue.length >= MAX_PENDING || pendingBytes + text.length > MAX_PENDING_BYTES) {

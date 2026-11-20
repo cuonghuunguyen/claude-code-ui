@@ -69,4 +69,21 @@ describe("settings area", () => {
     expect(claudeLoginChanged).toHaveBeenCalledTimes(1);
     expect(sent.some((m) => m.type === "settings_changed")).toBe(true);
   });
+
+  it("a Project override naming an unknown Claude account is refused and not saved", async () => {
+    const { ctx, call } = setup(true);
+    expect(await call("settings.set", { patch: { projects: { overrides: { local: { "/p": { account: "nope" } } } } } })).toMatchObject({ type: "error", code: "bad_settings" });
+    expect(ctx.appSettings.get().projects.overrides).toEqual({});
+  });
+
+  it("removing a Claude account clears it from every Project override in the same write; other overrides stay", async () => {
+    const { ctx, call } = setup(true);
+    await call("claude.account.add", { name: "work", token: "sk-ant-oat01-abc" });
+    await call("claude.account.add", { name: "home", token: "sk-ant-oat01-def" });
+    const [work, home] = ctx.secrets.claudeAccounts().map((a) => a.id) as [string, string];
+    const patch = { projects: { overrides: { local: { "/a": { account: work, mode: "plan" }, "/b": { account: work }, "/c": { account: home } } } } };
+    expect(await call("settings.set", { patch })).toMatchObject({ type: "reply" });
+    await call("claude.account.remove", { id: work });
+    expect(ctx.appSettings.get().projects.overrides).toEqual({ local: { "/a": { mode: "plan" }, "/c": { account: home } } });
+  });
 });

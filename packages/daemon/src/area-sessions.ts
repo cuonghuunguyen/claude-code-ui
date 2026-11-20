@@ -97,7 +97,7 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     // A removal may have started during the awaits: no live session in a deleted directory.
     if (!s) return r.fail("worktree_removing", "This worktree is being removed");
     if (draft) remember(firstSend.byDraft, draft, s.id);
-    rememberEngine(catalogue.engine.name);
+    rememberEngine(catalogue.engine.name, cwd);
     return r.reply({ session: s.info() });
   };
   const defaultMode = async (msg: Msg<"session.defaultMode">, r: Respond) => {

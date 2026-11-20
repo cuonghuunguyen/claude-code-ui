@@ -3,12 +3,16 @@
 import { isAbsolute } from "node:path";
 import { createJsonFile } from "./json-file.ts";
 import { marksOk } from "./back-marks.ts";
-import { ENGINES, parseEditorCommand, APP_ICON_MAX, COMMIT_INSTRUCTION_MAX, AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, jiraUrlProblem, LABEL_EMOJI_MAX, LABEL_ENTRIES_MAX, LABEL_ICON_MAX, LABEL_NAME_MAX, PARENT_FOLDER_MODES, SESSION_MODES, WORKER_MODES, type BackMark, type Settings, type SettingsPatch } from "@claude-ui/protocol";
+import { EFFORTS, ENGINES, parseEditorCommand, PROJECT_OVERRIDES_SIDES_MAX, APP_ICON_MAX, COMMIT_INSTRUCTION_MAX, AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, jiraUrlProblem, LABEL_EMOJI_MAX, LABEL_ENTRIES_MAX, LABEL_ICON_MAX, LABEL_NAME_MAX, PARENT_FOLDER_MODES, SESSION_MODES, WORKER_MODES, type BackMark, type ProjectOverrides, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 
-export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {}, commitMessageWarm: false }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } };
+export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {}, commitMessageWarm: false }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, projects: { overrides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } };
 
-/** `patch`: a stricter rule for a new value only; a stored value that fails it is kept (and refused at use), never emptied. */
-type Check = { valid: (v: unknown) => boolean; label: string; rule: string; patch?: (v: unknown) => boolean; patchRule?: string };
+/**
+ * `patch`: a stricter rule for a new value only; a stored value that fails it is kept (and refused at use), never emptied.
+ * `stored`: reads a stored value that may be partly invalid and returns what is usable (instead of `valid` all or nothing).
+ * `normalize`: the form a valid patched value is stored in.
+ */
+type Check = { valid: (v: unknown) => boolean; label: string; rule: string; patch?: (v: unknown) => boolean; patchRule?: string; stored?: (v: unknown) => unknown; normalize?: (v: unknown) => unknown };
 const jiraUrl = (v: unknown) => {
   if (typeof v !== "string" || v.length > 500) return false;
   try {
@@ -51,6 +55,65 @@ const instructions = (label: string): Check => ({
   valid: (v) => isObj(v) && Object.keys(v).length <= LABEL_ENTRIES_MAX && Object.entries(v).every(([k, t]) => k.length >= 1 && k.length <= 4096 && !k.includes("\0") && instruction(t, 1)),
   label,
   rule: `at most ${LABEL_ENTRIES_MAX} entries of 1 to ${COMMIT_INSTRUCTION_MAX} characters`,
+});
+const overrideText = (c: Check) => (v: unknown) => v !== "" && c.valid(v);
+/** One Project's overrides: only known fields, each under the rule of its global setting for a new value, an empty string is not a value (unset = absent). */
+const overridesOk = (o: unknown): o is ProjectOverrides => {
+  if (!isObj(o)) return false;
+  const fields: Record<string, (v: unknown) => boolean> = {
+    engine: CHECKS.sessions.engine.valid,
+    model: (v) => typeof v === "string" && v.length >= 1 && v.length <= 200 && !/[\0-\x1f\x7f]/.test(v),
+    effort: (v) => (EFFORTS as unknown[]).includes(v),
+    // A mode of the daemon's list (SESSION_MODES has no bypassPermissions): the daemon's allow-bypass flag is never an override.
+    mode: CHECKS.sessions.defaultMode.valid,
+    account: CHECKS.claude.account.valid,
+  };
+  const groups: Record<string, Record<string, (v: unknown) => boolean>> = {
+    inlineTask: { model: overrideText(CHECKS.inlineTask.model), openCodeModel: overrideText(CHECKS.inlineTask.openCodeModel) },
+    history: { enabled: CHECKS.history.enabled.valid },
+    jira: { url: overrideText({ ...CHECKS.jira.url, valid: CHECKS.jira.url.patch ?? CHECKS.jira.url.valid }), email: overrideText(CHECKS.jira.email), jql: overrideText(CHECKS.jira.jql), template: overrideText(CHECKS.jira.template) },
+  };
+  return Object.entries(o).every(([k, v]) => {
+    if (v === undefined) return true;
+    if (Object.hasOwn(fields, k)) return fields[k]!(v);
+    const g = Object.hasOwn(groups, k) ? groups[k] : undefined;
+    return !!g && isObj(v) && Object.entries(v).every(([f, x]) => x === undefined || (Object.hasOwn(g, f) && g[f]!(x)));
+  });
+};
+/** Without the fields that are unset (undefined) or empty groups; undefined when nothing is left. */
+const pruneOverrides = (o: ProjectOverrides): ProjectOverrides | undefined => {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(o)) {
+    if (v === undefined) continue;
+    if (isObj(v)) {
+      const g = Object.fromEntries(Object.entries(v).filter(([, x]) => x !== undefined));
+      if (Object.keys(g).length) out[k] = g;
+    } else out[k] = v;
+  }
+  return Object.keys(out).length ? (out as ProjectOverrides) : undefined;
+};
+const keyOk = (k: string) => k.length >= 1 && k.length <= 4096 && !k.includes("\0");
+/** `Object.fromEntries` creates own properties: a key "__proto__" never reaches a prototype. */
+const overridesMap = (v: Record<string, unknown>, keep: (o: unknown) => boolean): Record<string, Record<string, ProjectOverrides>> =>
+  Object.fromEntries(
+    Object.entries(v)
+      .filter(([side, projects]) => keyOk(side) && isObj(projects))
+      .slice(0, PROJECT_OVERRIDES_SIDES_MAX)
+      .map(([side, projects]) => [side, Object.fromEntries(Object.entries(projects as Record<string, unknown>).filter(([cwd, o]) => keyOk(cwd) && keep(o)).slice(0, LABEL_ENTRIES_MAX).map(([cwd, o]) => [cwd, pruneOverrides(o as ProjectOverrides)]).filter((e): e is [string, ProjectOverrides] => !!e[1]))] as const)
+      .filter(([, projects]) => Object.keys(projects).length),
+  );
+// shortcut: the whole map is one setting and a patch replaces it (see labels); split into per-key patches if two browsers collide.
+const overrides = (label: string): Check => ({
+  valid: (v) =>
+    isObj(v) &&
+    Object.keys(v).length <= PROJECT_OVERRIDES_SIDES_MAX &&
+    Object.entries(v).every(([side, projects]) => keyOk(side) && isObj(projects) && Object.keys(projects).length <= LABEL_ENTRIES_MAX && Object.entries(projects).every(([cwd, o]) => keyOk(cwd) && overridesOk(o))),
+  label,
+  rule: `at most ${PROJECT_OVERRIDES_SIDES_MAX} machines with at most ${LABEL_ENTRIES_MAX} projects each, a project holding only known fields of valid values`,
+  // A hand-edited entry that fails drops alone; the others stay.
+  // The rule of a new value too: the whole map is written back on every change, and one entry a patch would refuse would refuse every later write (overrides have no legacy values).
+  stored: (v) => (isObj(v) ? overridesMap(v, (o) => overridesOk(o)) : undefined),
+  normalize: (v) => overridesMap(v as Record<string, unknown>, () => true),
 });
 const intIn = (label: string, min: number, max: number): Check => ({ valid: (v) => Number.isInteger(v) && (v as number) >= min && (v as number) <= max, label, rule: `a whole number from ${min} to ${max}` });
 /** Per field: is `v` valid. A stored field that fails falls back to its default; a patched one is refused with "<label> must be <rule>". */
@@ -120,6 +183,7 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
     open: bool("Open browser at start"),
   },
   labels: { projects: labels("Project names and icons"), sides: labels("Machine names and icons") },
+  projects: { overrides: overrides("Project overrides") },
   editor: {
     command: { valid: (v) => v === "" || (typeof v === "string" && v.length <= 1024 && !/[\0\r\n]/.test(v) && !!parseEditorCommand(v)[0]), label: "Editor command", rule: "one line, at most 1024 characters, with a program first and balanced quotes" },
     name: { valid: (v) => v === "" || nameOk(v), label: "Editor name", rule: `empty or 1 to ${LABEL_NAME_MAX} characters, not only spaces, without control characters` },
@@ -153,6 +217,8 @@ export const SETTINGS_SCOPE: { [S in keyof Settings]: "synced" | "hub" } = {
   git: "synced",
   // The start options of this machine's claude-ui (a later manual start there would use them).
   launcher: "hub",
+  // A Side gets only its own entries, without the Claude account (`sideSettings`).
+  projects: "synced",
   labels: "synced",
   // The command runs on the Hub's desktop only.
   editor: "hub",
@@ -160,9 +226,28 @@ export const SETTINGS_SCOPE: { [S in keyof Settings]: "synced" | "hub" } = {
   back: "hub",
   app: "synced",
 };
-/** The sections of `settings` a Side gets (`SETTINGS_SCOPE` "synced"). */
-export function sideSettings(settings: Settings): SettingsPatch {
-  return Object.fromEntries(Object.entries(settings).filter(([section]) => SETTINGS_SCOPE[section as keyof Settings] === "synced"));
+/** The Claude account ids the overrides name (any Side). */
+export const overrideAccounts = (overrides: Settings["projects"]["overrides"]): string[] => Object.values(overrides).flatMap((projects) => Object.values(projects).flatMap((o) => (o.account === undefined ? [] : [o.account])));
+/** `overrides` without the Claude account `id` (a removed account), emptied entries pruned; undefined when none names it. */
+export function withoutOverrideAccount(overrides: Settings["projects"]["overrides"], id: string): Settings["projects"]["overrides"] | undefined {
+  if (!overrideAccounts(overrides).includes(id)) return undefined;
+  return overridesMap(
+    Object.fromEntries(Object.entries(overrides).map(([side, projects]) => [side, Object.fromEntries(Object.entries(projects).map(([cwd, o]) => [cwd, o.account === id ? { ...o, account: undefined } : o]))])),
+    () => true,
+  );
+}
+/**
+ * The sections of `settings` the Side `sideId` gets (`SETTINGS_SCOPE` "synced"). Of `projects.overrides` it gets only its own
+ * entries, as `local` (it reads its own as local), and never the Claude account: an account id is unknown there.
+ */
+export function sideSettings(settings: Settings, sideId: string): SettingsPatch {
+  const own = Object.hasOwn(settings.projects.overrides, sideId) ? settings.projects.overrides[sideId]! : {};
+  const projects = Object.fromEntries(
+    Object.entries(own)
+      .map(([cwd, o]) => [cwd, pruneOverrides({ ...o, account: undefined })] as const)
+      .filter((e): e is [string, ProjectOverrides] => !!e[1]),
+  );
+  return { ...Object.fromEntries(Object.entries(settings).filter(([section]) => SETTINGS_SCOPE[section as keyof Settings] === "synced")), projects: { overrides: Object.keys(projects).length ? { local: projects } : {} } };
 }
 const same = (a: unknown, b: unknown) => (Array.isArray(a) ? Array.isArray(b) && a.length === b.length && a.every((x, i) => x === b[i]) : isObj(a) ? JSON.stringify(a) === JSON.stringify(b) : a === b);
 // Entries are replaced, never mutated: a shallow copy of a map is enough.
@@ -186,7 +271,10 @@ function parseStored(raw: unknown): Stored {
     if (!isObj(sec)) continue;
     for (const k of Object.keys(checks[s]!)) {
       const v = own(sec, k);
-      if (checks[s]![k]!.valid(v) && !same(v, defaults[s]![k])) (out[s] ??= {})[k] = copy(v);
+      const c = checks[s]![k]!;
+      // `stored` keeps the usable part of a partly invalid value.
+      const use = c.stored ? c.stored(v) : c.valid(v) ? v : undefined;
+      if (use !== undefined && !same(use, defaults[s]![k])) (out[s] ??= {})[k] = copy(use);
     }
   }
   return out;
@@ -233,8 +321,9 @@ export function createSettings({ file }: { file?: string } = {}) {
           for (const k of Object.keys(checks[s]!)) {
             if (!Object.hasOwn(sec, k)) continue;
             // A default value is not stored: the field follows the default again.
-            if (same(sec[k], defaults[s]![k])) delete d[s]?.[k];
-            else (d[s] ??= {})[k] = copy(sec[k]);
+            const v = checks[s]![k]!.normalize ? checks[s]![k]!.normalize!(sec[k]) : sec[k];
+            if (same(v, defaults[s]![k])) delete d[s]?.[k];
+            else (d[s] ??= {})[k] = copy(v);
           }
         }
       });

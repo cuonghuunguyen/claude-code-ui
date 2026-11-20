@@ -2,13 +2,13 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, it, vi } from "vitest";
-import { checkPatch, createSettings, DEFAULTS, parseSettings } from "../src/settings.ts";
+import { checkPatch, createSettings, DEFAULTS, parseSettings, sideSettings } from "../src/settings.ts";
 
 const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {}, commitMessageWarm: false };
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, launcher: DEFAULTS.launcher, labels: { projects: {}, sides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, launcher: DEFAULTS.launcher, labels: { projects: {}, sides: {} }, projects: { overrides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
@@ -449,4 +449,50 @@ it("inlineTask defaults, saves and refuses bad values (GH-734)", () => {
   expect(() => s.set({ inlineTask: { model: "" } })).toThrow("Inline task model must be");
   expect(() => s.set({ inlineTask: { openCodeModel: "nomodel" } })).toThrow("Inline task OpenCode model must be");
   expect(() => s.set({ inlineTask: { enabled: 1 as never } })).toThrow("Inline tasks must be on or off");
+});
+
+it("projects.overrides: a patch with an invalid override is refused with the field's message; valid ones are stored without empty entries", () => {
+  const s = createSettings({ file: file() });
+  const bad: [unknown, RegExp][] = [
+    [{ local: { "/p": { engine: "gpt" } } }, /Project overrides must be/],
+    [{ local: { "/p": { mode: "bypassPermissions" } } }, /Project overrides must be/],
+    [{ local: { "/p": { jira: { url: "http://jira.example.com" } } } }, /Project overrides must be/],
+    [{ local: { "/p": { jira: { url: "" } } } }, /Project overrides must be/],
+    [{ local: { "/p": { unknown: 1 } } }, /Project overrides must be/],
+    [{ local: { "/p": { history: { exclude: [] } } } }, /Project overrides must be/],
+    [{ local: { "": { mode: "plan" } } }, /Project overrides must be/],
+    [{ local: { "/p": { effort: "huge" } } }, /Project overrides must be/],
+  ];
+  for (const [overrides, message] of bad) expect(() => s.set({ projects: { overrides: overrides as never } })).toThrow(message);
+  const next = s.set({ projects: { overrides: { local: { "/p": { mode: "plan", account: "", history: { enabled: false } }, "/empty": { history: {} } }, "ssh:box": {} } } });
+  expect(next.projects.overrides).toEqual({ local: { "/p": { mode: "plan", account: "", history: { enabled: false } } } });
+  expect(s.set({ projects: { overrides: {} } }).projects.overrides).toEqual({});
+});
+
+it("projects.overrides: one invalid stored entry is dropped, the others stay", () => {
+  const f = file();
+  writeFileSync(f, JSON.stringify({ projects: { overrides: { local: { "/ok": { mode: "plan" }, "/bypass": { mode: "bypassPermissions" }, "/junk": "x", "/mixed": { engine: "nope", model: "m" }, "/http": { jira: { url: "http://jira.example.com" } } }, "ssh:box": { "/b": { effort: "high" } } } } }));
+  const stored = createSettings({ file: f }).get();
+  expect(stored.projects.overrides).toEqual({ local: { "/ok": { mode: "plan" } }, "ssh:box": { "/b": { effort: "high" } } });
+  // What is kept is always a valid patch: a Hub sync and every later whole-map write pass.
+  expect(checkPatch({ projects: stored.projects })).toBeUndefined();
+  expect(checkPatch(sideSettings(stored, "ssh:box"))).toBeUndefined();
+});
+
+it("sideSettings: a Side gets only its own project overrides as local, never the Claude account or another Side's entries (contract)", () => {
+  const s = parseSettings({
+    projects: {
+      overrides: {
+        local: { "/hub": { mode: "plan", account: "hub-token" } },
+        "ssh:box": { "/box": { mode: "acceptEdits", account: "hub-token", history: { enabled: false } }, "/only-account": { account: "cli" } },
+        "wsl:Ubuntu": { "/wsl": { engine: "opencode" } },
+      },
+    },
+  });
+  const patch = sideSettings(s, "ssh:box") as { projects: unknown; claude?: unknown };
+  expect(patch.projects).toEqual({ overrides: { local: { "/box": { mode: "acceptEdits", history: { enabled: false } } } } });
+  expect(JSON.stringify(patch)).not.toMatch(/hub-token|"\/hub"|\/wsl|\/only-account/);
+  expect(patch.claude).toBeUndefined();
+  expect(sideSettings(s, "docker:none")).toMatchObject({ projects: { overrides: {} } });
+  expect(checkPatch(patch)).toBeUndefined();
 });

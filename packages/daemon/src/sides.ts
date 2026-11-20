@@ -1516,15 +1516,20 @@ export function createRouter(opts: {
   sides.addRouter(router);
   sides.ready().forEach((id) => router.attach(id));
 
-  /** The hub's app settings (but its launcher options) on a Hub it started: a coordinator there gets the same orchestration settings. */
+  /** The hub's app settings (but its launcher options, its Claude account and other Sides' project overrides) on a Hub it started: a coordinator there gets the same orchestration settings. */
   async function syncSettings(id: string, settings?: Settings) {
     if (!settings) {
       const r = await opts.localCall({ type: "settings.get", reqId: "" } as ClientMessage);
       if (r.type !== "reply") return;
       settings = (r.result as SettingsResult).settings;
     }
-    const patch = sideSettings(settings);
-    await sideCall(id, { type: "settings.set", patch, reqId: "" } as ClientMessage);
+    const patch = sideSettings(settings, id);
+    const r = await sideCall(id, { type: "settings.set", patch, reqId: "" } as ClientMessage);
+    // A Side of an older version refuses the whole patch for the unknown section: send the rest.
+    if (r.type === "error" && /unknown setting projects/.test(r.message)) {
+      const { projects: _projects, ...rest } = patch;
+      await sideCall(id, { type: "settings.set", patch: rest, reqId: "" } as ClientMessage);
+    }
   }
 
   /**

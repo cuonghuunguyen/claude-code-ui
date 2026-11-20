@@ -6,6 +6,7 @@ import { deleteSession, forkSession, getSessionInfo, listSessions, renameSession
 import { asideForkPoint } from "./aside.ts";
 import { claudeEngine } from "./claude-engine.ts";
 import { readDefaultMode } from "./default-mode.ts";
+import { projectOverrides } from "./project-overrides.ts";
 import { isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type ListCtx } from "./engine-catalogue.ts";
 import { lastEntryTime, mapLimit } from "./session-scan.ts";
 import { Session, transcriptModel, type SessionSettings, type Transcript } from "./session.ts";
@@ -131,9 +132,13 @@ export function createClaudeCatalogue(ctx: CatalogueContext, d: ClaudeDeps): Eng
     return prompt.text;
   }
 
-  /** `permissions.defaultMode` of the Claude settings for `cwd`, else Settings `sessions.defaultMode`, when this daemon offers it for `model` (bypass needs the daemon flag, auto a model with support). */
+  /**
+   * The Project's `mode` override, else `permissions.defaultMode` of the Claude settings for `cwd`, else Settings `sessions.defaultMode`,
+   * when this daemon offers it for `model` (bypass needs the daemon flag, auto a model with support): an override never widens that list.
+   */
   const defaultModeFor = async (cwd: string, model = "default") => {
-    const mode = readDefaultMode(d.claudeDir, cwd, await d.localFiles(cwd)) ?? ctx.appSettings.get().sessions.defaultMode;
+    const settings = ctx.appSettings.get();
+    const mode = projectOverrides(settings, cwd).mode ?? readDefaultMode(d.claudeDir, cwd, await d.localFiles(cwd)) ?? settings.sessions.defaultMode;
     return permissionModesFor({ allowBypass: ctx.allowBypass, supportsAuto: d.supportsAuto(model) }).find((m) => m === mode);
   };
 
