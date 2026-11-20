@@ -17,6 +17,8 @@ import { EFFORT_LABEL, MODE_LABEL } from "./toolbar.tsx";
 const GLOBAL = "__global__";
 const DEFAULT_ACCOUNT = "__default__";
 const CONTROL = "w-44 max-md:w-full";
+// Text fields show "Global (<value>)" as placeholder: a URL or template needs more than a select.
+const TEXT_CONTROL = "w-72 max-md:w-full";
 const INPUT = "h-8 min-w-0 rounded-md border bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:h-11";
 
 type Option = { value: string; label: string };
@@ -41,7 +43,8 @@ type Props = {
   onClose: () => void;
 };
 
-type Ui = { busy: boolean; error?: { id: string; message: string }; save: (id: string, change: Change) => void };
+/** `save` resolves true when the daemon took the change. */
+type Ui = { busy: boolean; error?: { id: string; message: string }; save: (id: string, change: Change) => Promise<boolean> };
 type Ids = { labelId: string; describedBy: string };
 
 /** One row: label, hint, control, status and reset. `set`: the Project sets this field. */
@@ -62,7 +65,7 @@ function Row({ ui, id, label, hint, set, reset, children }: { ui: Ui; id: string
           <button
             type="button"
             disabled={!set || ui.busy}
-            onClick={() => ui.save(id, reset)}
+            onClick={() => void ui.save(id, reset)}
             aria-label={t("projectSettings.reset", { field: label })}
             title={t("projectSettings.reset", { field: label })}
             className={`grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-faint outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:size-11 ${set ? "" : "invisible"}`}
@@ -104,14 +107,15 @@ function Choice({ ui, id, value, globalValue, options, onChange, p }: { ui: Ui; 
 }
 
 /** Text field: empty = unset; the global value is the placeholder. Saved on Enter or blur. */
-function TextField({ ui, id, value, globalValue, onSave, p }: { ui: Ui; id: string; value: string | undefined; globalValue: string; onSave: (v: string | undefined) => void; p: Ids }) {
+function TextField({ ui, id, value, globalValue, onSave, p }: { ui: Ui; id: string; value: string | undefined; globalValue: string; onSave: (v: string | undefined) => Promise<boolean>; p: Ids }) {
   const t = useT();
   const [text, setText] = useState<string>();
-  const commit = () => {
+  // A refused value stays in the input next to the daemon's message, so the user can correct it instead of retyping.
+  const placeholder = t("projectSettings.globalValue", { value: globalValue || t("projectSettings.none") });
+  const commit = async () => {
     if (text === undefined) return;
     const next = text.trim();
-    setText(undefined);
-    if (next !== (value ?? "")) onSave(next || undefined);
+    if (next === (value ?? "") || (await onSave(next || undefined))) setText(undefined);
   };
   return (
     <input
@@ -122,12 +126,13 @@ function TextField({ ui, id, value, globalValue, onSave, p }: { ui: Ui; id: stri
       autoCapitalize="off"
       autoComplete="off"
       value={text ?? value ?? ""}
-      placeholder={t("projectSettings.globalValue", { value: globalValue || t("projectSettings.none") })}
+      placeholder={placeholder}
       disabled={ui.busy}
       onChange={(e) => setText(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => e.key === "Enter" && !isImeKey(e.nativeEvent) && (e.preventDefault(), commit())}
-      className={`${INPUT} ${CONTROL}`}
+      onBlur={() => void commit()}
+      onKeyDown={(e) => e.key === "Enter" && !isImeKey(e.nativeEvent) && (e.preventDefault(), void commit())}
+      title={placeholder}
+      className={`${INPUT} ${TEXT_CONTROL}`}
       data-testid={`${id}-input`}
     />
   );
@@ -164,20 +169,22 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
     if (open && settings) loadModels(engine);
   }, [open, !!settings, engine]);
 
-  const save = async (id: string, change: Change) => {
+  const save = async (id: string, change: Change): Promise<boolean> => {
     setBusy(true);
     try {
       const patch = { projects: { overrides: setOverride(all, side, cwd, change) } } as SettingsPatch;
       take(await ask.current<SettingsResult>({ type: "settings.set", patch }));
       setFieldError(undefined);
+      return true;
     } catch (e) {
       setFieldError({ id, message: (e as Error).message });
+      return false;
     } finally {
       setBusy(false);
     }
   };
 
-  const ui: Ui = { busy, error: fieldError, save: (id, change) => void save(id, change) };
+  const ui: Ui = { busy, error: fieldError, save };
   const section = (id: string, title: string, rows: ReactNode) => (
     <section aria-labelledby={`project-settings-${id}`} className="flex flex-col" data-testid={`project-settings-${id}`}>
       <h3 id={`project-settings-${id}`} className="pb-1 font-medium text-[13px] text-muted-foreground">

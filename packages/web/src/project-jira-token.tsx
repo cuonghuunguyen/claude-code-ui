@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import type { Request } from "./client.ts";
 import { useT } from "./i18n.ts";
 import { isImeKey } from "./ime.ts";
+import { ConfirmDialog } from "./session-actions.tsx";
 import { jiraOriginOf } from "./project-settings.ts";
 
 const INPUT = "h-8 min-w-0 flex-1 rounded-md border bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:h-11";
@@ -34,6 +35,8 @@ export function ProjectJiraToken({ project, url, own, cloud, tokenSet, sharedWit
   const [replacing, setReplacing] = useState(false);
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
   const [error, setError] = useState<string>();
   const [test, setTest] = useState<{ ok: boolean; text: string }>();
   const origin = jiraOriginOf(url);
@@ -55,6 +58,7 @@ export function ProjectJiraToken({ project, url, own, cloud, tokenSet, sharedWit
   };
   const testConnection = async () => {
     setBusy(true);
+    setTesting(true);
     setTest(undefined);
     try {
       const r = await request<{ user: string }>({ type: "jira.test", project });
@@ -63,6 +67,7 @@ export function ProjectJiraToken({ project, url, own, cloud, tokenSet, sharedWit
       setTest({ ok: false, text: (e as Error).message });
     } finally {
       setBusy(false);
+      setTesting(false);
     }
   };
 
@@ -85,7 +90,7 @@ export function ProjectJiraToken({ project, url, own, cloud, tokenSet, sharedWit
           <Button variant="outline" size="sm" className={BUTTON} disabled={busy} onClick={() => setReplacing(true)} data-testid="project-jira-token-replace">
             {t("jira.replace")}
           </Button>
-          <Button variant="destructive" size="sm" className={BUTTON} disabled={busy} onClick={() => void save(null)} data-testid="project-jira-token-clear">
+          <Button variant="destructive" size="sm" className={BUTTON} disabled={busy} onClick={() => (sharedWith ? setConfirmClear(true) : void save(null))} data-testid="project-jira-token-clear">
             {t("jira.clear")}
           </Button>
         </div>
@@ -127,7 +132,7 @@ export function ProjectJiraToken({ project, url, own, cloud, tokenSet, sharedWit
       )}
       <div className="flex flex-wrap items-center gap-2 pt-1">
         <Button variant="outline" size="sm" className={BUTTON} disabled={busy || !tokenSet} onClick={() => void testConnection()} data-testid="project-jira-test">
-          {busy && <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" aria-hidden />}
+          {testing && <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" aria-hidden />}
           {t("jira.test")}
         </Button>
         {test && (
@@ -136,6 +141,16 @@ export function ProjectJiraToken({ project, url, own, cloud, tokenSet, sharedWit
           </span>
         )}
       </div>
+      <ConfirmDialog
+        open={confirmClear}
+        title={t("projectSettings.jira.clearTitle", { origin })}
+        description={t("projectSettings.jira.clearBody", { with: sharedWith })}
+        confirm={t("jira.clear")}
+        destructive
+        testId="project-jira-clear"
+        onCancel={() => setConfirmClear(false)}
+        onConfirm={() => (setConfirmClear(false), void save(null))}
+      />
     </div>
   );
 }

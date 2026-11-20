@@ -18,12 +18,15 @@ const MODELS: ModelInfo[] = [
   { value: "opus", displayName: "Opus", description: "" },
 ];
 
-async function render({ side = "local", overrides = {}, refuse, tokens }: { side?: string; overrides?: Settings["projects"]["overrides"]; refuse?: string; tokens?: string[] } = {}) {
+async function render({ side = "local", overrides = {}, refuse, tokens, hold }: { side?: string; overrides?: Settings["projects"]["overrides"]; refuse?: string; tokens?: string[]; hold?: string } = {}) {
+  let release = () => {};
+  const held = new Promise<void>((r) => (release = r));
   let saved = tokens;
   let settings = { jira: { url: "https://acme.atlassian.net", email: "ann@example.com", template: "{type}/{key}", jql: "" }, sessions: { defaultMode: "plan", engine: "claude" }, inlineTask: { model: "haiku", openCodeModel: "" }, history: { enabled: true, exclude: [] }, claude: { account: "" }, projects: { overrides } } as unknown as Settings;
   const calls: Request[] = [];
   const request = vi.fn(async (msg: Request) => {
     calls.push(msg);
+    if (msg.type === hold) await held;
     if (msg.type === "settings.set") {
       if (refuse) throw new Error(refuse);
       settings = { ...settings, projects: { overrides: (msg.patch as { projects: Settings["projects"] }).projects.overrides } };
@@ -46,7 +49,7 @@ async function render({ side = "local", overrides = {}, refuse, tokens }: { side
   const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
   const requests = (type: string) => calls.filter((c) => c.type === type);
   const patches = () => calls.filter((c) => c.type === "settings.set").map((c) => (c as { patch: { projects: Settings["projects"] } }).patch.projects.overrides);
-  return { q, patches, loadModels, requests };
+  return { q, patches, loadModels, requests, release: () => act(async () => release()) };
 }
 const click = (el: HTMLElement | null | undefined) => act(async () => el!.click());
 
@@ -202,7 +205,7 @@ it("Jira: the token of a Project's own URL is saved, tested and cleared for that
 it("Jira: a Project on a Side sends its Side id; a token shared with the global settings or other Projects says so", async () => {
   const overrides = { "ssh:box": { "/p": { jira: { url: "https://jira.example.com/a" } } }, local: { "/x": { jira: { url: "https://jira.example.com/b" } } }, "wsl:U": { "/y": { jira: { url: GLOBAL_ORIGIN } }, "/z": { jira: { url: "https://other.example.com" } } } };
   const { q, requests } = await render({ side: "ssh:box", overrides, tokens: [] });
-  expect(q("project-jira-token-shared")!.textContent).toContain("1 other");
+  expect(q("project-jira-token-shared")!.textContent).toContain("1 other project.");
   await typeInto("project-jira-token", "tok");
   await click(q("project-jira-token-save"));
   expect(requests("jira.token")[0]).toMatchObject({ project: { side: "ssh:box", cwd: "/p" } });
@@ -217,4 +220,43 @@ it("Jira: a refused token shows under the token", async () => {
   await typeInto("project-jira-token", "tok");
   await click(q("project-jira-token-save"));
   expect(q("project-jira-token-error")!.textContent).toContain("printable");
+});
+
+it("Jira: the refused URL stays in the input and the message names the field", async () => {
+  const { q } = await render({ tokens: [], refuse: "Jira URL must be an https address (http only for localhost or 127.0.0.1)" });
+  await typeInto("project-jira-url-input", "http://jira.example.com");
+  await enter("project-jira-url-input");
+  expect(q("project-jira-url-error")!.textContent).toContain("Jira URL must be an https address");
+  expect((q("project-jira-url-input") as HTMLInputElement).value).toBe("http://jira.example.com");
+});
+
+it("Jira: clearing a token that others use asks first and names who loses it; an unshared token clears at once", async () => {
+  const overrides = { local: { "/p": { jira: { url: "https://jira.example.com" } }, "/x": { jira: { url: "https://jira.example.com" } } } };
+  const { q, requests } = await render({ overrides, tokens: ["https://jira.example.com"] });
+  await click(q("project-jira-token-clear"));
+  expect(requests("jira.token")).toEqual([]);
+  const dialog = document.querySelector('[data-testid="project-jira-clear-dialog"]')!;
+  expect(dialog.textContent).toContain("1 other project");
+  await click(document.querySelector('[data-testid="project-jira-clear-cancel"]'));
+  expect(requests("jira.token")).toEqual([]);
+  await click(q("project-jira-token-clear"));
+  await click(document.querySelector('[data-testid="project-jira-clear-confirm"]'));
+  expect(requests("jira.token")).toEqual([{ type: "jira.token", token: null, project: { side: "local", cwd: "/p" } }]);
+});
+
+it("Jira: the spinner is only on the button that runs (Test connection while testing, not while Save or Clear runs)", async () => {
+  const overrides = { local: { "/p": { jira: { url: "https://jira.example.com" } } } };
+  const spinner = (q: (id: string) => HTMLElement | null) => q("project-jira-test")!.querySelector("svg.animate-spin");
+  const saving = await render({ overrides, tokens: [], hold: "jira.token" });
+  await typeInto("project-jira-token", "tok");
+  await click(saving.q("project-jira-token-save"));
+  expect(spinner(saving.q)).toBeNull();
+  await saving.release();
+  act(() => root?.unmount());
+  document.body.innerHTML = "";
+  const testing = await render({ overrides, tokens: ["https://jira.example.com"], hold: "jira.test" });
+  await click(testing.q("project-jira-test"));
+  expect(spinner(testing.q)).not.toBeNull();
+  await testing.release();
+  expect(spinner(testing.q)).toBeNull();
 });

@@ -457,7 +457,7 @@ it("projects.overrides: a patch with an invalid override is refused with the fie
   const bad: [unknown, RegExp][] = [
     [{ local: { "/p": { engine: "gpt" } } }, /Project overrides must be/],
     [{ local: { "/p": { mode: "bypassPermissions" } } }, /Project overrides must be/],
-    [{ local: { "/p": { jira: { url: "http://jira.example.com" } } } }, /Project overrides must be/],
+    [{ local: { "/p": { jira: { url: "http://jira.example.com" } } } }, /Jira URL must be/],
     [{ local: { "/p": { jira: { url: "" } } } }, /Project overrides must be/],
     [{ local: { "/p": { unknown: 1 } } }, /Project overrides must be/],
     [{ local: { "/p": { history: { exclude: [] } } } }, /Project overrides must be/],
@@ -465,6 +465,9 @@ it("projects.overrides: a patch with an invalid override is refused with the fie
     [{ local: { "/p": { effort: "huge" } } }, /Project overrides must be/],
   ];
   for (const [overrides, message] of bad) expect(() => s.set({ projects: { overrides: overrides as never } })).toThrow(message);
+  // A refused Jira URL says so (the https rule), not the whole-map rule.
+  expect(() => s.set({ projects: { overrides: { local: { "/p": { jira: { url: "http://jira.example.com" } } } } } })).toThrow(/^Jira URL must be an https address/);
+  expect(checkPatch({ projects: { overrides: { local: { "/p": { mode: "plan", jira: { url: "ftp://x" } } } } } })).toMatch(/^Jira URL must be/);
   const next = s.set({ projects: { overrides: { local: { "/p": { mode: "plan", account: "", history: { enabled: false } }, "/empty": { history: {} } }, "ssh:box": {} } } });
   expect(next.projects.overrides).toEqual({ local: { "/p": { mode: "plan", account: "", history: { enabled: false } } } });
   expect(s.set({ projects: { overrides: {} } }).projects.overrides).toEqual({});

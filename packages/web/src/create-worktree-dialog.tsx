@@ -81,8 +81,10 @@ function Body({ project, side = LOCAL_SIDE, request, onClose, onCreated, onJiraS
         // The Jira connection of this Project: its overrides over the global one, and the token of that URL's origin.
         const j = r.settings.jira && jiraOf(r.settings.projects?.overrides, side, project, r.settings.jira);
         const ready = !!j?.url && jiraTokenFor(r, j.url);
-        setJira({ ready, template: j?.template || "{type}/{key}-{summary}", filter: !!j?.jql?.trim(), own: !!j && j.url !== r.settings.jira.url });
-        if (offer("jira", { ready })) setJiraHint(true);
+        const own = !!j && j.url !== r.settings.jira.url;
+        setJira({ ready, template: j?.template || "{type}/{key}-{summary}", filter: !!j?.jql?.trim(), own });
+        // A Project with its own URL and no token has Jira set up globally: the hint (it opens the global settings) would mislead.
+        if (!own && offer("jira", { ready })) setJiraHint(true);
       },
       () => live && setJira({ ready: false, template: "", filter: false }),
     );
@@ -331,7 +333,7 @@ function Body({ project, side = LOCAL_SIDE, request, onClose, onCreated, onJiraS
             <p className="text-muted-foreground text-sm">{t("sidebar.cw.loading")}</p>
           ) : !jira.ready ? (
             <p className="text-sm" data-testid="create-worktree-no-jira">
-              {t("sidebar.cw.noJira")}{" "}
+              {t(jira.own ? "sidebar.cw.noProjectToken" : "sidebar.cw.noJira")}{" "}
               <button type="button" onClick={() => onJiraSettings(!!jira.own)} className="text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring" data-testid="create-worktree-jira-settings">
                 {t(jira.own ? "sidebar.cw.openProjectJira" : "sidebar.cw.openJira")}
               </button>

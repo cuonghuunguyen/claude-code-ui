@@ -655,5 +655,7 @@ export default {
   "projectSettings.jira.shared": "Cũng được dùng bởi {with}. Thay hoặc xóa token sẽ đổi cho tất cả.",
   "projectSettings.jira.sharedGlobal": "cài đặt chung",
   "projectSettings.jira.sharedProjects": "{count} dự án khác",
+  "projectSettings.jira.clearTitle": "Xóa token của {origin}?",
+  "projectSettings.jira.clearBody": "Cũng được dùng bởi {with}. Họ cũng mất token này và không kết nối được Jira cho đến khi lưu token mới.",
   "settings.projectSettings": "Cài đặt dự án cho {project}…",
 } satisfies Partial<Messages>;

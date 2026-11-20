@@ -329,6 +329,10 @@ it("Ticket: a Project with its own Jira URL but no token for it is not ready, th
   expect(q("create-worktree-tab-name")!.getAttribute("aria-selected")).toBe("true");
   await click(q("create-worktree-tab-ticket"));
   expect(q("create-worktree-no-jira")).not.toBeNull();
+  // The global Jira is set up: the text names the missing token of this Project's site, and the Connect Jira hint (which opens the global settings) does not show.
+  expect(q("create-worktree-no-jira")!.textContent).toContain("No token for this project's Jira site.");
+  expect(q("create-worktree-no-jira")!.textContent).not.toContain("not set up");
+  expect(q("rec-jira")).toBeNull();
   expect(calls.some((c) => c.type === "jira.search")).toBe(false);
   // The way out is the project's own settings, not the global ones that already have a token.
   expect(q("create-worktree-jira-settings")!.textContent).toBe("Open Project settings › Jira");
