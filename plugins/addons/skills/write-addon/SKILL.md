@@ -96,7 +96,8 @@ newer than their claude-ui.
   `side`, `fg`, `muted`, `border`, `primary`, `pfg`, `kw`, `str`, `fn`, `type`, `num`, `cmt`,
   `varc`, `err`, `warn`, `ok`, `info`. Copy the theme of `examples/addons/example/addon.json` and
   change the values; keep text on `bg`/`card` at a 4.5:1 contrast.
-- `css`: one `.css` applied app-wide while enabled, in a cascade layer after the app's own styles: it wins without `!important` (inline `style` attributes and the unlayered library CSS of CodeMirror `.cm-*`, xterm `.xterm*`, KaTeX `.katex*` need it); it cannot load external images or `@import`.
+- `themes[].css`: a `.css` for that theme only (the daemon scopes it: a rule applies only while the theme is picked). Write plain selectors; `:root`, `html`, `.dark` still mean `<html>`. Prefer this over the top-level `css`.
+- `css` (legacy): one `.css` applied while enabled, for every theme (its `:root` and `.dark` token rules then override built-in themes too), in a cascade layer after the app's own styles: it wins without `!important` (inline `style` attributes and the unlayered library CSS of CodeMirror `.cm-*`, xterm `.xterm*`, KaTeX `.katex*` need it); it cannot load external images or `@import`.
   Select app elements with `[data-part="<name>"]` (stable parts, list: `docs/site/features/addon-parts.md`),
   never `[data-testid=...]` or Tailwind class names: those change without notice.
 - Paths are relative, without `..` or `\`, and must exist. Every view, command and renderer needs

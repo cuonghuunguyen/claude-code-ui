@@ -252,6 +252,50 @@ describe("serving", () => {
     expect((await fetchAddon(i.base + "pane.html", "script")).status).toBe(403); // a page only as a frame
   });
 
+  describe("theme css", () => {
+    const palette = Object.fromEntries(["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"].map((k) => [k, "#101010"]));
+    /** A local addon with two themes, one css file each. */
+    const themed = async (css: Record<string, string>) => {
+      const d = folder("themed", { themes: [{ id: "dusk", name: "Dusk", dark: palette, css: "dusk.css" }, { id: "dawn", name: "Dawn", dark: palette, css: "dawn.css" }] });
+      for (const [f, text] of Object.entries(css)) writeFileSync(join(d, f), text);
+      await c.request({ type: "addons.install", source: { kind: "local", path: d } });
+      return (await approveAll("themed")).base!;
+    };
+
+    it("a theme's css is served scoped to that theme, so its :root and .dark rules cannot reach another theme", async () => {
+      const base = await themed({ "dusk.css": ":root { --background: #111 } .dark { --card: #222 }", "dawn.css": ".a { color: red }" });
+      const r = await fetchAddon(`${base}dusk.css?theme=dusk`, "style");
+      expect(r.status).toBe(200);
+      expect(String(r.headers["content-type"])).toContain("text/css");
+      expect(r.body).toContain(':root[data-theme="addon:themed:dusk"] {');
+      expect(r.body.replace(/\s+/g, " ")).toContain("& { --background: #111 } &.dark { --card: #222 }");
+    });
+
+    it("the same file without ?theme, or with the other theme's id, is served as it is", async () => {
+      const base = await themed({ "dusk.css": ":root { --background: #111 }", "dawn.css": ".a { color: red }" });
+      expect((await fetchAddon(`${base}dusk.css`, "style")).body).toBe(":root { --background: #111 }");
+      expect((await fetchAddon(`${base}dusk.css?theme=dawn`, "style")).body).toBe(":root { --background: #111 }");
+    });
+
+    it("broken css is served unscoped and never fails the request", async () => {
+      const base = await themed({ "dusk.css": ".a { color: red", "dawn.css": "" });
+      const r = await fetchAddon(`${base}dusk.css?theme=dusk`, "style");
+      expect(r.status).toBe(200);
+      expect(r.body).toBe(".a { color: red");
+    });
+
+    it("an edit of the file shows on the next request", async () => {
+      const base = await themed({ "dusk.css": ".a { x: 1 }", "dawn.css": "" });
+      expect((await fetchAddon(`${base}dusk.css?theme=dusk`, "style")).body).toContain(".a { x: 1 }");
+      writeFileSync(join(tmp, "folder-themed", "dusk.css"), ".b { y: 22 }");
+      expect((await fetchAddon(`${base}dusk.css?theme=dusk`, "style")).body).toContain(".b { y: 22 }");
+    });
+
+    it.each([["a missing file", { themes: [{ id: "dusk", name: "D", dark: palette, css: "nope.css" }] }], ["a file that is not css", { themes: [{ id: "dusk", name: "D", dark: palette, css: "pane.html" }] }]])("the manifest refuses %s", (_n, patch) => {
+      expect(() => parseManifest({ ...BASE, ...patch }, folder("bad", patch))).toThrow(/themes\[dusk\]\.css/);
+    });
+  });
+
   it("without net: connect-src is none", async () => {
     commitAddon();
     await installGit();
