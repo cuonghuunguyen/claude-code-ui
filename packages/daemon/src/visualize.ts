@@ -9,13 +9,30 @@ export function visualizePluginDir(base = import.meta.url): string | undefined {
   return undefined;
 }
 
-/** The skill as OpenCode's per-prompt `system` text: its description (the "when") and body, no frontmatter; undefined when `dir` is none or has no readable skill. */
-export function visualizeSystem(dir: string | undefined): string | undefined {
+const OC_HOW = "How: put the self-contained HTML fragment (no <html> wrapper) directly in the fence. Do not write a file and do not look for an uploads folder.\n\n";
+let warned = false;
+
+/** The Claude text for OpenCode: no uploads folder there, so the "How:" block (file write) becomes "HTML in the fence". A marker not found: the text as it is, one warning. */
+function forOpenCode(body: string): string {
+  const a = body.indexOf("\nHow:\n");
+  const b = body.indexOf("\nDraw one whenever the reply covers");
+  const ex = "Example fragment (the file content, or the fence content without an uploads folder):";
+  if (a < 0 || b < a || !body.includes(ex)) {
+    if (!warned) (warned = true), console.warn("visualize: SKILL.md layout changed, OpenCode gets the Claude text");
+    return body;
+  }
+  return (body.slice(0, a + 1) + OC_HOW + body.slice(b + 1)).replace(ex, "Example fragment (the fence content):");
+}
+
+/** The skill as OpenCode's per-prompt `system` text: its description (the "when") and body, no frontmatter; undefined when `dir` is none or has no readable skill. `engine` "opencode" swaps the file-write step for the HTML in the fence. */
+export function visualizeSystem(dir: string | undefined, engine: "claude" | "opencode" = "claude"): string | undefined {
   if (!dir) return undefined;
   try {
     const m = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(readFileSync(join(dir, "skills/visualize/SKILL.md"), "utf8").replace(/\r\n/g, "\n"));
     const desc = m && /^description:\s*(.+)$/m.exec(m[1]!)?.[1];
-    return desc ? `${desc}\n\n${m![2]!.trim()}` : undefined;
+    if (!desc) return undefined;
+    const body = m![2]!.trim();
+    return `${desc}\n\n${engine === "opencode" ? forOpenCode(body) : body}`;
   } catch {
     return undefined;
   }

@@ -254,7 +254,7 @@ export default {
   "settings.row.fork.enabled.hint": "Chỉ áp dụng cho phiên Claude Code. Agent có thể khởi chạy subagent dạng fork: nó kế thừa cuộc trò chuyện này, chạy trong ngữ cảnh riêng và chỉ trả về kết quả, giúp ngữ cảnh chính nhỏ gọn. Subagent của OpenCode luôn bắt đầu mới. Áp dụng cho lượt bắt đầu sau khi đổi.",
   "settings.row.terminalAccess.enabled.label": "Cho phiên dùng terminal đang mở",
   "settings.row.terminalAccess.enabled.hint": "Agent của phiên có thể liệt kê các terminal đang mở trong bảng Terminal của dự án, đọc đầu ra gần đây (bí mật được ẩn) và, sau khi bạn cho phép, gõ lệnh vào một terminal. Áp dụng cho lượt bắt đầu sau thay đổi.",
-  "settings.row.chat.visualize.hint": "Claude có thể vẽ biểu đồ, sơ đồ và tiện ích tương tác nhỏ trong câu trả lời. Chúng chạy trong khung cô lập, không truy cập được ứng dụng, tệp của bạn hay mạng, trừ các CDN script. Áp dụng cho phiên khởi động hoặc tiếp tục sau thay đổi; tắt thì hiển thị dưới dạng mã.",
+  "settings.row.chat.visualize.hint": "Claude có thể vẽ biểu đồ, sơ đồ và tiện ích tương tác nhỏ trong câu trả lời. Chúng chạy trong khung cô lập, không truy cập được ứng dụng, tệp của bạn hay mạng, trừ các CDN script. Áp dụng cho phiên khởi động hoặc tiếp tục sau thay đổi; tắt thì hiển thị dưới dạng mã. OpenCode: từ lời nhắc kế tiếp; yêu cầu bằng /visualize.",
   "settings.row.usageLimit.autoContinue.label": "Tự động tiếp tục sau khi giới hạn mức dùng được đặt lại",
   "settings.row.usageLimit.autoContinue.hint": "Phiên bị dừng do giới hạn mức dùng của gói nhận prompt “continue” khi giới hạn được đặt lại; nhiều phiên tiếp tục lần lượt. Tự gửi tin nhắn sẽ hủy việc này. Khởi động lại daemon sẽ bỏ các lần tiếp tục đã lên lịch.",
   "settings.row.performance.monitor.label": "Giám sát hiệu năng",

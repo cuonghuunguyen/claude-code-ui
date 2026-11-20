@@ -205,6 +205,9 @@ const LOCAL_COMMANDS: SlashCommand[] = [
   { name: "redo", description: "Redo the last undone message", argumentHint: "" },
 ];
 const LOCAL_NAMES = LOCAL_COMMANDS.map((c) => c.name);
+/** `/visualize [what]`: the daemon's own command, listed while the setting is on and OpenCode has no `visualize` of its own (docs/spec.md "Inline visualizations"). */
+const VISUALIZE_COMMAND: SlashCommand = { name: "visualize", description: "Draw the answer as an inline visualization", argumentHint: "[what to draw]" };
+const withVisualize = (list: SlashCommand[], on: boolean) => (on && !list.some((c) => c.name === "visualize") ? [...list.slice(0, LOCAL_COMMANDS.length), VISUALIZE_COMMAND, ...list.slice(LOCAL_COMMANDS.length)] : list);
 const dataUrlMime = (url: string) => /^data:([^;,]+)/.exec(url)?.[1] ?? "image/png";
 
 class OpenCodeSession implements EngineSession {
@@ -345,11 +348,11 @@ class OpenCodeSession implements EngineSession {
   }
 
   private async emitCommands() {
-    const commands = await this.engine.commands(this.cwd).catch(() => undefined);
-    if (!commands) return;
-    // /compact, /undo and /redo are ours: with arguments they are a plain prompt, never a server command.
-    this.commandNames = new Set(commands.map((c) => c.name).filter((n) => !LOCAL_NAMES.includes(n)));
-    this.session.emit({ type: "commands", id: "commands", commands });
+    const raw = await this.engine.serverCommands(this.cwd).catch(() => undefined);
+    if (!raw) return;
+    // /compact, /undo and /redo are ours: with arguments they are a plain prompt, never a server command. /visualize is ours too unless the server lists one.
+    this.commandNames = new Set(raw.map((c) => c.name).filter((n) => !LOCAL_NAMES.includes(n)));
+    this.session.emit({ type: "commands", id: "commands", commands: withVisualize(raw, !!this.engine.visualizeOn?.()) });
   }
 
   /** The `agents` part; `failed: true` when OpenCode did not answer (the web offers a retry, which calls this again). Never waits for the caller. */
@@ -661,7 +664,10 @@ class OpenCodeSession implements EngineSession {
       ];
       // No caller timeout: a slow answer (a cold folder) is not a failed prompt; the turn runs whatever the answer's delay.
       // A Stop meanwhile leaves this wait as it is: OpenCode may run the turn already (interrupt() tells by its status).
-      const system = visualizeSystem(this.opts.visualizePlugin?.()); // per prompt: the setting applies from the next one
+      const system = visualizeSystem(this.opts.visualizePlugin?.(), "opencode"); // per prompt: the setting applies from the next one
+      // `/visualize [what]` while on (and no server command of that name): the typed text plus a hidden directive part (synthetic: the history shows the typed text only).
+      const viz = system && !this.commandNames.has("visualize") ? /^\/visualize(?:\s+([\s\S]*))?$/.exec(text.trim()) : null;
+      if (viz) parts.push({ id: ascending("prt"), type: "text", text: viz[1]?.trim() ? `Answer this with a visualize fence: ${viz[1].trim()}` : "Draw your last answer, or the current topic, as a visualize fence.", synthetic: true } as (typeof parts)[number]);
       await run
         .post(
           this.server.request(`/session/${this.id}/prompt_async`, {
@@ -1261,6 +1267,7 @@ class OpenCodeEngineImpl implements Engine {
     readonly server: OpenCodeServer,
     readonly onTitle?: (id: string, title: string) => void,
     readonly mcp?: OpenCodeMcpRoute,
+    readonly visualizeOn?: () => boolean,
   ) {}
 
   permissionModes = (o: { allowBypass?: boolean; supportsAuto?: boolean }) => permissionModesFor({ ...o, modes: OPENCODE_PERMISSION_MODES });
@@ -1374,6 +1381,10 @@ class OpenCodeEngineImpl implements Engine {
   private commandLists = new Map<string, { at: number; list: Promise<SlashCommand[]> }>();
   /** `GET /command` of a folder (built-ins, project and user commands, MCP prompts, skills), cached 60 s; dropped when the server restarts. */
   commands(cwd: string): Promise<SlashCommand[]> {
+    return this.serverCommands(cwd).then((l) => withVisualize(l, !!this.visualizeOn?.()));
+  }
+  /** The list of `commands` without the daemon's `/visualize` (it follows the setting per call, this list is cached). */
+  serverCommands(cwd: string): Promise<SlashCommand[]> {
     const hit = this.commandLists.get(cwd);
     if (hit && Date.now() - hit.at < 60_000) return hit.list;
     // Waits for OpenCode's MCP load of the folder: never cut off (see brokenState); a broken folder is reloaded and read once more.
@@ -1398,4 +1409,4 @@ class OpenCodeEngineImpl implements Engine {
 /** The daemon's `/opencode-mcp` route (server.ts): its URL (undefined while the daemon does not listen), the bearer token of a session (made on first use), dropped at close. */
 export type OpenCodeMcpRoute = { url: () => string | undefined; token: (id: string, server: McpServerKey) => string; drop: (id: string) => void };
 export type OpenCodeEngine = OpenCodeEngineImpl;
-export const createOpenCodeEngine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; mcp?: OpenCodeMcpRoute } = {}): OpenCodeEngine => new OpenCodeEngineImpl(server, o.onTitle, o.mcp);
+export const createOpenCodeEngine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; mcp?: OpenCodeMcpRoute; visualizeOn?: () => boolean } = {}): OpenCodeEngine => new OpenCodeEngineImpl(server, o.onTitle, o.mcp, o.visualizeOn);

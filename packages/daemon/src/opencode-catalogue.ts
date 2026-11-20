@@ -40,6 +40,7 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
       ctx.broadcast({ type: "sessions.changed" });
     },
     mcp: o.mcp,
+    visualizeOn: () => appSettings.get().chat.visualize,
   });
   const ownsId = (id: string) => OPENCODE_ID.test(id);
   const sessionOpts = (initial: Partial<SessionSettings>) => ({ ...ctx.sessionOpts(initial), engine: openCodeEngine });
