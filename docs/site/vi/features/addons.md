@@ -56,7 +56,7 @@ Thẻ liệt kê addon xin quyền gì, mỗi quyền một dòng dễ hiểu, c
 | `version`, `description` | Hiện trong hộp thoại |
 | `capabilities` | Danh sách ở trên; mục nào cần quyền phải được bao phủ |
 | `themes` | `[{id, name, light?, dark?, options?}]`, xem [giao diện màu](#themes) |
-| `css` | Tệp `.css` áp dụng toàn ứng dụng khi addon đang bật |
+| `css` | Tệp `.css` áp dụng toàn ứng dụng khi addon đang bật, trong [lớp cascade `addon`](addon-parts#cascade) |
 | `views` | `[{id, title, entry, kind: "pane" \| "band", phone?}]`. `phone: false` ẩn khung dưới 640 px |
 | `commands` | `[{name, description, argumentHint?}]` |
 | `commandsEntry` | Tệp `.html` xử lý lệnh; mặc định là entry của khung đầu tiên |

@@ -19,6 +19,15 @@ A theme addon styles claude-ui with CSS. To find the element to style, select a 
 - Parts marked **reserved** are named already, but the app does not render them yet.
 - The list is also in `packages/protocol/src/addon-parts.ts` (`PARTS`, `PARTS_VERSION`).
 
+## Cascade {#cascade}
+
+The CSS file of an addon (`css` in `addon.json`) is loaded in its own cascade layer, `addon.<name>`, after every style of the app. Order: `theme, base, components, utilities, host, addon`.
+
+- Your rules win over the app's rules without `!important` and without a long selector. Do not add `!important` to win over the app.
+- Exception: a declaration with `!important` inside the app's built-in Neon theme beats yours, and only while Neon is the picked theme.
+- An inline `style` attribute of an element still wins over a layer. Add `!important` in your rule to override it.
+- Your own layers inside the file work as usual, for example `@layer base, effects;`; they sit inside `addon.<name>`.
+
 ## Parts {#parts}
 
 | Part | Element | State attributes | Since |

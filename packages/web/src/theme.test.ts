@@ -120,3 +120,49 @@ for (const { name, mode, t } of PAIRS) {
     });
   });
 }
+
+// Cascade contract (GH-868): addon CSS lives in later layers (`addon.<name>`); an unlayered host rule would beat every addon rule, so no host rule may stay outside a layer.
+describe("index.css cascade layers", () => {
+  /** Top-level statements: at-rule name + prelude, or "rule" for a style rule; comments and block bodies skipped. */
+  const noComments = (t: string) => t.replace(/\/\*[\s\S]*?\*\//g, "").trim();
+  const topLevel = (() => {
+    const src = css;
+    const out: { kind: string; prelude: string }[] = [];
+    let depth = 0;
+    let start = 0;
+    let quote = "";
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i]!;
+      if (quote) {
+        if (c === "\\") i++;
+        else if (c === quote) quote = "";
+      } else if (c === "/" && src[i + 1] === "*") {
+        i = src.indexOf("*/", i + 2) + 1;
+      } else if (c === '"' || c === "'") quote = c;
+      else if (c === "{") {
+        if (depth++ === 0) {
+          const prelude = noComments(src.slice(start, i));
+          out.push({ kind: prelude.startsWith("@") ? /^@[\w-]+/.exec(prelude)![0] : "rule", prelude });
+        }
+      } else if (c === "}") {
+        if (--depth === 0) start = i + 1;
+      } else if (c === ";" && depth === 0) {
+        const prelude = noComments(src.slice(start, i));
+        out.push({ kind: /^@[\w-]+/.exec(prelude)![0], prelude });
+        start = i + 1;
+      }
+    }
+    return out;
+  })();
+
+  it("declares the layer order first, host after utilities and addon last", () => {
+    expect(topLevel[0]!.prelude).toBe("@layer theme, base, components, utilities, host, addon");
+  });
+
+  it("keeps no host rule outside a layer", () => {
+    const loose = topLevel.filter((s) => !["@layer", "@import", "@source", "@custom-variant", "@theme", "@property"].includes(s.kind));
+    expect(loose.map((s) => s.prelude.slice(0, 60))).toEqual([]);
+    const blocks = topLevel.filter((s) => s.kind === "@layer" && !s.prelude.includes(","));
+    expect([...new Set(blocks.map((s) => s.prelude))].sort()).toEqual(["@layer base", "@layer host"]);
+  });
+});

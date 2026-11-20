@@ -20,12 +20,15 @@ export function loadPref(): ThemePref {
   }
 }
 
+/** The colour rules go in the `host` layer with index.css: unlayered they would beat every addon sheet (layer `addon.<name>`). */
+const hostLayer = (css: string) => (css ? `@layer host {\n${css}\n}` : "");
+
 // The colour theme blocks (themes.ts) are generated, not hand-written in index.css; in the document before the first render.
 // (Tests that import this module in a node environment have no document.)
 if (typeof document !== "undefined") {
   const themeStyle = document.createElement("style");
   themeStyle.id = "claude-ui-themes";
-  themeStyle.textContent = themeCss();
+  themeStyle.textContent = hostLayer(themeCss());
   document.head.append(themeStyle);
 }
 
@@ -108,23 +111,27 @@ export function applyAddonThemes(themes: readonly Theme[]) {
     style.id = "claude-ui-addon-themes";
     document.head.append(style);
   }
-  style.textContent = themeCss(themes);
+  style.textContent = hostLayer(themeCss(themes));
   addonList = themes;
   syncThemeOptions();
   syncMeta();
 }
 
-/** One stylesheet link per enabled addon with `css`; links of addons no longer enabled go (GH-516). Same-origin, so the app CSP allows it and blocks what the sheet loads from elsewhere. */
+/** CSS identifier for an addon name (`[a-z0-9-]`): a leading digit is escaped (`\31 `), else the layer name would be invalid and the whole import dropped. */
+const identOf = (name: string) => name.replace(/^[0-9]/, (d) => `\\3${d} `);
+
+/** One `<style>` per enabled addon with `css`: `@import ... layer(addon.<name>)`, so its rules sit in a layer after `host` and win without `!important`; styles of addons no longer enabled (or with another file) go (GH-516, GH-868). Same-origin, so the app CSP allows it and blocks what the sheet loads from elsewhere. */
 export function applyAddonCss(addons: readonly AddonInfo[]) {
-  const want = new Map<string, string>(addons.flatMap((a) => (a.base && a.manifest?.css ? [[`addon-css-${a.name}`, a.base + a.manifest.css.split("/").map(encodeURIComponent).join("/")] as const] : [])));
-  for (const l of document.querySelectorAll<HTMLLinkElement>('link[id^="addon-css-"]')) if (want.get(l.id) !== l.getAttribute("href")) l.remove();
-  for (const [id, href] of want)
+  const want = new Map<string, string>(
+    addons.flatMap((a) => (a.base && a.manifest?.css ? [[`addon-css-${a.name}`, `@import url("${a.base + a.manifest.css.split("/").map(encodeURIComponent).join("/")}") layer(addon.${identOf(a.name)});`] as const] : [])),
+  );
+  for (const l of document.querySelectorAll<HTMLElement>('style[id^="addon-css-"], link[id^="addon-css-"]')) if (want.get(l.id) !== l.textContent) l.remove();
+  for (const [id, text] of want)
     if (!document.getElementById(id)) {
-      const l = document.createElement("link");
-      l.rel = "stylesheet";
-      l.id = id;
-      l.href = href;
-      document.head.append(l);
+      const s = document.createElement("style");
+      s.id = id;
+      s.textContent = text;
+      document.head.append(s);
     }
 }
 

@@ -88,7 +88,7 @@ describe("colour theme", () => {
 describe("addon themes and CSS (GH-516)", () => {
   const addon = (name: string, css?: string): AddonInfo =>
     ({ name, source: { kind: "local", path: "/x" }, approved: [], state: "enabled", base: `/addon/${"0".repeat(32)}/${name}/`, manifest: { name, version: "1", description: "", capabilities: [], themes: [], css, views: [], commands: [], renderers: [] } }) as AddonInfo;
-  const links = () => [...document.querySelectorAll("link[id^='addon-css-']")].map((l) => [l.id, l.getAttribute("href")]);
+  const sheets = () => [...document.querySelectorAll("style[id^='addon-css-']")].map((l) => [l.id, l.textContent]);
 
   it("a stored addon theme id is kept before addons load", () => {
     localStorage.setItem("claude-ui.colorTheme", "addon:example:dusk");
@@ -118,15 +118,27 @@ describe("addon themes and CSS (GH-516)", () => {
     expect(root.hasAttribute("data-opt-glow")).toBe(false);
   });
 
-  it("applyAddonCss adds a link per enabled addon with css and removes it when the addon is gone", () => {
+  it("applyAddonCss adds a layered import per enabled addon with css and removes it when the addon is gone", () => {
     applyAddonCss([addon("one", "theme.css"), addon("two", "css/a b.css"), addon("three")]);
-    expect(links()).toEqual([
-      ["addon-css-one", `/addon/${"0".repeat(32)}/one/theme.css`],
-      ["addon-css-two", `/addon/${"0".repeat(32)}/two/css/a%20b.css`],
+    expect(sheets()).toEqual([
+      ["addon-css-one", `@import url("/addon/${"0".repeat(32)}/one/theme.css") layer(addon.one);`],
+      ["addon-css-two", `@import url("/addon/${"0".repeat(32)}/two/css/a%20b.css") layer(addon.two);`],
     ]);
-    applyAddonCss([addon("two", "css/a b.css")]);
-    expect(links().map((l) => l[0])).toEqual(["addon-css-two"]);
+    applyAddonCss([addon("two", "css/b.css")]);
+    expect(sheets()).toEqual([["addon-css-two", `@import url("/addon/${"0".repeat(32)}/two/css/b.css") layer(addon.two);`]]);
     applyAddonCss([]);
-    expect(links()).toEqual([]);
+    expect(sheets()).toEqual([]);
+  });
+
+  it("an addon name that starts with a digit still gets a valid layer name", () => {
+    applyAddonCss([addon("1st-theme", "t.css")]);
+    expect(sheets()[0]![1]).toContain("layer(addon.\\31 st-theme)");
+  });
+
+  it("the colour rules of built-in and addon themes are in the host layer, so an addon sheet (later layer) beats them", () => {
+    expect(document.getElementById("claude-ui-themes")!.textContent).toMatch(/^@layer host \{/);
+    const palette = Object.fromEntries(["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"].map((k) => [k, "#101010"]));
+    applyAddonThemes(addonThemes([{ ...addon("example"), manifest: { ...addon("example").manifest!, themes: [{ id: "dusk", name: "D", dark: palette }] } }]));
+    expect(document.getElementById("claude-ui-addon-themes")!.textContent).toMatch(/^@layer host \{[\s\S]*addon:example:dusk[\s\S]*\}$/);
   });
 });
