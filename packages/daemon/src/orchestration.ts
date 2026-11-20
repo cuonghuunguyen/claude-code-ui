@@ -70,14 +70,18 @@ export type WorkerEvent = {
   /** denied: the worker's tool call that was denied (auto-mode classifier, a rule, the user). */
   toolUseId?: string;
   input?: string;
-  /** turn_end: the worker's last reply text of the turn. */
+  /** turn_end, stalled closed_idle: the worker's last reply text. */
   result?: string;
   isError?: boolean;
   interrupted?: boolean;
   /** turn_end: the daemon closed the worker's CLI after the turn (Close finished workers); worker_send resumes it. */
   closed?: true;
-  /** stalled: ended_without_result (the CLI ended in the middle of a turn), no_start (a new turn got no CLI message), silent (running, no CLI message for the stall time). Report only: the worker is not stopped. */
-  reason?: "ended_without_result" | "no_start" | "silent";
+  /**
+   * stalled: ended_without_result (the CLI ended in the middle of a turn), no_start (a new turn got no CLI message), silent (running, no CLI message for the stall time),
+   * idle_waiting (idle, its last turn ended while work of its own ran, that work ended and no turn followed for the stall time), closed_idle (the CLI of such a waiting worker closed without the coordinator asking; `result` is its last reply text).
+   * Report only: the worker is not stopped.
+   */
+  reason?: "ended_without_result" | "no_start" | "silent" | "idle_waiting" | "closed_idle";
   /** stalled: ISO time of the last CLI message. */
   lastActivity?: string;
 };
@@ -211,6 +215,10 @@ export function createOrchestration(deps: OrchestrationDeps) {
   const noStart = new Map<string, { at: number; progress: number }>();
   /** Workers reported as stalled, with the CLI message count then: the next CLI message ends the stall and re-arms the watchdog. */
   const stalled = new Map<string, { reason: NonNullable<WorkerEvent["reason"]>; received: number }>();
+  /** GH-852: workers whose last turn ended while work of their own still ran (background command, Monitor, subagent, workers below): turn end time and the last sweep that saw that work. */
+  const waiting = new Map<string, { turnEnd: number; busyAt: number }>();
+  /** Workers their coordinator is closing (worker_close, the web app's Close worker): that close is not news. */
+  const closing = new Set<string>();
   const stallOf = (id: string) => {
     const st = stalled.get(id);
     if (st && deps.sessions.get(id)?.activity().received !== st.received) stalled.delete(id);
@@ -337,6 +345,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
   /** A coordinator with a worker that is starting, running or waiting for input: the idle close keeps its CLI. */
   const waitingOnWorkers = (id: string) => workers(id).some((w) => starting.has(w.id) || !!deps.sessions.get(w.id)?.working());
   /** A coordinator that waits: on workers (see above), or on its own running subagent or background command (an idle session that still `working()`). */
+  const busyOwn = (s: Session) => s.working() || waitingOnWorkers(s.id);
   const stillWaiting = (id: string) => waitingOnWorkers(id) || !!deps.sessions.get(id)?.working();
   /** GH-574: a worker whose turn ended closes its CLI unless the setting is off, it is kept open, a tab shows it, or it still works or waits on workers or events of its own. */
   const finishable = (s: Session) =>
@@ -446,9 +455,13 @@ export function createOrchestration(deps: OrchestrationDeps) {
     if (p.type === "session_state" && (p.state === "closed" || p.state === "error")) (warming.delete(s.id), wake(s.id));
     // Each move into running (also after needs_input) restarts the silence clock: a long wait for the user is not silence.
     if (p.type === "session_state" && p.state === "running") open.set(s.id, Date.now());
+    // A keep-warm tick is the daemon's own turn: the wait it interrupts goes on.
+    if (p.type === "session_state" && (p.state === "running" || p.state === "needs_input") && !warming.has(s.id)) waiting.delete(s.id);
     if (p.type === "turn_result" || p.type === "turn_interrupted" || (p.type === "session_state" && p.state !== "running" && p.state !== "needs_input")) {
       // A CLI that ended in the middle of a turn: no result will come.
       if (p.type === "session_state" && p.state === "closed" && open.has(s.id) && !quiet.has(s.id) && !stallOf(s.id)) stall(s, "ended_without_result");
+      // The CLI of a waiting worker ended by itself.
+      if (p.type === "session_state" && p.state === "closed") dropped(s);
       open.delete(s.id);
       noStart.delete(s.id);
     }
@@ -503,11 +516,26 @@ export function createOrchestration(deps: OrchestrationDeps) {
           e.closed = true;
           console.log(`session ${s.id}: worker turn ended, CLI closed (Close finished workers)`);
           wake(s.id);
-        }
+        } else markWaiting(s);
         // Already inside the ordered step: route would queue the event behind this worker's later ones.
         deliver(resolve(linkOf(s.id)?.coordinatorId ?? captured), e);
       });
+    if (e.type === "turn_end") setImmediate(() => markWaiting(s));
     route(s.id, captured, e);
+  }
+
+  /** GH-852: a worker that went idle while work of its own runs waits for it: the sweep reports it when no turn follows. */
+  function markWaiting(s: Session) {
+    if (quiet.has(s.id) || s.keepWarmTurn || s.info().state !== "idle" || !busyOwn(s)) return;
+    waiting.set(s.id, { turnEnd: Date.now(), busyAt: Date.now() });
+  }
+
+  /** GH-852: the CLI of a worker that waited on work of its own ended without the coordinator asking (any daemon drop, or the CLI process exit). */
+  function dropped(s: Session) {
+    if (!waiting.delete(s.id) || quiet.has(s.id) || closing.has(s.id) || stallOf(s.id)) return;
+    const l = linkOf(s.id);
+    const t = lastText.get(s.id);
+    stall(s, "closed_idle", { result: cut(t?.text ?? "", MAX_TEXT, t && l?.name && readMore(l.name, t.id)) });
   }
 
   function route(id: string, coordinator: string, e: WorkerEvent) {
@@ -516,12 +544,12 @@ export function createOrchestration(deps: OrchestrationDeps) {
   }
 
   /** One stalled event per stall; the worker is not touched. */
-  function stall(s: Session, reason: NonNullable<WorkerEvent["reason"]>) {
+  function stall(s: Session, reason: NonNullable<WorkerEvent["reason"]>, extra?: Partial<WorkerEvent>) {
     const l = linkOf(s.id);
     if (!l?.coordinatorId || !l.name) return;
     const { received, at } = s.activity();
     stalled.set(s.id, { reason, received });
-    route(s.id, l.coordinatorId, { name: l.name, sessionId: s.id, type: "stalled", at: Date.now(), reason, lastActivity: new Date(at).toISOString() });
+    route(s.id, l.coordinatorId, { name: l.name, sessionId: s.id, type: "stalled", at: Date.now(), reason, lastActivity: new Date(at).toISOString(), ...extra });
   }
 
   /** Arms no_start for a new turn sent to `s` (`progress` taken before the prompt). */
@@ -540,6 +568,19 @@ export function createOrchestration(deps: OrchestrationDeps) {
       if (n) {
         if (now - n.at >= NO_START_MS) stall(s, "no_start");
       } else if (minutes > 0 && s.info().state === "running" && now - Math.max(at, since) >= minutes * 60_000) stall(s, "silent");
+    }
+    // GH-852: NO_START_MS is the grace for the CLI's own turn after the work ends.
+    for (const [id, w] of waiting) {
+      const s = deps.sessions.get(id);
+      if (!s || !s.live() || s.info().state !== "idle") {
+        waiting.delete(id);
+        continue;
+      }
+      if (busyOwn(s)) {
+        w.busyAt = now;
+        continue;
+      }
+      if (minutes > 0 && !stallOf(id) && now - w.turnEnd >= minutes * 60_000 && now - w.busyAt >= NO_START_MS) (waiting.delete(id), stall(s, "idle_waiting"));
     }
   }
   /** Wakes idle coordinators that wait (workers, subagents, background commands) with a one-line message, so their prompt cache outlives its lifetime (Settings keepWarmMinutes). */
@@ -625,7 +666,13 @@ export function createOrchestration(deps: OrchestrationDeps) {
         quiet.delete(s.id);
       }
     }
-    if (s.live()) s.restartQuery();
+    waiting.delete(s.id);
+    closing.add(s.id);
+    try {
+      if (s.live()) s.restartQuery();
+    } finally {
+      closing.delete(s.id);
+    }
     wake(s.id);
   }
 
@@ -777,7 +824,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
       ),
       def(
         "worker_wait",
-        `Wait for worker events: denied (cannot be undone), turn_end (\`result\`: first ${MAX_TEXT} characters, \`closed: true\`: the daemon closed the CLI), error, stalled (\`reason\`; a report only, the worker is not stopped). Returns unread events at once, else waits up to timeoutMs (default ${DEFAULT_WAIT_MS}, max ${MAX_WAIT_MS}); an empty list on timeout.`,
+        `Wait for worker events: denied (cannot be undone), turn_end (\`result\`: first ${MAX_TEXT} characters, \`closed: true\`: the daemon closed the CLI), error, stalled (\`reason\`; \`result\` for closed_idle; a report only, the worker is not stopped). Returns unread events at once, else waits up to timeoutMs (default ${DEFAULT_WAIT_MS}, max ${MAX_WAIT_MS}); an empty list on timeout.`,
         {
           names: z.array(name).max(50).optional(),
           types: z.array(z.enum(EVENT_TYPES)).max(EVENT_TYPES.length).optional(),
@@ -944,6 +991,11 @@ export function createOrchestration(deps: OrchestrationDeps) {
     waitingOnWorkers,
     /** The idle close dropped the CLI of session `id`: see wake. */
     released: wake,
+    /** `live` of session `id` changed (GH-852): a CLI that closed while its worker waited is reported. */
+    liveChanged(id: string) {
+      const s = deps.sessions.get(id);
+      if (s && !s.live()) dropped(s);
+    },
     /** Web app worker.close / worker.remove: the worker's link names its coordinator; same checks as the tools. The error to report, or undefined. */
     async userOp(op: "close" | "remove", id: string): Promise<{ code: string; message: string } | undefined> {
       const l = linkOf(id);
@@ -1028,7 +1080,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
         for (const m of [lastText, lastActivity] as Map<string, unknown>[]) {
           if (m.has(from)) m.set(to, m.get(from));
         }
-        for (const m of [open, noStart, stalled] as Map<string, unknown>[]) m.delete(from);
+        for (const m of [open, noStart, stalled, waiting] as Map<string, unknown>[]) m.delete(from);
       }
     },
     /**
@@ -1090,7 +1142,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
     },
     /** A deleted session leaves no state behind. */
     forget(id: string) {
-      for (const m of [bindings, queues, aliases, epochs, lastText, lastActivity, open, noStart, stalled, lastTurnEnd, ticks] as Map<string, unknown>[]) m.delete(id);
+      for (const m of [bindings, queues, aliases, epochs, lastText, lastActivity, open, noStart, stalled, waiting, lastTurnEnd, ticks] as Map<string, unknown>[]) m.delete(id);
       for (const set of [served, notified, renoticed, warming]) set.delete(id);
     },
     sweep,

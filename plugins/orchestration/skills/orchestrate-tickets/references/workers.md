@@ -66,7 +66,7 @@ already sent a notice, the events are there: call it with no `timeoutMs` and do 
 | `turn_end` | `result` (the worker's last reply text, **first 4000 characters**; a longer one ends with the `worker_read {name, part, offset}` call that reads the rest), `isError`, `interrupted` | The worker stopped. Parse the RESULT block. |
 | `denied` | `tool`, `toolUseId`, `input` | The auto-mode classifier, a rule or the user refused a call. Cannot be undone. |
 | `error` | | The session hit an error state. |
-| `stalled` | `reason` (`ended_without_result`, `no_start`, `silent`), `lastActivity` | Report only: the worker is not stopped. One event per stall; its next message ends it. |
+| `stalled` | `reason` (`ended_without_result`, `no_start`, `silent`, `idle_waiting`, `closed_idle`), `lastActivity`, `result` (`closed_idle`: the last reply text) | Report only: the worker is not stopped. One event per stall; its next message ends it. |
 
 A worker's question or permission request is no event: it goes to the user. Read it in `worker_list` (`waitingForUser`) or `worker_read`.
 
