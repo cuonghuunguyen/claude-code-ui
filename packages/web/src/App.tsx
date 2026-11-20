@@ -3929,10 +3929,11 @@ export function App() {
       />
       <OnFirstOpen open={!!creatingWt} fallback={<DialogFallback size="worktree" />}><CreateWorktreeDialog
         project={creatingWt}
+        side={creatingWt === undefined ? undefined : sideOfCwd(cwdSides, creatingWt)}
         request={(m) => client.current!.request(m)}
         onClose={() => setCreatingWt(undefined)}
         onCreated={(project, r) => void openInWorktree(project, r.path)}
-        onJiraSettings={() => (setCreatingWt(undefined), openSettingsGroup("jira"))}
+        onJiraSettings={(own) => (setCreatingWt(undefined), own && creatingWt ? setProjectSettings({ open: true, cwd: creatingWt }) : openSettingsGroup("jira"))}
       /></OnFirstOpen>
       <ConfirmDialog
         open={removingWorker !== undefined}

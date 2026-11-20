@@ -1,7 +1,7 @@
 // Project overrides of global settings (ADR 0013, docs/spec.md "Project settings"): the lookup the daemon's readers share.
 // Only `overrides.local` counts: it holds this daemon's own Projects (the Hub puts a Side's entries there when it syncs, `sideSettings`).
 import { basename, dirname } from "node:path";
-import { LOCAL_SIDE, type ProjectOverrides, type Settings } from "@claude-ui/protocol";
+import { LOCAL_SIDE, type ProjectOverrides, type ProjectRef, type Settings } from "@claude-ui/protocol";
 import { gitDirsOf } from "./git.ts";
 
 const own = (settings: Settings): Record<string, ProjectOverrides> => {
@@ -55,4 +55,24 @@ export function inlineTaskSettings(settings: Settings, cwd: string): Settings["i
 /** Settings `history` for one file: `enabled` of the file's Project over the global one. */
 export function historySettings(settings: Settings, file: string): Settings["history"] {
   return { ...settings.history, enabled: projectOverridesOfFile(settings, file).history?.enabled ?? settings.history.enabled };
+}
+
+/** The overrides of the Project `ref` as the Hub keys them (Side id, then the Project's own folder). Nothing for a Worktree path: the caller sends its Project. */
+const refOverrides = (settings: Settings, ref: ProjectRef | undefined): ProjectOverrides | undefined => {
+  const m = settings.projects.overrides;
+  if (!ref || !Object.hasOwn(m, ref.side)) return undefined;
+  const side = m[ref.side]!;
+  return Object.hasOwn(side, ref.cwd) ? side[ref.cwd] : undefined;
+};
+
+/** Settings `jira` for one Project (Hub): each field its overrides set (an empty string is not a value) over the global one. */
+export function jiraSettings(settings: Settings, ref?: ProjectRef): Settings["jira"] {
+  const o = refOverrides(settings, ref)?.jira;
+  return { ...settings.jira, ...(o?.url && { url: o.url }), ...(o?.email && { email: o.email }), ...(o?.jql && { jql: o.jql }), ...(o?.template && { template: o.template }) };
+}
+
+/** Every Jira URL origin in use: the global one ("" without URL) and those of all Project overrides on every Side. Saved tokens of other origins are dropped. */
+export function jiraOriginsInUse(settings: Settings): string[] {
+  const urls = [settings.jira.url, ...Object.values(settings.projects.overrides).flatMap((side) => Object.values(side).map((o) => o.jira?.url ?? ""))];
+  return [...new Set(urls.filter((u, i) => i === 0 || u).map((u) => (u ? new URL(u).origin : "")))];
 }

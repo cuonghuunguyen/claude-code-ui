@@ -1,7 +1,7 @@
 // Create worktree modal (GH-447, docs/spec.md "Worktrees"): a new worktree's branch from a Jira Ticket, an existing Branch or a free Name.
 // The daemon creates it (`worktree.create`); errors (a taken folder or branch: `exists`) show here and the modal stays open.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { branchNameError, checkoutFolder, checkoutFolderError, normalizeBranchName, ticketBranchName, type BranchRow, jiraKeyInBranch, type JiraSearchResult, type JiraTicket, type PullRequestBranchesResult, type SettingsResult, type WorktreeBranchesResult, type WorktreeCreateResult } from "@claude-ui/protocol";
+import { LOCAL_SIDE, branchNameError, checkoutFolder, checkoutFolderError, normalizeBranchName, ticketBranchName, type BranchRow, jiraKeyInBranch, type JiraSearchResult, type JiraTicket, type PullRequestBranchesResult, type SettingsResult, type WorktreeBranchesResult, type WorktreeCreateResult } from "@claude-ui/protocol";
 import { LoaderCircleIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -12,17 +12,20 @@ import { baseOptions, branchesWithKey, branchKind, branchWithKey, checkoutRef, p
 import { isImeKey } from "./ime.ts";
 import { projectName } from "./tabs.ts";
 import { useT } from "./i18n.ts";
+import { jiraOf, jiraTokenFor } from "./project-settings.ts";
 import { offer } from "./recommendations.ts";
 
 type Props = {
   /** The project whose repository gets the worktree; the modal shows while set. */
   project?: string;
+  /** Side id of the project (default `local`): its Jira overrides are keyed by it. */
+  side?: string;
   request: <T>(m: Request) => Promise<T>;
   onClose: () => void;
   /** The worktree is ready: the app opens a new session tab in it. */
   onCreated: (project: string, r: WorktreeCreateResult) => void;
-  /** Ticket tab without Jira: opens Settings › Jira. */
-  onJiraSettings: () => void;
+  /** Ticket tab without Jira: opens Settings › Jira, or with `own` (this project sets its own Jira URL) the project's settings. */
+  onJiraSettings: (own: boolean) => void;
 };
 
 export function CreateWorktreeDialog(p: Props) {
@@ -33,12 +36,12 @@ const INPUT = "h-8 w-full rounded-md border bg-background px-2 text-sm outline-n
 const SEARCH_DELAY = 300;
 type Create = { branch: string; base?: string } | { checkout: string };
 
-function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & { project: string }) {
+function Body({ project, side = LOCAL_SIDE, request, onClose, onCreated, onJiraSettings }: Props & { project: string }) {
   const t = useT();
   const ask = useRef(request);
   ask.current = request;
   const [picked, setPicked] = useState<Source | undefined>(storedSource);
-  const [jira, setJira] = useState<{ ready: boolean; template: string; filter: boolean }>();
+  const [jira, setJira] = useState<{ ready: boolean; template: string; filter: boolean; own?: boolean }>();
   const source: Source = picked ?? (jira?.ready ? "ticket" : "name");
   const [branches, setBranches] = useState<BranchRow[]>();
   const [defaultBase, setDefaultBase] = useState<string>();
@@ -75,14 +78,16 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
     ask.current<SettingsResult>({ type: "settings.get" }).then(
       (r) => {
         if (!live) return;
-        const ready = !!r.settings.jira?.url && !!r.jiraToken;
-        setJira({ ready, template: r.settings.jira?.template || "{type}/{key}-{summary}", filter: !!r.settings.jira?.jql?.trim() });
+        // The Jira connection of this Project: its overrides over the global one, and the token of that URL's origin.
+        const j = r.settings.jira && jiraOf(r.settings.projects?.overrides, side, project, r.settings.jira);
+        const ready = !!j?.url && jiraTokenFor(r, j.url);
+        setJira({ ready, template: j?.template || "{type}/{key}-{summary}", filter: !!j?.jql?.trim(), own: !!j && j.url !== r.settings.jira.url });
         if (offer("jira", { ready })) setJiraHint(true);
       },
       () => live && setJira({ ready: false, template: "", filter: false }),
     );
     return () => void (live = false);
-  }, [project]);
+  }, [project, side]);
 
   // Ticket search: my open tickets first, then per typed text (debounced).
   useEffect(() => {
@@ -100,7 +105,7 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
               return key;
             })
           : Promise.resolve(query.trim());
-      text.then((q) => ask.current<JiraSearchResult>({ type: "jira.search", ...(q && { text: q }) })).then(
+      text.then((q) => ask.current<JiraSearchResult>({ type: "jira.search", ...(q && { text: q }), project: { side, cwd: project } })).then(
         (r) => live && (setTickets(r.tickets), setTicketError(undefined)),
         (e: Error) => live && (setTickets(undefined), setTicketError(e.message)),
       ).finally(() => live && setSearching(false));
@@ -109,7 +114,7 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
       live = false;
       clearTimeout(timer);
     };
-  }, [source, jira?.ready, query, project]);
+  }, [source, jira?.ready, query, project, side]);
 
   // Branch filter: a pasted pull request link is looked up on origin (debounced like the ticket search).
   const paste = useMemo(() => pasteOf(filter), [filter]);
@@ -245,7 +250,7 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
         <p className="flex items-center gap-2 text-sm" data-testid="rec-jira">
           <span className="min-w-0 flex-1">
             {t("rec.jira")}{" "}
-            <button type="button" onClick={onJiraSettings} className="text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring" data-testid="rec-jira-connect">
+            <button type="button" onClick={() => onJiraSettings(false)} className="text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring" data-testid="rec-jira-connect">
               {t("rec.jiraConnect")}
             </button>
           </span>
@@ -327,8 +332,8 @@ function Body({ project, request, onClose, onCreated, onJiraSettings }: Props & 
           ) : !jira.ready ? (
             <p className="text-sm" data-testid="create-worktree-no-jira">
               {t("sidebar.cw.noJira")}{" "}
-              <button type="button" onClick={onJiraSettings} className="text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring" data-testid="create-worktree-jira-settings">
-                {t("sidebar.cw.openJira")}
+              <button type="button" onClick={() => onJiraSettings(!!jira.own)} className="text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring" data-testid="create-worktree-jira-settings">
+                {t(jira.own ? "sidebar.cw.openProjectJira" : "sidebar.cw.openJira")}
               </button>
             </p>
           ) : (

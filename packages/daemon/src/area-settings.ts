@@ -8,7 +8,18 @@ import type { AddonsRequest } from "./addons.ts";
 import type { Area, Connection, Handlers, Msg, Respond } from "./dispatch.ts";
 import { JiraError, jiraOrigin } from "./jira.ts";
 import { usesOauthToken } from "./plan-usage.ts";
+import type { ProjectRef } from "@claude-ui/protocol";
+import { jiraOriginsInUse, jiraSettings } from "./project-overrides.ts";
 import { overrideAccounts, withoutOverrideAccount } from "./settings.ts";
+
+const REF_MAX = 4096;
+/** The `project` of a jira.* request: absent, or a Side id and a folder as short strings. */
+const projectRefProblem = (p: unknown): string | undefined => {
+  if (p === undefined) return undefined;
+  const o = p as Partial<ProjectRef> | null;
+  const ok = (v: unknown) => typeof v === "string" && v.length > 0 && v.length <= REF_MAX && !v.includes("\0");
+  return o && typeof o === "object" && ok(o.side) && ok(o.cwd) ? undefined : "project must be { side, cwd } of strings";
+};
 
 export type SettingsAreaContext = Pick<
   DaemonContext,
@@ -37,8 +48,12 @@ export function createSettingsArea(ctx: SettingsAreaContext, conn: Pick<Connecti
 
   const jiraToken = async (msg: Msg<"jira.token">, { reply, fail }: Respond) => {
     if (msg.token !== null && typeof msg.token !== "string") return fail("bad_settings", "token must be a string or null");
+    const bad = projectRefProblem(msg.project);
+    if (bad) return fail("bad_settings", bad);
     try {
-      secrets.setJiraToken(msg.token === null ? null : msg.token.trim(), jiraOrigin(appSettings.get().jira.url));
+      // The token is saved for the origin of the Jira URL in effect (a Project's, else the global one); the global origin's token is also kept in the old format.
+      const settings = appSettings.get();
+      secrets.setJiraToken(msg.token === null ? null : msg.token.trim(), jiraOrigin(jiraSettings(settings, msg.project).url), jiraOrigin(settings.jira.url));
     } catch (err) {
       return fail("bad_settings", (err as Error).message);
     }
@@ -90,8 +105,10 @@ export function createSettingsArea(ctx: SettingsAreaContext, conn: Pick<Connecti
 
   const jiraRun = async (msg: Msg<"jira.test" | "jira.search">, { reply, fail }: Respond) => {
     if (msg.type === "jira.search" && msg.text !== undefined && (typeof msg.text !== "string" || msg.text.length > 500)) return fail("bad_request", "text must be a string of at most 500 characters");
+    const bad = projectRefProblem(msg.project);
+    if (bad) return fail("bad_request", bad);
     try {
-      return reply(msg.type === "jira.test" ? await jira.test() : { tickets: await jira.search(msg.text) });
+      return reply(msg.type === "jira.test" ? await jira.test(msg.project) : { tickets: await jira.search(msg.text, msg.project) });
     } catch (e) {
       if (e instanceof JiraError) return fail(e.code, e.message);
       throw e;
@@ -114,10 +131,9 @@ export function createSettingsArea(ctx: SettingsAreaContext, conn: Pick<Connecti
       if (settings.claude.account !== before) (ctx.applyAccountToken(), ctx.claudeLoginChanged());
       const origin = jiraOrigin(settings.jira.url);
       const urlPatched = msg.patch?.jira?.url !== undefined;
-      // GH-487: a token saved without URL takes the first URL set here (never a hand edit), in one write; a token of another origin is dropped (cleanup, it is never sent anyway).
+      // GH-487: a token saved without URL takes the first URL set here (never a hand edit), in one write; a token of an origin that neither the global URL nor a Project override uses is dropped (cleanup, it is never sent anyway).
       if (urlPatched && origin) secrets.bindJiraToken(origin);
-      const bound = secrets.jiraTokenOrigin();
-      if (bound !== undefined && bound !== origin) secrets.setJiraToken(null);
+      secrets.pruneJiraTokens(jiraOriginsInUse(settings), origin);
       if (urlPatched && !origin) secrets.endJiraTokenReset();
       if (!settings.usageLimit.autoContinue) ctx.autoContinue.clear();
       if (!settings.focus.nextForYou) for (const s of ctx.sessions.values()) s.clearSuggestion();

@@ -353,6 +353,7 @@ export default {
   "sidebar.cw.inWorktree": "in worktree {name}",
   "sidebar.cw.noJira": "Jira is not set up.",
   "sidebar.cw.openJira": "Open Settings › Jira",
+  "sidebar.cw.openProjectJira": "Open Project settings › Jira",
   "sidebar.cw.ticketPlaceholder": "Key, text, ticket or pull request link",
   "sidebar.cw.searchTickets": "Search tickets",
   "sidebar.cw.tickets": "Tickets",

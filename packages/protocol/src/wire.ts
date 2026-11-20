@@ -228,18 +228,18 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "back.done"; sessionId: string; partId: string }
   /** Refresh or Retry: sends a new brief turn for the mark. Error `brief_busy` while one is queued or running, `unknown_mark`. */
   | { type: "back.brief"; sessionId: string; partId: string }
-  /** Saves (string) or clears (null) the Jira token in secrets.json; write-only. Reply SettingsResult; broadcasts `settings_changed`. Error `bad_settings`. */
-  | { type: "jira.token"; token: string | null }
+  /** Saves (string) or clears (null) the Jira token in secrets.json; write-only. The token belongs to the origin of the Jira URL in effect: the global one, or with `project` the one that Project's overrides set (a Project without its own URL: the global one). Reply SettingsResult; broadcasts `settings_changed`. Error `bad_settings`. */
+  | { type: "jira.token"; token: string | null; project?: ProjectRef }
   /** Saves a named Claude token (from `claude setup-token`) in secrets.json; write-only, at most 20. Reply SettingsResult; broadcasts `settings_changed`. Error `bad_settings`. Hub only. */
   | { type: "claude.account.add"; name: string; token: string }
   /** Removes a token account; when it was the active one the account falls back to Default. Reply SettingsResult; broadcasts `settings_changed`. Hub only. */
   | { type: "claude.account.remove"; id: string }
   /** Checks a token account with one minimal CLI turn (Haiku, no tools) in a throwaway CLI config; never changes the active account or any session. Reply {} on success; errors claude_auth (token refused: invalid, expired, revoked), claude_test_failed (network, timeout, other; message = the CLI's one-line reason), bad_settings (unknown id, cloud provider env). Hub only. */
   | { type: "claude.account.test"; id: string }
-  /** Test connection with the saved Jira settings and token. Reply `{user}` (display name); errors jira_not_configured, jira_auth, jira_unreachable, jira_failed. */
-  | { type: "jira.test" }
-  /** Ticket tab: no `text` = the Ticket filter's tickets (`settings.jira.jql`, default my open ones; 20); a key or ticket URL = that ticket; other text = summary search (inside the Ticket filter when set). Reply JiraSearchResult; errors as `jira.test`. */
-  | { type: "jira.search"; text?: string }
+  /** Test connection with the saved Jira settings and token (with `project`: the Jira settings that Project's overrides replace, and the token of their URL's origin). Reply `{user}` (display name); errors jira_not_configured, jira_auth, jira_unreachable, jira_failed. */
+  | { type: "jira.test"; project?: ProjectRef }
+  /** Ticket tab: no `text` = the Ticket filter's tickets (`settings.jira.jql`, default my open ones; 20); a key or ticket URL = that ticket; other text = summary search (inside the Ticket filter when set). `project`: as `jira.test`. Reply JiraSearchResult; errors as `jira.test`. */
+  | { type: "jira.search"; text?: string; project?: ProjectRef }
   /** Performance data of this daemon (docs/spec.md "Performance monitor"); reply PerfReport. */
   | { type: "perf.report" }
   /** First-send timings of this browser (docs/spec.md "Performance monitor"): ms since send pressed, per mark; reply {}. Ignored while the monitor is off. */
@@ -609,7 +609,7 @@ export type ServerMessage =
   /** To every connection when OpenCode read a changed provider set (after a login or logout): its model list is stale. */
   | { type: "opencode.providersChanged" }
   /** To every connection of this daemon after `settings.set`. */
-  | { type: "settings_changed"; settings: Settings; jiraToken?: boolean; claudeAccounts?: ClaudeAccountInfo[] }
+  | { type: "settings_changed"; settings: Settings; jiraToken?: boolean; jiraTokens?: string[]; claudeAccounts?: ClaudeAccountInfo[] }
   /** On connect: this daemon runs older code than is on disk (a source checkout changed after the start, or a newer install waits for a restart). `note` says which. */
   | { type: "daemon_stale"; note: string }
   /** GH-518: the Hub's machine slept while a session ran; to every connection when found, the last one again to each new connection. */
@@ -1117,6 +1117,8 @@ export type ProjectOverrides = {
   history?: { enabled?: boolean };
   jira?: { url?: string; email?: string; jql?: string; template?: string };
 };
+/** A Project as `projects.overrides` keys it: its Side id and its own folder (never a Worktree path). */
+export type ProjectRef = { side: string; cwd: string };
 /** Most Side ids in `projects.overrides`. */
 export const PROJECT_OVERRIDES_SIDES_MAX = 20;
 export type Settings = { orchestration: { enabled: boolean; /** Live workers of one root coordinator's tree, every depth, plus its worker_start calls in flight. */ workerCap: number; /** Live workers of this daemon, all trees; 0 = no limit. */ workerCapTotal: number; /** Depth = coordinatorId hops from the root coordinator; a worker at this depth may not start workers. */ maxDepth: number; /** Live direct workers one coordinator may run. */ maxChildren: number; /** A running worker whose CLI sends no message for this long raises a `stalled` event to its coordinator; 0 = off. */ stallMinutes: number; /** An idle coordinator that waits on running workers, subagents or background commands gets a one-line keep-warm message this long after its last turn, so its prompt cache stays warm (set under the cache lifetime: 55 for 1 hour, 4 for 5 minutes); 0 = off. */ keepWarmMinutes: number; workerMode: WorkerModeSetting; /** Off: a worker's finished and error notify nobody but its coordinator; a worker's permission request or question still notifies the user. */ workerNotifications: boolean; /** GH-574: a worker whose turn ends settled loses its CLI (worker_send resumes it). */ closeFinished: boolean }; /** New session mode when Claude settings set none; `auto` on a model without auto support runs in `default`. */ sessions: { defaultMode: (typeof SESSION_MODES)[number]; /** The Engine of the last session created: the new-session tab starts with it. */ engine: Engine }; /** OpenCode engine (docs/spec.md "OpenCode engine"): `path` of its binary, "" = look it up on PATH. */ opencode: { path: string }; usageLimit: { autoContinue: boolean }; focus: { /** Claude predicts the next prompt after a turn (SDK promptSuggestions); applies to sessions started or resumed after the change. */ nextForYou: boolean }; notifications: { desktop: boolean };
@@ -1192,7 +1194,7 @@ export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
 export type ClaudeAccountInfo = { id: string; name: string };
 /** An editor the hub can open a path in. */
 export type EditorId = "code" | "cursor" | "idea";
-export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true; /** The daemon's own environment has CLAUDE_CODE_OAUTH_TOKEN: the Default Claude account is that token. */ claudeEnvToken?: true; /** This daemon can hold a sleep inhibitor (`supported`) and the last failure (`error`, kept until the setting is turned off); absent from a side or an older daemon. */ keepAwake?: { supported: boolean; error?: string }; /** The OS launcher shortcut exists; absent: this daemon cannot make one (side, older daemon, other OS). */ shortcut?: { installed: boolean }; /** Editors found on the hub (fs.openExternal `with`); absent from a side or an older daemon. */ editors?: { id: EditorId | "custom"; label: string }[] }; /** A Jira token is saved (the token itself is write-only). */ jiraToken?: boolean; /** The saved Claude token accounts, without tokens. */ claudeAccounts?: ClaudeAccountInfo[]; /** An old-format token was cleared by a security update and none is saved since (GH-487). */ jiraTokenReset?: true };
+export type SettingsResult = { settings: Settings; daemon?: { host: string; version?: string; desktopForcedOff?: true; /** The daemon's own environment has CLAUDE_CODE_OAUTH_TOKEN: the Default Claude account is that token. */ claudeEnvToken?: true; /** This daemon can hold a sleep inhibitor (`supported`) and the last failure (`error`, kept until the setting is turned off); absent from a side or an older daemon. */ keepAwake?: { supported: boolean; error?: string }; /** The OS launcher shortcut exists; absent: this daemon cannot make one (side, older daemon, other OS). */ shortcut?: { installed: boolean }; /** Editors found on the hub (fs.openExternal `with`); absent from a side or an older daemon. */ editors?: { id: EditorId | "custom"; label: string }[] }; /** A Jira token is saved for the global Jira URL (the token itself is write-only). */ jiraToken?: boolean; /** The Jira origins (scheme + host + port; not secret) that have a saved token: the global URL's and the Project overrides'. Absent from an older daemon, which has no Jira per Project. */ jiraTokens?: string[]; /** The saved Claude token accounts, without tokens. */ claudeAccounts?: ClaudeAccountInfo[]; /** An old-format token was cleared by a security update and none is saved since (GH-487). */ jiraTokenReset?: true };
 /** Spans of the daemon the monitor times (code constants; never a user value). */
 /** First-send marks a browser reports (`perf.client`), ms since send pressed; a closed list. */
 export const PERF_CLIENT_MARKS = ["firstSend.sent", "firstSend.info", "firstSend.taken", "firstSend.tab"] as const;

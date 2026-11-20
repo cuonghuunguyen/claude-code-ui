@@ -29,7 +29,7 @@ it("the token is returned only for the origin it was saved for; an old-format to
   const old = createSecrets({ file });
   expect(old.jiraToken("https://jira.example.com")).toBeUndefined();
   expect(old.jiraToken("")).toBeUndefined();
-  expect(old.jiraTokenOrigin()).toBeUndefined();
+  expect(old.jiraOrigins()).toEqual([]);
   expect(old.jiraTokenReset()).toBe(true);
   // The token is gone from the disk, the flag is persisted (GH-487).
   expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ jiraTokenReset: true });
@@ -38,11 +38,11 @@ it("the token is returned only for the origin it was saved for; an old-format to
   expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({});
   const s = createSecrets({ file });
   s.setJiraToken("tok", A);
-  expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ jiraToken: "tok", jiraOrigin: A });
+  expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ jiraToken: "tok", jiraOrigin: A, jiraTokens: { [A]: "tok" } });
   expect(s.jiraToken("https://b.example.com")).toBeUndefined();
   expect(s.jiraToken(A)).toBe("tok");
   expect(s.jiraTokenReset()).toBe(false);
-  s.setJiraToken(null);
+  s.setJiraToken(null, A);
   expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({});
   expect(createSecrets({ file }).jiraTokenReset()).toBe(false);
 });
@@ -54,9 +54,9 @@ it("bindJiraToken binds a token saved without URL in one write and never rebinds
   expect(existsSync(file)).toBe(false);
   s.setJiraToken("tok");
   s.bindJiraToken("https://a.example.com");
-  expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ jiraToken: "tok", jiraOrigin: "https://a.example.com" });
+  expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ jiraToken: "tok", jiraOrigin: "https://a.example.com", jiraTokens: { "https://a.example.com": "tok" } });
   s.bindJiraToken("https://b.example.com");
-  expect(s.jiraTokenOrigin()).toBe("https://a.example.com");
+  expect(s.jiraOrigins()).toEqual(["https://a.example.com"]);
   expect(s.jiraToken("https://a.example.com")).toBe("tok");
 });
 
@@ -83,6 +83,77 @@ it("Claude accounts and the Jira token live side by side in the file", () => {
   s.setJiraToken("jira-tok", "https://example.com");
   expect(s.jiraToken("https://example.com")).toBe("jira-tok");
   expect(s.claudeToken(id)).toBe("tok-a");
-  s.setJiraToken(null);
+  s.setJiraToken(null, "https://example.com");
   expect(s.claudeToken(id)).toBe("tok-a");
+});
+
+const A = "https://acme.atlassian.net";
+const B = "https://jira.example.com";
+const tmpFile = () => join(mkdtempSync(join(tmpdir(), "secrets-")), "secrets.json");
+
+it("one token per Jira origin: Projects of the same origin share it, another origin has its own; survives a restart (GH-894)", () => {
+  const file = tmpFile();
+  const s = createSecrets({ file });
+  s.setJiraToken("tok-a", A);
+  s.setJiraToken("tok-b", B, A);
+  expect(s.jiraToken(A)).toBe("tok-a");
+  expect(s.jiraToken(B)).toBe("tok-b");
+  expect(s.jiraToken("https://other.example.com")).toBeUndefined();
+  expect(s.jiraOrigins().sort()).toEqual([B, A].sort());
+  const again = createSecrets({ file });
+  expect(again.jiraToken(A)).toBe("tok-a");
+  expect(again.jiraToken(B)).toBe("tok-b");
+  s.setJiraToken(null, B, A);
+  expect(createSecrets({ file }).jiraOrigins()).toEqual([A]);
+  expect(createSecrets({ file }).jiraToken("__proto__")).toBeUndefined();
+});
+
+it("an old-format file { jiraToken, jiraOrigin } migrates to the origin map (GH-894)", () => {
+  const file = tmpFile();
+  writeFileSync(file, JSON.stringify({ jiraToken: "tok-old", jiraOrigin: A }));
+  const s = createSecrets({ file });
+  expect(s.jiraToken(A)).toBe("tok-old");
+  expect(s.jiraOrigins()).toEqual([A]);
+  s.setJiraToken("tok-b", B, A);
+  expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ jiraTokens: { [A]: "tok-old", [B]: "tok-b" } });
+});
+
+it("the token of the global origin is also written as jiraToken + jiraOrigin so an older daemon finds it; a Project token never replaces it (GH-894)", () => {
+  const file = tmpFile();
+  const s = createSecrets({ file });
+  const disk = () => JSON.parse(readFileSync(file, "utf8"));
+  s.setJiraToken("tok-a", A, A);
+  expect(disk()).toMatchObject({ jiraToken: "tok-a", jiraOrigin: A });
+  s.setJiraToken("tok-b", B, A);
+  expect(disk()).toMatchObject({ jiraToken: "tok-a", jiraOrigin: A, jiraTokens: { [A]: "tok-a", [B]: "tok-b" } });
+  // The global URL moves to the other origin: the mirror follows; without a token there the mirror is gone.
+  s.pruneJiraTokens([A, B], B);
+  expect(disk()).toMatchObject({ jiraToken: "tok-b", jiraOrigin: B });
+  s.pruneJiraTokens([A, B], "https://none.example.com");
+  expect(disk().jiraToken).toBeUndefined();
+  expect(disk().jiraOrigin).toBeUndefined();
+  expect(disk().jiraTokens).toEqual({ [A]: "tok-a", [B]: "tok-b" });
+});
+
+it("pruneJiraTokens drops the tokens of origins nothing uses and writes nothing when nothing changes (GH-894)", () => {
+  const file = tmpFile();
+  const s = createSecrets({ file });
+  s.setJiraToken("tok-a", A, A);
+  s.setJiraToken("tok-b", B, A);
+  const before = readFileSync(file, "utf8");
+  s.pruneJiraTokens([A, B], A);
+  expect(readFileSync(file, "utf8")).toBe(before);
+  s.pruneJiraTokens([A], A);
+  expect(s.jiraOrigins()).toEqual([A]);
+  expect(s.jiraToken(B)).toBeUndefined();
+  s.pruneJiraTokens([], "");
+  expect(s.jiraOrigins()).toEqual([]);
+  expect(JSON.parse(readFileSync(file, "utf8")).jiraToken).toBeUndefined();
+});
+
+it("values() returns every Jira token so terminal output redacts them all (GH-894)", () => {
+  const s = createSecrets({ file: tmpFile() });
+  s.setJiraToken("tok-a", A, A);
+  s.setJiraToken("tok-b", B, A);
+  expect(s.values().sort()).toEqual(["tok-a", "tok-b"]);
 });
