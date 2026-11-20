@@ -879,6 +879,15 @@ describe("GH-771: daemon_hello and snapshot refs through the hub", () => {
     expect(t.sent.filter((m) => m.type === "daemon_hello")).toEqual([]);
   });
 
+  it("a side's plan_usage and account_usage are not relayed: the Hub shows its own accounts", async () => {
+    const a = fakeSide();
+    const t = await setup(a);
+    a.out({ type: "plan_usage", usage: null });
+    a.out({ type: "account_usage", key: "", usage: null });
+    await t.settle();
+    expect(t.sent.filter((m) => m.type === "plan_usage" || m.type === "account_usage")).toEqual([]);
+  });
+
   it("session.subscribe known reaches the owning side unchanged; a reply with refs passes and is relayed whole", async () => {
     const known = [["p1", "h1"], ["p2", "h2"]];
     const snapshot = { heads: [], attentionSeq: 0, refs: true, page: { parts: [{ ref: "p1" }, { type: "assistant_text", id: "p3", text: "new", streaming: false }] }, aux: [{ pos: 2, part: { ref: "p2" } }] };

@@ -11,7 +11,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { DEFAULT_ENGINE, createAdapter, editorLabel, type Engine as EngineName, type PromptResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_UPLOAD_BYTES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_TAG, type ClientMessage, type ListResult, type MediaReadResult, type ModelInfo, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { DEFAULT_ENGINE, createAdapter, type Settings, editorLabel, type Engine as EngineName, type PromptResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_UPLOAD_BYTES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_TAG, type ClientMessage, type ListResult, type MediaReadResult, type ModelInfo, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
@@ -44,7 +44,7 @@ import { createProjects, trim, type Projects } from "./projects.ts";
 import { claudeEnv, setClaudeToken } from "./claude-env.ts";
 import { historySettings, inlineTaskSettings, jiraSettings, projectOverrides } from "./project-overrides.ts";
 import { TEST_ARGS, TEST_TIMEOUT_MS, testOutcome } from "./claude-test.ts";
-import { createPlanTracker, RESET_GRACE_MS, usesOauthToken } from "./plan-usage.ts";
+import { createPlanTrackers, RESET_GRACE_MS, usesOauthToken } from "./plan-usage.ts";
 import { createPromptQueue } from "./prompt-queue.ts";
 import { briefPrompt, find as findMark } from "./back-marks.ts";
 import { createBackReminders, TICK_MS as BACK_TICK_MS, type Due } from "./back-reminders.ts";
@@ -339,8 +339,17 @@ export function createDaemon(opts: {
       console.error("saving session settings failed:", err);
     }
   };
-  // Account-wide, so not a session event: every connection gets each change.
-  const plan = createPlanTracker({ onChange: (usage) => broadcast({ type: "plan_usage", usage }), read: () => queuedQuery(plan.refresh, opts.query), oauthToken: opts.oauthToken ?? (() => usesOauthToken(claudeEnv())), account: () => accountName() });
+  // Account-wide, so not a session event: every connection gets each change. One tracker per Claude account in use (GH-900): the global account and every
+  // account a Project overrides it with. `account_usage` carries each; `plan_usage` stays the global account's (an older page shows only that).
+  const plans = createPlanTrackers({
+    onChange: (key, usage) => {
+      broadcast({ type: "account_usage", key, usage });
+      if (key === globalAccount()) broadcast({ type: "plan_usage", usage });
+    },
+    read: (key, refresh) => queuedQuery(refresh, opts.query, { env: claudeEnvOf(key) }),
+    oauthToken: (key) => (key === globalAccount() ? opts.oauthToken : undefined) ?? usesOauthToken(claudeEnvOf(key)),
+    name: (key) => accountNameOf(key),
+  });
   /** Options of every session: settings changes are saved under its ID. */
   // Local settings files per cwd. `Session.snapshot()` is synchronous, so `planDirs` reads this cache; async paths refresh or warm it.
   const localFilesCache = new Map<string, string[]>();
@@ -352,15 +361,14 @@ export function createDaemon(opts: {
   const cachedLocalFiles = (cwd: string) => localFilesCache.get(cwd) ?? [join(cwd, ".claude", "settings.local.json")];
   const sessionOpts = (initial: Partial<SessionSettings>) => ({
     ...initial,
-    plan,
+    plan: (cwd: string) => plans.ensure(accountKeyOf(cwd)),
     promptSuggestions: () => appSettings.get().focus.nextForYou,
     chrome: () => appSettings.get().chrome.enabled,
     fork: () => appSettings.get().fork.enabled,
     claudeEnv: (cwd: string) => claudeEnvFor(cwd),
     visualizePlugin: () => (appSettings.get().chat.visualize ? visualizePluginDir() : undefined),
-    // The plan fallback only while the plan says rejected: another 429 (per-model, credits) during a warning is no usage limit.
-    onLimitStop: (id: string, resetsAt: number | undefined) => {
-      const at = resetsAt ?? (plan.current()?.status === "rejected" ? plan.current()?.statusResetsAt : undefined);
+    // `resetsAt`: the event's, else the plan fallback of the Session's own account (claude-engine.ts).
+    onLimitStop: (id: string, at: number | undefined) => {
       sessions.get(id)?.setLimitStop(at);
       autoContinue.schedule(id, at);
       // Queued messages wait for the reset (after an automatic continue), else for the user: sending into the limit would burn them one by one.
@@ -498,11 +506,39 @@ export function createDaemon(opts: {
     const a = projectOverrides(appSettings.get(), cwd).account;
     return a === undefined ? claudeEnv() : claudeEnv(process.env, a === "cli" ? null : a ? secrets.claudeToken(a) : undefined);
   };
-  const accountName = () => {
-    const a = appSettings.get().claude.account;
-    return a === "cli" ? "CLI login" : a ? secrets.claudeAccounts().find((x) => x.id === a)?.name : undefined;
+  /** An account setting as the CLI env takes it: `""` Default, `"cli"`, a token account id; an unknown id (removed, hand edit) is Default. */
+  const accountKey = (a: string) => (a === "" || a === "cli" || secrets.claudeAccounts().some((x) => x.id === a) ? a : "");
+  /** The Claude account key of the daemon's own setting. */
+  const globalAccount = () => accountKey(appSettings.get().claude.account);
+  /** The Claude account key a CLI started for `cwd` runs on: its Project's override, else the global one (`claudeEnvFor` is its env). */
+  const accountKeyOf = (cwd: string) => accountKey(projectOverrides(appSettings.get(), cwd).account ?? appSettings.get().claude.account);
+  const claudeEnvOf = (key: string) => claudeEnv(process.env, key === "cli" ? null : key ? secrets.claudeToken(key) : undefined);
+  const accountNameOf = (key: string) => (key === "cli" ? "CLI login" : key ? secrets.claudeAccounts().find((x) => x.id === key)?.name : undefined);
+  /** Account keys the settings name: the global one and every Project override. */
+  const accountKeysOf = (settings: Settings) => [accountKey(settings.claude.account), ...Object.values(Object.hasOwn(settings.projects.overrides, "local") ? settings.projects.overrides.local! : {}).flatMap((o) => (o.account === undefined ? [] : [accountKey(o.account)]))];
+  let lastGlobalAccount: string | undefined;
+  /** Settings changed: one tracker per account in use. */
+  const syncAccounts = () => {
+    plans.sync(accountKeysOf(appSettings.get()));
+    lastGlobalAccount = globalAccount();
+  };
+  /**
+   * An override account changed (global change: `claudeLoginChanged`): the live CLI of each local Claude Session whose account differs from
+   * `before`'s is replaced, idle now, busy at the end of its turn (the popover switcher is the way out of a usage limit).
+   */
+  const projectAccountsChanged = (before: Settings) => {
+    syncAccounts();
+    const after = appSettings.get();
+    // The raw setting, not the key: a removed account (unknown id now) differs from Default, and its Sessions still run on its token.
+    const raw = (settings: Settings, cwd: string) => projectOverrides(settings, cwd).account ?? settings.claude.account;
+    for (const s of sessions.values()) {
+      if (!s.live() || raw(before, s.cwd) === raw(after, s.cwd)) continue;
+      if (!s.releaseQuery()) s.staleLogin = true;
+      else console.log(`session ${s.id}: Project Claude account changed, CLI closed`);
+    }
   };
   setClaudeToken(accountToken());
+  syncAccounts();
   /** `claude.account.test` in flight by account id: a second request awaits the same CLI run. */
   const accountTests = new Map<string, Promise<ReturnType<typeof testOutcome>>>();
   const testAccount = (id: string, token: string, env: NodeJS.ProcessEnv) => {
@@ -558,7 +594,7 @@ export function createDaemon(opts: {
   const updater: Updater | undefined =
     opts.update && createUpdater({ ...opts.update, busy: () => ({ sessions: [...sessions.values()].filter((s) => s.working()).length, terminals: terminals.count() }), broadcast });
   updater?.start();
-  const config = createConfig({ query: opts.query, cli: opts.cli, holdMs: opts.configHoldMs, pollMs: opts.configPollMs, onChanged: (kind, cwd) => (commandCache.clear(), broadcast({ type: "config.changed", kind, cwd })) });
+  const config = createConfig({ envFor: claudeEnvFor, query: opts.query, cli: opts.cli, holdMs: opts.configHoldMs, pollMs: opts.configPollMs, onChanged: (kind, cwd) => (commandCache.clear(), broadcast({ type: "config.changed", kind, cwd })) });
   const plugins = createPlugins({
     cli: opts.cli ?? runCli,
     // Plugins are user- or project-wide: every live query reloads, as the extension reloads every open session.
@@ -584,30 +620,42 @@ export function createDaemon(opts: {
   });
   const addons = opts.addonsDir ? createAddons({ dir: opts.addonsDir, file: join(opts.addonsDir, "addons.json"), onChanged: () => broadcast({ type: "config.changed", kind: "addons", cwd: "" }) }) : undefined;
   const root = resolve(opts.webRoot);
-  // Model list cached until the Claude login or account changes (claudeLoginChanged).
-  let models: ReturnType<typeof listModels> | undefined;
-  // Sync copy for SessionInfo.permissionModes: every path that builds a SessionInfo awaits modelList() first.
-  let known: ModelInfo[] = [];
-  const modelList = () =>
-    (models ??= listModels(opts.query).then((l) => (known = l))).catch((e) => {
-      models = undefined;
+  // Model list per Claude account key (its subscription decides which models and auto mode it offers), cached until the login or an account changes (claudeLoginChanged).
+  const modelCaches = new Map<string, { list?: ReturnType<typeof listModels>; known: ModelInfo[] }>();
+  /** The account key of a model list request: the folder's Project account, the global one without a folder. */
+  const modelKey = (cwd?: string) => (cwd === undefined ? globalAccount() : accountKeyOf(cwd));
+  // Sync copy for SessionInfo.permissionModes: every path that builds a SessionInfo for a folder awaits modelList(cwd) first.
+  const knownModels = (cwd?: string) => {
+    const own = modelCaches.get(modelKey(cwd));
+    // Not read yet for this account: the global list stands in until it is.
+    return own?.list ? own.known : (modelCaches.get(globalAccount())?.known ?? []);
+  };
+  const modelList = (cwd?: string) => {
+    const key = modelKey(cwd);
+    const entry = modelCaches.get(key) ?? (modelCaches.set(key, { known: [] }), modelCaches.get(key)!);
+    return (entry.list ??= listModels(opts.query, claudeEnvOf(key)).then((l) => ((entry.known = l), l))).catch((e) => {
+      if (modelCaches.get(key) === entry) entry.list = undefined;
       throw e;
     });
+  };
   /** The Claude login or account changed: models, plan usage and live CLIs are read again. */
   const claudeLoginChanged = () => {
-    models = undefined;
-    known = [];
+    modelCaches.clear();
     for (const s of sessions.values()) {
       if (!s.releaseQuery()) s.staleLogin = true;
       else console.log(`session ${s.id}: Claude login changed, CLI closed`);
     }
-    void plan.reset();
+    // The meter of the old global account stays until the new one answers: an empty one now (never null: it hides the meter).
+    const hadUsage = lastGlobalAccount !== undefined && plans.get(lastGlobalAccount)?.current() !== undefined;
+    syncAccounts();
+    if (hadUsage && plans.get(globalAccount())?.current() === undefined) broadcast({ type: "plan_usage", usage: { plan: null, windows: [], status: "allowed" } });
+    void plans.reset();
     // GH-668: the ready Haiku process holds the old login (token in its env).
     warmCommit.stop();
     if (appSettings.get().git.commitMessageWarm) warmCommit.prewarm();
     broadcast({ type: "config.changed", kind: "models", cwd: "" });
   };
-  const supportsAuto = (model: string) => known.some((m) => m.value === model && m.supportsAutoMode);
+  const supportsAuto = (model: string, cwd?: string) => knownModels(cwd).some((m) => m.value === model && m.supportsAutoMode);
   const roots = opts.roots.map(real).filter((r) => r !== undefined);
   /** UNC roots (configured and canonical form): the only UNC paths that may reach the file system (GH-282: an SMB lookup sends the NTLM hash). */
   const uncRoots = [...opts.roots, ...roots].filter((r) => winPathKind(r) === "unc");
@@ -913,13 +961,15 @@ export function createDaemon(opts: {
   // session.commands: the list per cwd, one throwaway CLI per cwd and minute (a plugin change shows within it).
   const commandCache = new Map<string, { at: number; list: Promise<SlashCommand[]> }>();
   const commandsOf = (cwd: string) => {
-    const hit = commandCache.get(cwd);
+    // Per folder and Project account: the list the CLI of that account reads.
+    const cacheKey = `${cwd}\0${accountKeyOf(cwd)}`;
+    const hit = commandCache.get(cacheKey);
     if (hit && Date.now() - hit.at < 60_000) return hit.list;
-    const list = queuedQuery((q) => q.supportedCommands(), opts.query, { cwd, persistSession: false }).then(
+    const list = queuedQuery((q) => q.supportedCommands(), opts.query, { cwd, persistSession: false, env: claudeEnvFor(cwd) }).then(
       (l) => (createAdapter().commands(l)[0] as { commands: SlashCommand[] }).commands,
     );
-    commandCache.set(cwd, { at: Date.now(), list });
-    list.catch(() => commandCache.delete(cwd));
+    commandCache.set(cacheKey, { at: Date.now(), list });
+    list.catch(() => commandCache.delete(cacheKey));
     return list;
   };
 
@@ -1194,8 +1244,8 @@ export function createDaemon(opts: {
     port: () => (http.address() as AddressInfo | null)?.port,
     heldElsewhere: (id) => cliTurnRunning(claudeDir, id, true),
     openCodeAgents: async (cwd) => (await openCodeCatalogue().agents(cwd)).map((a) => a.name),
-    agents: (cwd) => queuedQuery((q) => q.supportedAgents(), opts.query, { cwd, persistSession: false }).then((l) => l.map((a) => a.name)),
-    models: () => known,
+    agents: (cwd) => queuedQuery((q) => q.supportedAgents(), opts.query, { cwd, persistSession: false, env: claudeEnvFor(cwd) }).then((l) => l.map((a) => a.name)),
+    models: () => knownModels(),
     openCodeModels: () => openCodeCatalogue().models(),
     remove: async (id) => {
       const err = await deleteSessionById(id);
@@ -1271,7 +1321,7 @@ export function createDaemon(opts: {
         statStamp,
         transcriptCwd,
         sessionCwd,
-        modelList: () => modelList(),
+        modelList: (cwd) => modelList(cwd),
         supportsAuto,
         localFiles,
         commandsOf,
@@ -1976,6 +2026,8 @@ export function createDaemon(opts: {
     testAccount,
     applyAccountToken: () => setClaudeToken(accountToken()),
     claudeLoginChanged,
+    projectAccountsChanged,
+    accountOf: (cwd: string) => ({ env: claudeEnvFor(cwd), global: accountKeyOf(cwd) === globalAccount() }),
     warmCommit,
     catalogues,
     autoContinue,
@@ -2013,9 +2065,15 @@ export function createDaemon(opts: {
     ws.on("message", () => (stat.recvMsgs++, (stat.lastRecvAt = Date.now())));
     // First: the page reads the daemon's identity and epoch before anything else (GH-771).
     send(ws, { type: "daemon_hello", daemonId, logEpoch });
-    const usage = plan.current();
-    if (usage !== undefined) send(ws, { type: "plan_usage", usage });
-    if (plan.age() > PLAN_STALE_MS) void plan.reread();
+    syncAccounts();
+    const global = plans.get(globalAccount())?.current();
+    if (global !== undefined) send(ws, { type: "plan_usage", usage: global });
+    for (const key of plans.keys()) {
+      const t = plans.get(key)!;
+      const usage = t.current();
+      if (usage !== undefined) send(ws, { type: "account_usage", key, usage });
+      if (t.age() > PLAN_STALE_MS) void t.reread();
+    }
     updater?.messages().forEach((m) => send(ws, m));
     const stale = opts.buildInfo?.stale();
     if (stale) send(ws, { type: "daemon_stale", note: stale });

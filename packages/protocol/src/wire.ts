@@ -602,6 +602,8 @@ export type ServerMessage =
   | ({ type: "sessions.search.result"; reqId: string } & SessionSearchHits)
   /** Plan usage, not a session event: on connect and on each change. `usage` null: no plan limits (API key, Bedrock, Vertex). */
   | { type: "plan_usage"; usage: PlanUsage | null }
+  /** Plan usage of one Claude account (GH-900): `key` = `""` Default, `"cli"` (CLI login) or a token account id. One per account in use, on connect and on each change; `plan_usage` stays the global account's. */
+  | { type: "account_usage"; key: string; usage: PlanUsage | null }
   /** Output of an attached terminal. */
   | { type: "terminal.output"; terminalId: string; data: string }
   /** The terminal's shell exited (or it was closed); sent to every attached connection. The terminal is gone. */

@@ -32,7 +32,7 @@ export function promptFor(instruction: string, d: CommitDiff): string {
 /** The reply text: trimmed, one surrounding code fence removed. */
 export const unfence = (text: string) => text.trim().replace(/^```[^\n]*\n([\s\S]*?)\n?```$/, "$1").trim();
 
-const optionsFor = (cwd: string, abortController: AbortController) => ({ systemPrompt: SYSTEM, thinking: { type: "disabled" as const }, tools: [], maxTurns: 1, persistSession: false, model: COMMIT_MESSAGE_MODEL, cwd, env: claudeEnv(), settingSources: [], mcpServers: {}, strictMcpConfig: true, settings: { disableAllHooks: true }, abortController });
+const optionsFor = (cwd: string, abortController: AbortController, env: NodeJS.ProcessEnv = claudeEnv()) => ({ systemPrompt: SYSTEM, thinking: { type: "disabled" as const }, tools: [], maxTurns: 1, persistSession: false, model: COMMIT_MESSAGE_MODEL, cwd, env, settingSources: [], mcpServers: {}, strictMcpConfig: true, settings: { disableAllHooks: true }, abortController });
 
 /** A started Claude CLI process that waits for its one message. */
 type Spare = { messages: AsyncIterable<SDKMessage>; ctl: AbortController; send: (text: string) => void };
@@ -83,7 +83,7 @@ export function createWarmCommitMessage(query: typeof sdkQuery = sdkQuery) {
 export type WarmCommitMessage = ReturnType<typeof createWarmCommitMessage>;
 
 /** Asks Claude once. Throws WorktreeError `cancelled`, `timeout` or `generate_failed`. `warm`: a ready process answers (one retry on a crashed one). */
-export async function generateCommitMessage(o: { cwd: string; prompt: string; signal: AbortSignal; query?: typeof sdkQuery; warm?: WarmCommitMessage }): Promise<string> {
+export async function generateCommitMessage(o: { cwd: string; prompt: string; signal: AbortSignal; query?: typeof sdkQuery; warm?: WarmCommitMessage; /** The CLI's env (the Project's Claude account); absent: the daemon's. A `warm` process always runs on the daemon's account: pass it only then. */ env?: NodeJS.ProcessEnv }): Promise<string> {
   if (o.signal.aborted) throw new WorktreeError("cancelled", "cancelled");
   let ctl = new AbortController();
   let timedOut = false;
@@ -104,7 +104,7 @@ export async function generateCommitMessage(o: { cwd: string; prompt: string; si
   };
   try {
     if (!o.warm) {
-      const q = (o.query ?? sdkQuery)({ prompt: o.prompt, options: optionsFor(o.cwd, ctl) as never });
+      const q = (o.query ?? sdkQuery)({ prompt: o.prompt, options: optionsFor(o.cwd, ctl, o.env) as never });
       const text = await read(q);
       if (text !== undefined) return text;
       throw ctl.signal.aborted ? end() : new WorktreeError("generate_failed", "Claude returned no message");

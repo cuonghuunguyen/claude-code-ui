@@ -90,8 +90,9 @@ export type ClaudeDeps = {
   statStamp(file: string): string;
   transcriptCwd(id: string, cwd: string): string;
   sessionCwd(cwd: string): string;
-  modelList(): Promise<ModelInfo[]>;
-  supportsAuto(model: string): boolean;
+  /** The model list of the Claude account of `cwd`'s Project (the global account without a folder). */
+  modelList(cwd?: string): Promise<ModelInfo[]>;
+  supportsAuto(model: string, cwd?: string): boolean;
   localFiles(cwd: string): Promise<string[]>;
   commandsOf(cwd: string): Promise<SlashCommand[]>;
   /** The draft token of a new-session tab's uploads: the session gets their id (one claim per token). */
@@ -139,7 +140,7 @@ export function createClaudeCatalogue(ctx: CatalogueContext, d: ClaudeDeps): Eng
   const defaultModeFor = async (cwd: string, model = "default") => {
     const settings = ctx.appSettings.get();
     const mode = projectOverrides(settings, cwd).mode ?? readDefaultMode(d.claudeDir, cwd, await d.localFiles(cwd)) ?? settings.sessions.defaultMode;
-    return permissionModesFor({ allowBypass: ctx.allowBypass, supportsAuto: d.supportsAuto(model) }).find((m) => m === mode);
+    return permissionModesFor({ allowBypass: ctx.allowBypass, supportsAuto: d.supportsAuto(model, cwd) }).find((m) => m === mode);
   };
 
   async function list(lctx: ListCtx): Promise<CatalogueList> {
@@ -192,7 +193,7 @@ export function createClaudeCatalogue(ctx: CatalogueContext, d: ClaudeDeps): Eng
     },
     entry: () => ({ engine: claudeEngine.name, capabilities: ALL_CAPABILITIES, permissionModes: permissionModesFor({ allowBypass: ctx.allowBypass, supportsAuto: d.supportsAuto("default") }) }),
     startMode: async (cwd, model) => {
-      await d.modelList().catch(() => {});
+      await d.modelList(cwd).catch(() => {});
       return defaultModeFor(cwd, model) as Promise<PermissionMode | undefined>;
     },
     create: async (cwd, initial, o) => {
@@ -215,16 +216,16 @@ export function createClaudeCatalogue(ctx: CatalogueContext, d: ClaudeDeps): Eng
         // Before the read: a write during it changes the stamp, so the first subscriber syncs it.
         d.stamps.set(id, d.statStamp(transcriptFile(d.projectsDir, info.cwd, id)));
         const { main: messages, runs, entries } = await d.readTranscript(id, info.cwd);
-        await d.modelList().catch(() => {});
+        await d.modelList(info.cwd).catch(() => {});
         // Its worktree is being removed: no live session in a directory about to go.
         if (ctx.isRemoving(info.cwd)) return undefined;
         // The model row whose resolved ID the transcript last used ("default" first); the ID itself when none matches.
         const used = transcriptModel(messages);
         // No entry (sessions.json lost, a session of the terminal CLI): mode and effort the transcript last recorded.
         const saved = ctx.settings.get(id) ?? { model: undefined, ...transcriptSettings(entries ?? []) };
-        const model = isModel(saved?.model) ? saved.model : used && ((await d.modelList().catch(() => [])).find((m) => m.resolvedModel === used)?.value ?? used);
+        const model = isModel(saved?.model) ? saved.model : used && ((await d.modelList(info.cwd).catch(() => [])).find((m) => m.resolvedModel === used)?.value ?? used);
         // A mode the daemon does not enable now (bypass without CLAUDE_UI_ALLOW_BYPASS) falls back to the default.
-        const modes = permissionModesFor({ allowBypass: ctx.allowBypass, supportsAuto: d.supportsAuto(model ?? "default") });
+        const modes = permissionModesFor({ allowBypass: ctx.allowBypass, supportsAuto: d.supportsAuto(model ?? "default", info.cwd) });
         const permissionMode = modes.includes(saved.permissionMode as never) ? (saved.permissionMode as SessionSettings["permissionMode"]) : undefined;
         const effort = EFFORTS.includes(saved.effort as never) ? (saved.effort as SessionSettings["effort"]) : undefined;
         // Each run's messages name the Agent call that started it (parent_tool_use_id): they go right after that call's result, inside its turn.
@@ -259,7 +260,7 @@ export function createClaudeCatalogue(ctx: CatalogueContext, d: ClaudeDeps): Eng
     },
     commands: (cwd) => d.commandsOf(cwd),
     agents: async () => [],
-    models: () => d.modelList(),
+    models: (cwd) => d.modelList(cwd),
     forget: (id) => void hadTranscript.delete(id),
     close: async () => {},
   };

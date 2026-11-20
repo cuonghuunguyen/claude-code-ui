@@ -51,7 +51,7 @@ export type SessionOpts = Partial<Omit<SessionSettings, "agent">> & {
   engine?: Engine;
   allowBypass?: boolean;
   /** Whether a model value (`ModelInfo.value`) supports auto mode (`supportsAutoMode`); none = no model does. */
-  supportsAuto?: (model: string) => boolean;
+  supportsAuto?: (model: string, cwd?: string) => boolean;
   uploadDir?: (id: string) => string | undefined;
   /** The `subagents` folder of the session's transcript (`<projects>/<cwd key>/<id>/subagents`): where an inline run's steps are stored (inline-transcript.ts). Absent: not stored. */
   subagentsDir?: (id: string, cwd: string) => string | undefined;
@@ -74,8 +74,11 @@ export type SessionOpts = Partial<Omit<SessionSettings, "agent">> & {
   fork?: () => boolean;
   /** The visualize plugin folder to load into the CLI (GH-690), or undefined while the setting is off; read at every query start. */
   visualizePlugin?: () => string | undefined;
-  /** Account plan usage: told of each rate_limit_event, refreshed after each turn. */
-  plan?: Pick<PlanTracker, "refresh" | "rateLimit">;
+  /**
+   * The plan usage tracker of the Claude account the CLI of a session in `cwd` runs on (GH-900): told of each rate_limit_event, refreshed after each turn.
+   * Read together with `claudeEnv` at every CLI start, so a CLI reports into the account it bills.
+   */
+  plan?: (cwd: string) => Pick<PlanTracker, "refresh" | "rateLimit" | "current">;
   /** Reads the session's SDK transcript: its main chain and each subagent run's messages (sync()). */
   readTranscript?: (id: string, cwd: string) => Promise<Transcript>;
   /** Whether a terminal CLI process still runs a turn of this session (its own report): the quiet time then ends no external turn. */
@@ -195,7 +198,7 @@ export class Session {
       permissionMode,
       effort,
       ...(agent !== undefined && { agent }),
-      permissionModes: this.engine.permissionModes({ allowBypass: this.opts.allowBypass, supportsAuto: this.opts.supportsAuto?.(model) }),
+      permissionModes: this.engine.permissionModes({ allowBypass: this.opts.allowBypass, supportsAuto: this.opts.supportsAuto?.(model, this.cwd) }),
       capabilities: this.engine.capabilities,
       engine: this.engine.name,
     };

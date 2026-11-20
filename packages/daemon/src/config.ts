@@ -199,13 +199,15 @@ const toSkill = (s: RawSkill): SkillRow => ({
  * `cli`: runs the CLI (tests inject a fake). `holdMs`: config query hold. `onChanged`: after a config write in `cwd`
  * (the daemon broadcasts `config.changed`).
  */
-export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; holdMs?: number; pollMs?: number; onChanged: (kind: ConfigKind, cwd: string) => void }) {
+export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; holdMs?: number; pollMs?: number; onChanged: (kind: ConfigKind, cwd: string) => void; /** The env of the CLI processes for `cwd` (its Project's Claude account); absent: the daemon's. */ envFor?: (cwd: string) => NodeJS.ProcessEnv }) {
   const cli = opts.cli ?? runCli;
   const pollMs = opts.pollMs ?? SKILLS_POLL_MS;
   const holdMs = opts.holdMs ?? CONFIG_HOLD_MS;
   // One config query per project cwd: OAuth state lives in its CLI process, so a flow's requests must reach the same one.
   // ponytail: not in the one-at-a-time throwaway queue (it would block context usage reads for the whole hold); one per open project dialog.
-  const held = new Map<string, { q: Query; timer?: NodeJS.Timeout }>();
+  const held = new Map<string, { q: Query; timer?: NodeJS.Timeout; token?: string }>();
+  // The login of a cwd's CLI: a query started under another account is replaced (the key is the token's value, never logged or sent).
+  const loginOf = (cwd: string) => opts.envFor?.(cwd).CLAUDE_CODE_OAUTH_TOKEN;
   // The query of a project whose OAuth flow waits for its callback. A config write replaces the held query, but not this
   // one: it runs until the flow ends or the hold passes, so another tab's add/remove does not end the flow.
   const flows = new Map<string, { q: Query; timer?: NodeJS.Timeout }>();
@@ -236,9 +238,14 @@ export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; h
   };
   function configQuery(cwd: string) {
     let h = held.get(cwd);
+    // The Project's account changed since this query started.
+    if (h && h.token !== loginOf(cwd)) {
+      drop(cwd, h.q);
+      h = undefined;
+    }
     if (!h) {
-      const q = openQuery(opts.query, { cwd, persistSession: false });
-      h = { q };
+      const q = openQuery(opts.query, { cwd, persistSession: false, ...(opts.envFor && { env: opts.envFor(cwd) }) });
+      h = { q, token: loginOf(cwd) };
       held.set(cwd, h);
       // Its CLI exited (crash): the next request starts a new one.
       void (async () => {
@@ -257,7 +264,7 @@ export function createConfig(opts: { query?: typeof sdkQuery; cli?: CliRunner; h
   }
 
   async function write(args: string[], cwd: string) {
-    const r = await cli(args, cwd);
+    const r = await (opts.envFor ? cli(args, cwd, undefined, undefined, opts.envFor(cwd)) : cli(args, cwd));
     if (r.code !== 0) throw new ConfigError("cli_failed", firstLine(r.stderr) || firstLine(r.stdout) || `claude exited with code ${r.code}`);
     // The held query read its config at start; the next list needs a fresh one. One with a waiting OAuth flow lives on, detached.
     const h = held.get(cwd);

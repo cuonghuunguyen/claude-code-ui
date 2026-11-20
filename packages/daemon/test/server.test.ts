@@ -25,7 +25,7 @@ import { createDaemon, MAX_FRAME_BYTES } from "../src/server.ts";
 import { scanThreadConfig } from "../src/session-scan.ts";
 import { SideSocket } from "../src/sides.ts";
 import { MAX_TERMINALS, MAX_TERMINALS_PER_CLIENT } from "../src/terminals.ts";
-import { calls, CLEAR_RECORD, clearQuery, closedQueries, controlCalls, fakeQuery, firstTurnLastAssistant, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery, foregroundBashQuery, backgroundShellQuery, yielded } from "./fake-query.ts";
+import { calls, CLEAR_RECORD, clearQuery, closedQueries, controlCalls, fakeQuery, firstTurnLastAssistant, planCalls, history, interruptQuery, models, permissionQuery, permissionResults, questionQuery, setModelCalls, stopped, subagentQuery, foregroundBashQuery, backgroundShellQuery, yielded, limitQuery, limitState } from "./fake-query.ts";
 
 /** A projects store with these cwds added. */
 // Counts `git worktree list` reads (the session list's cache); behaviour unchanged.
@@ -5009,12 +5009,12 @@ describe("Project override of the permission mode", () => {
 });
 
 describe("Project overrides in a daemon", () => {
-  const boot = async () => {
+  const boot = async (query: unknown = fakeQuery) => {
     const a = realpathSync(mkdtempSync(join(tmpdir(), "proj-a-")));
     const b = realpathSync(mkdtempSync(join(tmpdir(), "proj-b-")));
     const appSettings = createSettings();
     const secrets = createSecrets();
-    const d = createDaemon({ webRoot, token, roots: [a, b], query: fakeQuery as never, appSettings, secrets, history: { listSessions: (async () => []) as never } as never });
+    const d = createDaemon({ webRoot, token, roots: [a, b], query: query as never, appSettings, secrets, history: { listSessions: (async () => []) as never } as never });
     await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
     const c = await client((d.address() as AddressInfo).port);
     const account = async (name: string, tok: string) => ((await c.request({ type: "claude.account.add", name, token: tok })) as { result: { claudeAccounts: { id: string; name: string }[] } }).result.claudeAccounts.find((x) => x.name === name)!.id;
@@ -5039,6 +5039,134 @@ describe("Project overrides in a daemon", () => {
     await t.apply({ projects: { overrides: { local: { [t.a]: { account: "" } } } } });
     expect((await t.prompt(await t.create(t.a))).CLAUDE_CODE_OAUTH_TOKEN).not.toBe("tok-home");
     t.d.close();
+  });
+
+  const tokenOf = (o: { env?: Record<string, string | undefined> } | undefined) => o?.env?.CLAUDE_CODE_OAUTH_TOKEN;
+
+  it("plan usage follows the Session's account: connect sends one account_usage per account, a Project Session reads and reports its own account and leaves the global plan_usage alone", async () => {
+    const t = await boot();
+    const work = await t.account("Work", "tok-work");
+    const home = await t.account("Home", "tok-home");
+    const mark = planCalls.length;
+    await t.apply({ claude: { account: home }, projects: { overrides: { local: { [t.a]: { account: work } } } } });
+    const c2 = await client((t.d.address() as AddressInfo).port);
+    const of = (key: string) => c2.inbox.filter((m) => m.type === "account_usage" && m.key === key) as Extract<ServerMessage, { type: "account_usage" }>[];
+    await vi.waitFor(() => expect([of(work).at(-1)?.usage?.account, of(home).at(-1)?.usage?.account]).toEqual(["Work", "Home"]));
+    // Each account is read with its own token. plan_usage is the global account's only.
+    expect(new Set(planCalls.slice(mark).map(tokenOf))).toEqual(new Set(["tok-work", "tok-home"]));
+    const globalFrames = () => c2.inbox.filter((m) => m.type === "plan_usage") as Extract<ServerMessage, { type: "plan_usage" }>[];
+    expect(globalFrames().length).toBeGreaterThan(0);
+    expect(globalFrames().every((m) => m.usage?.account === "Home")).toBe(true);
+    const globalBefore = globalFrames().length;
+    const workBefore = of(work).length;
+    planCalls.length = 0;
+    await t.prompt(await t.create(t.a));
+    await vi.waitFor(() => expect(of(work).length).toBeGreaterThan(workBefore));
+    expect(new Set(planCalls.map(tokenOf))).toEqual(new Set(["tok-work"]));
+    expect(globalFrames()).toHaveLength(globalBefore);
+    t.d.close();
+  });
+
+  it("a Session in a Project that overrides the account stops on its own account's limit: the global account's rejected status gives it no reset time", async () => {
+    limitState.resetsAt = 0;
+    limitState.inSeconds = 60;
+    limitState.repeatEvent = true;
+    const t = await boot(limitQuery);
+    const work = await t.account("Work", "tok-work");
+    const home = await t.account("Home", "tok-home");
+    await t.apply({ claude: { account: home }, usageLimit: { autoContinue: false }, projects: { overrides: { local: { [t.a]: { account: work } } } } });
+    const limitStops = (id: string) => t.c.inbox.filter((m) => m.type === "event" && m.sessionId === id && m.part.type === "limit_stop").map((m: any) => m.part as { stopped: boolean; resetsAt?: number });
+    const hit = async (cwd: string, text: string) => {
+      const id = await t.create(cwd);
+      await t.c.request({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+      await t.c.request({ type: "session.prompt", sessionId: id, text });
+      await vi.waitFor(() => expect(limitStops(id)).toHaveLength(1));
+      return limitStops(id)[0]!;
+    };
+    // The global account is rejected with a reset time (the event names it).
+    expect((await hit(t.b, "limit")).resetsAt).toBeGreaterThan(Date.now());
+    // The Project Session's limit comes without an event: the fallback is its own account's status (allowed), not the global one.
+    expect((await hit(t.a, "limit-noevent")).resetsAt).toBeUndefined();
+    t.d.close();
+  });
+
+  it("an override account change restarts only the idle Sessions whose account changed", async () => {
+    const t = await boot();
+    const work = await t.account("Work", "tok-work");
+    const home = await t.account("Home", "tok-home");
+    await t.apply({ claude: { account: home }, projects: { overrides: { local: { [t.a]: { account: work } } } } });
+    await t.prompt(await t.create(t.a));
+    await t.prompt(await t.create(t.b));
+    const closedWith = (tok: string) => closedQueries.filter((o) => o.canUseTool && tokenOf(o) === tok).length;
+    const [workBefore, homeBefore] = [closedWith("tok-work"), closedWith("tok-home")];
+    await t.apply({ projects: { overrides: { local: { [t.a]: { account: "cli" } } } } });
+    expect(closedWith("tok-work")).toBe(workBefore + 1);
+    // Changing the override of a Project does not touch the Session of another Project, nor one whose account stays.
+    await t.apply({ projects: { overrides: { local: { [t.a]: { account: "cli" }, [t.b]: { mode: "plan" } } } } });
+    expect(closedWith("tok-work")).toBe(workBefore + 1);
+    expect(closedWith("tok-home")).toBe(homeBefore);
+    t.d.close();
+  });
+
+  it("throwaway CLIs of a Project start on its account: commands, agents, model list (cached per account); no folder uses the global account", async () => {
+    const t = await boot();
+    const work = await t.account("Work", "tok-work");
+    const home = await t.account("Home", "tok-home");
+    await t.apply({ claude: { account: home }, projects: { overrides: { local: { [t.a]: { account: work } } } } });
+    const since = (mark: number, tok: string) => calls.slice(mark).filter((o) => !o.canUseTool && tokenOf(o) === tok).length;
+    let mark = calls.length;
+    await t.c.request({ type: "session.commands", cwd: t.a });
+    expect([since(mark, "tok-work"), since(mark, "tok-home")]).toEqual([1, 0]);
+    mark = calls.length;
+    await t.c.request({ type: "session.commands", cwd: t.b });
+    expect([since(mark, "tok-work"), since(mark, "tok-home")]).toEqual([0, 1]);
+    mark = calls.length;
+    await t.c.request({ type: "models.list", cwd: t.a });
+    await t.c.request({ type: "models.list", cwd: t.a });
+    expect([since(mark, "tok-work"), since(mark, "tok-home")]).toEqual([1, 0]);
+    // Without a folder, and for the other Project: the global account (its list is read once, then cached).
+    await t.c.request({ type: "models.list" });
+    await t.c.request({ type: "models.list", cwd: t.b });
+    expect(since(mark, "tok-home")).toBe(1);
+    t.d.close();
+  });
+
+  it("git.commitMessage in a Project that overrides the account starts a CLI on its token and leaves the warm process alone; another Project uses the warm one", async () => {
+    const repo = (name: string) => {
+      const r = realpathSync(mkdtempSync(join(tmpdir(), name)));
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: r });
+      writeFileSync(join(r, "a.txt"), "hello\n");
+      return r;
+    };
+    const [a, b] = [repo("cm-a-"), repo("cm-b-")];
+    const procs = { warm: 0, cold: [] as (string | undefined)[] };
+    const query = ((q: { prompt: unknown; options: { abortController?: AbortController; systemPrompt?: string; env?: Record<string, string | undefined> } }) => {
+      const commit = q.options.systemPrompt?.includes("git commit messages");
+      if (!commit) return (fakeQuery as never as (x: unknown) => unknown)(q);
+      if (typeof q.prompt === "string") {
+        procs.cold.push(q.options.env?.CLAUDE_CODE_OAUTH_TOKEN);
+        return (async function* () { yield { type: "result", subtype: "success", is_error: false, result: "feat: cold" }; })();
+      }
+      procs.warm++;
+      return (async function* () { for await (const _ of q.prompt as AsyncIterable<unknown>) yield { type: "result", subtype: "success", is_error: false, result: "feat: warm" }; })();
+    }) as never;
+    const appSettings = createSettings();
+    const secrets = createSecrets();
+    const d = createDaemon({ webRoot, token, roots: [a, b], query, appSettings, secrets });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const c = await client((d.address() as AddressInfo).port);
+      const work = ((await c.request({ type: "claude.account.add", name: "Work", token: "tok-work" })) as { result: { claudeAccounts: { id: string }[] } }).result.claudeAccounts[0]!.id;
+      await c.request({ type: "settings.set", patch: { git: { commitMessageWarm: true }, projects: { overrides: { local: { [a]: { account: work } } } } } });
+      await vi.waitFor(() => expect(procs.warm).toBe(1));
+      expect(await c.request({ type: "git.commitMessage", cwd: a, paths: ["a.txt"] })).toMatchObject({ result: { message: "feat: cold" } });
+      expect(procs.cold).toEqual(["tok-work"]);
+      expect(procs.warm).toBe(1);
+      expect(await c.request({ type: "git.commitMessage", cwd: b, paths: ["a.txt"] })).toMatchObject({ result: { message: "feat: warm" } });
+      expect(procs.cold).toEqual(["tok-work"]);
+    } finally {
+      d.close();
+    }
   });
 
   it("creating a Session remembers its Engine as the global default only when the Project sets no Engine", async () => {

@@ -97,6 +97,10 @@ export type DaemonContext = {
   applyAccountToken(): void;
   /** The Claude login or account changed: models, plan usage and live CLIs are read again. */
   claudeLoginChanged(): void;
+  /** An account a Project overrides changed (not the global one): trackers follow, the live CLI of each Session whose account changed is replaced. `before`: the settings before the change. */
+  projectAccountsChanged(before: Settings): void;
+  /** The Claude account of the CLI processes started for `cwd`: their env, and whether it is the global account. */
+  accountOf(cwd: string): { env: NodeJS.ProcessEnv; global: boolean };
   warmCommit: ReturnType<typeof createWarmCommitMessage>;
   catalogues: Catalogues;
   autoContinue: ReturnType<typeof createAutoContinue>;

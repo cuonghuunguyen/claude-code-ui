@@ -20,6 +20,7 @@ const setup = (sameHost: boolean) => {
     testAccount: vi.fn(),
     applyAccountToken: vi.fn(),
     claudeLoginChanged,
+    projectAccountsChanged: vi.fn(),
     warmCommit: { prewarm: vi.fn(), stop: vi.fn() } as never,
     catalogues: { all: [] } as never,
     autoContinue: { clear: vi.fn() } as never,

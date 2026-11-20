@@ -151,6 +151,8 @@ export function connect(opts: {
     if (m.type === "terminal.output" || m.type === "terminal.exit") return terminalListeners.forEach((l) => l(m)), false;
     if (m.type === "sessions.changed") return opts.onSessionsChanged?.(m), false;
     if (m.type === "plan_usage") return opts.onPlanUsage?.(m.usage), false;
+    // The usage of a Project's own account (GH-900): the meter reads it in the next change; until then the page keeps the global one.
+    if (m.type === "account_usage") return false;
     if (m.type === "config.changed") return opts.onConfigChanged?.(m), false;
     if (m.type === "settings_changed") return opts.onSettingsChanged?.(m), false;
     if (m.type === "opencode.providersChanged") return opts.onProvidersChanged?.("opencode"), false;

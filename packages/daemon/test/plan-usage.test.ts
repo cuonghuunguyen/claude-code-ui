@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PlanUsage } from "@claude-ui/protocol";
-import { createPlanTracker, eventWindows, planUsage, usesOauthToken } from "../src/plan-usage.ts";
+import { createPlanTracker, createPlanTrackers, eventWindows, planUsage, usesOauthToken } from "../src/plan-usage.ts";
 import { fakePlanUsage } from "./fake-query.ts";
 
 const at = (iso: string) => new Date(iso).getTime();
@@ -289,5 +289,64 @@ describe("plan usage", () => {
     expect(eventWindows({ five_hour: { ...ok, utilization: NaN } }, 0)).toBeUndefined();
     expect(eventWindows({ five_hour: { ...ok, resetsAt: Infinity } }, 0)).toBeUndefined();
     expect(eventWindows({ five_hour: { ...ok, utilization: Infinity }, seven_day: ok }, 0)!.map((w) => w.kind)).toEqual(["weekly_all"]);
+  });
+});
+
+describe("plan trackers per account", () => {
+  const q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => fakePlanUsage };
+  const make = () => {
+    const seen: [string, PlanUsage | null][] = [];
+    const reads: string[] = [];
+    const trackers = createPlanTrackers({
+      onChange: (key, u) => seen.push([key, u]),
+      read: async (key, refresh) => (reads.push(key), refresh(q as never)),
+      oauthToken: () => false,
+      name: (key) => (key === "w" ? "Work" : undefined),
+    });
+    return { trackers, seen, reads };
+  };
+
+  it("sync keeps one tracker per referenced key: a new key starts empty, a key no longer referenced is dropped and its reset timer cleared", async () => {
+    vi.useFakeTimers({ now: at("2026-10-01T10:00:00Z") });
+    try {
+      const { trackers, seen, reads } = make();
+      trackers.sync(["", "w"]);
+      expect(trackers.keys().sort()).toEqual(["", "w"]);
+      expect(trackers.get("w")!.current()).toBeUndefined();
+      await trackers.get("w")!.reread();
+      expect(seen[0]![0]).toBe("w");
+      expect(seen[0]![1]).toMatchObject({ plan: "team", account: "Work" });
+      const same = trackers.get("")!;
+      trackers.sync(["", "x"]);
+      expect(trackers.get("")).toBe(same);
+      expect(trackers.get("w")).toBeUndefined();
+      expect(trackers.keys().sort()).toEqual(["", "x"]);
+      // The dropped tracker's window reset (11:40) arms no read any more.
+      reads.length = 0;
+      await vi.advanceTimersByTimeAsync(3 * 3600_000);
+      expect(reads).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an answer that arrives after the key was dropped changes nothing", async () => {
+    const seen: [string, PlanUsage | null][] = [];
+    let release!: () => void;
+    const slow = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => new Promise((r) => (release = () => r(fakePlanUsage))) };
+    const trackers = createPlanTrackers({ onChange: (k, u) => seen.push([k, u]), read: (_k, refresh) => refresh(slow as never), oauthToken: () => false, name: () => undefined });
+    trackers.sync(["w"]);
+    const reading = trackers.get("w")!.reread();
+    trackers.sync([]);
+    release();
+    await reading;
+    expect(seen).toEqual([]);
+  });
+
+  it("reset() resets every tracker", async () => {
+    const { trackers, reads } = make();
+    trackers.sync(["", "w"]);
+    await trackers.reset();
+    expect(reads.sort()).toEqual(["", "w"]);
   });
 });

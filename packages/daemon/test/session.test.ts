@@ -1492,8 +1492,8 @@ describe("Session context usage", () => {
   });
 
   it("reports the turn's rate_limit_event and refreshes plan usage on the session's query after each turn", async () => {
-    const plan = { refresh: vi.fn(async (_q: unknown) => {}), rateLimit: vi.fn(async (_info: unknown, _q: unknown) => {}) };
-    const s = new Session("/tmp", { query: fakeQuery as never, plan: plan as never });
+    const plan = { refresh: vi.fn(async (_q: unknown) => {}), rateLimit: vi.fn(async (_info: unknown, _q: unknown) => {}), current: () => undefined };
+    const s = new Session("/tmp", { query: fakeQuery as never, plan: (() => plan) as never });
     const events: Event[] = [];
     s.subscribe(0, (e) => events.push(e));
     s.prompt("hello");
