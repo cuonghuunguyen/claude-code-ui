@@ -134,6 +134,7 @@ export function SessionList({
   removing,
   onCleanUp,
   onEditProject,
+  onProjectSettings,
   onOpenProject,
   renaming,
   renamingFromMenu,
@@ -174,6 +175,8 @@ export function SessionList({
   onCleanUp?: (scope: CleanupScope) => void;
   /** "Change name and icon…" of a project (GH-515). */
   onEditProject?: (cwd: string) => void;
+  /** Opens the Project settings dialog of a project. */
+  onProjectSettings?: (cwd: string) => void;
   onOpenProject: () => void;
   /** Session whose row shows the title editor. */
   renaming?: string;
@@ -314,6 +317,7 @@ export function SessionList({
       copyPath: onCopy && (() => (count("copyPath"), onCopy(g.cwd, "path"))),
       newWorktree: onNewWorktree && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) ? (quick) => onNewWorktree(g.cwd, quick) : undefined,
       rename: onEditProject && (() => onEditProject(g.cwd)),
+      projectSettings: onProjectSettings && (() => onProjectSettings(g.cwd)),
       cleanUp: onCleanUp && (() => onCleanUp({ kind: "project", cwd: g.cwd })),
       tail: { id: `${prefix}remove`, label: t("sidebar.menu.removeFromList"), onSelect: () => onRemove(g.cwd) },
     });

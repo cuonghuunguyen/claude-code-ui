@@ -28,6 +28,7 @@ async function render({ project, legacy = false, sides, docker, failGet = false,
   const onTabAutoClose = vi.fn();
   const onShortcuts = vi.fn();
   const onAddons = vi.fn();
+  const onProjectSettings = vi.fn();
   let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {}, commitMessageWarm: false }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, projects: { overrides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } };
   if (legacy) (delete (settings as Partial<Settings>).power, delete (settings as Partial<Settings>).app, delete (settings as Partial<Settings>).launcher);
   let refuse: string | undefined;
@@ -76,6 +77,7 @@ async function render({ project, legacy = false, sides, docker, failGet = false,
         docker={docker}
         onShortcuts={onShortcuts}
         onAddons={onAddons}
+        onProjectSettings={onProjectSettings}
         push={{ ...push, toggle }}
         request={request as never}
         onClose={() => set(false)}
@@ -102,7 +104,7 @@ async function render({ project, legacy = false, sides, docker, failGet = false,
   await act(async () => root!.render(<Host />));
   const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
   const pick = async (group: string) => void (await act(async () => q(`settings-group-${group}`)!.click()));
-  return { bump: () => act(async () => bump()), refuse: (m: string) => void (refuse = m), calls, toggle, q, pick, prompt, onTabGrouping, onTabCompact, onTabAutoClose, onShortcuts, onAddons, onRestartGuide };
+  return { bump: () => act(async () => bump()), refuse: (m: string) => void (refuse = m), calls, toggle, q, pick, prompt, onTabGrouping, onTabCompact, onTabAutoClose, onShortcuts, onAddons, onProjectSettings, onRestartGuide };
 }
 
 it("shows the Orchestration section with labelled controls, loaded from the daemon", async () => {
@@ -1374,6 +1376,17 @@ const typeText = async (el: HTMLTextAreaElement, v: string) => {
   });
   await act(async () => void el.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
 };
+
+it("Settings names the project and opens its Project settings; without a project there is no link", async () => {
+  const none = await render();
+  expect(none.q("settings-project-settings")).toBeNull();
+  await act(async () => root?.unmount());
+  document.body.innerHTML = "";
+  const { q, onProjectSettings } = await render({ project: { cwd: "/p/app", name: "app" } });
+  expect(q("settings-project-settings")!.textContent).toBe("Project settings for app…");
+  await act(async () => q("settings-project-settings")!.click());
+  expect(onProjectSettings).toHaveBeenCalledTimes(1);
+});
 
 it("Settings › Git: the global commit message instruction shows the built-in one as placeholder and saves on blur", async () => {
   const { q, pick, calls } = await render();

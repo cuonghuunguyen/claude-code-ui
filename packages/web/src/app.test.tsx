@@ -4111,6 +4111,28 @@ describe("GH-430: panels on the new-session tab", () => {
     }
   });
 
+  it("GH-894: the new-session tab starts with the Project's model and effort, and a Project of another Side is not read", async () => {
+    const overrides = { local: { "/p/demo": { model: "opus", effort: "max" } }, "wsl:Ubuntu": { "/p/demo": { model: "other" } } };
+    const restore = await remount({
+      "settings.get": { settings: { orchestration: {}, sessions: { engine: "claude", defaultMode: "default" }, projects: { overrides } } },
+      "session.list": () => ({ sessions: sent.some((m) => m.type === "session.create") ? [session, created] : [session], projects: ["/p/demo"] }),
+      "session.subscribe": bySession,
+      "session.create": { session: created },
+      "session.setModel": { session: created },
+      "session.setEffort": { session: created },
+      "session.setPermissionMode": { session: created },
+      "session.prompt": {},
+    });
+    try {
+      await openNewTab();
+      await sendFirst("hello");
+      await vi.waitFor(() => expect(sent.find((m) => m.type === "session.setEffort")).toMatchObject({ effort: "max" }));
+      expect(sent.find((m) => m.type === "session.create")).toMatchObject({ cwd: "/p/demo", model: "opus" });
+    } finally {
+      restore();
+    }
+  });
+
   it("AC3: Changes on the new-session tab shows the empty state; Uncommitted asks git.diff for the draft cwd", async () => {
     saveDiffMode("session");
     await openNewTab();
