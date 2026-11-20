@@ -16,7 +16,7 @@ const PAGE = 100;
 /** A list of one folder reads at most this many pages (a folder with more sessions shows the newest ones). */
 const MAX_PAGES = 10;
 
-export type OpenCode2CatalogueOpts = { server: OpenCodeServer; /** How long `session.list` waits for OpenCode (default 3 s). */ listWaitMs?: number };
+export type OpenCode2CatalogueOpts = { server: OpenCodeServer; /** How long `session.list` waits for OpenCode (default 3 s). */ listWaitMs?: number; /** Writes the adapter record of a session (ADR 0015); throws when it cannot be saved. */ record?: (id: string) => void };
 export type OpenCode2Catalogue = Omit<EngineCatalogue, "listScope" | "ownsId" | "requests" | "settingsChanged" | "settled" | "forget" | "close">;
 
 /** Shown wherever OpenCode 2 would need an adapter feature that is not there yet. */
@@ -35,6 +35,7 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
       meta.set(id, { ...m, title });
       ctx.broadcast({ type: "sessions.changed" });
     },
+    record: o.record,
   });
   const sessionOpts = (initial: Partial<SessionSettings>) => ({ ...ctx.sessionOpts(initial), engine });
   const failure = (err: unknown) => (err instanceof OpenCodeError ? new EngineError(err.code, err.message) : new EngineError("opencode_failed", (err as Error).message));
@@ -47,6 +48,8 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     // `plan` is the plan agent (a later slice): it starts as the default mode.
     const mode = initial.permissionMode === "plan" ? "default" : initial.permissionMode;
     const row = await client.session.create({ location: { directory: cwd }, permissions: modeRules(mode) });
+    // A session of OpenCode 2 is recorded at once: an OpenCode 1 binary must not open it. A failed save fails the create (the empty session stays in OpenCode).
+    o.record?.(row.id);
     if (ctx.isRemoving(cwd) || !existsSync(cwd)) return undefined;
     const opts = sessionOpts({ ...initial, permissionMode: mode });
     const s = ctx.track(new Session(cwd, opts, { id: row.id }));
@@ -144,9 +147,10 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
   async function restoreSession(id: string): Promise<Session | undefined> {
     const known = meta.get(id);
     const client = await server.client();
-    // A session OpenCode 2 does not have (an OpenCode 1 one, until the adapter record lands) answers 404: it is gone here.
-    // Only "not found" means gone; a timeout or a restarting server is an error, not a lost session.
-    const row = await client.session.get({ sessionID: id }).catch((err) => ((err as { _tag?: string })._tag === "SessionNotFoundError" ? undefined : Promise.reject(err)));
+    // A session OpenCode 2 does not have (an OpenCode 1 one it did not import) answers 404: undefined here, the catalogue switch decides what that means.
+    // Only "not found" means that; a timeout or a restarting server is an error, not a lost session.
+    const { isSessionNotFoundError } = await import("@opencode/client");
+    const row = await client.session.get({ sessionID: id }).catch((err) => (isSessionNotFoundError(err) ? undefined : Promise.reject(err)));
     const cwd = row && ctx.allowed(known?.cwd ?? row.location.directory);
     if (!row || !cwd || ctx.isRemoving(cwd)) return undefined;
     const history = await loadOpenCode2History(client, id, cwd, (sid) => engine.isOurs(id, sid));
@@ -176,7 +180,7 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     list: async (lctx: ListCtx): Promise<CatalogueList> => {
       const { linked, links } = lctx.read();
       const r = await listSessions(lctx.folders ?? [], linked, links);
-      // Prunes nothing: a settings entry of an OpenCode 1 session is not in OpenCode 2's list, and only the adapter record of a later slice tells the two apart.
+      // Prunes nothing: a settings entry of an OpenCode 1 session is not in OpenCode 2's list, and nothing tells it from a deleted one here.
       return { items: r.items, keep: () => true };
     },
     restore: (id) => restoreSession(id).catch((err) => Promise.reject(failure(err))),

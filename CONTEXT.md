@@ -67,7 +67,7 @@ The one `opencode serve` process a Daemon starts on the first OpenCode Session. 
 _Avoid_: OpenCode daemon
 
 **OpenCode adapter**:
-The part of the OpenCode Engine that speaks to one major version of OpenCode (1 or 2). The Daemon picks it from the version of the installed `opencode` binary; the user sees one Engine. Both versions use `ses_` Session IDs, so the Daemon records the adapter of each Session it creates; a Session with no record belongs to version 1.
+The part of the OpenCode Engine that speaks to one major version of OpenCode (1 or 2). The Daemon picks it from the version of the installed `opencode` binary; the user sees one Engine. Both versions use `ses_` Session IDs, so the Daemon records the adapter of each Session it creates under version 2 (and of an older Session at its first version 2 turn); a Session with no record belongs to version 1 unless the installed version 2 has it. A Session recorded as version 2 does not open under a version 1 binary.
 _Avoid_: OpenCode 2 Engine, backend
 
 **Docked session**:

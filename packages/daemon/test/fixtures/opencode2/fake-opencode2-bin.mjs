@@ -3,6 +3,7 @@
 // GET /api/info -> {version, pid, urls}; GET /api/event -> SSE (`server.connected`, the turns' events, `: heartbeat` comments). There is no /global/health: it answers 404.
 // Routes: GET /api/model, /api/model/default, /api/session, /api/session/active, /api/session/:id, /api/session/:id/message, /api/permission/request;
 // POST /api/session, /api/session/:id/prompt, /api/session/:id/model, /api/session/:id/interrupt, /api/session/:id/permission/:rid/reply; PATCH /api/session/:id.
+// FAKE_OPENCODE2_FAIL: see the session route.
 // FAKE_OPENCODE2_DATA: JSON `{sessions: [{id, directory, title, time, permissions?, parentID?}], messages: {<id>: [v2 messages]}, models?, default?}`.
 // FAKE_OPENCODE2_SCRIPT: comma-separated turn files, one per prompt in order (a prompt after the last one gets a plain "pong" turn). A turn is a JSON list of steps:
 //   {event, data}   emits the event (`$SESSION`, `$USER`, `$A1`..`$A9` (assistant message ids), `$PERM` (a permission id) are replaced)
@@ -57,6 +58,7 @@ const emit = (type, d, directory) => {
   for (const c of clients) c.write(`data: ${JSON.stringify(e)}\n\n`);
 };
 /** The running turn per session: `{interrupt(), reply(decision)}`. */
+const failed = {};
 const running = new Map();
 /** Open permission requests by id. */
 const asked = new Map();
@@ -151,6 +153,9 @@ const server = createServer((req, res) => {
       return json(res, 200, { data: list.slice(0, limit), cursor: { previous: null, next: null } });
     }
     if ((m = /^\/api\/session\/([^/]+)(?:\/(.+))?$/.exec(p))) {
+      // FAKE_OPENCODE2_FAIL: JSON `{<session id>: n}`: the first n reads of that session (GET /api/session/:id) answer 500.
+      const failing = JSON.parse(process.env.FAKE_OPENCODE2_FAIL ?? "{}");
+      if (!m[2] && req.method === "GET" && (failing[m[1]] ?? 0) > (failed[m[1]] ?? 0)) return (failed[m[1]] = (failed[m[1]] ?? 0) + 1, json(res, 500, { message: "storage busy" }));
       const s = sessions.get(m[1]);
       if (!s) return json(res, 404, { _tag: "SessionNotFoundError", message: `Session not found: ${m[1]}` });
       const sub = m[2];

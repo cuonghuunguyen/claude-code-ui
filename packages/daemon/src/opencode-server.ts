@@ -126,6 +126,8 @@ export type OpenCodeServerOpts = {
   env?: () => NodeJS.ProcessEnv;
   now?: () => number;
   startTimeoutMs?: number;
+  /** Test seam: the reconnect delay of the event stream (default 1 s growing to 10 s) and how long a prompt waits for the stream (default 5 s). */
+  timing?: { reconnectMinMs?: number; reconnectMaxMs?: number; streamWaitMs?: number };
 };
 
 type Up = { url: string; auth: string; version: string; major: 1 | 2 };
@@ -144,6 +146,9 @@ function shareWithE2e(up: { url: string; auth: string }) {
 
 export function createOpenCodeServer(o: OpenCodeServerOpts) {
   const now = o.now ?? Date.now;
+  const reconnectMin = o.timing?.reconnectMinMs ?? RECONNECT_MIN_MS;
+  const reconnectMax = o.timing?.reconnectMaxMs ?? RECONNECT_MAX_MS;
+  const streamWait = o.timing?.streamWaitMs ?? STREAM_WAIT_MS;
   const env = () => ({ ...process.env, ...o.env?.() });
   let child: ChildProcess | undefined;
   let up: Up | undefined;
@@ -205,8 +210,8 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   const wrongMajor = (major: 1 | 2) => {
     const err =
       major === 2
-        ? new OpenCodeError("opencode_v2_unsupported", "The installed OpenCode is version 2, but its version was not known when this request started (an earlier version check failed). Press Check again in Settings › OpenCode, then retry.", 2)
-        : new OpenCodeError("opencode_failed", "OpenCode 2 client requested while the installed OpenCode is version 1", 1);
+        ? new OpenCodeError("opencode_v2_unsupported", "OpenCode is version 2 now, but this session opened with OpenCode 1 (the path changed while it was open, or a version check failed). Restart claude-ui to open it with OpenCode 2.", 2)
+        : new OpenCodeError("opencode_failed", "OpenCode is version 1 now, but this session needs an OpenCode 2 binary. Set Settings › OpenCode › path to one, then restart claude-ui.", 1);;
     refusals.add(err);
     return err;
   };
@@ -305,7 +310,18 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   let streamAbort: AbortController | undefined;
   let connected: Promise<void> = Promise.resolve();
   let markConnected = () => {};
-  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  /** Ends the reconnect wait of the pump at once (a consumer of a major nobody used so far came). */
+  let wake = () => {};
+  const sleep = (ms: number) =>
+    new Promise<void>((r) => {
+      const timer = setTimeout(done, ms);
+      function done() {
+        clearTimeout(timer);
+        wake = () => {};
+        r();
+      }
+      wake = done;
+    });
 
   async function readStream(res: Response, major: 1 | 2) {
     const reader = res.body!.getReader();
@@ -337,7 +353,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   async function pump() {
     if (pumping) return;
     pumping = true;
-    let delay = RECONNECT_MIN_MS;
+    let delay = reconnectMin;
     let again = false;
     connected = new Promise<void>((r) => (markConnected = r));
     while (handlers.size) {
@@ -353,7 +369,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
         if (!res.ok || !res.body) throw new Error(`event stream answered ${res.status}`);
         if (again) for (const [h, m] of [...handlers]) if (m === u.major) h.resync();
         again = true;
-        delay = RECONNECT_MIN_MS;
+        delay = reconnectMin;
         markConnected();
         await readStream(res, u.major);
       } catch {
@@ -363,7 +379,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
       // Down until the next connect: a prompt waits for it.
       connected = new Promise<void>((r) => (markConnected = r));
       await sleep(delay);
-      delay = Math.min(delay * 2, RECONNECT_MAX_MS);
+      delay = Math.min(delay * 2, reconnectMax);
     }
     pumping = false;
     markConnected();
@@ -392,7 +408,11 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     close: () => (handlers.clear(), stop()),
     /** Registers a consumer of the event stream (opened now when it was not); returns its unsubscribe. */
     events(h: OpenCodeEvents, major: 1 | 2 = 1) {
+      // The pump may be backing off for a refused major (version 1 consumers on a version 2 binary): a consumer of another major must not wait for that delay,
+      // its prompt would be sent with no stream open and lose the first events.
+      const fresh = ![...handlers.values()].includes(major);
       handlers.set(h, major);
+      if (fresh) wake();
       void pump();
       return () => {
         handlers.delete(h);
@@ -402,7 +422,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     /** Resolves when the event stream is connected (or after a few seconds): a prompt sent before it would lose its first events. */
     streamReady: () => {
       let timer: NodeJS.Timeout;
-      return Promise.race([connected, new Promise((r) => (timer = setTimeout(r, STREAM_WAIT_MS)))]).then(() => clearTimeout(timer));
+      return Promise.race([connected, new Promise((r) => (timer = setTimeout(r, streamWait)))]).then(() => clearTimeout(timer));
     },
     /** The path setting changed: stop, and forget crashes (the new binary gets a fresh start). */
     reset: () => ((gen += 1), (fastExits = []), (lastError = undefined), (lastMajor = undefined), (dataDir = undefined), stop()),

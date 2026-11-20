@@ -163,7 +163,7 @@ export const avatarColor = (cwd: string, known?: Map<string, AvatarColor>) => kn
 // The active tab lives in the URL hash, so a reload reopens it: a session id, "#new" for the new-session tab, "#focus" for the Focus page.
 export const tabHash = (id: string) => `#${encodeURIComponent(id)}`;
 // A subagent view adds its run: `#<session id>/agent/<subagent part id>`.
-const SESSION_HASH = /^#([0-9a-f-]{36})(?:\/agent\/([^/]+))?$/i;
+const SESSION_HASH = /^#([0-9a-f-]{36}|ses_[A-Za-z0-9]+)(?:\/agent\/([^/]+))?$/i;
 const safeDecode = (s: string) => {
   try {
     return decodeURIComponent(s);

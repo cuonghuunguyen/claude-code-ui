@@ -37,7 +37,7 @@ import { createWorktree, gitDirsOf, gitEscapes, gitStatus, gitTopOf, limiter, li
 import { createWarmCommitMessage } from "./commit-message.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
-import { createCatalogues, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx } from "./engine-catalogue.ts";
+import { createCatalogues, EngineError, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx } from "./engine-catalogue.ts";
 import { ARCHIVED_TAG, createClaudeCatalogue, transcriptFile, type History } from "./claude-catalogue.ts";
 import { createOpenCodeCatalogues } from "./opencode-catalogues.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
@@ -253,6 +253,8 @@ export function createDaemon(opts: {
   uploadSweepFirstMs?: number;
   projectsDir?: string;
   settingsFile?: string;
+  /** opencode-adapters.json: which OpenCode adapter each session belongs to (ADR 0015). Default: in memory (tests). */
+  opencodeAdaptersFile?: string;
   /** The Claude user config folder (`settings.json` holds `permissions.defaultMode`); default: `$CLAUDE_CONFIG_DIR` or `~/.claude`. */
   claudeDir?: string;
   projects?: Projects;
@@ -1266,6 +1268,7 @@ export function createDaemon(opts: {
       }),
       createOpenCodeCatalogues(catalogueCtx, {
         server: opts.opencode,
+        adaptersFile: opts.opencodeAdaptersFile,
         // The local OpenCode server always reaches the daemon on 127.0.0.1 (it listens there or on 0.0.0.0).
         mcp: {
           url: () => {
@@ -1409,9 +1412,12 @@ export function createDaemon(opts: {
     }
   }
 
+  /** Why the last restore of a session was refused (the session exists but needs another binary); read right after `findSession` answered undefined. */
+  const refusals = new Map<string, { code: string; message: string }>();
   /** A session of this daemon run, or one rebuilt from its SDK transcript (ADR 0001). Concurrent calls share one restore. */
   /** `background`: a follow without a hold; its restore waits behind foreground ones. */
   function findSession(id: string, background = false): Promise<Session | undefined> {
+    refusals.delete(id);
     // Its transcript still exists until the delete ends; a restore now would bring the session back.
     if (deleting.has(id)) return Promise.resolve(undefined);
     const live = sessions.get(id);
@@ -1425,7 +1431,12 @@ export function createDaemon(opts: {
     if (!p) {
       p = owner
         .restore(id, background)
-        .catch((err) => void console.error(`restoring session ${id} failed:`, err))
+        .catch((err) => {
+          // A session of the other OpenCode version: the user is told, not shown "no session".
+          if (err instanceof EngineError && err.code === "opencode_version_mismatch") refusals.set(id, { code: err.code, message: err.message });
+          else console.error(`restoring session ${id} failed:`, err);
+          return undefined;
+        })
         .finally(() => restoring.delete(id));
       restoring.set(id, p);
     }
@@ -1888,6 +1899,7 @@ export function createDaemon(opts: {
   /** What the areas (area-*.ts) reach of this daemon. Built once, after every closure it names exists. */
   const ctx: DaemonContext = {
     findSession,
+    restoreRefusal: (id: string) => refusals.get(id),
     locate,
     titleOf,
     list,

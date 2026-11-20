@@ -457,6 +457,26 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     }
   }, 20_000);
 
+  it("a version 2 consumer added while the stream backs off for a version 1 consumer gets its stream before streamReady gives up", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "oc-late2-")));
+    const logFile = join(root, "fake.log");
+    const server = createOpenCodeServer({ path: () => "", command: [process.execPath, BIN2], env: () => ({ FAKE_OPENCODE_LOG: logFile }), timing: { reconnectMinMs: 100, reconnectMaxMs: 8000, streamWaitMs: 4000 } });
+    try {
+      expect(await server.check()).toBe(2);
+      const off1 = server.events({ event: () => {}, resync: () => {} }, 1);
+      // The refusals back off 100, 200, 400, 800, 1600, 3200 ms: at 6.8 s the pump sleeps for the 6.4 s delay (until 12.7 s), longer than the 4 s a prompt waits.
+      await new Promise((r) => setTimeout(r, 6800));
+      const off2 = server.events({ event: () => {}, resync: () => {} }, 2);
+      await server.streamReady();
+      const paths = readFileSync(logFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((l) => l.type === "request").map((l) => l.path);
+      expect(paths).toContain("/api/event");
+      off1();
+      off2();
+    } finally {
+      await server.close();
+    }
+  }, 20_000);
+
   it("an OpenCode 2 binary older than 2.3.0 answers opencode_old naming 2.3.0", async () => {
     const d = await boot({ bin: BIN2, env: { FAKE_OPENCODE_VERSION: "2.2.0" } });
     expect((await d.ok({ type: "opencode.status" })).result).toMatchObject({ state: "old", message: expect.stringContaining("2.3.0") });

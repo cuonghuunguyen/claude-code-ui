@@ -1660,6 +1660,30 @@ describe("a tab that never resolves, and moves while the list loads (GH-201)", (
     }
   });
 
+  it("a session opened by link that needs the other OpenCode binary shows the daemon's message (GH-863)", async () => {
+    const { A } = ids;
+    // An OpenCode session id, not a UUID.
+    const H = "ses_e05b93227ffeNKwoybf1RL1QK4";
+    const all = [mk(A, "/p/one")];
+    const message = "This session needs an OpenCode 1 binary. Set Settings › OpenCode › path to one.";
+    location.hash = `#${H}`;
+    localStorage.setItem("claude-ui.tabs", JSON.stringify([A]));
+    const restore = await remount({
+      "session.list": { sessions: all, projects: ["/p/one"] },
+      "session.subscribe": (m: { sessionId: string }) => {
+        if (m.sessionId === H) throw Object.assign(new Error(message), { code: "opencode_version_mismatch" });
+        return { logEpoch: "e1", session: all.find((x) => x.id === m.sessionId) };
+      },
+    });
+    try {
+      await act(async () => {});
+      await act(async () => {});
+      expect(el.textContent).toContain(message);
+    } finally {
+      restore();
+    }
+  });
+
   it("a move while the session list is not in is applied, not refused silently", async () => {
     const { A, B } = ids;
     const C = "cccccccc-2222-3333-4444-555555555555";

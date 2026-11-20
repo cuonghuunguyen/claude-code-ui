@@ -112,6 +112,8 @@ export type DaemonContext = {
   // Sessions
   /** The live session, else restored from disk (`background`: a reconnect resubscribe, not a user's open). */
   findSession(id: string, background?: boolean): Promise<Session | undefined>;
+  /** After `findSession` answered undefined: the refusal that explains it (the session needs an OpenCode binary of the other version), else undefined (no such session). */
+  restoreRefusal(id: string): { code: string; message: string } | undefined;
   /** Where a session is: its folder and whether it is live (undefined: no such session). */
   locate(id: string): Promise<{ cwd: string; live: Session | undefined } | undefined>;
   titleOf(s: Session): Promise<string>;
