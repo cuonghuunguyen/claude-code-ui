@@ -182,8 +182,9 @@ export function InlineTaskCard({ call, result, awaiting, run }: { call: ToolCall
   const out = result && inlineTaskResult(result.output);
   const input = (call.input ?? {}) as { model?: unknown; maxTurns?: unknown };
   const active = call.status === "running" || call.status === "pending";
-  const status: ToolStatus = active ? call.status : out?.status === "stopped" ? "stopped" : out?.status === "error" ? "error" : call.status;
+  const status: ToolStatus = active ? call.status : out?.status === "stopped" ? "stopped" : out?.status === "error" ? "error" : out?.status === "denied" ? "denied" : call.status;
   const note = out && (out.status === "limit" ? t(LIMIT_NOTE[out.limit ?? "turns"]) : out.status === "stopped" ? t("session.run.stoppedPartial") : out.status === "error" ? t("session.run.error", { error: out.error ?? "" }) : undefined);
+  const denied = out?.denied?.length ? t("session.run.denied", { steps: out.denied.join("; ") }) : undefined;
   return (
     <RunCard
       id={call.id}
@@ -204,6 +205,11 @@ export function InlineTaskCard({ call, result, awaiting, run }: { call: ToolCall
           {note && (
             <p data-testid="run-note" className="text-muted-foreground text-xs [overflow-wrap:anywhere]">
               {note}
+            </p>
+          )}
+          {denied && (
+            <p data-testid="run-denied" className="text-muted-foreground text-xs [overflow-wrap:anywhere]">
+              {denied}
             </p>
           )}
           {out?.text && (

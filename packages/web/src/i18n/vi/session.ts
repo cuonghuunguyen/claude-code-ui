@@ -199,6 +199,7 @@ export default {
   "session.run.limitTokens": "Dừng do hết giới hạn token đầu ra. Kết quả chưa đầy đủ.",
   "session.run.limitTime": "Dừng do hết thời gian. Kết quả chưa đầy đủ.",
   "session.run.stoppedPartial": "Đã dừng. Kết quả chưa đầy đủ.",
+  "session.run.denied": "Người dùng đã từ chối: {steps}",
   "session.run.error": "Lần chạy thất bại: {error}",
   "session.run.truncated": "Văn bản kết quả bị cắt, chỉ giữ phần cuối.",
   "session.toolCard.exploring": "Đang khám phá",

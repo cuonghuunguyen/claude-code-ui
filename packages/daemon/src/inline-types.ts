@@ -34,11 +34,15 @@ export type InlineHooks = {
    */
   settings?: { model?: string; openCodeModel?: string };
 };
-export type InlineStatus = "done" | "limit" | "stopped" | "error";
+export type InlineStatus = "done" | "limit" | "stopped" | "error" | "denied";
 export type InlineResult = {
   status: InlineStatus;
   limit?: "turns" | "tokens" | "time";
   error?: string;
+  /** Steps the user (or a permission rule) denied, one line each (`Bash: rm -rf build`). On `denied`, and on a run that finished despite them. */
+  denied?: string[];
+  /** The last steps of a run that did not end `done`, one line each (`Bash: npm test`, ` (failed)` appended on a failed step), so the caller can act. */
+  steps?: string[];
   text: string;
   truncated?: boolean;
   model: string;

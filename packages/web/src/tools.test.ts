@@ -252,6 +252,13 @@ describe("inline task helpers (GH-734)", () => {
     expect(inlineTaskResult([{ type: "text", text: JSON.stringify(ok) }])).toEqual(ok);
   });
 
+  it("inlineTaskResult keeps the denied status with its denied steps and last steps", async () => {
+    const { inlineTaskResult } = await import("./tools.ts");
+    const r = inlineTaskResult(JSON.stringify({ status: "denied", error: "The user denied Bash: rm.", denied: ["Bash: rm", 3], steps: ["Bash: ls (failed)"], text: "", filesChanged: [] }))!;
+    expect(r).toMatchObject({ status: "denied", denied: ["Bash: rm"], steps: ["Bash: ls (failed)"] });
+    expect(inlineTaskResult(JSON.stringify({ status: "done", denied: [], text: "x" }))!.denied).toBeUndefined();
+  });
+
   it("inlineTaskResult drops what is not a result: error text, no status, bad fields", async () => {
     const { inlineTaskResult } = await import("./tools.ts");
     expect(inlineTaskResult("Inline task files must be inside the project")).toBeUndefined();
