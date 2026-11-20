@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ProjectOverrides } from "@claude-ui/protocol";
-import { historySettings, inlineTaskSettings, projectOverrides, projectOverridesOfFile } from "../src/project-overrides.ts";
+import { historySettings, inlineTaskSettings, jiraOriginsInUse, jiraSettings, projectOverrides, projectOverridesOfFile } from "../src/project-overrides.ts";
 import { createLocalHistory } from "../src/local-history.ts";
 import { parseSettings } from "../src/settings.ts";
 
@@ -110,5 +110,35 @@ describe("readers", () => {
     h.before(join(on, "a.txt"), "save");
     expect(await h.list(join(off, "a.txt"))).toHaveLength(0);
     expect(await h.list(join(on, "a.txt"))).toHaveLength(1);
+  });
+});
+
+describe("Jira per Project (Hub)", () => {
+  const all = (overrides: Record<string, Record<string, ProjectOverrides>>) => parseSettings({ jira: { url: "https://acme.atlassian.net", email: "ann@example.com", jql: "project = G", template: "{key}" }, projects: { overrides } });
+  const global = { url: "https://acme.atlassian.net", email: "ann@example.com", jql: "project = G", template: "{key}" };
+
+  it("each field a Project sets replaces the global one, the others stay; Side and folder pick the entry", () => {
+    const s = all({ local: { "/p": { jira: { url: "https://jira.example.com", jql: "project = P" } } }, "ssh:box": { "/p": { jira: { email: "bob@example.com" } } } });
+    expect(jiraSettings(s)).toEqual(global);
+    expect(jiraSettings(s, { side: "local", cwd: "/p" })).toEqual({ ...global, url: "https://jira.example.com", jql: "project = P" });
+    expect(jiraSettings(s, { side: "ssh:box", cwd: "/p" })).toEqual({ ...global, email: "bob@example.com" });
+    expect(jiraSettings(s, { side: "local", cwd: "/other" })).toEqual(global);
+    expect(jiraSettings(s, { side: "wsl:A", cwd: "/p" })).toEqual(global);
+    // A Worktree path is no Project: the web sends the Project's own folder.
+    expect(jiraSettings(s, { side: "local", cwd: "/p/.claude/worktrees/x" })).toEqual(global);
+  });
+
+  it("an empty value is no value, and property names are data", () => {
+    const s = all({ local: { "/p": { jira: { url: "" as never, template: "" as never } } } });
+    expect(jiraSettings(s, { side: "local", cwd: "/p" })).toEqual(global);
+    expect(jiraSettings(s, { side: "__proto__", cwd: "constructor" })).toEqual(global);
+    expect(jiraSettings(s, { side: "local", cwd: "__proto__" })).toEqual(global);
+  });
+
+  it("origins in use: the global URL's, those of every Project on every Side, once each; no URL = \"\"", () => {
+    expect(jiraOriginsInUse(all({}))).toEqual(["https://acme.atlassian.net"]);
+    const s = all({ local: { "/a": { jira: { url: "https://jira.example.com/path" } }, "/b": { jira: { url: "https://jira.example.com" } }, "/c": { mode: "plan" } }, "ssh:box": { "/d": { jira: { url: "https://acme.atlassian.net/x" } }, "/e": { jira: { email: "e@example.com" } } } });
+    expect(jiraOriginsInUse(s).sort()).toEqual(["https://acme.atlassian.net", "https://jira.example.com"]);
+    expect(jiraOriginsInUse(parseSettings({ projects: { overrides: { local: { "/a": { jira: { url: "https://jira.example.com" } } } } } }))).toEqual(["", "https://jira.example.com"]);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectOverrides } from "@claude-ui/protocol";
-import { draftStart, overridesOf, setOverride } from "./project-settings.ts";
+import { draftStart, jiraOf, jiraOriginOf, jiraTokenFor, overridesOf, setOverride } from "./project-settings.ts";
 
 const map = (side: string, cwd: string, o: ProjectOverrides) => ({ [side]: { [cwd]: o } });
 
@@ -60,5 +60,30 @@ describe("draftStart", () => {
   });
   it("a picked model or effort wins over the override", () => {
     expect(draftStart({ model: "opus", effort: "max" }, "claude", { model: "sonnet", effort: "low" })).toEqual({ engine: "claude", model: "sonnet", effort: "low" });
+  });
+});
+
+describe("Jira of a Project", () => {
+  const global = { url: "https://acme.atlassian.net", email: "ann@example.com", template: "{key}", jql: "project = G" };
+  it("each field the Project sets replaces the global one; the Side and the Project's own folder pick the entry", () => {
+    const all = { ...map("local", "/a", { jira: { url: "https://jira.example.com", jql: "project = A" } }), ...map("ssh:x", "/a", { jira: { email: "bob@example.com" } }) };
+    expect(jiraOf(all, "local", "/a", global)).toEqual({ ...global, url: "https://jira.example.com", jql: "project = A" });
+    expect(jiraOf(all, "ssh:x", "/a", global)).toEqual({ ...global, email: "bob@example.com" });
+    expect(jiraOf(all, "local", "/b", global)).toEqual(global);
+    expect(jiraOf(undefined, "local", "/a", global)).toEqual(global);
+    expect(jiraOf(all, "__proto__", "constructor", global)).toEqual(global);
+  });
+  it("a token belongs to an origin: path and trailing slash do not matter, another host or port does", () => {
+    expect(jiraOriginOf("https://jira.example.com/path/")).toBe("https://jira.example.com");
+    expect(jiraOriginOf("https://jira.example.com:8443")).toBe("https://jira.example.com:8443");
+    expect(jiraOriginOf("")).toBe("");
+    expect(jiraOriginOf("not a url")).toBe("");
+    const r = { jiraToken: true, jiraTokens: ["https://jira.example.com"] };
+    expect(jiraTokenFor(r, "https://jira.example.com/x")).toBe(true);
+    expect(jiraTokenFor(r, "https://acme.atlassian.net")).toBe(false);
+    expect(jiraTokenFor(r, "")).toBe(false);
+    // An older daemon reports the one global token only.
+    expect(jiraTokenFor({ jiraToken: true }, "https://acme.atlassian.net")).toBe(true);
+    expect(jiraTokenFor({ jiraToken: false }, "https://acme.atlassian.net")).toBe(false);
   });
 });

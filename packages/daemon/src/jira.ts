@@ -1,8 +1,8 @@
-// Jira client of the Create worktree modal's Ticket tab (docs/spec.md "Worktrees", GH-447). One app-wide connection: base URL, email
-// (Cloud only) and branch template in settings.json, the token in secrets.json. Auth by URL: `*.atlassian.net` = Cloud (email + API
+// Jira client of the Create worktree modal's Ticket tab (docs/spec.md "Worktrees", GH-447). A connection: base URL, email
+// (Cloud only) and branch template in settings.json (global, each replaceable per Project, GH-894), the token of the URL's origin in secrets.json. Auth by URL: `*.atlassian.net` = Cloud (email + API
 // token, Basic, /rest/api/3), else Data Center / Server (personal access token, Bearer, /rest/api/2). The token never leaves this module
 // except in the Authorization header to the configured base URL; no error message carries it.
-import { jiraIsCloud, jiraKeyOf, jiraUrlProblem, MY_OPEN_JQL, type JiraTicket } from "@claude-ui/protocol";
+import { jiraIsCloud, jiraKeyOf, jiraUrlProblem, MY_OPEN_JQL, type JiraTicket, type ProjectRef } from "@claude-ui/protocol";
 
 export type JiraErrorCode = "jira_not_configured" | "jira_auth" | "jira_unreachable" | "jira_failed";
 export class JiraError extends Error {
@@ -29,8 +29,8 @@ export function splitJql(jql: string): { where: string; order?: string } {
 }
 
 export type JiraDeps = {
-  /** `jql`: the Ticket filter of Settings › Jira; blank = MY_OPEN_JQL. */
-  config: () => { url: string; email: string; jql?: string };
+  /** `jql`: the Ticket filter of Settings › Jira; blank = MY_OPEN_JQL. `project`: the Project the request is for; its overrides replace the global fields. */
+  config: (project?: ProjectRef) => { url: string; email: string; jql?: string };
   /** The token saved for this origin (GH-487). */
   token: (origin: string) => string | undefined;
   fetch?: typeof fetch;
@@ -41,11 +41,13 @@ type Raw = { key?: unknown; fields?: { summary?: unknown; issuetype?: { name?: u
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 const ticketOf = (r: Raw): JiraTicket => ({ key: str(r.key), type: str(r.fields?.issuetype?.name), summary: str(r.fields?.summary), status: str(r.fields?.status?.name) });
 
+type Config = ReturnType<JiraDeps["config"]>;
+
 export function createJira(d: JiraDeps) {
   const doFetch = d.fetch ?? fetch;
-  /** GET `<base>/rest/api/<2|3>/<path>`; 404 is null. */
-  async function get(path: string): Promise<unknown | null> {
-    const { url, email } = d.config();
+  /** GET `<base>/rest/api/<2|3>/<path>` with the connection `c`; 404 is null. */
+  async function get(c: Config, path: string): Promise<unknown | null> {
+    const { url, email } = c;
     if (!url) throw new JiraError("jira_not_configured", "Jira is not set up: add its URL and token in Settings › Jira");
     const token = d.token(jiraOrigin(url));
     if (!token) throw new JiraError("jira_not_configured", "No Jira token: set one in Settings › Jira");
@@ -74,16 +76,16 @@ export function createJira(d: JiraDeps) {
     }
     return body;
   }
-  const search = async (jql: string): Promise<JiraTicket[]> => {
+  const search = async (c: Config, jql: string): Promise<JiraTicket[]> => {
     const q = new URLSearchParams({ jql, fields: FIELDS, maxResults: String(ROWS) });
-    const cloud = jiraIsCloud(d.config().url);
-    const r = (await get(`${cloud ? "search/jql" : "search"}?${q}`)) as { issues?: Raw[] } | null;
+    const cloud = jiraIsCloud(c.url);
+    const r = (await get(c, `${cloud ? "search/jql" : "search"}?${q}`)) as { issues?: Raw[] } | null;
     return (r?.issues ?? []).map(ticketOf).filter((t) => t.key);
   };
   return {
     /** Test connection: the Jira user's display name. */
-    async test(): Promise<{ user: string }> {
-      const me = (await get("myself")) as { displayName?: unknown } | null;
+    async test(project?: ProjectRef): Promise<{ user: string }> {
+      const me = (await get(d.config(project), "myself")) as { displayName?: unknown } | null;
       if (!me) throw new JiraError("jira_failed", "Jira has no /myself here: check the base URL");
       return { user: str(me.displayName) || "(no name)" };
     },
@@ -91,22 +93,23 @@ export function createJira(d: JiraDeps) {
      * No text: the Ticket filter's tickets (default: my open ones); a key or ticket URL: that ticket, filter or not; other text:
      * tickets whose summary has its words, inside the Ticket filter when one is set.
      */
-    async search(text = ""): Promise<JiraTicket[]> {
+    async search(text = "", project?: ProjectRef): Promise<JiraTicket[]> {
       const t = text.trim();
-      const filter = d.config().jql?.trim() || "";
-      if (!t) return search(filter || MY_OPEN_JQL);
+      const c = d.config(project);
+      const filter = c.jql?.trim() || "";
+      if (!t) return search(c, filter || MY_OPEN_JQL);
       const key = jiraKeyOf(t);
       if (key) {
-        const r = (await get(`issue/${encodeURIComponent(key)}?fields=${FIELDS}`)) as Raw | null;
+        const r = (await get(c, `issue/${encodeURIComponent(key)}?fields=${FIELDS}`)) as Raw | null;
         if (r) return [ticketOf(r)];
         if (/^https?:\/\//i.test(t)) return []; // a link to a missing ticket: nothing to search
       }
       const words = t.replace(SPECIAL, " ").split(/\s+/).filter((w) => w && !/^(and|or|not)$/i.test(w));
-      if (!words.length) return search(filter || MY_OPEN_JQL);
+      if (!words.length) return search(c, filter || MY_OPEN_JQL);
       const summary = `summary ~ "${words.join(" ")}*"`;
-      if (!filter) return search(`${summary} ORDER BY updated DESC`);
+      if (!filter) return search(c, `${summary} ORDER BY updated DESC`);
       const { where, order } = splitJql(filter);
-      return search(`${where ? `(${where}) AND ` : ""}${summary} ORDER BY ${order ?? "updated DESC"}`);
+      return search(c, `${where ? `(${where}) AND ` : ""}${summary} ORDER BY ${order ?? "updated DESC"}`);
     },
   };
 }

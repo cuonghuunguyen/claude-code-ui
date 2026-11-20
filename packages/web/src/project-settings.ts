@@ -1,6 +1,6 @@
 // Project overrides in the web app (docs/spec.md "Project settings"): lookup, whole-map writes and the draft defaults. The daemon applies the
 // Permission mode, Claude account, inline task model and local history itself; the new-session tab reads Engine, model and effort here.
-import { LOCAL_SIDE, type Effort, type Engine, type ProjectOverrides, type Settings, type Worktree } from "@claude-ui/protocol";
+import { LOCAL_SIDE, type Effort, type Engine, type ProjectOverrides, type Settings, type SettingsResult, type Worktree } from "@claude-ui/protocol";
 import { projectOf } from "./sessions.ts";
 
 export type OverrideMap = Settings["projects"]["overrides"];
@@ -46,3 +46,21 @@ export function draftStart(o: ProjectOverrides, globalEngine: Engine, picked: { 
   const same = engine === (o.engine ?? globalEngine);
   return { engine, model: picked.model ?? (same ? o.model : undefined) ?? "default", effort: picked.effort ?? (same ? o.effort : undefined) ?? "default" };
 }
+
+/** The origin (scheme, host, port) a Jira token belongs to; "" for no URL or one that is not a URL. */
+export function jiraOriginOf(url: string): string {
+  try {
+    return url ? new URL(url).origin : "";
+  } catch {
+    return "";
+  }
+}
+
+/** The Jira connection of a Project: each field its entry sets (an empty string is no value) over the global one, as the Hub resolves it. `cwd` is the Project's own folder. */
+export function jiraOf(all: OverrideMap | undefined, side: string, cwd: string, global: Settings["jira"]): Settings["jira"] {
+  const o = own(own(all, side), cwd)?.jira;
+  return { ...global, ...(o?.url && { url: o.url }), ...(o?.email && { email: o.email }), ...(o?.jql && { jql: o.jql }), ...(o?.template && { template: o.template }) };
+}
+
+/** A token is saved for the origin of `url`. An older daemon reports only its one global token. */
+export const jiraTokenFor = (r: Pick<SettingsResult, "jiraToken" | "jiraTokens">, url: string) => (r.jiraTokens ? r.jiraTokens.includes(jiraOriginOf(url)) : !!r.jiraToken);

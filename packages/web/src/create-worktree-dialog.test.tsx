@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { BranchRow, JiraTicket } from "@claude-ui/protocol";
+import type { BranchRow, JiraTicket, ProjectOverrides } from "@claude-ui/protocol";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -30,12 +30,12 @@ afterEach(() => {
 });
 
 const LONG: BranchRow = { name: `${"a".repeat(60)}-PROJ-351-tail`, local: true };
-function mount(o: { long?: boolean; jira?: boolean; jql?: string; noTickets?: boolean; fetchError?: string; createError?: string } = {}) {
+function mount(o: { long?: boolean; jira?: boolean; jql?: string; noTickets?: boolean; fetchError?: string; createError?: string; side?: string; overrides?: Record<string, Record<string, ProjectOverrides>>; tokens?: string[] } = {}) {
   const calls: Request[] = [];
   const request = vi.fn(async (m: Request) => {
     calls.push(m);
     if (m.type === "worktree.branches") return { branches: o.long ? [...BRANCHES, LONG] : BRANCHES, defaultBase: "origin/main", ...(m.fetch && (o.fetchError ? { fetchError: o.fetchError } : { fetched: true })) };
-    if (m.type === "settings.get") return { settings: { jira: o.jira ? { url: "https://acme.atlassian.net", email: "a@b.c", template: "{type}/{key}-{summary}", jql: o.jql ?? "" } : { url: "", email: "", template: "{type}/{key}-{summary}" } }, jiraToken: !!o.jira };
+    if (m.type === "settings.get") return { settings: { jira: o.jira ? { url: "https://acme.atlassian.net", email: "a@b.c", template: "{type}/{key}-{summary}", jql: o.jql ?? "" } : { url: "", email: "", template: "{type}/{key}-{summary}" }, ...(o.overrides && { projects: { overrides: o.overrides } }) }, jiraToken: !!o.jira, ...(o.tokens && { jiraTokens: o.tokens }) };
     if (m.type === "worktree.pr") {
       if (m.url.includes("/other/")) throw new Error("Pull request #9 is in acme/other on github.com, not in this repository");
       return m.url.includes("/pull/2") ? { number: 2, branches: ["feature/PRJ-2-old-try"] } : { number: 7, branches: ["feat/remote"] };
@@ -54,7 +54,7 @@ function mount(o: { long?: boolean; jira?: boolean; jql?: string; noTickets?: bo
   el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
-  act(() => root!.render(<CreateWorktreeDialog project={R} request={request as never} onClose={onClose} onCreated={onCreated} onJiraSettings={onJiraSettings} />));
+  act(() => root!.render(<CreateWorktreeDialog project={R} side={o.side} request={request as never} onClose={onClose} onCreated={onCreated} onJiraSettings={onJiraSettings} />));
   return { calls, onCreated, onClose, onJiraSettings };
 }
 const q = <T extends HTMLElement = HTMLElement>(id: string) => document.querySelector<T>(`[data-testid="${id}"]`);
@@ -167,7 +167,7 @@ it("Ticket: opens on my tickets when Jira is set up; picking one prefills the te
   expect(q("create-worktree-tab-ticket")!.getAttribute("aria-selected")).toBe("true");
   const rows = () => [...document.querySelectorAll<HTMLElement>('[data-testid="create-worktree-ticket-row"]')];
   expect(rows().map((r) => r.dataset.key)).toEqual(["PRJ-1", "PRJ-2"]);
-  expect(calls.find((c) => c.type === "jira.search")).toEqual({ type: "jira.search" });
+  expect(calls.find((c) => c.type === "jira.search")).toEqual({ type: "jira.search", project: { side: "local", cwd: R } });
   await click(rows()[0]!);
   expect(q<HTMLInputElement>("create-worktree-ticket-branch")!.value).toBe("bugfix/PRJ-1-login-fails-on-safari");
   await type("create-worktree-ticket-branch", "bugfix/PRJ-1 Safari Login");
@@ -198,7 +198,7 @@ it("Ticket: typed text searches after a pause; the existing branch of PRJ-2 chec
   await type("create-worktree-ticket-search", "PRJ-2");
   await act(async () => void vi.advanceTimersByTime(400));
   await flush();
-  expect(calls.filter((c) => c.type === "jira.search").at(-1)).toEqual({ type: "jira.search", text: "PRJ-2" });
+  expect(calls.filter((c) => c.type === "jira.search").at(-1)).toEqual({ type: "jira.search", text: "PRJ-2", project: { side: "local", cwd: R } });
   const rows = [...document.querySelectorAll<HTMLElement>('[data-testid="create-worktree-ticket-row"]')];
   expect(rows.map((r) => r.dataset.key)).toEqual(["PRJ-2"]);
   await click(rows[0]!);
@@ -256,7 +256,7 @@ it("Ticket: a pasted pull request link finds the ticket its branch names, and of
   await flush();
   await flush();
   expect(calls.find((c) => c.type === "worktree.pr")).toMatchObject({ url: "https://github.com/acme/app/pull/2" });
-  expect(calls.filter((c) => c.type === "jira.search").at(-1)).toEqual({ type: "jira.search", text: "PRJ-2" });
+  expect(calls.filter((c) => c.type === "jira.search").at(-1)).toEqual({ type: "jira.search", text: "PRJ-2", project: { side: "local", cwd: R } });
   const rows = [...document.querySelectorAll<HTMLElement>('[data-testid="create-worktree-ticket-row"]')];
   expect(rows.map((r) => r.dataset.key)).toEqual(["PRJ-2"]);
   await click(rows[0]!);
@@ -307,4 +307,31 @@ it("shows the Connect Jira hint once when Jira is not set up", async () => {
   mount();
   await flush();
   expect(q("rec-jira")).toBeNull();
+});
+
+it("Ticket: a Project's Jira overrides give the search its project, the branch template and the ready state of its own origin", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const overrides = { "ssh:box": { [R]: { jira: { url: "https://jira.example.com", template: "{key}/{summary}" } } } };
+  const { calls } = mount({ jira: true, side: "ssh:box", overrides, tokens: ["https://jira.example.com"] });
+  await flush();
+  await flush();
+  expect(q("create-worktree-tab-ticket")!.getAttribute("aria-selected")).toBe("true");
+  expect(calls.find((c) => c.type === "jira.search")).toEqual({ type: "jira.search", project: { side: "ssh:box", cwd: R } });
+  await click(document.querySelector<HTMLElement>('[data-testid="create-worktree-ticket-row"]'));
+  expect(q<HTMLInputElement>("create-worktree-ticket-branch")!.value).toBe("PRJ-1/login-fails-on-safari");
+});
+
+it("Ticket: a Project with its own Jira URL but no token for it is not ready, though the global URL has one", async () => {
+  const overrides = { local: { [R]: { jira: { url: "https://jira.example.com" } } } };
+  const { calls, onJiraSettings } = mount({ jira: true, overrides, tokens: ["https://acme.atlassian.net"] });
+  await flush();
+  await flush();
+  expect(q("create-worktree-tab-name")!.getAttribute("aria-selected")).toBe("true");
+  await click(q("create-worktree-tab-ticket"));
+  expect(q("create-worktree-no-jira")).not.toBeNull();
+  expect(calls.some((c) => c.type === "jira.search")).toBe(false);
+  // The way out is the project's own settings, not the global ones that already have a token.
+  expect(q("create-worktree-jira-settings")!.textContent).toBe("Open Project settings › Jira");
+  await click(q("create-worktree-jira-settings"));
+  expect(onJiraSettings).toHaveBeenCalledWith(true);
 });

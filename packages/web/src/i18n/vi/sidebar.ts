@@ -355,6 +355,7 @@ export default {
   "sidebar.cw.inWorktree": "trong worktree {name}",
   "sidebar.cw.noJira": "Jira chưa được thiết lập.",
   "sidebar.cw.openJira": "Mở Cài đặt › Jira",
+  "sidebar.cw.openProjectJira": "Mở Cài đặt dự án › Jira",
   "sidebar.cw.ticketPlaceholder": "Mã, văn bản, liên kết ticket hoặc pull request",
   "sidebar.cw.searchTickets": "Tìm ticket",
   "sidebar.cw.tickets": "Ticket",

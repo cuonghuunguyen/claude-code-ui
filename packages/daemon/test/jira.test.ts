@@ -114,4 +114,25 @@ describe("createJira", () => {
     expect(await code(j.search())).toBe("jira_not_configured");
     expect(fake.requests).toEqual([]);
   });
+
+  it("a Project's connection: its URL, ticket filter and the token of its origin; no project = the global connection (GH-894)", async () => {
+    const A = await fakeJira({ auth: "Bearer tok-global", issues: [{ key: "GLB-1", type: "Bug", summary: "Global ticket", status: "Open", mine: true }] });
+    const B = await fakeJira({ auth: "Bearer tok-project", issues: [{ key: "PRJ-5", type: "Task", summary: "Project ticket", status: "Open", mine: true }, { key: "OTH-6", type: "Task", summary: "Other ticket", status: "Open", mine: true }] });
+    fake = { ...A, close: async () => void (await A.close(), await B.close()) } as FakeJira;
+    const s = createSecrets();
+    s.setJiraToken("tok-global", new URL(A.url).origin, new URL(A.url).origin);
+    s.setJiraToken("tok-project", new URL(B.url).origin, new URL(A.url).origin);
+    const ref = { side: "local", cwd: "/p" };
+    const j = createJira({ config: (p) => (p ? { url: B.url, email: "", jql: "project = PRJ" } : { url: A.url, email: "" }), token: (o) => s.jiraToken(o) });
+    expect((await j.search()).map((t) => t.key)).toEqual(["GLB-1"]);
+    expect((await j.search("", ref)).map((t) => t.key)).toEqual(["PRJ-5"]);
+    expect(await j.test(ref)).toEqual({ user: "Ann Example" });
+    // Each site only ever saw its own token.
+    expect(A.requests.every((r) => r.auth === "Bearer tok-global")).toBe(true);
+    expect(B.requests.every((r) => r.auth === "Bearer tok-project")).toBe(true);
+    expect(B.requests.length).toBeGreaterThan(0);
+    // A Project whose origin has no token never gets the global one.
+    const none = createJira({ config: (p) => ({ url: p ? "https://acme.atlassian.net" : A.url, email: "ann@example.com" }), token: (o) => s.jiraToken(o), fetch: () => Promise.reject(new Error("must not fetch")) });
+    expect(await code(none.search("", ref))).toBe("jira_not_configured");
+  });
 });

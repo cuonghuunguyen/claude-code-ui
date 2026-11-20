@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, it, vi } from "vitest";
+import { createSecrets } from "../src/secrets.ts";
 import { checkPatch, createSettings, DEFAULTS, parseSettings, sideSettings } from "../src/settings.ts";
 
 const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {}, commitMessageWarm: false };
@@ -495,4 +496,21 @@ it("sideSettings: a Side gets only its own project overrides as local, never the
   expect(patch.claude).toBeUndefined();
   expect(sideSettings(s, "docker:none")).toMatchObject({ projects: { overrides: {} } });
   expect(checkPatch(patch)).toBeUndefined();
+});
+
+it("sideSettings: a Side gets the Jira fields of its own Projects (not secret) and never a Jira token (contract)", () => {
+  const s = parseSettings({
+    jira: { url: "https://acme.atlassian.net", email: "ann@example.com" },
+    projects: { overrides: { "ssh:box": { "/box": { jira: { url: "https://box.example.com", jql: "project = BOX" } } }, "wsl:Ubuntu": { "/wsl": { jira: { url: "https://wsl.example.com" } } } } },
+  });
+  const secrets = createSecrets();
+  secrets.setJiraToken("tok-global-SECRET", "https://acme.atlassian.net", "https://acme.atlassian.net");
+  secrets.setJiraToken("tok-box-SECRET", "https://box.example.com", "https://acme.atlassian.net");
+  secrets.setJiraToken("tok-wsl-SECRET", "https://wsl.example.com", "https://acme.atlassian.net");
+  const patch = JSON.stringify(sideSettings(s, "ssh:box"));
+  expect(patch).toContain("https://box.example.com");
+  expect(patch).not.toContain("wsl.example.com");
+  // Tokens live in secrets.json only: no settings patch, whatever it holds, carries one.
+  for (const token of secrets.values()) expect(patch).not.toContain(token);
+  expect(patch).not.toMatch(/jiraToken/);
 });

@@ -42,7 +42,7 @@ import { ARCHIVED_TAG, createClaudeCatalogue, transcriptFile, type History } fro
 import { createOpenCodeCatalogues } from "./opencode-catalogues.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
 import { claudeEnv, setClaudeToken } from "./claude-env.ts";
-import { historySettings, inlineTaskSettings, projectOverrides } from "./project-overrides.ts";
+import { historySettings, inlineTaskSettings, jiraSettings, projectOverrides } from "./project-overrides.ts";
 import { TEST_ARGS, TEST_TIMEOUT_MS, testOutcome } from "./claude-test.ts";
 import { createPlanTracker, RESET_GRACE_MS, usesOauthToken } from "./plan-usage.ts";
 import { createPromptQueue } from "./prompt-queue.ts";
@@ -482,9 +482,9 @@ export function createDaemon(opts: {
   /** Local history (local-history.ts): `before()` is the one entry point for every write that replaces file content (editor save, agent Edit/Write, git writes). */
   const localHistory = createLocalHistory({ dir: opts.historyDir ?? join(tmpdir(), `claude-ui-history-${randomUUID()}`), settings: (path) => historySettings(appSettings.get(), path), allowed: (p) => allowed(p) });
   const secrets = opts.secrets ?? createSecrets();
-  const jira = createJira({ config: () => appSettings.get().jira, token: (o) => secrets.jiraToken(o), ...(opts.jiraFetch && { fetch: opts.jiraFetch }) });
+  const jira = createJira({ config: (project) => jiraSettings(appSettings.get(), project), token: (o) => secrets.jiraToken(o), ...(opts.jiraFetch && { fetch: opts.jiraFetch }) });
   /** `settings.get` / `settings.set` / `jira.token` reply: the settings, the daemon, whether a Jira token is saved (never the token). */
-  const settingsReply = (settings = appSettings.get()) => ({ settings, daemon: daemonInfo(), jiraToken: !!secrets.jiraToken(jiraOrigin(settings.jira.url)), claudeAccounts: secrets.claudeAccounts(), ...(secrets.jiraTokenReset() && { jiraTokenReset: true as const }) });
+  const settingsReply = (settings = appSettings.get()) => ({ settings, daemon: daemonInfo(), jiraToken: !!secrets.jiraToken(jiraOrigin(settings.jira.url)), jiraTokens: secrets.jiraOrigins(), claudeAccounts: secrets.claudeAccounts(), ...(secrets.jiraTokenReset() && { jiraTokenReset: true as const }) });
   /** The Claude account of the settings as the CLI env takes it: undefined = Default, null = CLI login, a token; an unknown id (removed, hand edit) is Default. */
   const accountToken = () => {
     const a = appSettings.get().claude.account;
@@ -517,7 +517,7 @@ export function createDaemon(opts: {
   };
   const broadcastSettings = (settings = appSettings.get()) => {
     const r = settingsReply(settings);
-    broadcast({ type: "settings_changed", settings, jiraToken: r.jiraToken, claudeAccounts: r.claudeAccounts });
+    broadcast({ type: "settings_changed", settings, jiraToken: r.jiraToken, jiraTokens: r.jiraTokens, claudeAccounts: r.claudeAccounts });
   };
   // The monitor follows the `performance.monitor` setting: on start, on settings.set, and on its 10 s tick (another daemon's change to off).
   const perfMon = opts.perf ?? createPerf({ version: opts.buildInfo?.version, poll: () => appSettings.get().performance.monitor });

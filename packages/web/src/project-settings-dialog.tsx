@@ -2,7 +2,7 @@
 // every field: a control whose first option (or empty text) is "Global (<value>)", a Global / Project status in text, and a reset button
 // while the Project sets it. A change is saved at once through settings.set (the whole overrides map, like labels).
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { DEFAULT_ENGINE, EFFORTS, LOCAL_SIDE, SESSION_MODES, type ClaudeAccountInfo, type Effort, type Engine, type ModelInfo, type ProjectOverrides, type Settings, type SettingsPatch, type SettingsResult } from "@claude-ui/protocol";
+import { DEFAULT_ENGINE, EFFORTS, jiraIsCloud, LOCAL_SIDE, SESSION_MODES, type ClaudeAccountInfo, type Effort, type Engine, type ModelInfo, type ProjectOverrides, type Settings, type SettingsPatch, type SettingsResult } from "@claude-ui/protocol";
 import { RotateCcwIcon } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { Request } from "./client.ts";
@@ -10,7 +10,8 @@ import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { ENGINE_NAME } from "./engine-tag.tsx";
 import { isImeKey } from "./ime.ts";
 import { useT } from "./i18n.ts";
-import { overridesOf, setOverride } from "./project-settings.ts";
+import { ProjectJiraToken } from "./project-jira-token.tsx";
+import { jiraOf, jiraOriginOf, jiraTokenFor, overridesOf, setOverride } from "./project-settings.ts";
 import { EFFORT_LABEL, MODE_LABEL } from "./toolbar.tsx";
 
 const GLOBAL = "__global__";
@@ -137,13 +138,14 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
   const [settings, setSettings] = useState<Settings>();
   const [accounts, setAccounts] = useState<ClaudeAccountInfo[]>([]);
   const [envToken, setEnvToken] = useState(false);
+  const [tokens, setTokens] = useState<Pick<SettingsResult, "jiraToken" | "jiraTokens">>({});
   const [error, setError] = useState<string>();
   const [fieldError, setFieldError] = useState<{ id: string; message: string }>();
   const [busy, setBusy] = useState(false);
   const ask = useRef(request);
   ask.current = request;
 
-  const take = (r: SettingsResult) => (setSettings(r.settings), setAccounts(r.claudeAccounts ?? []), setEnvToken(!!r.daemon?.claudeEnvToken));
+  const take = (r: SettingsResult) => (setSettings(r.settings), setAccounts(r.claudeAccounts ?? []), setEnvToken(!!r.daemon?.claudeEnvToken), setTokens({ jiraToken: r.jiraToken, jiraTokens: r.jiraTokens }));
   useEffect(() => {
     if (!open) return;
     let live = true;
@@ -193,6 +195,11 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
   const accountOptions = [...(envToken ? [{ value: DEFAULT_ACCOUNT, label: t("app.plan.accountDefault") }] : []), { value: "cli", label: t("app.plan.accountCli") }, ...accounts.map((a) => ({ value: a.id, label: a.name }))];
   const modeNow = settings?.sessions.defaultMode;
   // A model or effort belongs to an Engine: setting one pins the Engine the Project uses now, so a later change of the global Engine (the last one used) does not give it to another Engine.
+  // Jira: the connection in effect, and who shares the token of its origin. Shown only when the daemon keeps a token per origin (`jiraTokens`).
+  const jiraNow = settings?.jira ? jiraOf(all, side, cwd, settings.jira) : undefined;
+  const jiraOrigin = jiraNow ? jiraOriginOf(jiraNow.url) : "";
+  const others = Object.entries(all ?? {}).flatMap(([s, projects]) => Object.entries(projects).filter(([c, p]) => !(s === side && c === cwd) && p.jira?.url && jiraOriginOf(p.jira.url) === jiraOrigin));
+  const sharedWith = [...(settings?.jira && jiraOriginOf(settings.jira.url) === jiraOrigin ? [t("projectSettings.jira.sharedGlobal")] : []), ...(others.length ? [t("projectSettings.jira.sharedProjects", { count: others.length })] : [])].join(", ");
   const pinEngine = (v: string | undefined): Change => (v !== undefined && o.engine === undefined ? { engine: globalEngine } : {});
 
   return (
@@ -282,6 +289,38 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
               )}
             </Row>,
           )}
+          {tokens.jiraTokens && settings.jira && jiraNow &&
+            section(
+              "jira",
+              t("projectSettings.group.jira"),
+              <>
+                <Row ui={ui} id="project-jira-url" label={t("jira.url")} hint={t("projectSettings.jira.url.hint")} set={o.jira?.url !== undefined} reset={{ jira: { url: undefined } }}>
+                  {(p) => <TextField ui={ui} id="project-jira-url" value={o.jira?.url} globalValue={settings.jira.url} onSave={(v) => ui.save("project-jira-url", { jira: { url: v } })} p={p} />}
+                </Row>
+                {(jiraIsCloud(jiraNow.url) || o.jira?.email !== undefined) && (
+                  <Row ui={ui} id="project-jira-email" label={t("jira.email")} hint={t("jira.emailHint")} set={o.jira?.email !== undefined} reset={{ jira: { email: undefined } }}>
+                    {(p) => <TextField ui={ui} id="project-jira-email" value={o.jira?.email} globalValue={settings.jira.email} onSave={(v) => ui.save("project-jira-email", { jira: { email: v } })} p={p} />}
+                  </Row>
+                )}
+                <ProjectJiraToken
+                  key={`${side}|${cwd}|${jiraOrigin}`}
+                  project={{ side, cwd }}
+                  url={jiraNow.url}
+                  own={o.jira?.url !== undefined}
+                  cloud={jiraIsCloud(jiraNow.url)}
+                  tokenSet={jiraTokenFor(tokens, jiraNow.url)}
+                  sharedWith={sharedWith}
+                  request={request}
+                  onResult={take}
+                />
+                <Row ui={ui} id="project-jira-jql" label={t("jira.jql")} hint={t("projectSettings.jira.jql.hint")} set={o.jira?.jql !== undefined} reset={{ jira: { jql: undefined } }}>
+                  {(p) => <TextField ui={ui} id="project-jira-jql" value={o.jira?.jql} globalValue={settings.jira.jql} onSave={(v) => ui.save("project-jira-jql", { jira: { jql: v } })} p={p} />}
+                </Row>
+                <Row ui={ui} id="project-jira-template" label={t("jira.template")} hint={t("jira.templateHint")} set={o.jira?.template !== undefined} reset={{ jira: { template: undefined } }}>
+                  {(p) => <TextField ui={ui} id="project-jira-template" value={o.jira?.template} globalValue={settings.jira.template} onSave={(v) => ui.save("project-jira-template", { jira: { template: v } })} p={p} />}
+                </Row>
+              </>,
+            )}
         </>
       )}
     </ConfigDialog>

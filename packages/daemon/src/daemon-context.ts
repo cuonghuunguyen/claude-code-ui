@@ -88,7 +88,7 @@ export type DaemonContext = {
   appSettings: ReturnType<typeof createSettings>;
   secrets: ReturnType<typeof createSecrets>;
   jira: ReturnType<typeof createJira>;
-  /** The `settings.get` reply: the settings, the daemon, whether a Jira token is saved (never the token). */
+  /** The `settings.get` reply: the settings, the daemon, which Jira origins have a saved token (never a token). */
   settingsReply(settings?: Settings): object;
   broadcastSettings(settings?: Settings): void;
   /** `claude.account.test`: one CLI run per account at a time. */

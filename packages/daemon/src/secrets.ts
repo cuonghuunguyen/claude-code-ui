@@ -1,6 +1,7 @@
 // Write-only secrets (docs/spec.md "Settings", GH-447): secrets.json in the config dir (mode 0600), same JSON-file helper as settings.json.
 // A secret is never sent in a reply, a broadcast or a log line; clients only learn whether one is set.
-// The Jira token is stored with the origin it was saved for and only returned for that origin (GH-487).
+// Jira tokens are stored per origin (scheme + host + port) and only returned for that origin (GH-487, GH-894): Projects of one Jira site share
+// one token. The token of the global URL's origin is also written as `jiraToken` + `jiraOrigin`, the format of older daemons sharing the file.
 import { randomUUID } from "node:crypto";
 import { createJsonFile } from "./json-file.ts";
 import { LABEL_NAME_MAX } from "@claude-ui/protocol";
@@ -10,19 +11,30 @@ import { nameOk } from "./settings.ts";
 /** A named Claude token (`claude setup-token`) the user pasted (GH-615); `token` leaves this file only as the env of a CLI process. */
 type ClaudeAccount = { id: string; name: string; token: string };
 export const CLAUDE_ACCOUNTS_MAX = 20;
-type Stored = { jiraToken?: string; jiraOrigin?: string; jiraTokenReset?: true; legacy?: true; claudeAccounts?: ClaudeAccount[] };
+type Stored = { jiraToken?: string; jiraOrigin?: string; jiraTokens?: Record<string, string>; jiraTokenReset?: true; legacy?: true; claudeAccounts?: ClaudeAccount[] };
 const parse = (raw: unknown): Stored => {
   const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const accounts = (Array.isArray(r.claudeAccounts) ? r.claudeAccounts : [])
     .filter((a): a is ClaudeAccount => !!a && typeof a.id === "string" && !!a.id && nameOk(a.name) && typeof a.token === "string" && !tokenProblem(a.token))
     .slice(0, CLAUDE_ACCOUNTS_MAX);
-  const rest = accounts.length ? { claudeAccounts: accounts } : {};
+  const listed = Object.fromEntries(Object.entries(r.jiraTokens && typeof r.jiraTokens === "object" && !Array.isArray(r.jiraTokens) ? r.jiraTokens : {}).filter(([, v]) => typeof v === "string" && v));
+  // The old format wins for its origin: an older daemon may have replaced that token after this one wrote the map.
+  const tokens: Record<string, string> = typeof r.jiraToken === "string" && r.jiraToken && typeof r.jiraOrigin === "string" ? { ...listed, [r.jiraOrigin]: r.jiraToken } : listed;
+  const rest = { ...(accounts.length && { claudeAccounts: accounts }), ...(Object.keys(tokens).length && { jiraTokens: tokens }) };
   if (typeof r.jiraToken === "string" && r.jiraToken) return typeof r.jiraOrigin === "string" ? { jiraToken: r.jiraToken, jiraOrigin: r.jiraOrigin, ...rest } : { legacy: true, ...rest };
   return r.jiraTokenReset === true ? { jiraTokenReset: true, ...rest } : rest;
 };
 /** A Jira API token or personal access token: printable, no spaces, at most 2000 characters. */
 export const tokenProblem = (t: unknown): string | undefined =>
   typeof t !== "string" || !t || t.length > 2000 || !/^[\x21-\x7e]+$/.test(t) ? "The token must be 1 to 2000 printable characters without spaces" : undefined;
+
+const setTokens = (d: Stored, m: Record<string, string>) => void (Object.keys(m).length ? (d.jiraTokens = m) : delete d.jiraTokens);
+/** The old format (`jiraToken` + `jiraOrigin`) holds the token of the global URL's origin, if there is one. */
+function mirror(d: Stored, globalOrigin: string) {
+  const t = d.jiraTokens;
+  if (t && Object.hasOwn(t, globalOrigin)) (d.jiraToken = t[globalOrigin]), (d.jiraOrigin = globalOrigin);
+  else delete d.jiraToken, delete d.jiraOrigin;
+}
 
 /** Without `file` the secrets live in memory only (tests). */
 export function createSecrets({ file }: { file?: string } = {}) {
@@ -48,7 +60,7 @@ export function createSecrets({ file }: { file?: string } = {}) {
     /** Every stored secret value, only to redact them from terminal output handed to an agent (agent-terminals.ts); never sent anywhere. */
     values: (): string[] => {
       const d = get();
-      return [...(d.jiraToken ? [d.jiraToken] : []), ...(d.claudeAccounts ?? []).map((a) => a.token)];
+      return [...new Set([...(d.jiraToken ? [d.jiraToken] : []), ...Object.values(d.jiraTokens ?? {})]), ...(d.claudeAccounts ?? []).map((a) => a.token)];
     },
     /** Only for the env of a CLI process. */
     claudeToken: (id: string): string | undefined => get().claudeAccounts?.find((a) => a.id === id)?.token,
@@ -68,37 +80,57 @@ export function createSecrets({ file }: { file?: string } = {}) {
     removeClaudeAccount: (id: string) => store.change((d) => void (d.claudeAccounts && (d.claudeAccounts = d.claudeAccounts.filter((a) => a.id !== id)))),
     /** The token, only for the origin it was saved for. */
     jiraToken: (origin: string): string | undefined => {
-      const d = get();
-      return d.jiraOrigin === origin ? d.jiraToken : undefined;
+      const t = get().jiraTokens;
+      return t && Object.hasOwn(t, origin) ? t[origin] : undefined;
     },
-    /** The origin of the saved token ("" = saved without URL); undefined without a token. */
-    jiraTokenOrigin: (): string | undefined => {
-      const d = get();
-      return d.jiraToken ? d.jiraOrigin : undefined;
-    },
+    /** The origins that have a saved token ("" = saved without URL); never the tokens. */
+    jiraOrigins: (): string[] => Object.keys(get().jiraTokens ?? {}),
     /** An old-format token was removed and no token was saved since (Settings says why). */
     jiraTokenReset: (): boolean => !!get().jiraTokenReset,
-    /** Binds a token saved without URL to `origin`, in one write; no-op for a token with an origin or none. */
+    /** Binds a token saved without URL to `origin` (the global URL's), in one write; no-op without such a token or when `origin` has one. */
     bindJiraToken(origin: string) {
-      const d = get();
-      if (!d.jiraToken || d.jiraOrigin !== "") return;
+      const t = get().jiraTokens;
+      if (!t || !Object.hasOwn(t, "") || origin === "" || Object.hasOwn(t, origin)) return;
       // Checked again on the freshly loaded data: another daemon may have written since `get()`.
-      store.change((x) => void (x.jiraToken && x.jiraOrigin === "" && (x.jiraOrigin = origin)));
+      store.change((x) => {
+        const m = x.jiraTokens;
+        if (!m || !Object.hasOwn(m, "") || Object.hasOwn(m, origin)) return;
+        m[origin] = m[""]!;
+        delete m[""];
+        mirror(x, origin);
+      });
     },
     /** The Jira URL was emptied: the "cleared by an update" notice has done its job. */
     endJiraTokenReset() {
       if (get().jiraTokenReset) store.change((d) => void (d.jiraTokenReset && delete d.jiraTokenReset));
     },
-    /** null clears. `origin` = the origin of jira.url ("" without URL). Throws when the token is invalid or the save fails. */
-    setJiraToken(token: string | null, origin = "") {
+    /**
+     * null clears. `origin` = the origin of the URL the token is for ("" without URL); `globalOrigin` = the origin of the global jira.url, whose token is
+     * also kept in the old format. Throws when the token is invalid or the save fails.
+     */
+    setJiraToken(token: string | null, origin = "", globalOrigin = origin) {
       if (token !== null) {
         const p = tokenProblem(token);
         if (p) throw new Error(p);
       }
       store.change((d) => {
         delete d.jiraTokenReset;
-        if (token === null) delete d.jiraToken, delete d.jiraOrigin;
-        else (d.jiraToken = token), (d.jiraOrigin = origin);
+        const m = Object.fromEntries(Object.entries(d.jiraTokens ?? {}).filter(([k]) => k !== origin));
+        if (token !== null) m[origin] = token;
+        setTokens(d, m);
+        mirror(d, globalOrigin);
+      });
+    },
+    /** Keeps only the tokens of `used` origins (a URL of the global or a Project setting names them); no write when nothing changes. */
+    pruneJiraTokens(used: string[], globalOrigin: string) {
+      const d = get();
+      const t = d.jiraTokens ?? {};
+      const kept = Object.keys(t).filter((o) => used.includes(o));
+      const want = Object.hasOwn(t, globalOrigin) && used.includes(globalOrigin) ? t[globalOrigin] : undefined;
+      if (kept.length === Object.keys(t).length && d.jiraToken === want && d.jiraOrigin === (want === undefined ? undefined : globalOrigin)) return;
+      store.change((x) => {
+        setTokens(x, Object.fromEntries(Object.entries(x.jiraTokens ?? {}).filter(([o]) => used.includes(o))));
+        mirror(x, globalOrigin);
       });
     },
   };

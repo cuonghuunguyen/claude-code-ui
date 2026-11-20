@@ -225,6 +225,63 @@ describe("Jira over the wire", () => {
     for (const text of [...c.raw, ...other.raw, ...logs]) expect(text).not.toContain(JIRA_TOKEN);
   });
 
+  it("Jira per Project: a Project's URL and token, one token per origin shared by Projects, unused tokens dropped, no token in any frame, log or settings file (GH-894)", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wtj-")));
+    mkdirSync(join(root, "cfg"));
+    const secretsFile = join(root, "cfg", "secrets.json");
+    const settingsFile = join(root, "cfg", "settings.json");
+    const logs: string[] = [];
+    const spies = (["log", "warn", "error", "info", "debug"] as const).map((k) => vi.spyOn(console, k).mockImplementation((...a: unknown[]) => void logs.push(a.map(String).join(" "))));
+    closers.push(() => spies.forEach((s) => s.mockRestore()));
+    const PROJECT_TOKEN = "jira-PAT-project-do-not-leak-987654";
+    const global = await fakeJira({ auth: `Bearer ${JIRA_TOKEN}`, user: "Global User", issues: [{ key: "GLB-1", type: "Bug", summary: "Global ticket", status: "Open", mine: true }] });
+    const site = await fakeJira({ auth: `Bearer ${PROJECT_TOKEN}`, user: "Project User", issues: [{ key: "PRJ-5", type: "Task", summary: "Project ticket", status: "Open", mine: true }] });
+    closers.push(() => Promise.all([global.close(), site.close()]));
+    const c = await client(await daemon({ root, secretsFile, settingsFile }));
+    const a = { side: "local", cwd: "/work/a" };
+    const b = { side: "ssh:box", cwd: "/work/b" };
+    const noUrl = { side: "local", cwd: "/work/none" };
+    await c.request({ type: "settings.set", patch: { jira: { url: global.url } } });
+    await c.request({ type: "jira.token", token: JIRA_TOKEN });
+    const set = (overrides: object) => c.request({ type: "settings.set", patch: { projects: { overrides } } as never });
+    expect(await set({ local: { "/work/a": { jira: { url: site.url, jql: "project = PRJ" } } }, "ssh:box": { "/work/b": { jira: { url: site.url } } } })).toMatchObject({ result: { jiraTokens: [new URL(global.url).origin] } });
+    // The Project has no token yet: never the global one.
+    expect(await c.request({ type: "jira.search", project: a })).toMatchObject({ code: "jira_not_configured" });
+    expect(site.requests).toEqual([]);
+    // Saving for the Project stores the token of its origin; the global one stays.
+    expect(await c.request({ type: "jira.token", token: PROJECT_TOKEN, project: a })).toMatchObject({ result: { jiraToken: true, jiraTokens: expect.arrayContaining([new URL(global.url).origin, new URL(site.url).origin]) } });
+    expect(await c.request({ type: "jira.test", project: a })).toMatchObject({ result: { user: "Project User" } });
+    expect(await c.request({ type: "jira.search", project: a })).toMatchObject({ result: { tickets: [{ key: "PRJ-5" }] } });
+    // The Project of another Side with the same URL shares the token; a Project without its own URL and no project use the global connection.
+    expect(await c.request({ type: "jira.search", project: b })).toMatchObject({ result: { tickets: [{ key: "PRJ-5" }] } });
+    expect(await c.request({ type: "jira.search", project: noUrl })).toMatchObject({ result: { tickets: [{ key: "GLB-1" }] } });
+    expect(await c.request({ type: "jira.search" })).toMatchObject({ result: { tickets: [{ key: "GLB-1" }] } });
+    expect(site.requests.every((r) => r.auth === `Bearer ${PROJECT_TOKEN}`)).toBe(true);
+    expect(global.requests.every((r) => r.auth === `Bearer ${JIRA_TOKEN}`)).toBe(true);
+    // The old format keeps the global token for an older daemon sharing the file.
+    expect(JSON.parse(readFileSync(secretsFile, "utf8"))).toMatchObject({ jiraToken: JIRA_TOKEN, jiraOrigin: new URL(global.url).origin, jiraTokens: { [new URL(site.url).origin]: PROJECT_TOKEN } });
+    // Clearing the token of a Project clears it for every Project of that origin.
+    expect(await c.request({ type: "jira.token", token: null, project: b })).toMatchObject({ result: { jiraToken: true } });
+    expect(await c.request({ type: "jira.search", project: a })).toMatchObject({ code: "jira_not_configured" });
+    await c.request({ type: "jira.token", token: PROJECT_TOKEN, project: a });
+    // One Project stops using the URL: the token stays for the other; the last one: the token is dropped.
+    await set({ "ssh:box": { "/work/b": { jira: { url: site.url } } } });
+    expect(readFileSync(secretsFile, "utf8")).toContain(PROJECT_TOKEN);
+    expect(await set({})).toMatchObject({ result: { jiraTokens: [new URL(global.url).origin] } });
+    expect(readFileSync(secretsFile, "utf8")).not.toContain(PROJECT_TOKEN);
+    expect(readFileSync(secretsFile, "utf8")).toContain(JIRA_TOKEN);
+    // A malformed project is refused.
+    for (const project of [{ side: "local" }, { side: 1, cwd: "/x" }, "x", null, { side: "", cwd: "/x" }]) {
+      expect(await c.request({ type: "jira.search", project } as never)).toMatchObject({ code: "bad_request" });
+      expect(await c.request({ type: "jira.token", token: "t", project } as never)).toMatchObject({ code: "bad_settings" });
+    }
+    expect(readFileSync(settingsFile, "utf8")).not.toMatch(new RegExp(`${JIRA_TOKEN}|${PROJECT_TOKEN}`));
+    for (const text of [...c.raw, ...logs]) {
+      expect(text).not.toContain(JIRA_TOKEN);
+      expect(text).not.toContain(PROJECT_TOKEN);
+    }
+  });
+
   it("a stored non-local http Jira URL stays, is never sent the token and says why (GH-451)", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "wtj-")));
     mkdirSync(join(root, "cfg"));
@@ -302,6 +359,6 @@ describe("Jira over the wire", () => {
     expect(saved.result.jiraToken).toBe(true);
     expect(saved.result.jiraTokenReset).toBeUndefined();
     expect(await c.request({ type: "jira.test" })).toMatchObject({ result: { user: "Dana Center" } });
-    expect(JSON.parse(readFileSync(secretsFile, "utf8"))).toEqual({ jiraToken: JIRA_TOKEN, jiraOrigin: new URL(fake.url).origin });
+    expect(JSON.parse(readFileSync(secretsFile, "utf8"))).toEqual({ jiraToken: JIRA_TOKEN, jiraOrigin: new URL(fake.url).origin, jiraTokens: { [new URL(fake.url).origin]: JIRA_TOKEN } });
   });
 });
