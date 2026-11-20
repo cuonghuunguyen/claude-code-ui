@@ -308,6 +308,7 @@ export async function runInlineClaude(deps: InlineClaudeDeps, spec: InlineSpec, 
   const failure = error !== undefined ? error : final && (final.is_error || (subtype && subtype !== "success")) ? ((Array.isArray(final.errors) ? (final.errors as string[]).join("; ") : "") || (typeof final.result === "string" && final.result) || subtype || "The run failed.") : undefined;
   if (failure === undefined) return withDenied;
   // The run ended in error after a denial: say what was denied instead of the CLI's internal diagnostic.
-  if (denied.length) return ended({ ...withDenied, status: "denied", error: `The user denied ${denied.join("; ")}.` });
+  // Only the CLI's opaque stop after a deny (`[ede_diagnostic]`) becomes `denied`; any other error keeps its own text (the denials stay listed).
+  if (denied.length && failure.includes("[ede_diagnostic]")) return ended({ ...withDenied, status: "denied", error: `The user denied ${denied.join("; ")}.` });
   return ended({ ...withDenied, status: "error", error: failure });
 }

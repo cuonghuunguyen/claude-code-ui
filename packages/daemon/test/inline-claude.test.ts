@@ -331,6 +331,8 @@ describe("runInlineClaude limits and stops", () => {
     const a = await run({ messages: [...calls, toolResult("t6", "No", true), result({ subtype: "error_during_execution", is_error: true, errors: ["[ede_diagnostic] stop_reason=tool_use"], permission_denials: denials })] }).done;
     expect(a).toMatchObject({ status: "denied", error: "The user denied Bash: rm -rf build.", denied: ["Bash: rm -rf build"] });
     expect(a.steps).toEqual(["Bash: step 2", "Bash: step 3", "Bash: step 4", "Bash: step 5", "Bash: step 6 (failed)"]);
+    const c = await run({ messages: [calls[5]!, result({ subtype: "error_during_execution", is_error: true, errors: ["API overloaded"], permission_denials: denials })] }).done;
+    expect(c).toMatchObject({ status: "error", error: "API overloaded", denied: ["Bash: rm -rf build"] });
     const b = await run({ messages: [calls[5]!, toolResult("t6", "No", true), assistant("m7", [text("went on")]), result({ permission_denials: denials })] }).done;
     expect(b).toMatchObject({ status: "done", text: "went on", denied: ["Bash: rm -rf build"] });
     expect(b.steps).toBeUndefined();
