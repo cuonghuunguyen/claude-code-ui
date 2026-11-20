@@ -61,6 +61,8 @@ const LOCAL_NAMES = LOCAL_COMMANDS.map((c) => c.name);
 /** How often, and how many times, an agent list is read again while OpenCode has not loaded the folder (2.3.0 lists no agent then). */
 const AGENT_POLL_MS = 250;
 const AGENT_POLLS = 120;
+/** How long after a first non-empty agent list it is read again while no event stream runs. */
+const SETTLE_MS = 500;
 /** The instruction entry that carries an inline task's system text. */
 const INLINE_ENTRY = "claude-ui-inline";
 
@@ -142,7 +144,7 @@ const CLEAR_EXECUTION_MS = 2000;
 const shownUser = (m: OpenCode2Message) => m.type === "user" && (!!m.text || !!m.files?.some((f) => f.mime?.startsWith("image/") && f.data));
 type Req = { kind: "permission"; callId?: string; sessionID: string; /** The mapper of the call: an inline run's own. */ mapper: OpenCode2Mapper; /** An inline run's call: its denied card shows under it. */ parentId?: string } | { kind: "question"; sessionID: string; questions: Question[]; fields: { key: string; type: string }[] };
 /** A running inline task: its child session's events feed `notify`; `callId` = the call its steps show under. */
-type InlineRun = { callId?: string; mapper: OpenCode2Mapper; notify: (type: string, d: Json) => void };
+type InlineRun = { callId?: string; mapper: OpenCode2Mapper; notify: (type: string, d: Json) => void; /** Its prompt reached OpenCode: a check that finds it not running ends it. */ posted?: boolean; /** Ends the run as it is in OpenCode (an end event lost with a stream drop). */ settle: () => void };
 /** The text of the last assistant message of a stored child session (the fallback when its events were missed). */
 const lastAssistantText2 = (messages: readonly OpenCode2Message[]) => {
   for (const m of [...messages].reverse()) {
@@ -286,12 +288,27 @@ class OpenCode2Session implements EngineSession {
   /** Asks again what OpenCode still waits for (permission requests and questions of this session); settles what it no longer lists. */
   private requests(h: OpenCode2History) {
     const live = new Set<string>();
-    for (const p of h.permissions) (live.add(p.id), this.askPermission(p));
+    for (const p of h.permissions) {
+      live.add(p.id);
+      // An inline run's ask keeps its own call data (its denied card shows under the inline task).
+      const run = this.inlineRuns.get(p.sessionID);
+      if (run) this.askPermission(p, run.mapper, run.callId);
+      else this.askPermission(p);
+    }
     for (const f of h.forms ?? []) (live.add(f.id), this.askForm(f));
     for (const id of [...this.reqs.keys()]) if (!live.has(id) && this.session.pendingRequest(id)) this.session.cancel(id, ANSWERED);
   }
 
+  /** After a reconnect: an inline run OpenCode no longer runs lost its end event; it ends (its text from the stored messages). */
+  private async checkInlines(client: OpenCodeClient) {
+    const posted = [...this.inlineRuns].filter(([, r]) => r.posted);
+    if (!posted.length) return;
+    const active = await client.session.active().catch(() => undefined);
+    if (active) for (const [id, r] of posted) if (!(id in active)) r.settle();
+  }
+
   resync(): Promise<void> {
+    void this.server.client().then((c) => this.checkInlines(c), () => undefined);
     const posts = this.posts;
     return (this.resyncing ??= this.server
       .client()
@@ -863,7 +880,9 @@ class OpenCode2Session implements EngineSession {
             if (cap) resolve({ status: "limit", limit: cap });
             else if (collector.error) resolve({ status: "error", error: collector.error });
             else if (collector.idle) resolve({ status: "done" });
+            else if (collector.interrupted) resolve({ status: "stopped" });
           },
+          settle: () => resolve({ status: "done" }),
         });
         this.engine.adoptInline(id, this);
         timer = setTimeout(() => resolve({ status: "limit", limit: "time" }), INLINE_TIMEOUT_MS);
@@ -875,7 +894,11 @@ class OpenCode2Session implements EngineSession {
       await client.experimental.session.instructions.entry.put({ sessionID: id, key: INLINE_ENTRY, value: INLINE_SYSTEM });
       await this.server.streamReady();
       // A Stop that came while the session was made sends no prompt.
-      if (!hooks.signal.aborted && !(callId && !this.inlineStops.has(callId))) await client.session.prompt({ sessionID: id, text: spec.text });
+      if (!hooks.signal.aborted && !(callId && !this.inlineStops.has(callId))) {
+        await client.session.prompt({ sessionID: id, text: spec.text });
+        const run = this.inlineRuns.get(id);
+        if (run) run.posted = true;
+      }
       const end = await outcome;
       if (end.status !== "done" && end.status !== "error") await client.session.interrupt({ sessionID: id }).catch(() => undefined);
       let text = collector.text();
@@ -1145,6 +1168,8 @@ class OpenCode2EngineImpl implements Engine {
 
   /** The agent lists and commands of `dir` (none: of every folder) are read again; its open sessions show the new ones. */
   private listsChanged(dir: string | undefined) {
+    // OpenCode names the folder by its real path: a folder opened through a link matches none, then every folder is read again.
+    if (dir && ![...this.agentLists.keys(), ...this.commandLists.keys(), ...[...this.sessions.values()].map((s) => s.cwd)].includes(dir)) dir = undefined;
     for (const map of [this.agentLists, this.commandLists, this.defaults]) for (const k of [...map.keys()]) if (!dir || k === dir) map.delete(k);
     for (const s of this.sessions.values()) if (!dir || s.cwd === dir) (void s.refreshAgents(), void s.emitCommands());
   }
@@ -1160,7 +1185,9 @@ class OpenCode2EngineImpl implements Engine {
       const c = await this.server.client();
       for (let i = 0; ; i++) {
         const l = (await c.agent.list({ location: { directory: cwd } })).data as unknown as Agent2[];
-        if (l.length) return l;
+        // Without an event stream no `agent.updated` says the folder's own agents came (2.3.0 lists them ~0.2 s after its built-ins): read once more a moment later.
+        if (l.length && !this.unsubscribe) await new Promise((r) => setTimeout(r, SETTLE_MS));
+        if (l.length) return !this.unsubscribe ? ((await c.agent.list({ location: { directory: cwd } })).data as unknown as Agent2[]) : l;
         if (i >= AGENT_POLLS) throw new Error("OpenCode lists no agent for this folder");
         await new Promise((r) => setTimeout(r, AGENT_POLL_MS));
       }

@@ -31,6 +31,8 @@ export class InlineCollector2 {
   private model: string | undefined;
   /** Set by the child's `session.execution.succeeded`. */
   idle = false;
+  /** Set by the child's `session.execution.interrupted` (not ours: OpenCode's own app, a shutdown). */
+  interrupted = false;
   /** Set by a failure of the child (an interrupt is none). */
   error: string | undefined;
 
@@ -53,6 +55,8 @@ export class InlineCollector2 {
       }
       case "session.execution.succeeded":
         return void (this.idle = true);
+      case "session.execution.interrupted":
+        return void (this.interrupted = true);
       case "session.step.failed":
       case "session.execution.failed":
         if (d.error && d.error.type !== "aborted") this.error ??= failureText(d.error);

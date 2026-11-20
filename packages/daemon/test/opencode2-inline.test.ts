@@ -17,7 +17,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; stored?: Json[]; model?: string } = {}) {
   const calls: { name: string; input: Json }[] = [];
-  const handlers = new Set<{ event: (dir: string | undefined, p: { type: string; properties: Json }) => void }>();
+  const handlers = new Set<{ event: (dir: string | undefined, p: { type: string; properties: Json }) => void; resync: () => void }>();
   const emit = (type: string, d: Json) => handlers.forEach((h) => h.event("/p", { type, properties: d }));
   const child = (type: string, d: Json = {}) => emit(type, { sessionID: "ses_child", ...d });
   const rec =
@@ -33,8 +33,11 @@ function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; sto
       interrupt: rec("session.interrupt", () => ({ interrupted: true })),
       remove: rec("session.remove"),
       update: rec("session.update"),
+      active: rec("session.active", () => ({})),
+      get: rec("session.get", () => ({ id: "ses_parent", permissions: [] })),
     },
-    permission: { reply: rec("permission.reply") },
+    form: { list: rec("form.list", () => ({ data: [] })) },
+    permission: { reply: rec("permission.reply"), request: { list: rec("permission.request.list", () => ({ data: [] })) } },
     experimental: { session: { instructions: { entry: { put: rec("instructions.put") } } } },
     message: { list: rec("message.list", () => ({ data: o.stored ?? [], cursor: {} })) },
   };
@@ -59,7 +62,9 @@ function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; sto
     emit("session.tool.called", { sessionID: "ses_parent", assistantMessageID: "msg_p", id, input });
   };
   const called = (name: string) => calls.filter((c) => c.name === name).map((c) => c.input);
-  return { run, emit, child, emitted, asks, callRunning, called };
+  /** The event stream reconnected (events may have been lost). */
+  const reconnect = () => handlers.forEach((h) => h.resync());
+  return { run, emit, child, emitted, asks, callRunning, called, reconnect };
 }
 const hooks = (signal = new AbortController().signal, settings?: { openCodeModel?: string }) => ({ signal, input: INPUT, ...(settings && { settings }) });
 
@@ -157,5 +162,17 @@ describe("OpenCode 2 inline task", () => {
     expect(await model({ setting: "acme/y" })).toEqual({ providerID: "acme", id: "y" });
     expect(await model({})).toEqual({ providerID: "fake", id: "m" });
     expect(await model({ parent: "default" })).toBeUndefined();
+  });
+
+  it("a run interrupted in OpenCode itself ends as stopped; a run whose end was lost with a stream drop ends at the reconnect with its stored answer", async () => {
+    const elsewhere = rig({ script: (c) => (c("session.execution.started"), c("session.execution.interrupted", { reason: "shutdown" })) });
+    expect(await elsewhere.run.inlineTask(spec(), hooks())).toMatchObject({ status: "stopped" });
+
+    const lost = rig({ stored: [{ id: "msg_a1", type: "assistant", content: [{ type: "text", text: "stored answer" }] }], script: (c) => c("session.execution.started") });
+    const running = lost.run.inlineTask(spec(), hooks());
+    for (let i = 0; i < 40 && !lost.called("session.prompt").length; i++) await sleep(25);
+    await sleep(0);
+    lost.reconnect();
+    expect(await running).toMatchObject({ status: "done", text: "stored answer" });
   });
 });

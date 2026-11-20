@@ -888,7 +888,7 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
   it("the chooser lists OpenCode's primary agents once the folder loaded, the config's default first; a chosen agent is switched in OpenCode with its denials in the rules; plan mode is the plan agent", async () => {
     // 2.3.0 lists no agent before the folder loaded; the config's `default_agent` comes from its documents.
     const agents = [plan2, build2, { id: "general", mode: "subagent", hidden: false, permissions: [] }, { id: "title", mode: "primary", hidden: true, permissions: [] }, { id: "mine", mode: "all", hidden: false, permissions: [] }];
-    const d = await boot({ env: { FAKE_OPENCODE2_COLD_AGENTS: "2", FAKE_OPENCODE2_PARTIAL_AGENTS: "1" }, data: { agents, config: [{ type: "document", path: "/x/opencode.json", info: { default_agent: "build" } }] } });
+    const d = await boot({ env: { FAKE_OPENCODE2_COLD_AGENTS: "2", FAKE_OPENCODE2_PARTIAL_AGENTS: "2" }, data: { agents, config: [{ type: "document", path: "/x/opencode.json", info: { default_agent: "build" } }] } });
     await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
     // The chooser read the folder before OpenCode listed its own agents (2.3.0 lists the built-ins first; its `agent.updated` came before any event stream).
     expect(names((await d.ok({ type: "session.agents", cwd: d.project, engine: "opencode" })).agents)).toEqual(["build", "plan"]);
@@ -910,6 +910,12 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
     await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "plan" });
     expect(d.requests("POST", `/api/session/${s.id}/agent`).map((r) => r.body.agent)).toEqual(["plan", "mine", "plan"]);
     expect((await d.ok({ type: "session.list" })).sessions.find((x: { id: string }) => x.id === s.id)).toMatchObject({ agent: "plan", permissionMode: "default" });
+  });
+
+  it("the chooser of a new session, before any session runs, lists the folder's own agents that OpenCode lists after its built-ins", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_PARTIAL_AGENTS: "1" }, data: { agents: [plan2, build2, { id: "mine", mode: "primary", hidden: false, permissions: [] }] } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    expect(names((await d.ok({ type: "session.agents", cwd: d.project, engine: "opencode" })).agents)).toEqual(["build", "plan", "mine"]);
   });
 
   it("a restored session opens as the agent OpenCode has; an agent chosen in OpenCode's own app is followed; an agent the config lost runs the prompt as the default with a notice", async () => {
