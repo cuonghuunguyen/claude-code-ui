@@ -1,0 +1,68 @@
+[
+ {
+  "event": "session.execution.started",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "agent": "build",
+   "model": {
+    "id": "m",
+    "providerID": "fake"
+   },
+   "assistantMessageID": "$A1"
+  }
+ },
+ {
+  "event": "permission.asked",
+  "data": {
+   "id": "$PERM",
+   "sessionID": "ses_child",
+   "action": "shell",
+   "resources": [
+    "ls -la"
+   ],
+   "save": [
+    "ls *"
+   ],
+   "source": {
+    "type": "tool",
+    "messageID": "msg_child",
+    "id": "call_child"
+   }
+  }
+ },
+ {
+  "wait": "permission"
+ },
+ {
+  "event": "session.step.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "finish": "stop",
+   "rawFinish": "stop",
+   "tokens": {
+    "input": 1,
+    "output": 1,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   },
+   "cost": 0,
+   "files": []
+  }
+ },
+ {
+  "event": "session.execution.succeeded",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ }
+]

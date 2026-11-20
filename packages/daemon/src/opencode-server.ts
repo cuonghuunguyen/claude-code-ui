@@ -147,7 +147,8 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   const env = () => ({ ...process.env, ...o.env?.() });
   let child: ChildProcess | undefined;
   let up: Up | undefined;
-  let starting: Promise<Up> | undefined;
+  /** The start in flight per major: a call joins only the start of its own major (a version 1 caller must not take the refusal of a version 2 start, nor the other way round). */
+  const starting = new Map<1 | 2, Promise<Up>>();
   /** Start times of recent exits that came within FAST_MS of their start. */
   let fastExits: number[] = [];
   let lastError: string | undefined;
@@ -199,12 +200,12 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   const failed = (why: string) => new OpenCodeError("opencode_failed", `OpenCode server did not start: ${why}`);
   const tail = () => stderr.trim().split("\n").slice(-5).join("\n") || "no output";
 
-  /** The binary is of the other major than the adapter that asked: no `serve` (ADR 0015: only the version 2 adapter starts a version 2 server, whose first start changes `opencode.db`). */
+  /** The binary is of the other major than the adapter that asked: no `serve` (ADR 0015: only the version 2 adapter starts a version 2 server, whose first start changes `opencode.db`). The OpenCode 1 adapter meets a version 2 binary only when the catalogue switch did not know the version (a failed check). */
   const refusals = new WeakSet<Error>();
   const wrongMajor = (major: 1 | 2) => {
     const err =
       major === 2
-        ? new OpenCodeError("opencode_v2_unsupported", "OpenCode 2 sessions are not supported yet. Set Settings › OpenCode › path to an OpenCode 1 binary.", 2)
+        ? new OpenCodeError("opencode_v2_unsupported", "The installed OpenCode is version 2, but its version was not known when this request started (an earlier version check failed). Press Check again in Settings › OpenCode, then retry.", 2)
         : new OpenCodeError("opencode_failed", "OpenCode 2 client requested while the installed OpenCode is version 1", 1);
     refusals.add(err);
     return err;
@@ -283,25 +284,30 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
    * the OpenCode 1 adapter (every caller but `client()`) can never start an OpenCode 2 server, whatever the catalogue switch believed about the version. */
   const ensure = (want: 1 | 2 = 1): Promise<Up> => {
     if (up && child) return up.major === want ? Promise.resolve(up) : Promise.reject(wrongMajor(up.major));
-    return (starting ??= start(want)
-      .catch((err) => {
-        // A refusal started nothing: it is not a failed start for Settings.
-        if (!refusals.has(err)) lastError = err instanceof Error ? err.message : String(err);
-        throw err;
-      })
-      .finally(() => (starting = undefined)))
-      .then((u) => (u.major === want ? u : Promise.reject(wrongMajor(u.major))));
+    let run = starting.get(want);
+    if (!run) {
+      run = start(want)
+        .catch((err) => {
+          // A refusal started nothing: it is not a failed start for Settings.
+          if (!refusals.has(err)) lastError = err instanceof Error ? err.message : String(err);
+          throw err;
+        })
+        .finally(() => starting.delete(want));
+      starting.set(want, run);
+    }
+    return run.then((u) => (u.major === want ? u : Promise.reject(wrongMajor(u.major))));
   };
 
   // The event stream (`GET /global/event`, one for every folder): open while a handler exists, reconnected through ensure() with a growing delay.
-  const handlers = new Set<OpenCodeEvents>();
+  /** The consumers of the stream and the major each needs: the stream is the one of the first consumer's major. */
+  const handlers = new Map<OpenCodeEvents, 1 | 2>();
   let pumping = false;
   let streamAbort: AbortController | undefined;
   let connected: Promise<void> = Promise.resolve();
   let markConnected = () => {};
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  async function readStream(res: Response) {
+  async function readStream(res: Response, major: 1 | 2) {
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let buf = "";
@@ -323,7 +329,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
         // Version 2 sends the event itself (`{type, data, location, durable?}`), version 1 wraps it as `{directory, payload}`.
         const payload = msg.payload ?? (typeof msg.type === "string" ? { type: msg.type, properties: msg.data ?? {}, durable: msg.durable } : undefined);
         if (!payload || payload.type === "sync" || payload.type === "server.heartbeat" || payload.type === "server.connected") continue;
-        for (const h of [...handlers]) h.event(msg.directory ?? msg.location?.directory, payload);
+        for (const [h, m] of [...handlers]) if (m === major) h.event(msg.directory ?? msg.location?.directory, payload);
       }
     }
   }
@@ -336,17 +342,20 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     connected = new Promise<void>((r) => (markConnected = r));
     while (handlers.size) {
       try {
-        const u = await ensure();
+        // The stream of the binary in use: the major of the running server, else of the last check, else of the first consumer (a consumer left from before a path change must not keep asking for the old major).
+        const mine = new Set(handlers.values());
+        const known = up && child ? up.major : lastMajor;
+        // Only a major an open consumer needs is asked for: a version 1 consumer on a version 2 binary is refused as before, it never starts a version 2 server.
+        const u = await ensure(known && mine.has(known) ? known : (handlers.values().next().value ?? 1));
         if (!handlers.size) break;
         streamAbort = new AbortController();
-        // Version 2 route: unused until the OpenCode 2 adapter (slice 2) opens the stream with its major (ensure() here asks for version 1).
         const res = await ocFetch(`${u.url}${u.major === 2 ? "/api/event" : "/global/event"}`, { headers: { authorization: u.auth, accept: "text/event-stream" }, signal: streamAbort.signal });
         if (!res.ok || !res.body) throw new Error(`event stream answered ${res.status}`);
-        if (again) for (const h of [...handlers]) h.resync();
+        if (again) for (const [h, m] of [...handlers]) if (m === u.major) h.resync();
         again = true;
         delay = RECONNECT_MIN_MS;
         markConnected();
-        await readStream(res);
+        await readStream(res, u.major);
       } catch {
         // Retried below; a start failure shows when the next request needs the server.
       }
@@ -382,8 +391,8 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     /** The daemon ends: no more event stream, the server stops and stays down. */
     close: () => (handlers.clear(), stop()),
     /** Registers a consumer of the event stream (opened now when it was not); returns its unsubscribe. */
-    events(h: OpenCodeEvents) {
-      handlers.add(h);
+    events(h: OpenCodeEvents, major: 1 | 2 = 1) {
+      handlers.set(h, major);
       void pump();
       return () => {
         handlers.delete(h);

@@ -14,7 +14,7 @@ const SHARED_REQUESTS = new Set(["opencode.status", "opencode.restart"]);
 export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatalogueOpts): EngineCatalogue {
   const srv = createOpenCodeServer({ path: () => ctx.appSettings.get().opencode.path, ...o.server });
   const v1 = createOpenCodeCatalogue(ctx, { ...o, server: { ...o.server, instance: srv } });
-  const v2 = createOpenCode2Catalogue({ server: srv });
+  const v2 = createOpenCode2Catalogue(ctx, { server: srv, listWaitMs: o.server?.listWaitMs });
   /** Version 2 only when the binary said so; unknown = version 1, so a Claude-only user never starts a check. */
   const pick = () => (srv.major() === 2 ? v2 : v1);
   /** One `--version` run at a time, shared by every caller. A failure (missing, old, hung binary) is remembered for NEGATIVE_MS: it is not run again on every list.
@@ -66,7 +66,7 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
     },
     listScope: v1.listScope,
     ownsId: v1.ownsId,
-    entry: v1.entry,
+    entry: () => pick().entry(),
     isLocal: (id) => pick().isLocal(id),
     knownIds: () => pick().knownIds(),
     startMode: (cwd, model) => pick().startMode(cwd, model),
