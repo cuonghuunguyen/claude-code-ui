@@ -64,6 +64,8 @@ async function boot(o: { engine?: "claude" | "opencode"; path?: string; env?: Re
     claudeDir: join(root, "claude"),
     projectsDir: join(root, "claude", "projects"),
     uploadSweepMs: 0,
+    // No transcript scan of the real ~/.claude (history defaults to the SDK's, which ignores projectsDir): on a machine with many projects every list took seconds and the tests below timed out or broke their time bounds.
+    history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
     // session.list waits listWaitMs (3 s by default) for the OpenCode server to start; a start takes longer on a loaded Windows machine and the list then answers without the OpenCode sessions the test is about. Tests of the wait itself pass their own.
     opencode: { command: [process.execPath, BIN], env: () => env, ...(process.platform === "win32" && { listWaitMs: 60_000 }), ...o.opencode },
   });
@@ -219,11 +221,10 @@ describe("OpenCode engine: lifecycle, create and list", () => {
 
   it("session.list answers in the list wait while OpenCode does not start, with the Claude items and the OpenCode entry of sessions.json kept", async () => {
     const entry = { ses_gone: { model: "default", permissionMode: "default", effort: "default", saved: 1 } };
-    const d = await boot({ engine: "opencode", env: { FAKE_OPENCODE_HANG: "1" }, sessionsJson: entry, opencode: { listWaitMs: 300, startTimeoutMs: 20_000 } });
-    const t = Date.now();
+    const d = await boot({ engine: "opencode", env: { FAKE_OPENCODE_HANG: "1" }, sessionsJson: entry, opencode: { listWaitMs: 300, startTimeoutMs: 600_000 } });
     const listed = (await d_list(d)).result;
-    // The point: the list answers after its own wait, not after the 20 s start timeout (3.0 s alone, 5.1 s seen under a full suite).
-    expect(Date.now() - t).toBeLessThan(process.platform === "win32" ? 10_000 : 5000);
+    // The point: the list answered while the start still hangs (its timeout is far beyond the test's), so it did not wait for the start. No wall-clock bound: the load of the machine cannot fail this.
+    await until(() => d.starts().some((l) => l.hung));
     expect(listed.sessions.filter((s: any) => s.engine === "opencode")).toEqual([]);
     expect(Object.keys(JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8")))).toContain("ses_gone");
   }, 30_000);
