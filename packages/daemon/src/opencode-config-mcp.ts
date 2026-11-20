@@ -25,8 +25,8 @@ const fail = (code: string, message: string) => new EngineError(code, message);
 function globalNames(): Set<string> {
   const dir = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "opencode");
   const names = new Set<string>();
-  for (const f of ["opencode.json", "opencode.jsonc"]) {
-    const file = join(dir, f);
+  // OpenCode 1.19.5 also reads the global config.json and the file OPENCODE_CONFIG names.
+  for (const file of [join(dir, "config.json"), join(dir, "opencode.json"), join(dir, "opencode.jsonc"), ...(process.env.OPENCODE_CONFIG ? [process.env.OPENCODE_CONFIG] : [])]) {
     if (!existsSync(file)) continue;
     try {
       const mcp = (parse(readFileSync(file, "utf8"), [], { allowTrailingComma: true }) as { mcp?: Record<string, unknown> } | undefined)?.mcp;
@@ -93,12 +93,13 @@ export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd:
     let status: Status;
     if (first === "late") {
       const c = await raced(config);
-      if (c === "late" || !c.value) throw fail("opencode_loading", "OpenCode is still loading this folder. Try again in a moment.");
-      defined = c.value;
+      // Without OpenCode's own answer, the servers of the files shown as pending (the dialog polls).
+      defined = c === "late" || !c.value ? Object.fromEntries([...projectKeys(cwd, ["mcp"]), ...globalNames()].map((n) => [n, {}])) : c.value;
       status = Object.fromEntries(Object.entries(defined).map(([name, m]) => [name, { status: m.enabled === false ? "disabled" : "pending" }]));
     } else {
       status = first.value;
-      defined = (await config) ?? {};
+      const c = await raced(config);
+      defined = c === "late" ? {} : (c.value ?? {});
     }
     const project = projectKeys(cwd, ["mcp"]);
     const user = globalNames();

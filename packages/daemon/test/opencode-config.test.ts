@@ -208,6 +208,12 @@ describe("OpenCode MCP servers dialog", { timeout: TEST_MS }, () => {
     expect(r.servers.find((s: any) => s.name === "echo").config).toBeUndefined();
   });
 
+  it("mcp.add in a project without an opencode.json creates it", async () => {
+    const d = await boot();
+    await d.mcp({ type: "mcp.add", name: "tool", scope: "project", config: { transport: "http", url: "http://127.0.0.1:1/mcp", headers: [] } });
+    expect(JSON.parse(d.file("opencode.json")).mcp.tool).toEqual({ type: "remote", url: "http://127.0.0.1:1/mcp" });
+  });
+
   it("config requests with an OpenCode 2 binary answer opencode_v2_unsupported", async () => {
     const d = await boot({ file: FILE, env: { FAKE_OPENCODE_VERSION: "2.3.0" } });
     const r = await d.request({ type: "mcp.list", cwd: d.project, engine: "opencode" });

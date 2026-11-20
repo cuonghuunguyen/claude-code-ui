@@ -63,11 +63,11 @@ const has = (data: Record<string, unknown>, path: (string | number)[]) => {
 
 function write(link: string, path: (string | number)[], value: unknown) {
   // A symlinked config file (dotfiles) stays a link: the real file is replaced, with its mode.
-  const file = realpathSync(link);
+  const file = existsSync(link) ? realpathSync(link) : link;
   const { text } = read(file);
   const next = applyEdits(text, modify(text, path, value, { formattingOptions: { insertSpaces: true, tabSize: 2, eol: text.includes("\r\n") ? "\r\n" : "\n" } }));
   const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync(tmp, next, { mode: statSync(file).mode & 0o777 });
+  writeFileSync(tmp, next, existsSync(file) ? { mode: statSync(file).mode & 0o777 } : undefined);
   renameSync(tmp, file);
 }
 
