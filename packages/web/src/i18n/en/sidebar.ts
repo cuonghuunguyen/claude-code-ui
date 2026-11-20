@@ -106,6 +106,7 @@ export default {
   "label.projectTitle": "Name and icon of {name}",
   "label.machineTitle": "Name and icon of {name}",
   "sidebar.menu.rename": "Change name and icon…",
+  "sidebar.menu.projectSettings": "Project settings…",
   "settings.sides.edit": "Change name and icon of {name}",
   "settings.sides.local": "This machine",
   "sidebar.menu.copyPath": "Copy path",

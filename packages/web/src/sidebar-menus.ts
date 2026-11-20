@@ -81,6 +81,8 @@ export function groupEntries(o: {
   copyPath?: () => void;
   /** "Change name and icon…" (GH-515): the Label dialog of this project. */
   rename?: () => void;
+  /** "Project settings…" (GH-894): the Project settings dialog of this project. */
+  projectSettings?: () => void;
   /** "Clean up…" (GH-377): the Clean up dialog scoped to this project. */
   cleanUp?: () => void;
   /** Last section (Remove from list, Delete worktree…). */
@@ -95,6 +97,7 @@ export function groupEntries(o: {
   }
   if (o.copyPath) e.push({ kind: "sep" }, { kind: "item", id: `${p}copy-path`, label: t("sidebar.menu.copyPath"), onSelect: o.copyPath });
   if (o.rename) e.push(...(o.copyPath ? [] : [{ kind: "sep" as const }]), { kind: "item", id: `${p}rename`, label: t("sidebar.menu.rename"), onSelect: o.rename });
+  if (o.projectSettings) e.push(...(o.copyPath || o.rename ? [] : [{ kind: "sep" as const }]), { kind: "item", id: `${p}project-settings`, label: t("sidebar.menu.projectSettings"), onSelect: o.projectSettings });
   if (!o.archivedView) {
     e.push({ kind: "sep" }, { kind: "check", id: `${p}hide-inactive`, label: t("sidebar.menu.hideInactive"), checked: o.onlyActive, onChange: o.setOnlyActive }, { kind: "label", label: t("sidebar.menu.archiveIdleOlder") });
     for (const d of ARCHIVE_DAYS) {

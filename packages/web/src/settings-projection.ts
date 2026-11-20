@@ -9,6 +9,8 @@ export type SettingsChangedMessage = { settings: Settings; claudeAccounts?: Clau
 
 export type SettingsView = {
   lastEngine: Engine;
+  /** Settings projects.overrides: Project overrides by Side id, then cwd; none on an older daemon. */
+  projectOverrides?: Settings["projects"]["overrides"];
   sessionsMode?: PermissionMode;
   workerNotices: boolean;
   ignoreSubmodules: boolean;
@@ -38,6 +40,7 @@ const NO_FACTS: Facts = { desktopForcedOff: false, claudeEnvToken: false };
 function project(s: Settings, accounts: ClaudeAccountInfo[] | undefined, f: Facts): SettingsView {
   return {
     lastEngine: s.sessions?.engine ?? DEFAULT_ENGINE,
+    projectOverrides: s.projects?.overrides,
     sessionsMode: s.sessions?.defaultMode,
     workerNotices: s.orchestration.workerNotifications !== false,
     ignoreSubmodules: s.git?.ignoreSubmodules === true,

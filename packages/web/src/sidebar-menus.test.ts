@@ -64,6 +64,16 @@ describe("groupEntries", () => {
     expect(e.find((x) => x.kind === "item" && x.id === "g-cleanup")).toMatchObject({ label: "Clean up…" });
     expect(ids(groupEntries(base)).includes("g-cleanup")).toBe(false);
   });
+  it("GH-894 Project settings…: after Change name and icon…, only when given", () => {
+    const projectSettings = vi.fn();
+    const e = groupEntries({ ...base, newSession: () => {}, copyPath: () => {}, rename: () => {}, projectSettings });
+    expect(ids(e).slice(0, 5)).toEqual(["g-new-session", "-", "g-copy-path", "g-rename", "g-project-settings"]);
+    expect(e.find((x) => x.kind === "item" && x.id === "g-project-settings")).toMatchObject({ label: "Project settings…" });
+    (e.find((x) => x.kind === "item" && x.id === "g-project-settings") as { onSelect: () => void }).onSelect();
+    expect(projectSettings).toHaveBeenCalledTimes(1);
+    expect(ids(groupEntries({ ...base, rename: () => {} })).includes("g-project-settings")).toBe(false);
+  });
+
   it("GH-515 rename: Change name and icon… right after Copy path, only when given", () => {
     const rename = vi.fn();
     const e = groupEntries({ ...base, newSession: () => {}, copyPath: () => {}, rename });

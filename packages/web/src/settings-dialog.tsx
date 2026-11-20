@@ -37,7 +37,7 @@ import { useKeymap } from "./keymap.ts";
 import { keyText } from "./shortcuts.ts";
 import { KeyTipsRow } from "./key-tip.tsx";
 import { setRecommendationsOn, useRecommendationsOn } from "./recommendations.ts";
-import { ChevronLeftIcon, PencilIcon } from "lucide-react";
+import { ChevronLeftIcon, FolderCogIcon, PencilIcon } from "lucide-react";
 import { InstructionSetting } from "./instruction-setting.tsx";
 import { ListSetting } from "./list-setting.tsx";
 import { ClaudeAccountSection } from "./claude-account-settings.tsx";
@@ -872,7 +872,7 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
 export type PushUi = { on: boolean; supported: boolean; busy: boolean; error?: string; toggle: () => void };
 
 /** `changed`: bumped when another client changed the settings (reloads them). */
-export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onAddons, onProvidersChanged, onLogin, onRestartGuide, push, sides, docker, update, onCheckUpdate, project }: { /** Opens the Claude login terminal (none: no project is open). */ onLogin?: () => void; /** The project shown: its own commit message instruction gets a row in Settings › Git. */ project?: { cwd: string; name: string }; update?: UpdateInfo; onCheckUpdate?: () => Promise<UpdateCheckResult>; sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onAddons?: () => void; /** An Engine's login or logout happened: its model lists are stale. */ onProvidersChanged?: (engine: Engine) => void; onRestartGuide?: () => void }) {
+export function SettingsDialog({ open, changed = 0, request, onClose, tabGrouping, onTabGrouping, onTerminalPosition, tabCompact = false, onTabCompact, tabAutoClose = "off", onTabAutoClose, onShortcuts, onAddons, onProvidersChanged, onLogin, onRestartGuide, onProjectSettings, push, sides, docker, update, onCheckUpdate, project }: { /** Opens the Project settings dialog of `project` (the Settings dialog closes). */ onProjectSettings?: () => void; /** Opens the Claude login terminal (none: no project is open). */ onLogin?: () => void; /** The project shown: its own commit message instruction gets a row in Settings › Git. */ project?: { cwd: string; name: string }; update?: UpdateInfo; onCheckUpdate?: () => Promise<UpdateCheckResult>; sides?: SideInfo[]; docker?: DockerState; tabAutoClose?: AutoClose; onTabAutoClose?: (v: AutoClose) => void; push?: PushUi; open: boolean; changed?: number; request: <T>(msg: Request) => Promise<T>; onClose: () => void; tabGrouping?: TabGrouping; onTerminalPosition?: (a: Area) => void; onTabGrouping?: (g: TabGrouping) => void; tabCompact?: boolean; onTabCompact?: (on: boolean) => void; onShortcuts?: () => void; onAddons?: () => void; /** An Engine's login or logout happened: its model lists are stale. */ onProvidersChanged?: (engine: Engine) => void; onRestartGuide?: () => void }) {
   const t = useT();
   const [settings, setSettings] = useState<Settings>();
   const [error, setError] = useState<string>();
@@ -1192,6 +1192,12 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
   return (
     <ConfigDialog title={t("settings.title")} open={open} onClose={onClose} testId="settings-dialog">
       {error && <Banner kind="error">{error}</Banner>}
+      {project && onProjectSettings && (
+        <button type="button" onClick={onProjectSettings} className="flex h-7 items-center gap-1.5 self-start rounded-md px-1 text-sm underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" data-testid="settings-project-settings">
+          <FolderCogIcon className="size-4" aria-hidden />
+          {t("settings.projectSettings", { project: project.name })}
+        </button>
+      )}
       <div className="flex min-h-0 gap-4 md:h-[480px] max-md:flex-1" data-testid="settings-layout">
         <div role="tablist" aria-label={t("settings.groups")} aria-orientation="vertical" onKeyDown={onListKey} className={`flex w-40 shrink-0 flex-col gap-0.5 overflow-y-auto max-md:w-full ${drilled ? "max-md:hidden" : ""}`} data-testid="settings-groups">
           {groups.map((g, i) => [

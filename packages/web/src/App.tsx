@@ -179,6 +179,7 @@ import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { LabelDialog } from "./label-dialog.tsx";
+import { draftStart, overridesOf, sideOfCwd } from "./project-settings.ts";
 import { applySettingsChanged, fromSettingsGet, publishSettings, type SettingsView } from "./settings-projection.ts";
 import { projectLabel, saveLabel, useLabels } from "./labels.ts";
 import { ENGINE_ICON, ENGINE_NAME, EngineTag } from "./engine-tag.tsx";
@@ -225,6 +226,7 @@ const card = "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border b
 const McpDialog = lazy(() => import("./mcp-dialog.tsx").then((x) => ({ default: x.McpDialog })));
 const SkillsDialog = lazy(() => import("./skills-dialog.tsx").then((x) => ({ default: x.SkillsDialog })));
 const ShellsDialog = lazy(() => import("./shells-dialog.tsx").then((x) => ({ default: x.ShellsDialog })));
+const ProjectSettingsDialog = lazy(() => import("./project-settings-dialog.tsx").then((x) => ({ default: x.ProjectSettingsDialog })));
 const SettingsDialog = lazy(() => import("./settings-dialog.tsx").then((x) => ({ default: x.SettingsDialog })));
 const PluginsDialog = lazy(() => import("./plugins-dialog.tsx").then((x) => ({ default: x.PluginsDialog })));
 const AddonsDialog = lazy(() => import("./addons-dialog.tsx").then((x) => ({ default: x.AddonsDialog })));
@@ -354,6 +356,8 @@ export function App() {
   // config.changed count per project cwd: an open dialog of that project refreshes.
   // Settings dialog; `settingsChanged`: another client changed the settings (the open dialog reloads).
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Project settings dialog (GH-894): the Project it acts on, kept after closing so the dialog stays mounted for its close and focus return.
+  const [projectSettings, setProjectSettings] = useState<{ open: boolean; cwd: string }>();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [shortcutsEdit, setShortcutsEdit] = useState<string>();
   // Shortcut labels and the shortcuts themselves follow the user's bindings.
@@ -3078,7 +3082,10 @@ export function App() {
     setFileTree(true);
     reveal("files");
   };
-  const draftEngine = pick.engine ?? lastEngine;
+  // Project settings (GH-894): the draft's project may set Engine, model and effort of a new session.
+  const draftOverrides = overridesOf(settingsView?.projectOverrides, cwdSides, draftProject, worktrees);
+  const start = draftStart(draftOverrides, lastEngine, pick);
+  const draftEngine = start.engine;
   const engineEntry = enginesOf(draftProject).find((e) => e.engine === draftEngine);
   // An Engine whose modes include auto (it depends on the model): the start modes follow the model and the daemon config; another: the modes it lists.
   const modesFor = (engine: Engine, model: string) => {
@@ -3087,7 +3094,7 @@ export function App() {
     if (row && !modes!.includes("auto")) return row.permissionModes;
     return permissionModesFor({ modes, allowBypass: newModes.includes("bypassPermissions"), supportsAuto: modelsOf(engine, draftProject).some((m) => m.value === model && m.supportsAutoMode) });
   };
-  const draftModes = modesFor(draftEngine, pick.model);
+  const draftModes = modesFor(draftEngine, start.model);
   // The model list of an Engine is fetched the first time a session or the draft of it shows (Claude's came with the connection).
   const shownEngine: Engine | undefined = draftShown ? draftEngine : shown ? engineOf(shown) : undefined;
   const shownCaps = (draftShown ? engineEntry?.capabilities : shown ? capabilitiesOf(shown) : undefined) ?? ALL_CAPABILITIES;
@@ -3097,18 +3104,21 @@ export function App() {
     if (shownEngine && status === "connected") catalogue.load(sourceOf(shownEngine, shownCwd));
   }, [shownEngine, shownCwd, status, shownList]); // a provider change drops the list: fetched again
   // The settings default applies only where the draft's model offers it (auto needs support); else Ask.
-  const draft: StartOptions = { ...pick, engine: draftEngine, mode: pick.mode ?? draftStartMode(draftModes, defaultMode) };
+  const draft: StartOptions = { ...pick, engine: draftEngine, model: start.model, effort: start.effort, mode: pick.mode ?? draftStartMode(draftModes, defaultMode) };
   // A model without auto support takes the draft out of auto mode, like the daemon does for a session.
   const changeDraft = (d: StartOptions) => {
     if (d.engine !== draft.engine) {
       // Another Engine has its own models, modes and effort levels.
       const offered = modesFor(d.engine!, "default");
-      return setDraft({ model: "default", effort: "default", engine: d.engine, mode: pick.mode && offered.includes(pick.mode) ? pick.mode : undefined });
+      return setDraft({ engine: d.engine, mode: pick.mode && offered.includes(pick.mode) ? pick.mode : undefined });
     }
     const list = modelsOf(draftEngine, draftProject);
     const lost = d.mode === "auto" && !list.some((m) => m.value === d.model && m.supportsAutoMode);
     if (lost) setToast(autoUnavailable(list, d.model));
-    setDraft(lost ? { ...d, mode: "default" } : { ...d, mode: d.mode === draft.mode ? pick.mode : d.mode });
+    // A field the user did not change stays as picked (absent: the Project's value or Default), so a change of mode does not pin the Project's values (GH-894).
+    // A picked model or effort belongs to the Engine it was picked for: it pins that Engine, so a project switch cannot send it to another one.
+    const kept = { engine: d.model !== draft.model || d.effort !== draft.effort ? draft.engine : pick.engine, model: d.model === draft.model ? pick.model : d.model, effort: d.effort === draft.effort ? pick.effort : d.effort };
+    setDraft(lost ? { ...d, ...kept, mode: "default" } : { ...d, ...kept, mode: d.mode === draft.mode ? pick.mode : d.mode });
     // GH-722: the same other mode picked three times in a row in a new session suggests it as the Default permission mode.
     const mode = lost ? undefined : d.mode;
     if (mode && mode !== draft.mode && (SESSION_MODES as readonly string[]).includes(mode))
@@ -3123,7 +3133,7 @@ export function App() {
       () => {},
     );
     return () => void (stale = true);
-  }, [draftShown, draftProject, status]);
+  }, [draftShown, draftProject, status, draftOverrides.mode]);
   const project = draftShown ? draftProject : shown?.cwd;
   const projectSession = draftShown ? undefined : shown?.id;
   const openMcp = (server?: string) => project && setMcp({ open: true, cwd: project, sessionId: projectSession, server });
@@ -3402,7 +3412,7 @@ export function App() {
       focusShownPrompt(id ?? s);
     },
     setModel: (model) => (draftShown ? changeDraft({ ...draft, model }) : configure({ type: "session.setModel", sessionId: shown!.id, model })),
-    setEffort: (effort) => (draftShown ? setDraft((d) => ({ ...d, effort })) : configure({ type: "session.setEffort", sessionId: shown!.id, effort })),
+    setEffort: (effort) => (draftShown ? setDraft((d) => ({ ...d, effort, engine: draftEngine })) : configure({ type: "session.setEffort", sessionId: shown!.id, effort })),
     setMode: (mode) => (draftShown ? setDraft((d) => ({ ...d, mode })) : configure({ type: "session.setPermissionMode", sessionId: shown!.id, mode })),
     rewind: (id) => (setRewindTo(id), showSession()),
     stop: () => client.current!.request({ type: "session.interrupt", sessionId: shown!.id }).catch((e) => setError((e as Error).message)),
@@ -3850,6 +3860,20 @@ export function App() {
           if (!cleanupOpen.current) setToast(r.skipped[0] ? tr("app.main.cleanupSkipped", { summary: summaryText(r), label: r.skipped[0].label, reason: r.skipped[0].reason }) : summaryText(r));
         }}
       /></OnFirstOpen>
+      {projectSettings && (
+        <OnFirstOpen open={projectSettings.open} fallback={<DialogFallback size="settings" />}><ProjectSettingsDialog
+          open={projectSettings.open}
+          cwd={projectSettings.cwd}
+          name={projectName(projectSettings.cwd)}
+          side={sideOfCwd(cwdSides, projectSettings.cwd)}
+          engines={projectEngines(enginesOf(projectSettings.cwd))}
+          modelsOf={(engine) => modelsOf(engine, projectSettings.cwd)}
+          loadModels={(engine) => catalogue.load(sourceOf(engine, projectSettings.cwd))}
+          request={(m) => client.current!.request(m)}
+          changed={settingsChanged}
+          onClose={() => setProjectSettings({ ...projectSettings, open: false })}
+        /></OnFirstOpen>
+      )}
       <LabelDialog
         open={labeling !== undefined}
         title={tr("label.projectTitle", { name: labeling ? projectName(labeling) : "" })}
@@ -4035,6 +4059,7 @@ export function App() {
               removing={(path) => removingPaths.has(path)}
               onCleanUp={(scope) => (setDrawer(false), setCleanup(scope))}
               onEditProject={(cwd) => (setDrawer(false), setLabeling(cwd))}
+              onProjectSettings={(cwd) => (setDrawer(false), setProjectSettings({ open: true, cwd }))}
               onOpenProject={() => (setDrawer(false), setOpeningProject(true))}
               renaming={renaming?.in === "list" ? renaming.id : undefined}
               renamingFromMenu={renaming?.menu}
@@ -4604,7 +4629,7 @@ export function App() {
           onClose={() => setPlugins({ ...plugins, open: false })}
         /></OnFirstOpen>
       )}
-      <OnFirstOpen open={settingsOpen} fallback={<DialogFallback size="settings" />}><SettingsDialog onLogin={() => (setSettingsOpen(false), openLogin())} project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} onProvidersChanged={catalogue.providersChanged} /></OnFirstOpen>
+      <OnFirstOpen open={settingsOpen} fallback={<DialogFallback size="settings" />}><SettingsDialog onLogin={() => (setSettingsOpen(false), openLogin())} onProjectSettings={project ? () => (setSettingsOpen(false), setProjectSettings({ open: true, cwd: projectOf(project, worktrees) })) : undefined} project={project ? { cwd: projectOf(project, worktrees), name: projectName(projectOf(project, worktrees)) } : undefined} update={update} onCheckUpdate={checkUpdate} sides={sides} docker={docker} push={{ on: pushOn, supported: pushSupported(), busy: pushBusy, error: pushError, toggle: () => void togglePush() }} open={settingsOpen} changed={settingsChanged} request={(m) => client.current!.request(m)} onClose={() => setSettingsOpen(false)} tabGrouping={grouping} onTabGrouping={changeGrouping} onRestartGuide={() => startGuide("settings")} onTerminalPosition={(a) => (a !== "main" && leaveMain("terminal"), saveTerminalDock(a))} tabCompact={compact} onTabCompact={changeCompact} tabAutoClose={autoClose} onTabAutoClose={changeAutoClose} onShortcuts={() => (setSettingsOpen(false), setShortcutsOpen(true))} onAddons={() => (setSettingsOpen(false), setAddonsOpen(true))} onProvidersChanged={catalogue.providersChanged} /></OnFirstOpen>
       {(viewer || shown) && client.current && (
         <OnFirstOpen open={!!viewer} fallback={<DialogFallback size="large" />}><ViewerDialog
           target={viewer && !isFileTarget(viewer.target) ? viewer.target : undefined}
@@ -5241,6 +5266,7 @@ function EngineIcon({ engine }: { engine: Engine }) {
   return <Icon aria-hidden />;
 }
 
+const projectEngines = (list: { engine: Engine }[]): Engine[] => (list.length ? list.map((e) => e.engine) : [DEFAULT_ENGINE]);
 const autoUnavailable = (models: ModelInfo[], model: string) => tt("app.main.autoUnavailable", { model: models.find((m) => m.value === model)?.displayName ?? model });
 
 /** `draft`: the new-session tab's upload token (upload-owner.ts), claimed by session.create. */
@@ -5250,8 +5276,9 @@ export type FirstMessage = { text: string; images: string[] } | { command: strin
 /** The mode a new-session draft starts in: config when the Engine offers it (OpenCode, GH-705), else the settings default when offered, else Ask. */
 export const draftStartMode = (modes: PermissionMode[], defaultMode: PermissionMode): PermissionMode => (modes.includes("config") ? "config" : modes.includes(defaultMode) ? defaultMode : modes.includes("default") ? "default" : modes[0]!);
 const NEW_SESSION_MODES = PERMISSION_MODES.filter((m) => m !== "bypassPermissions");
-type DraftPick = Omit<StartOptions, "mode"> & { mode?: PermissionMode };
-const NEW_DRAFT: DraftPick = { model: "default", effort: "default" };
+/** `model` and `effort` absent: not picked in the tab, the Project's settings or Default apply (draftStart). */
+type DraftPick = Omit<StartOptions, "mode" | "model" | "effort"> & { mode?: PermissionMode; model?: string; effort?: Effort };
+const NEW_DRAFT: DraftPick = {};
 
 const timelineKey = (item: SignalItem) => (item.kind === "part" ? item.part.id : item.id);
 

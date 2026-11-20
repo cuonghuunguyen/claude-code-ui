@@ -108,6 +108,7 @@ export default {
   "label.projectTitle": "Tên và biểu tượng của {name}",
   "label.machineTitle": "Tên và biểu tượng của {name}",
   "sidebar.menu.rename": "Đổi tên và biểu tượng…",
+  "sidebar.menu.projectSettings": "Cài đặt dự án…",
   "settings.sides.edit": "Đổi tên và biểu tượng của {name}",
   "settings.sides.local": "Máy này",
   "sidebar.menu.copyPath": "Sao chép đường dẫn",
