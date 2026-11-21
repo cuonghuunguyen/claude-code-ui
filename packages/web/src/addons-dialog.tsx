@@ -1,7 +1,7 @@
 // "Manage addons" dialog (/addons; docs/spec.md "Frontend" › Addons dialog, ADR 0006): install from git or a local folder, approval card
 // with the declared capabilities, enable, update check, uninstall, renderer conflicts and the per-addon log. State lives on the daemon (Hub).
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Trash2Icon } from "lucide-react";
+import { Trash2Icon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { Request } from "./client.ts";
@@ -238,6 +238,19 @@ export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onCl
               <p className="text-destructive text-xs" data-testid="addons-error">
                 {a.error}
               </p>
+            )}
+            {a.lint && a.lint.length > 0 && (
+              <section className="flex flex-col gap-1 text-xs" aria-label={t("addons.checks", { count: a.lint.length })} data-testid="addons-checks">
+                <h4 className="font-medium text-muted-foreground">{t("addons.checks", { count: a.lint.length })}</h4>
+                <ul className="flex flex-col gap-1">
+                  {a.lint.map((l, i) => (
+                    <li key={i} className="flex items-start gap-1.5 [overflow-wrap:anywhere]" data-testid="addons-check" data-code={l.code}>
+                      <TriangleAlertIcon className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
+                      <span>{t(`addons.lint.${l.code}`, { file: l.file ?? "", where: l.line ? t("addons.lint.where", { file: l.file ?? "", line: l.line }) : (l.file ?? ""), name: l.name ?? "", suggest: l.suggest ?? "", count: l.count ?? 0 })}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
             )}
             {a.state === "needs_approval" && (
               <div className="flex flex-col gap-1 text-xs" data-testid="addons-diff">

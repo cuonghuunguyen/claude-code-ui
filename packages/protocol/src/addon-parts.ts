@@ -5,8 +5,56 @@
 /** Bump when a part is added, renamed or removed. */
 export const PARTS_VERSION = 1;
 
+/** Every part name, in documentation order. `PartName` is derived from it, so a typed `data-part` value or a typo in a lookup fails to compile. */
+export const PART_NAMES = [
+  "titlebar",
+  "sidebar",
+  "session-item",
+  "session-search",
+  "group-toggle",
+  "day-header",
+  "work-area",
+  "session-area",
+  "session-header",
+  "tab",
+  "focus-tab",
+  "terminal-tab",
+  "side-panel",
+  "files-panel",
+  "file-tree",
+  "graph-panel",
+  "terminal",
+  "user-message",
+  "assistant-text",
+  "thinking",
+  "tool-card",
+  "permission-panel",
+  "question-panel",
+  "plan-window",
+  "prompt-box",
+  "prompt-toolbar",
+  "markdown-toolbar",
+  "send",
+  "context-meter",
+  "context-bar",
+  "status-bar",
+  "focus-page",
+  "focus-row",
+  "focus-queue",
+  "toast-region",
+  "scroll-to-bottom",
+  "palette",
+  "commit-message",
+  "changed-file",
+  "file-diff",
+  "loader",
+  "done-icon",
+  "backdrop",
+] as const;
+export type PartName = (typeof PART_NAMES)[number];
+
 export type AddonPart = {
-  name: string;
+  name: PartName;
   /** App version (major.minor) that first had the part. */
   since: string;
   /** Attributes on the part element that carry its state, with the values they take. Documented per part; existing attributes are reused. */
@@ -17,52 +65,17 @@ export type AddonPart = {
   reserved?: true;
 };
 
-const S = "1.5";
-const p = (name: string, states?: string[]): AddonPart => ({ name, since: S, ...(states && { states }) });
 const SESSION_STATE = "data-state=running|needs_input|idle|error|closed";
+/** What differs from the default (`since` 1.5, no states). A key that is not a part name does not compile. */
+const META: { [K in PartName]?: Omit<AddonPart, "name" | "since"> } = {
+  "session-item": { states: [SESSION_STATE] },
+  tab: { states: ["data-state=new|running|needs_input|unread|idle", "data-active"] },
+  "tool-card": { states: ["data-status=pending|running|done|error|denied|stopped"] },
+  "plan-window": { states: ["data-level=ok|warning|limit"] },
+  send: { states: ["data-state=idle|running|needs_input|disconnected"] },
+  loader: { reserved: true },
+  "done-icon": { reserved: true },
+  backdrop: { reserved: true },
+};
 
-export const PARTS: readonly AddonPart[] = [
-  p("titlebar"),
-  p("sidebar"),
-  p("session-item", [SESSION_STATE]),
-  p("session-search"),
-  p("group-toggle"),
-  p("day-header"),
-  p("work-area"),
-  p("session-area"),
-  p("session-header"),
-  p("tab", ["data-state=new|running|needs_input|unread|idle", "data-active"]),
-  p("focus-tab"),
-  p("terminal-tab"),
-  p("side-panel"),
-  p("files-panel"),
-  p("file-tree"),
-  p("graph-panel"),
-  p("terminal"),
-  p("user-message"),
-  p("assistant-text"),
-  p("thinking"),
-  p("tool-card", ["data-status=pending|running|done|error|denied|stopped"]),
-  p("permission-panel"),
-  p("question-panel"),
-  p("plan-window", ["data-level=ok|warning|limit"]),
-  p("prompt-box"),
-  p("prompt-toolbar"),
-  p("markdown-toolbar"),
-  p("send", ["data-state=idle|running|needs_input|disconnected"]),
-  p("context-meter"),
-  p("context-bar"),
-  p("status-bar"),
-  p("focus-page"),
-  p("focus-row"),
-  p("focus-queue"),
-  p("toast-region"),
-  p("scroll-to-bottom"),
-  p("palette"),
-  p("commit-message"),
-  p("changed-file"),
-  p("file-diff"),
-  { ...p("loader"), reserved: true },
-  { ...p("done-icon"), reserved: true },
-  { ...p("backdrop"), reserved: true },
-];
+export const PARTS: readonly AddonPart[] = PART_NAMES.map((name) => ({ name, since: "1.5", ...META[name] }));

@@ -155,6 +155,27 @@ it("a needs_approval row shows added and removed capabilities", async () => {
   expect(d.calls.at(-2)).toMatchObject({ type: "addons.approve", capabilities: ["session.read", "ui.pane", "ui.band"] });
 });
 
+it("an addon row lists its lint warnings under Checks, with the file, line and the fix; an addon without findings has no Checks", async () => {
+  const lint: AddonInfo["lint"] = [
+    { level: "warning", code: "selects-testid", file: "dusk.css", line: 3, count: 2 },
+    { level: "warning", code: "unknown-part", file: "dusk.css", line: 9, name: "sidebr" },
+    { level: "warning", code: "unprefixed-name", file: "dusk.css", line: 12, name: "spin", suggest: "dusk-spin" },
+    { level: "warning", code: "top-level-css", file: "legacy.css" },
+  ];
+  const d = await render({ addons: [addon("themed", { lint }), addon("plain")], picks: {} });
+  const rows = d.all("addons-row");
+  const checks = rows[0]!.querySelector<HTMLElement>('[data-testid="addons-checks"]')!;
+  expect(checks.textContent).toContain("Checks (4)");
+  const items = [...checks.querySelectorAll("li")].map((li) => li.textContent);
+  expect(items).toHaveLength(4);
+  expect(items[0]).toContain("dusk.css line 3");
+  expect(items[0]).toContain("[data-part]");
+  expect(items[1]).toContain('"sidebr"');
+  expect(items[2]).toContain('"dusk-spin"');
+  expect(items[3]).toContain("themes[].css");
+  expect(rows[1]!.querySelector('[data-testid="addons-checks"]')).toBeNull();
+});
+
 it("the switch enables and disables; uninstall asks first", async () => {
   const d = await render({ addons: [addon("example")], picks: {} });
   await d.click(d.q("addons-enabled"));

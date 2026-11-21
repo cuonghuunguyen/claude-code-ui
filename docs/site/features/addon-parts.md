@@ -17,7 +17,7 @@ A theme addon styles claude-ui with CSS. To find the element to style, select a 
 - State is an attribute on the part itself. The table lists the attributes a part has. Other attributes are not part of the contract.
 - A part is removed only after one minor release in which it is marked **deprecated** in the table. A new part gets a `since` version.
 - Parts marked **reserved** are named already, but the app does not render them yet.
-- The list is also in `packages/protocol/src/addon-parts.ts` (`PARTS`, `PARTS_VERSION`).
+- The list is also in `packages/protocol/src/addon-parts.ts` (`PARTS`, `PART_NAMES`, `PartName`, `PARTS_VERSION`).
 
 ## Cascade {#cascade}
 
@@ -76,6 +76,21 @@ The CSS file of an addon (`css` in `addon.json`) is loaded in its own cascade la
 | `loader` | Reserved: the loading mark of a running turn | | 1.5 |
 | `done-icon` | Reserved: the done mark of a finished tool call | | 1.5 |
 | `backdrop` | Reserved: full-window background layer | | 1.5 |
+
+## Checks {#checks}
+
+The Addons dialog lists **Checks** under each addon: warnings from the addon lint. A warning never blocks an install or an enable. Each shows the file and, where it has one, the line.
+
+| Check | Meaning | Fix |
+|---|---|---|
+| `selects-testid` | A selector uses `[data-testid]`. It is a test hook and changes without notice. | Select `[data-part="..."]`. |
+| `unknown-part` | `[data-part="x"]` names a part that is not in the table. It matches nothing. | Fix the name (see the table). |
+| `unprefixed-name` | An `@keyframes`, `@font-face` family or `@property` name has no addon prefix. These names are global and can replace a name of the app. | Name it `<addon>-name` (`--<addon>-name` for `@property`). |
+| `top-level-css` | `css` in `addon.json` applies to every theme, and the addon has themes. | Move it to `themes[].css`. |
+| `css-broken` | The CSS does not parse: an unclosed block, comment or `url(`, a stray `}`, or groups nested over 32 deep. A theme CSS is then served unscoped and applies under every theme. | Fix it. |
+| `css-too-large` | The file is larger than 512 KB. A theme CSS is then served unscoped and applies under every theme. | Split or shrink it. |
+
+A selector with `^=`, `$=`, `*=` or `|=` on `data-part` is not checked.
 
 ## Changelog {#changelog}
 

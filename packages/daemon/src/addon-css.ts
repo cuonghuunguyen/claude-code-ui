@@ -19,7 +19,7 @@ const HOISTED = new Set(["font-face", "keyframes", "-webkit-keyframes", "propert
 type Stmt = { prelude: string; block?: string };
 
 /** Index after a comment, string or `url(...)` that starts at `i`, else `i` unchanged. */
-function skipToken(t: string, i: number): number {
+export function skipToken(t: string, i: number): number {
   const c = t[i];
   if (c === "/" && t[i + 1] === "*") {
     const end = t.indexOf("*/", i + 2);

@@ -100,6 +100,7 @@ newer than their claude-ui.
 - `css` (legacy): one `.css` applied while enabled, for every theme (its `:root` and `.dark` token rules then override built-in themes too), in a cascade layer after the app's own styles: it wins without `!important` (inline `style` attributes and the unlayered library CSS of CodeMirror `.cm-*`, xterm `.xterm*`, KaTeX `.katex*` need it); it cannot load external images or `@import`.
   Select app elements with `[data-part="<name>"]` (stable parts, list: `docs/site/features/addon-parts.md`),
   never `[data-testid=...]` or Tailwind class names: those change without notice.
+  The Addons dialog lists lint warnings (Checks) per addon, never blocking: `[data-testid]` selectors, unknown `[data-part]` names, `@keyframes` / `@font-face` / `@property` names without the addon prefix (name them `<addon>-spin`), top-level `css` next to themes (move it to `themes[].css`), unparsable or over-512 KB css. Fix every one.
 - Paths are relative, without `..` or `\`, and must exist. Every view, command and renderer needs
   its capability, or install fails naming it.
 
