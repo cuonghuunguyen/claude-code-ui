@@ -137,14 +137,15 @@ export function createSettingsArea(ctx: SettingsAreaContext, conn: Pick<Connecti
       else ctx.projectAccountsChanged(settingsBefore);
       const origin = jiraOrigin(settings.jira.url);
       const urlPatched = msg.patch?.jira?.url !== undefined;
-      // GH-487: a token saved without URL takes the first URL set here (never a hand edit), in one write; the token of an origin this change stops
-      // using (neither the global URL nor a Project override names it any more) is dropped (cleanup, it is never sent anyway).
+      // GH-487: a token saved without URL takes the first URL set here, in one write: only when the URL before was empty, so never a URL a hand edit
+      // or a Hub sync set (GH-915). Dropped (cleanup, never sent anyway): the token of an origin this change stops using (neither the global URL nor a
+      // Project override names it any more), and the token saved without URL once the global URL is set.
       // GH-915: never on another computer's Hub's sync: its settings name its own sites, not those this machine's own users saved tokens for; and only
       // origins this change stops using, so a later change here keeps the tokens whose URLs a sync replaced.
       if (!conn.fromHub) {
-        if (urlPatched && origin) secrets.bindJiraToken(origin);
-        const [was, now] = [jiraOriginsInUse(settingsBefore), jiraOriginsInUse(settings)];
-        secrets.pruneJiraTokens(secrets.jiraOrigins().filter((o) => now.includes(o) || !was.includes(o)), origin);
+        if (urlPatched && origin && !jiraOrigin(settingsBefore.jira.url)) secrets.bindJiraToken(origin);
+        const now = jiraOriginsInUse(settings);
+        secrets.pruneJiraTokens([...jiraOriginsInUse(settingsBefore), ""].filter((o) => !now.includes(o)), origin);
         if (urlPatched && !origin) secrets.endJiraTokenReset();
       }
       if (!settings.usageLimit.autoContinue) ctx.autoContinue.clear();

@@ -311,12 +311,9 @@ describe("Jira over the wire", () => {
     // Another computer's Hub syncs its settings (global URL of its own, this Side's Project entries of its own: none).
     expect(await hub({ type: "settings.set", patch: { jira: { url: "https://acme.atlassian.net" }, projects: { overrides: {} } } })).toMatchObject({ type: "reply" });
     expect(JSON.parse(readFileSync(secretsFile, "utf8")).jiraTokens).toEqual({ [OWN]: PROJECT_TOKEN, "": JIRA_TOKEN });
-    // A later own change that stops using no Jira URL drops nothing, though the sync replaced the URLs those tokens were saved for.
+    // A later own change keeps the token of a URL the sync replaced; the token typed without URL goes, as the global URL is set now (never bound to the Hub's site).
     await c.request({ type: "settings.set", patch: { labels: { projects: {}, sides: {} } } });
-    expect(JSON.parse(readFileSync(secretsFile, "utf8")).jiraTokens).toEqual({ [OWN]: PROJECT_TOKEN, "": JIRA_TOKEN });
-    // An own change of the global URL binds the token typed without URL; nothing else is dropped.
-    await c.request({ type: "settings.set", patch: { jira: { url: OWN } } });
-    expect(JSON.parse(readFileSync(secretsFile, "utf8")).jiraTokens).toEqual({ [OWN]: JIRA_TOKEN });
+    expect(JSON.parse(readFileSync(secretsFile, "utf8")).jiraTokens).toEqual({ [OWN]: PROJECT_TOKEN });
   });
 
   it("a token for a Project without its own Jira URL is refused and the global token stays (GH-915)", async () => {
@@ -370,6 +367,15 @@ describe("Jira over the wire", () => {
     writeFileSync(settingsFile, JSON.stringify({ jira: { url: fakeB.url } }));
     expect(await c.request({ type: "jira.test" })).toMatchObject({ code: "jira_not_configured" });
     expect(await c.request({ type: "settings.set", patch: { notifications: { desktop: false } } })).toMatchObject({ result: { jiraToken: false } });
+    // A later save of a URL of the hand-edited host does not bind it either (GH-915).
+    expect(await setUrl(`${fakeB.url}/jira`)).toMatchObject({ result: { jiraToken: false } });
+    expect(await c.request({ type: "jira.test" })).toMatchObject({ code: "jira_not_configured" });
+    // Part 3: a token saved without URL, a hand edit, then at once a save of that host's URL: the edited URL was no empty one, so no bind (GH-915).
+    await setUrl("");
+    await c.request({ type: "jira.token", token: JIRA_TOKEN });
+    writeFileSync(settingsFile, JSON.stringify({ jira: { url: fakeB.url } }));
+    expect(await setUrl(`${fakeB.url}/jira`)).toMatchObject({ result: { jiraToken: false } });
+    expect(await c.request({ type: "jira.test" })).toMatchObject({ code: "jira_not_configured" });
     expect(fakeB.requests).toEqual([]);
     for (const text of [...c.raw, ...logs]) expect(text).not.toContain(JIRA_TOKEN);
   });
