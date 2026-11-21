@@ -627,6 +627,8 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     if (typeof msg.sessionId !== "string" || !asideOf(msg.sessionId)) return r.fail("not_an_aside", "this session is not an aside");
     const err = await deleteSessionById(msg.sessionId, true);
     if (err?.code === "unknown_session") return saveSettings(() => settings.delete([msg.sessionId])), r.reply({});
+    // The fork stays (deleted at the next start): the reason is in the log, not only in the page's banner.
+    if (err) console.error(`aside ${msg.sessionId}: close failed: ${err.message}`);
     return err ? r.fail(err.code, err.message) : r.reply({});
   };
   const asideKeep = async (msg: Msg<"aside.keep">, r: Respond) => {

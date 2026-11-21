@@ -223,8 +223,16 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     },
     restore: (id) => restoreSession(id).catch((err) => Promise.reject(failure(err))),
     locate: async (id, live) => {
-      // The folder it was listed, created or opened in; its store is OpenCode's.
-      const cwd = live?.cwd ?? meta.get(id)?.cwd;
+      // The folder it was listed, created or opened in; its store is OpenCode's. One not seen in this run (an Aside left by a stopped daemon, GH-907) is asked:
+      // undefined only when OpenCode 2 does not have it, so a failed read never drops what claude-ui keeps of a session that still exists.
+      let cwd = live?.cwd ?? meta.get(id)?.cwd;
+      if (!cwd) {
+        const client = await server.client().catch((err) => Promise.reject(failure(err)));
+        const gone = await notFound();
+        const row = await client.session.get({ sessionID: id }).catch((err) => (gone(err) ? undefined : Promise.reject(failure(err))));
+        cwd = row && ctx.allowed(row.location.directory);
+        if (cwd) meta.set(id, { cwd, title: row!.title ?? "New session" });
+      }
       return cwd && ctx.allowed(cwd) ? { cwd, transcript: false } : undefined;
     },
     title: async (s) => meta.get(s.id)?.title ?? "New session",
