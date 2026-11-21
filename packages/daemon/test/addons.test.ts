@@ -271,6 +271,20 @@ describe("serving", () => {
       expect(r.body.replace(/\s+/g, " ")).toContain("& { --background: #111 } &.dark { --card: #222 }");
     });
 
+    it("lint warns about a test-hook selector and never blocks the install; an edit clears it on the next list", async () => {
+      const d = folder("linted", { themes: [{ id: "dusk", name: "Dusk", dark: palette, css: "dusk.css" }], css: "legacy.css" });
+      writeFileSync(join(d, "dusk.css"), '[data-testid="sidebar"] { color: red } @keyframes spin {}');
+      writeFileSync(join(d, "legacy.css"), "a {}");
+      const i = (await c.request({ type: "addons.install", source: { kind: "local", path: d } })).result as AddonInfo;
+      expect(i.state).toBe("needs_approval"); // installed
+      expect(i.lint?.map((l) => `${l.code}:${l.file}`)).toEqual(["top-level-css:legacy.css", "selects-testid:dusk.css", "unprefixed-name:dusk.css"]);
+      expect((await list()).addons.find((a) => a.name === "linted")?.lint).toHaveLength(3);
+      writeFileSync(join(d, "dusk.css"), '[data-part="sidebar"] { color: red }');
+      writeFileSync(join(d, "addon.json"), json({ ...BASE, name: "linted", themes: [{ id: "dusk", name: "Dusk", dark: palette, css: "dusk.css" }] }));
+      const again = (await list()).addons.find((a) => a.name === "linted")!;
+      expect(again.lint).toBeUndefined();
+    });
+
     it("the same file without ?theme, or with the other theme's id, is served as it is", async () => {
       const base = await themed({ "dusk.css": ":root { --background: #111 }", "dawn.css": ".a { color: red }" });
       expect((await fetchAddon(`${base}dusk.css`, "style")).body).toBe(":root { --background: #111 }");

@@ -1339,6 +1339,21 @@ export type AddonManifest = {
 };
 /** needs_approval: declared capabilities not all approved (never enabled). error: the manifest does not load. */
 export type AddonState = "enabled" | "disabled" | "needs_approval" | "error";
-export type AddonInfo = { name: string; source: AddonSource; sha?: string; manifest?: AddonManifest; approved: string[]; state: AddonState; error?: string; /** `/addon/<nonce>/<name>/`: only when enabled. */ base?: string };
+/** One finding of the addon lint (docs/spec.md "Addon lint"). Warnings only: a finding never blocks an install or an enable. `text` is built by the client from `code` and the fields. */
+export type AddonLintCode = "selects-testid" | "unknown-part" | "unprefixed-name" | "top-level-css" | "css-broken" | "css-too-large";
+export type AddonLint = {
+  level: "warning";
+  code: AddonLintCode;
+  /** Addon-relative path of the CSS file. */
+  file?: string;
+  line?: number;
+  /** The part name, `@keyframes` / `@font-face` family / `@property` name. */
+  name?: string;
+  /** The prefixed form of `name`. */
+  suggest?: string;
+  /** `selects-testid`: how many selectors. */
+  count?: number;
+};
+export type AddonInfo = { name: string; source: AddonSource; sha?: string; manifest?: AddonManifest; /** Lint findings of the manifest and its CSS; absent when there are none. */ lint?: AddonLint[]; approved: string[]; state: AddonState; error?: string; /** `/addon/<nonce>/<name>/`: only when enabled. */ base?: string };
 export type AddonsListResult = { addons: AddonInfo[]; picks: Record<string, string> };
 export type AddonUpdateCheck = { name: string; current: string; latest: string; added: string[]; removed: string[]; error?: string };

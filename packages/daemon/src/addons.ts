@@ -18,6 +18,7 @@ import { BATCH_SSH, runGit, type GitRunner } from "./git-runner.ts";
 import { redactUrls, tidy } from "./git-remote.ts";
 import { createJsonFile } from "./json-file.ts";
 import { themeRoot } from "./addon-css.ts";
+import { lintAddon } from "./addon-lint.ts";
 
 export type AddonsRequest = Extract<ClientMessage, { type: `addons.${string}` }>;
 
@@ -278,11 +279,13 @@ function load(root: string, name: string): { manifest: AddonManifest } | { error
 /** The wire form of a stored addon; the URL never leaves with userinfo. `nonce`: set when files are served (base of an enabled addon). */
 export function toInfo(name: string, r: Record_, dir: string, nonce = ""): AddonInfo {
   const source: AddonSource = r.source.kind === "git" ? { ...r.source, url: redactUrls(r.source.url) } : r.source;
-  const l = load(rootOf(dir, name, r), name);
+  const root = rootOf(dir, name, r);
+  const l = load(root, name);
   const base = { name, source, ...(r.sha && { sha: r.sha }), approved: r.approved };
   if ("error" in l) return { ...base, state: "error", error: redactUrls(l.error) };
   const state = !covered(l.manifest, r.approved) ? "needs_approval" : r.enabled ? "enabled" : "disabled";
-  return { ...base, manifest: l.manifest, state, ...(state === "enabled" && { base: `/addon/${nonce}/${name}/` }) };
+  const lint = lintAddon(root, l.manifest); // warnings only (addon-lint.ts): never changes the state
+  return { ...base, manifest: l.manifest, ...(lint.length && { lint }), state, ...(state === "enabled" && { base: `/addon/${nonce}/${name}/` }) };
 }
 
 const err = (code: string, msg: string) => new ConfigError(code, msg);

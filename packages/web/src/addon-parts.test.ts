@@ -1,7 +1,7 @@
 // Contract of the addon part list (packages/protocol/src/addon-parts.ts): external addon themes select `[data-part="..."]`;
 // a part renamed or removed in the UI, or a name missing from the list, breaks them silently.
 import { readdirSync, readFileSync } from "node:fs";
-import { PARTS } from "@claude-ui/protocol";
+import { PARTS, PART_NAMES, type PartName } from "@claude-ui/protocol";
 import { expect, it } from "vitest";
 
 const dir = new URL(".", import.meta.url);
@@ -21,7 +21,7 @@ function used(): Set<string> {
 }
 
 it("every data-part in the UI is a listed part", () => {
-  const listed = new Set(PARTS.map((x) => x.name));
+  const listed = new Set<string>(PARTS.map((x) => x.name));
   expect([...used()].filter((n) => !listed.has(n))).toEqual([]);
 });
 
@@ -38,6 +38,14 @@ it("part names are unique", () => {
 it("the built-in Neon CSS selects parts, not test hooks, for listed parts", () => {
   const css = readFileSync(new URL("index.css", dir), "utf8");
   const hooks = [...css.matchAll(/\[data-testid="([^"]+)"\]/g)].map((m) => m[1]!);
-  const listed = new Set(PARTS.map((x) => x.name));
+  const listed = new Set<string>(PARTS.map((x) => x.name));
   expect(hooks.filter((n) => listed.has(n))).toEqual([]);
+});
+
+it("PartName is the literal union of the listed names (not string)", () => {
+  const ok: PartName = "titlebar";
+  // @ts-expect-error a name that is not a part does not compile
+  const bad: PartName = "not-a-part";
+  expect([ok, bad].length).toBe(2);
+  expect(PARTS.map((x) => x.name)).toEqual([...PART_NAMES]);
 });
