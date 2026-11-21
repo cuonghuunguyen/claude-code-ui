@@ -87,14 +87,17 @@ export function createSecrets({ file }: { file?: string } = {}) {
     jiraOrigins: (): string[] => Object.keys(get().jiraTokens ?? {}),
     /** An old-format token was removed and no token was saved since (Settings says why). */
     jiraTokenReset: (): boolean => !!get().jiraTokenReset,
-    /** Binds a token saved without URL to `origin` (the global URL's), in one write; no-op without such a token or when `origin` has one. */
+    /**
+     * Binds a token saved without URL to `origin` (the global URL's), in one write; no-op without such a token. It replaces a token a Project saved
+     * for `origin` (GH-915): the token typed in Settings › Jira is the one the user means for the global URL.
+     */
     bindJiraToken(origin: string) {
       const t = get().jiraTokens;
-      if (!t || !Object.hasOwn(t, "") || origin === "" || Object.hasOwn(t, origin)) return;
+      if (!t || !Object.hasOwn(t, "") || origin === "") return;
       // Checked again on the freshly loaded data: another daemon may have written since `get()`.
       store.change((x) => {
         const m = x.jiraTokens;
-        if (!m || !Object.hasOwn(m, "") || Object.hasOwn(m, origin)) return;
+        if (!m || !Object.hasOwn(m, "")) return;
         m[origin] = m[""]!;
         delete m[""];
         mirror(x, origin);
@@ -121,15 +124,16 @@ export function createSecrets({ file }: { file?: string } = {}) {
         mirror(d, globalOrigin);
       });
     },
-    /** Keeps only the tokens of `used` origins (a URL of the global or a Project setting names them); no write when nothing changes. */
-    pruneJiraTokens(used: string[], globalOrigin: string) {
+    /** Drops the tokens of the `drop` origins and keeps the old format on the global origin's token; no write when nothing changes. */
+    pruneJiraTokens(drop: string[], globalOrigin: string) {
       const d = get();
       const t = d.jiraTokens ?? {};
-      const kept = Object.keys(t).filter((o) => used.includes(o));
-      const want = Object.hasOwn(t, globalOrigin) && used.includes(globalOrigin) ? t[globalOrigin] : undefined;
+      const kept = Object.keys(t).filter((o) => !drop.includes(o));
+      const want = Object.hasOwn(t, globalOrigin) && !drop.includes(globalOrigin) ? t[globalOrigin] : undefined;
       if (kept.length === Object.keys(t).length && d.jiraToken === want && d.jiraOrigin === (want === undefined ? undefined : globalOrigin)) return;
+      // Filtered on the freshly loaded data: a token another daemon wrote since `get()` stays unless it is dropped.
       store.change((x) => {
-        setTokens(x, Object.fromEntries(Object.entries(x.jiraTokens ?? {}).filter(([o]) => used.includes(o))));
+        setTokens(x, Object.fromEntries(Object.entries(x.jiraTokens ?? {}).filter(([o]) => !drop.includes(o))));
         mirror(x, globalOrigin);
       });
     },

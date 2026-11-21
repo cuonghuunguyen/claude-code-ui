@@ -321,6 +321,23 @@ it("Ticket: a Project's Jira overrides give the search its project, the branch t
   expect(q<HTMLInputElement>("create-worktree-ticket-branch")!.value).toBe("PRJ-1/login-fails-on-safari");
 });
 
+it("Ticket: with a Hub of the previous version (no per-origin tokens, project ignored) the tab uses the global template and filter, like its search (GH-915)", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const overrides = { local: { [R]: { jira: { url: "https://jira.example.com", template: "{key}/{summary}", jql: "project = PRJ" } } } };
+  mount({ jira: true, overrides, noTickets: true });
+  await flush();
+  await flush();
+  expect(q("create-worktree-tab-ticket")!.getAttribute("aria-selected")).toBe("true");
+  expect(document.body.textContent).toContain("No open tickets assigned to you");
+  act(() => root!.unmount());
+  el!.remove();
+  mount({ jira: true, overrides });
+  await flush();
+  await flush();
+  await click(document.querySelector<HTMLElement>('[data-testid="create-worktree-ticket-row"]'));
+  expect(q<HTMLInputElement>("create-worktree-ticket-branch")!.value).toBe("bugfix/PRJ-1-login-fails-on-safari");
+});
+
 it("Ticket: a Project with its own Jira URL but no token for it is not ready, though the global URL has one", async () => {
   const overrides = { local: { [R]: { jira: { url: "https://jira.example.com" } } } };
   const { calls, onJiraSettings } = mount({ jira: true, overrides, tokens: ["https://acme.atlassian.net"] });

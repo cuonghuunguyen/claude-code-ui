@@ -25,6 +25,8 @@ export type Connection = {
   /** The browser runs on the daemon's machine (ADR 0011). */
   sameHost: boolean;
   sameBrowser: boolean;
+  /** An attached Hub's virtual connection (sides.ts runSide): requests of another computer's Hub, such as its settings sync. */
+  fromHub: boolean;
   /** The nonce this connection got for a media key (issued once per key). */
   nonceFor(key: string): string;
 };

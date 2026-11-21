@@ -78,8 +78,9 @@ function Body({ project, side = LOCAL_SIDE, request, onClose, onCreated, onJiraS
     ask.current<SettingsResult>({ type: "settings.get" }).then(
       (r) => {
         if (!live) return;
-        // The Jira connection of this Project: its overrides over the global one, and the token of that URL's origin.
-        const j = r.settings.jira && jiraOf(r.settings.projects?.overrides, side, project, r.settings.jira);
+        // The Jira connection of this Project: its overrides over the global one, and the token of that URL's origin. A Hub of the previous version
+        // (no `jiraTokens`) ignores the search's `project` and searches the global site: then the global template and filter too (GH-915).
+        const j = r.settings.jira && (r.jiraTokens ? jiraOf(r.settings.projects?.overrides, side, project, r.settings.jira) : r.settings.jira);
         const ready = !!j?.url && jiraTokenFor(r, j.url);
         const own = !!j && j.url !== r.settings.jira.url;
         setJira({ ready, template: j?.template || "{type}/{key}-{summary}", filter: !!j?.jql?.trim(), own });

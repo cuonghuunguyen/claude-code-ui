@@ -9,7 +9,7 @@ import type { Area, Connection, Handlers, Msg, Respond } from "./dispatch.ts";
 import { JiraError, jiraOrigin } from "./jira.ts";
 import { usesOauthToken } from "./plan-usage.ts";
 import type { ProjectRef } from "@claude-ui/protocol";
-import { jiraOriginsInUse, jiraSettings } from "./project-overrides.ts";
+import { jiraOriginsInUse, jiraSettings, ownJiraUrl } from "./project-overrides.ts";
 import { overrideAccounts, withoutOverrideAccount } from "./settings.ts";
 
 const REF_MAX = 4096;
@@ -44,16 +44,18 @@ export type SettingsAreaContext = Pick<
   | "covered"
 > & { opts: Pick<DaemonContext["opts"], "keepAwake" | "push" | "shortcut"> };
 
-export function createSettingsArea(ctx: SettingsAreaContext, conn: Pick<Connection, "ws" | "sameHost">): Area<SettingsTypes> {
+export function createSettingsArea(ctx: SettingsAreaContext, conn: Pick<Connection, "ws" | "sameHost" | "fromHub">): Area<SettingsTypes> {
   const { appSettings, secrets, jira, opts } = ctx;
 
   const jiraToken = async (msg: Msg<"jira.token">, { reply, fail }: Respond) => {
     if (msg.token !== null && typeof msg.token !== "string") return fail("bad_settings", "token must be a string or null");
     const bad = projectRefProblem(msg.project);
     if (bad) return fail("bad_settings", bad);
+    const settings = appSettings.get();
+    // GH-915: only a Project with its own Jira URL has a token of its own; the global token is changed without `project`.
+    if (msg.project && !ownJiraUrl(settings, msg.project)) return fail("bad_settings", "The project has no own Jira URL: its token is the global one");
     try {
       // The token is saved for the origin of the Jira URL in effect (a Project's, else the global one); the global origin's token is also kept in the old format.
-      const settings = appSettings.get();
       secrets.setJiraToken(msg.token === null ? null : msg.token.trim(), jiraOrigin(jiraSettings(settings, msg.project).url), jiraOrigin(settings.jira.url));
     } catch (err) {
       return fail("bad_settings", (err as Error).message);
@@ -135,10 +137,17 @@ export function createSettingsArea(ctx: SettingsAreaContext, conn: Pick<Connecti
       else ctx.projectAccountsChanged(settingsBefore);
       const origin = jiraOrigin(settings.jira.url);
       const urlPatched = msg.patch?.jira?.url !== undefined;
-      // GH-487: a token saved without URL takes the first URL set here (never a hand edit), in one write; a token of an origin that neither the global URL nor a Project override uses is dropped (cleanup, it is never sent anyway).
-      if (urlPatched && origin) secrets.bindJiraToken(origin);
-      secrets.pruneJiraTokens(jiraOriginsInUse(settings), origin);
-      if (urlPatched && !origin) secrets.endJiraTokenReset();
+      // GH-487: a token saved without URL takes the first URL set here, in one write: only when the URL before was empty, so never a URL a hand edit
+      // or a Hub sync set (GH-915). Dropped (cleanup, never sent anyway): the token of an origin this change stops using (neither the global URL nor a
+      // Project override names it any more), and the token saved without URL once the global URL is set.
+      // GH-915: never on another computer's Hub's sync: its settings name its own sites, not those this machine's own users saved tokens for; and only
+      // origins this change stops using, so a later change here keeps the tokens whose URLs a sync replaced.
+      if (!conn.fromHub) {
+        if (urlPatched && origin && !jiraOrigin(settingsBefore.jira.url)) secrets.bindJiraToken(origin);
+        const now = jiraOriginsInUse(settings);
+        secrets.pruneJiraTokens([...jiraOriginsInUse(settingsBefore), ""].filter((o) => !now.includes(o)), origin);
+        if (urlPatched && !origin) secrets.endJiraTokenReset();
+      }
       if (!settings.usageLimit.autoContinue) ctx.autoContinue.clear();
       if (!settings.focus.nextForYou) for (const s of ctx.sessions.values()) s.clearSuggestion();
       ctx.perfMon.setEnabled(settings.performance.monitor);

@@ -1,5 +1,6 @@
 // Create worktree modal over the wire (GH-447): worktree.create per Branch source, worktree.branches, Jira settings, token and search.
 import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -81,7 +82,20 @@ async function daemon(o: { root: string; repo?: string; secretsFile?: string; se
   });
   await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
   closers.push(() => d.close());
+  last = d;
   return (d.address() as AddressInfo).port;
+}
+let last: ReturnType<typeof createDaemon> | undefined;
+/** An attached Hub's virtual connection (sides.ts runSide) to the last daemon: the way another computer's Hub syncs its settings here. */
+function hubConnection() {
+  const sent: { type: string; reqId?: string; code?: string; result?: any }[] = [];
+  const ws = Object.assign(new EventEmitter(), { OPEN: 1, readyState: 1, bufferedAmount: 0, send: (x: string) => void sent.push(JSON.parse(x)), close() {}, ping() {}, terminate() {} });
+  last!.accept(ws as never);
+  return async (msg: object) => {
+    const reqId = Math.random().toString(36);
+    ws.emit("message", Buffer.from(JSON.stringify({ ...msg, reqId })));
+    return vi.waitFor(() => sent.find((m) => m.reqId === reqId && (m.type === "reply" || m.type === "error")) ?? Promise.reject(new Error("no reply")), { timeout: 5000 });
+  };
 }
 
 describe("worktree.create per Branch source", () => {
@@ -282,6 +296,40 @@ describe("Jira over the wire", () => {
     }
   });
 
+  it("a Hub's settings sync never drops or binds this machine's Jira tokens; its own settings change does (GH-915)", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wtj-")));
+    mkdirSync(join(root, "cfg"));
+    const secretsFile = join(root, "cfg", "secrets.json");
+    const OWN = "https://own.example.com";
+    const PROJECT_TOKEN = "jira-PAT-project-do-not-leak-987654";
+    const c = await client(await daemon({ root, secretsFile, settingsFile: join(root, "cfg", "settings.json") }));
+    const hub = hubConnection();
+    // This machine, used as its own Hub: no global URL, a token typed without URL, and a Project of its own site with a token.
+    await c.request({ type: "settings.set", patch: { projects: { overrides: { local: { "/work/a": { jira: { url: OWN } } } } } } });
+    await c.request({ type: "jira.token", token: PROJECT_TOKEN, project: { side: "local", cwd: "/work/a" } });
+    await c.request({ type: "jira.token", token: JIRA_TOKEN });
+    // Another computer's Hub syncs its settings (global URL of its own, this Side's Project entries of its own: none).
+    expect(await hub({ type: "settings.set", patch: { jira: { url: "https://acme.atlassian.net" }, projects: { overrides: {} } } })).toMatchObject({ type: "reply" });
+    expect(JSON.parse(readFileSync(secretsFile, "utf8")).jiraTokens).toEqual({ [OWN]: PROJECT_TOKEN, "": JIRA_TOKEN });
+    // A later own change keeps the token of a URL the sync replaced; the token typed without URL goes, as the global URL is set now (never bound to the Hub's site).
+    await c.request({ type: "settings.set", patch: { labels: { projects: {}, sides: {} } } });
+    expect(JSON.parse(readFileSync(secretsFile, "utf8")).jiraTokens).toEqual({ [OWN]: PROJECT_TOKEN });
+  });
+
+  it("a token for a Project without its own Jira URL is refused and the global token stays (GH-915)", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wtj-")));
+    mkdirSync(join(root, "cfg"));
+    const secretsFile = join(root, "cfg", "secrets.json");
+    const c = await client(await daemon({ root, secretsFile, settingsFile: join(root, "cfg", "settings.json") }));
+    await c.request({ type: "settings.set", patch: { jira: { url: "https://acme.atlassian.net" }, projects: { overrides: { local: { "/work/a": { jira: { jql: "project = A" } } } } } } });
+    await c.request({ type: "jira.token", token: JIRA_TOKEN });
+    for (const token of ["other-token-1234", null]) {
+      expect(await c.request({ type: "jira.token", token, project: { side: "local", cwd: "/work/a" } })).toMatchObject({ code: "bad_settings", message: expect.stringContaining("own Jira URL") });
+      expect(await c.request({ type: "jira.token", token, project: { side: "local", cwd: "/work/none" } })).toMatchObject({ code: "bad_settings" });
+    }
+    expect(JSON.parse(readFileSync(secretsFile, "utf8"))).toMatchObject({ jiraToken: JIRA_TOKEN, jiraTokens: { "https://acme.atlassian.net": JIRA_TOKEN } });
+  });
+
   it("a stored non-local http Jira URL stays, is never sent the token and says why (GH-451)", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "wtj-")));
     mkdirSync(join(root, "cfg"));
@@ -319,6 +367,15 @@ describe("Jira over the wire", () => {
     writeFileSync(settingsFile, JSON.stringify({ jira: { url: fakeB.url } }));
     expect(await c.request({ type: "jira.test" })).toMatchObject({ code: "jira_not_configured" });
     expect(await c.request({ type: "settings.set", patch: { notifications: { desktop: false } } })).toMatchObject({ result: { jiraToken: false } });
+    // A later save of a URL of the hand-edited host does not bind it either (GH-915).
+    expect(await setUrl(`${fakeB.url}/jira`)).toMatchObject({ result: { jiraToken: false } });
+    expect(await c.request({ type: "jira.test" })).toMatchObject({ code: "jira_not_configured" });
+    // Part 3: a token saved without URL, a hand edit, then at once a save of that host's URL: the edited URL was no empty one, so no bind (GH-915).
+    await setUrl("");
+    await c.request({ type: "jira.token", token: JIRA_TOKEN });
+    writeFileSync(settingsFile, JSON.stringify({ jira: { url: fakeB.url } }));
+    expect(await setUrl(`${fakeB.url}/jira`)).toMatchObject({ result: { jiraToken: false } });
+    expect(await c.request({ type: "jira.test" })).toMatchObject({ code: "jira_not_configured" });
     expect(fakeB.requests).toEqual([]);
     for (const text of [...c.raw, ...logs]) expect(text).not.toContain(JIRA_TOKEN);
   });

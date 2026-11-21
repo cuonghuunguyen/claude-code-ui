@@ -2194,7 +2194,7 @@ export function createDaemon(opts: {
       media.set(nonce, { src: { kind: "bytes", read, mime, name }, ws, used: Date.now() });
       return { type: "reply", reqId: msg.reqId, result: { url: `/media/${nonce}/${encodeURIComponent(name)}?v=${msg.hash ?? r.mtime}`, mime, size: r.size, mtime: r.mtime } };
     };
-    const conn: Connection = { ws, send: (m) => send(ws, m), sameHost, sameBrowser, nonceFor };
+    const conn: Connection = { ws, send: (m) => send(ws, m), sameHost, sameBrowser, fromHub: virtual.has(ws), nonceFor };
     const areas = connectAreas(ctx, conn);
     /** Handles a message in this daemon; its reply or error goes to `out`, events and streams to this connection. */
     const local = areas.dispatch;

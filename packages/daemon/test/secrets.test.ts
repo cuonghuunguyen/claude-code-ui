@@ -60,6 +60,16 @@ it("bindJiraToken binds a token saved without URL in one write and never rebinds
   expect(s.jiraToken("https://a.example.com")).toBe("tok");
 });
 
+it("bindJiraToken: the token typed in Settings › Jira without URL replaces a Project's token of the first global URL's origin (GH-915)", () => {
+  const X = "https://acme.atlassian.net";
+  const s = createSecrets();
+  s.setJiraToken("tok-project", X, "");
+  s.setJiraToken("tok-global", "", "");
+  s.bindJiraToken(X);
+  expect(s.jiraOrigins()).toEqual([X]);
+  expect(s.jiraToken(X)).toBe("tok-global");
+});
+
 it("Claude token accounts: add, list without tokens, remove; invalid name or token refused; the file is 0600 (GH-615)", () => {
   const file = join(mkdtempSync(join(tmpdir(), "secrets-")), "secrets.json");
   const s = createSecrets({ file });
@@ -127,26 +137,26 @@ it("the token of the global origin is also written as jiraToken + jiraOrigin so 
   s.setJiraToken("tok-b", B, A);
   expect(disk()).toMatchObject({ jiraToken: "tok-a", jiraOrigin: A, jiraTokens: { [A]: "tok-a", [B]: "tok-b" } });
   // The global URL moves to the other origin: the mirror follows; without a token there the mirror is gone.
-  s.pruneJiraTokens([A, B], B);
+  s.pruneJiraTokens([], B);
   expect(disk()).toMatchObject({ jiraToken: "tok-b", jiraOrigin: B });
-  s.pruneJiraTokens([A, B], "https://none.example.com");
+  s.pruneJiraTokens([], "https://none.example.com");
   expect(disk().jiraToken).toBeUndefined();
   expect(disk().jiraOrigin).toBeUndefined();
   expect(disk().jiraTokens).toEqual({ [A]: "tok-a", [B]: "tok-b" });
 });
 
-it("pruneJiraTokens drops the tokens of origins nothing uses and writes nothing when nothing changes (GH-894)", () => {
+it("pruneJiraTokens drops the tokens of the given origins and writes nothing when nothing changes (GH-894)", () => {
   const file = tmpFile();
   const s = createSecrets({ file });
   s.setJiraToken("tok-a", A, A);
   s.setJiraToken("tok-b", B, A);
   const before = readFileSync(file, "utf8");
-  s.pruneJiraTokens([A, B], A);
+  s.pruneJiraTokens(["https://none.example.com"], A);
   expect(readFileSync(file, "utf8")).toBe(before);
-  s.pruneJiraTokens([A], A);
+  s.pruneJiraTokens([B], A);
   expect(s.jiraOrigins()).toEqual([A]);
   expect(s.jiraToken(B)).toBeUndefined();
-  s.pruneJiraTokens([], "");
+  s.pruneJiraTokens([A], "");
   expect(s.jiraOrigins()).toEqual([]);
   expect(JSON.parse(readFileSync(file, "utf8")).jiraToken).toBeUndefined();
 });
