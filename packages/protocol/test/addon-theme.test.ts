@@ -23,6 +23,10 @@ describe("addon theme var values (a value is written into a <style> text)", () =
     ["url(x.png)", "url"],
     ["URL (x.png)", "url, case and space"],
     ["image-set(x 1x)", "image-set"],
+    ["-webkit-image-set(x 1x)", "prefixed image-set"],
+    ["-moz-element(#app)", "prefixed element"],
+    ["-webkit-cross-fade(a, b)", "prefixed cross-fade"],
+    ["a<b", "angle bracket alone"],
     ["cross-fade(a, b)", "cross-fade"],
     ["paint(x)", "paint"],
     ["@import x", "at-rule"],
@@ -38,7 +42,7 @@ describe("addon theme var values (a value is written into a <style> text)", () =
     ["x".repeat(201), "too long"],
   ])("refuses %j (%s)", (v) => expect(varValueError(v)).toBeDefined());
 
-  it("is bounded by the length cap on hostile input", () => {
+  it("refuses hostile input fast (length cap first; one linear pass up to 200 characters)", () => {
     const t = performance.now();
     for (const v of ["(".repeat(1_000_000), '"'.repeat(1_000_000), "a".repeat(1_000_000)]) expect(varValueError(v)).toBeDefined();
     for (let i = 0; i < 2000; i++) varValueError("(".repeat(100) + ")".repeat(100));

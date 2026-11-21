@@ -1,4 +1,4 @@
-// Theme vars of an addon theme (docs/site/features/addon-parts.md "Theme vars", docs/spec.md "Addon themes and CSS").
+// Theme vars of an addon theme (docs/site/features/addons.md "Themes", docs/spec.md Addons "Theme vars").
 // A var name and value go into a <style> text: the daemon checks a manifest with these functions and the web app checks again before it writes the rule.
 
 /** Custom properties per mode, at most. */
@@ -11,7 +11,7 @@ const MAX_VALUE = 200;
 
 const NAME = /^--[a-z][a-z0-9-]{0,40}$/;
 /** Tokens the palette keys set (themes.ts `MAP`, `tokensOf`): a var may not replace them. `--context-*` stay free: they default from `graph` and a theme may set its own. */
-const PALETTE_TOKENS = new Set(
+export const PALETTE_TOKENS: ReadonlySet<string> = new Set(
   [
     "background", "card", "popover", "secondary", "foreground", "card-foreground", "popover-foreground", "secondary-foreground", "accent-foreground", "ring-progress", "syntax-parameter",
     "muted-foreground", "syntax-punctuation", "ring-track", "tab-separator", "kbd", "primary", "send", "ring", "primary-foreground", "syntax-keyword", "ref-remote", "syntax-string", "syntax-regexp",
@@ -20,7 +20,7 @@ const PALETTE_TOKENS = new Set(
   ].map((n) => `--${n}`),
 );
 const GRAPH_TOKEN = /^--graph-[1-8]$/;
-const IMAGE_FN = /(?:^|[^a-z0-9-])(?:url|src|image|image-set|-webkit-image-set|cross-fade|element|paint)\s*\(/i;
+const IMAGE_FN = /(?:^|[^a-z0-9_])(?:-(?:webkit|moz)-)?(?:url|src|image|image-set|cross-fade|element|paint)\s*\(/i;
 const CLOSER: Record<string, string> = { "(": ")", "[": "]" };
 
 /** Why a var name is refused, else undefined. */

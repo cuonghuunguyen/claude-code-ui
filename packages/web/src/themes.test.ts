@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AddonInfo } from "@claude-ui/protocol";
-import { varNameError } from "@claude-ui/protocol";
+import { PALETTE_TOKENS, varNameError } from "@claude-ui/protocol";
 import { addonThemes, KEYS, SURFACE, swatchOf, terminalTheme, themeCss, THEMES, tokensOf } from "./themes.ts";
 
 const HEX = /^#[0-9a-f]{6}$/;
@@ -185,6 +185,8 @@ describe("addonThemes", () => {
       const names = Object.keys(tokensOf(THEMES.find((t) => t.id === "catppuccin")!.dark!, "dark")).filter((n) => !/^--(graph|context)-/.test(n));
       expect(names.length).toBeGreaterThan(40);
       for (const n of names) expect(varNameError(n), n).toBeDefined();
+      // the other direction: every token the list refuses is one a palette sets (graph tokens aside), so the list holds no stale name
+      expect([...names].sort()).toEqual([...PALETTE_TOKENS].sort());
     });
   });
 
