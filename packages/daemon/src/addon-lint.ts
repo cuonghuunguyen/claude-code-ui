@@ -1,7 +1,7 @@
 // Addon lint (GH-871, docs/spec.md "Addon lint"): warnings about an addon theme's CSS and manifest. Never blocks an install or an enable.
 // The scan is one linear pass without recursion (`skipToken` of addon-css.ts for comments, strings and url()); broken CSS ends it with a
 // `css-broken` finding, never an exception. Every look-ahead is bounded (an attribute selector 300 characters, an `@font-face` block up to its next brace).
-import { closeSync, fstatSync, openSync, readFileSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { PARTS, type AddonLint, type AddonManifest } from "@claude-ui/protocol";
 import { CssScanError, MAX_THEME_CSS, scopeCss, skipToken, themeRoot } from "./addon-css.ts";
@@ -121,7 +121,7 @@ const CACHE_MAX = 64;
 function readCss(path: string): { text: string } | { size: false } | undefined {
   let fd: number | undefined;
   try {
-    fd = openSync(path, "r");
+    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK); // not blocking: a FIFO swapped in cannot stall the daemon
     const st = fstatSync(fd);
     if (!st.isFile()) return undefined;
     if (st.size > MAX_THEME_CSS) return { size: false };
@@ -142,11 +142,14 @@ export function lintAddon(root: string, m: AddonManifest): AddonLint[] {
     const path = join(root, f);
     let st: { mtimeMs: number; size: number };
     try {
-      st = statSync(path);
+      const x = statSync(path);
+      if (!x.isFile()) continue;
+      st = x;
     } catch {
       continue;
     }
-    const key = `${root}\0${f}\0${m.name}\0${st.mtimeMs}\0${st.size}`;
+    const theme = m.themes.find((t) => t.css === f);
+    const key = `${root}\0${f}\0${m.name}\0${theme?.id ?? ""}\0${st.mtimeMs}\0${st.size}`; // the role (theme file or not) changes the result
     let l = cache.get(key);
     if (!l) {
       const r = readCss(path);
@@ -154,13 +157,11 @@ export function lintAddon(root: string, m: AddonManifest): AddonLint[] {
       if ("size" in r) l = [{ level: "warning", code: "css-too-large", file: f }];
       else {
         l = lintCss(r.text, m.name, f);
-        const theme = m.themes.find((t) => t.css === f);
         if (theme && !l.some((x) => x.code === "css-broken"))
           try {
             scopeCss(r.text, themeRoot(m.name, theme.id));
-          } catch (e) {
-            if (!(e instanceof CssScanError)) throw e;
-            l = [...l, { level: "warning", code: "css-broken", file: f }];
+          } catch {
+            l = [...l, { level: "warning", code: "css-broken", file: f }]; // any failure: the server serves the raw file then too
           }
       }
       if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value!);

@@ -165,6 +165,12 @@ describe("lintAddon", () => {
     expect(lintAddon(r, manifest({ css: "t.css" }))).toEqual([]);
   });
 
+  it("the same file is judged by its role: moving broken css from top-level to a theme (no edit) adds css-broken", () => {
+    const r = root({ "t.css": "a { color: red" });
+    expect(lintAddon(r, manifest({ css: "t.css" }))).toEqual([]);
+    expect(lintAddon(r, manifest({ themes: [{ id: "x", name: "X", css: "t.css" }] })).map((x) => x.code)).toEqual(["css-broken"]);
+  });
+
   it("a file that is not a regular file is skipped", () => {
     const r = root({});
     mkdirSync(join(r, "dir.css"));
