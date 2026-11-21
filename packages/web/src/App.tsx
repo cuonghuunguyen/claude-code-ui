@@ -3317,7 +3317,9 @@ export function App() {
   const selectedChange = changesShown && changesNow.selected ? changesNow.selected : undefined;
   const revealCwd = panelTarget?.cwd ?? shownCwd;
   const revealPath = activeFilesPath ?? selectedChange?.path ?? revealCwd;
-  const switcherActive = overridesOf(settingsView?.projectOverrides, cwdSides, shownCwd, worktrees).account;
+  // The Project's account as the radio list checks it: Default without an env token is the CLI login.
+  const projectAccount = overridesOf(settingsView?.projectOverrides, cwdSides, shownCwd, worktrees).account;
+  const switcherActive = projectAccount === "" && !claudeEnvToken ? "cli" : projectAccount;
   const accountChoices = [...(planProject ? [{ id: GLOBAL_ROW, title: tr("app.plan.accountGlobal", { name: planProject.globalName }) }] : []), ...(claudeEnvToken ? [{ id: "", title: tr("app.plan.accountDefault") }] : []), { id: "cli", title: tr("app.plan.accountCli") }, ...claudeAccounts.map((a) => ({ id: a.id, title: a.name }))];
   const gitAsk = (pane: "changes" | "graph", ask: Parameters<typeof askPanel>[0]) => () => (reveal(pane), askPanel(ask));
   const commands = appCommands({
@@ -3842,7 +3844,7 @@ export function App() {
           />
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5 max-md:gap-2">
-          {meterUsage && status !== "unauthorized" && shownCaps.planMeter && <PlanMeter usage={meterUsage} project={planProject} switcher={!shownCaps.account ? undefined : { accounts: claudeAccounts, active: planProject ? (switcherActive === "" && !claudeEnvToken ? "cli" : switcherActive!) : claudeAccount, envToken: claudeEnvToken, onSwitch: (id) => (planProject ? setProjectAccount(acct.project!, id) : void client.current!.request({ type: "settings.set", patch: { claude: { account: id } } }).catch((e) => setError((e as Error).message))), onManage: () => (setSettingsOpen(true), saveSettingsGroup("account")) }} />}
+          {meterUsage && status !== "unauthorized" && shownCaps.planMeter && <PlanMeter usage={meterUsage} project={planProject} switcher={!shownCaps.account ? undefined : { accounts: claudeAccounts, active: planProject ? switcherActive! : claudeAccount, envToken: claudeEnvToken, onSwitch: (id) => (planProject ? setProjectAccount(acct.project!, id) : void client.current!.request({ type: "settings.set", patch: { claude: { account: id } } }).catch((e) => setError((e as Error).message))), onManage: () => (setSettingsOpen(true), saveSettingsGroup("account")) }} />}
           {/* Below sm the tab switcher needs the width for the session name: search and theme live in the drawer. */}
           {canQuickOpen && (
             <IconButton className="max-sm:hidden" label={quickOpenLabel()} onClick={showQuickOpen} testId="quick-open-button" command="file.open">
