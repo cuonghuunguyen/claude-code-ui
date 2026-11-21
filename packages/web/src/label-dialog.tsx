@@ -30,6 +30,8 @@ type Props = {
   iconPx?: number;
   /** Data URL characters the saved image may take, default LABEL_ICON_MAX. */
   iconMax?: number;
+  /** Where the focus goes on close (default: the element that opened the dialog). A dialog opened over another one returns it to its button. */
+  finalFocus?: () => HTMLElement | null;
 };
 
 export function LabelDialog(p: Props) {
@@ -40,7 +42,7 @@ export function LabelDialog(p: Props) {
   );
 }
 
-function Body({ title, fallbackName, label, onSave, onClose, iconPx = LABEL_ICON_PX, iconMax = LABEL_ICON_MAX }: Props) {
+function Body({ title, fallbackName, label, onSave, onClose, finalFocus, iconPx = LABEL_ICON_PX, iconMax = LABEL_ICON_MAX }: Props) {
   const t = useT();
   const kept = iconSrc(label?.icon);
   const [name, setName] = useState(label?.name ?? "");
@@ -113,6 +115,7 @@ function Body({ title, fallbackName, label, onSave, onClose, iconPx = LABEL_ICON
     <Dialog.Portal>
       <Dialog.Backdrop className="fixed inset-0 z-50 bg-overlay" />
       <Dialog.Popup
+        finalFocus={finalFocus ? () => finalFocus() ?? true : undefined}
         onKeyDown={trapTab}
         className="-translate-x-1/2 fixed top-[max(48px,calc((100dvh-560px)/2))] left-1/2 z-50 flex max-h-[min(100dvh-96px,640px)] w-[min(100vw-24px,420px)] flex-col rounded-2xl border bg-card text-foreground shadow-floating outline-none max-sm:top-0 max-sm:h-dvh max-sm:max-h-dvh max-sm:w-screen max-sm:rounded-none"
         data-testid="label-dialog"

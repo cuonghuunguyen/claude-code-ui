@@ -2,13 +2,19 @@
 // every field: a control whose first option (or empty text) is "Global (<value>)", a Global / Project status in text, and a reset button
 // while the Project sets it. A change is saved at once through settings.set (the whole overrides map, like labels).
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { DEFAULT_ENGINE, EFFORTS, jiraIsCloud, LOCAL_SIDE, SESSION_MODES, type ClaudeAccountInfo, type Effort, type Engine, type ModelInfo, type ProjectOverrides, type Settings, type SettingsPatch, type SettingsResult } from "@claude-ui/protocol";
+import { DEFAULT_COMMIT_INSTRUCTION, DEFAULT_ENGINE, EFFORTS, jiraIsCloud, LOCAL_SIDE, SESSION_MODES, type ClaudeAccountInfo, type Label, type Effort, type Engine, type ModelInfo, type ProjectOverrides, type Settings, type SettingsPatch, type SettingsResult } from "@claude-ui/protocol";
+import { Button } from "@/components/ui/button";
 import { RotateCcwIcon } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { Request } from "./client.ts";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { ENGINE_NAME } from "./engine-tag.tsx";
 import { isImeKey } from "./ime.ts";
+import { baseName } from "./paths.ts";
+import { InstructionSetting } from "./instruction-setting.tsx";
+import { LabelDialog } from "./label-dialog.tsx";
+import { LabelIcon } from "./label-icon.tsx";
+import { setLabels, withLabel } from "./labels.ts";
 import { useT } from "./i18n.ts";
 import { ProjectJiraToken } from "./project-jira-token.tsx";
 import { jiraOf, jiraOriginOf, jiraTokenFor, overridesOf, setOverride } from "./project-settings.ts";
@@ -154,6 +160,10 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
   const [error, setError] = useState<string>();
   const [fieldError, setFieldError] = useState<{ id: string; message: string }>();
   const [busy, setBusy] = useState(false);
+  const [labelOpen, setLabelOpen] = useState(false);
+  const labelButton = useRef<HTMLButtonElement>(null);
+  // The Label dialog never outlives its Project settings dialog or shows for another Project.
+  useEffect(() => setLabelOpen(false), [open, cwd]);
   const ask = useRef(request);
   ask.current = request;
 
@@ -186,6 +196,26 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
     } catch (e) {
       setFieldError({ id, message: (e as Error).message });
       return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Label and commit message instruction keep their own cwd-keyed maps (labels.projects, git.commitMessageInstructions); a patch replaces the whole map.
+  const projectLabel = settings?.labels && Object.hasOwn(settings.labels.projects, cwd) ? settings.labels.projects[cwd] : undefined;
+  const saveLabel = async (label: Label | undefined) => {
+    const r = await ask.current<SettingsResult>({ type: "settings.set", patch: { labels: { projects: withLabel(settings!.labels.projects, cwd, label) } } });
+    take(r);
+    setLabels(r.settings.labels);
+  };
+  const saveInstruction = async (next: string) => {
+    const { [cwd]: _, ...rest } = settings!.git.commitMessageInstructions;
+    setBusy(true);
+    try {
+      take(await ask.current<SettingsResult>({ type: "settings.set", patch: { git: { commitMessageInstructions: next ? { ...rest, [cwd]: next } : rest } } }));
+      setFieldError(undefined);
+    } catch (e) {
+      setFieldError({ id: "project-commit-instruction", message: (e as Error).message });
     } finally {
       setBusy(false);
     }
@@ -224,6 +254,26 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
       {settings?.projects && (
         <>
           <p className="text-muted-foreground text-xs">{t("projectSettings.intro")}</p>
+          {settings.labels &&
+            section(
+              "identity",
+              t("projectSettings.group.identity"),
+              <div className="flex flex-col gap-1 border-t py-2" data-testid="project-label">
+                <div className="flex gap-3 max-md:flex-col max-md:gap-1">
+                  <div className="min-w-0 flex-1">
+                    <span className="block text-sm">{t("projectSettings.label.label")}</span>
+                    <span className="block text-muted-foreground text-xs">{t("projectSettings.label.hint")}</span>
+                  </div>
+                  <div className="flex items-center gap-2 max-md:w-full">
+                    {projectLabel?.icon && <LabelIcon icon={projectLabel.icon} className="size-6 text-lg" />}
+                    <span className="min-w-0 max-w-40 truncate text-sm max-md:max-w-none max-md:flex-1" data-testid="project-label-name">{projectLabel?.name || name}</span>
+                    <Button ref={labelButton} variant="outline" type="button" onClick={() => setLabelOpen(true)} className="max-md:h-11" data-testid="project-label-edit">
+                      {t("projectSettings.label.edit")}
+                    </Button>
+                  </div>
+                </div>
+              </div>,
+            )}
           {section(
             "sessions",
             t("projectSettings.group.sessions"),
@@ -283,6 +333,24 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
               </Row>
             </>,
           )}
+          {settings.git &&
+            section(
+              "commit",
+              t("projectSettings.group.commit"),
+              <>
+                <InstructionSetting
+                  id="project-commit-instruction"
+                  label={t("projectSettings.commit.label")}
+                  hint={t("projectSettings.commit.hint")}
+                  value={settings.git.commitMessageInstructions[cwd] ?? ""}
+                  placeholder={settings.git.commitMessageInstruction || DEFAULT_COMMIT_INSTRUCTION}
+                  onSave={(next) => void saveInstruction(next)}
+                />
+                {fieldError?.id === "project-commit-instruction" && (
+                  <p role="alert" className="text-destructive text-xs" data-testid="project-commit-instruction-error">{fieldError.message}</p>
+                )}
+              </>,
+            )}
           {section(
             "history",
             t("projectSettings.group.history"),
@@ -337,6 +405,7 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
             )}
         </>
       )}
+      {settings?.labels && <LabelDialog open={labelOpen} title={t("label.projectTitle", { name })} fallbackName={baseName(cwd)} label={projectLabel} onSave={saveLabel} finalFocus={() => labelButton.current} onClose={() => setLabelOpen(false)} />}
     </ConfigDialog>
   );
 }

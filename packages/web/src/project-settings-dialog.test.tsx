@@ -22,14 +22,15 @@ async function render({ side = "local", overrides = {}, refuse, tokens, hold, re
   let release = () => {};
   const held = new Promise<void>((r) => (release = r));
   let saved = tokens;
-  let settings = { jira: { url: "https://acme.atlassian.net", email: "ann@example.com", template: "{type}/{key}", jql: "" }, sessions: { defaultMode: "plan", engine: "claude" }, inlineTask: { model: "haiku", openCodeModel: "" }, history: { enabled: true, exclude: [] }, claude: { account: "" }, projects: { overrides } } as unknown as Settings;
+  let settings = { jira: { url: "https://acme.atlassian.net", email: "ann@example.com", template: "{type}/{key}", jql: "" }, sessions: { defaultMode: "plan", engine: "claude" }, inlineTask: { model: "haiku", openCodeModel: "" }, history: { enabled: true, exclude: [] }, claude: { account: "" }, git: { commitMessageInstruction: "Global rule", commitMessageInstructions: { "/other": "Other rule" } }, labels: { projects: { "/other": { name: "Other" } }, sides: {} }, projects: { overrides } } as unknown as Settings;
   const calls: Request[] = [];
   const request = vi.fn(async (msg: Request) => {
     calls.push(msg);
     if (msg.type === hold) await held;
     if (msg.type === "settings.set") {
       if (refuse && (!refuseWhen || JSON.stringify(msg).includes(refuseWhen))) throw new Error(refuse);
-      settings = { ...settings, projects: { overrides: (msg.patch as { projects: Settings["projects"] }).projects.overrides } };
+      const patch = msg.patch as { projects?: Settings["projects"]; git?: Partial<Settings["git"]>; labels?: Partial<Settings["labels"]> };
+      settings = { ...settings, ...(patch.projects && { projects: { overrides: patch.projects.overrides } }), ...(patch.git && { git: { ...settings.git, ...patch.git } }), ...(patch.labels && { labels: { ...settings.labels, ...patch.labels } }) };
     }
     if (msg.type === "jira.token") {
       if (refuse) throw new Error(refuse);
@@ -48,8 +49,9 @@ async function render({ side = "local", overrides = {}, refuse, tokens, hold, re
   });
   const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
   const requests = (type: string) => calls.filter((c) => c.type === type);
-  const patches = () => calls.filter((c) => c.type === "settings.set").map((c) => (c as { patch: { projects: Settings["projects"] } }).patch.projects.overrides);
-  return { q, patches, loadModels, requests, release: () => act(async () => release()) };
+  const patches = () => calls.filter((c) => c.type === "settings.set" && (c as { patch: { projects?: unknown } }).patch.projects).map((c) => (c as { patch: { projects: Settings["projects"] } }).patch.projects.overrides);
+  const sets = () => calls.filter((c) => c.type === "settings.set").map((c) => (c as { patch: unknown }).patch);
+  return { sets, q, patches, loadModels, requests, release: () => act(async () => release()) };
 }
 const click = (el: HTMLElement | null | undefined) => act(async () => el!.click());
 
@@ -270,4 +272,57 @@ it("Jira: the spinner is only on the button that runs (Test connection while tes
   expect(spinner(testing.q)).not.toBeNull();
   await testing.release();
   expect(spinner(testing.q)).toBeNull();
+});
+
+const fill = async (el: HTMLTextAreaElement | HTMLInputElement, v: string) => {
+  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(el, v);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => void el.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+};
+
+it("the commit message instruction row saves this project's key in the map and keeps the other projects' keys; blank removes only its key (GH-902)", async () => {
+  const { q, sets } = await render();
+  const ta = q("project-commit-instruction-input") as HTMLTextAreaElement;
+  expect(ta.placeholder).toBe("Global rule");
+  await fill(ta, "  Use Vietnamese.  ");
+  expect(sets().at(-1)).toEqual({ git: { commitMessageInstructions: { "/other": "Other rule", "/p": "Use Vietnamese." } } });
+  expect((q("project-commit-instruction-input") as HTMLTextAreaElement).value).toBe("Use Vietnamese.");
+  await fill(q("project-commit-instruction-input") as HTMLTextAreaElement, "   ");
+  expect(sets().at(-1)).toEqual({ git: { commitMessageInstructions: { "/other": "Other rule" } } });
+});
+
+it("the Label row opens the name and icon dialog, saves into labels.projects with the other keys kept, and Reset removes only this key (GH-902)", async () => {
+  const { q, sets } = await render();
+  expect(q("project-label-name")!.textContent).toBe("proj");
+  await click(q("project-label-edit"));
+  const name = document.querySelector<HTMLInputElement>('[data-testid="label-name"]')!;
+  await fill(name, "  Shop  ");
+  await click(document.querySelector<HTMLElement>('[data-testid="label-save"]'));
+  expect(sets().at(-1)).toEqual({ labels: { projects: { "/other": { name: "Other" }, "/p": { name: "Shop" } } } });
+  expect(document.querySelector('[data-testid="label-dialog"]')).toBeNull();
+  expect(q("project-label-name")!.textContent).toBe("Shop");
+  await click(q("project-label-edit"));
+  await click(document.querySelector<HTMLElement>('[data-testid="label-reset"]'));
+  expect(sets().at(-1)).toEqual({ labels: { projects: { "/other": { name: "Other" } } } });
+});
+
+it("a refused label stays in the label dialog with the daemon's message", async () => {
+  const { q } = await render({ refuse: "Label name too long", refuseWhen: "labels" });
+  await click(q("project-label-edit"));
+  await fill(document.querySelector<HTMLInputElement>('[data-testid="label-name"]')!, "x");
+  await click(document.querySelector<HTMLElement>('[data-testid="label-save"]'));
+  expect(document.querySelector('[data-testid="label-error"]')!.textContent).toBe("Label name too long");
+});
+
+it("a refused commit message instruction shows under the row and keeps the typed text; the label dialog returns focus to its button", async () => {
+  const { q } = await render({ refuse: "Instruction too long", refuseWhen: "commitMessageInstructions" });
+  await fill(q("project-commit-instruction-input") as HTMLTextAreaElement, "x");
+  expect(q("project-commit-instruction-error")!.textContent).toBe("Instruction too long");
+  const edit = q("project-label-edit")!;
+  await click(edit);
+  await click(document.querySelector<HTMLElement>('[data-testid="label-cancel"]'));
+  expect(document.activeElement).toBe(edit);
 });
