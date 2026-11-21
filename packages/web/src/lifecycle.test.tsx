@@ -60,6 +60,13 @@ describe("useJustFinished", () => {
     render(createElement(Probe, { id: "b", phase: "idle" }));
     expect(finished()).toBe(false);
   });
+  it("is not set again when switching back to the finished session within the hold", () => {
+    render(createElement(Probe, { id: "a", phase: "thinking" }));
+    render(createElement(Probe, { id: "a", phase: "idle" }));
+    render(createElement(Probe, { id: "b", phase: "idle" }));
+    render(createElement(Probe, { id: "a", phase: "idle" }));
+    expect(finished()).toBe(false);
+  });
   it("is cleared at once when a new run starts", () => {
     render(createElement(Probe, { id: "a", phase: "thinking" }));
     render(createElement(Probe, { id: "a", phase: "idle" }));

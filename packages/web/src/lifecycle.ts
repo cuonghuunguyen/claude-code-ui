@@ -30,6 +30,7 @@ export function useJustFinished(sessionId: string | undefined, phase: Phase): bo
   useEffect(() => {
     const p = prev.current;
     prev.current = { sessionId, phase };
+    if (p.sessionId !== sessionId) setDone((d) => (d.id === undefined ? d : { n: d.n }));
     if (p.sessionId === sessionId && p.phase === "thinking" && phase === "idle") setDone((d) => ({ id: sessionId, n: d.n + 1 }));
   }, [sessionId, phase]);
   return useHold(done.n) && done.id === sessionId && phase === "idle";
