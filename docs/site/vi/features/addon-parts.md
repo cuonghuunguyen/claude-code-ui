@@ -79,7 +79,7 @@ Tệp CSS của addon (`css` trong `addon.json`) được tải trong một lớ
 
 ## Kiểm tra {#checks}
 
-Hộp thoại Addons liệt kê **Kiểm tra** dưới mỗi addon: cảnh báo từ bộ lint addon. Cảnh báo không bao giờ chặn việc cài hay bật. Mỗi cảnh báo ghi rõ tệp và dòng.
+Hộp thoại Addons liệt kê **Kiểm tra** dưới mỗi addon: cảnh báo từ bộ lint addon. Cảnh báo không bao giờ chặn việc cài hay bật. Mỗi cảnh báo ghi rõ tệp và, nếu có, dòng.
 
 | Kiểm tra | Ý nghĩa | Cách sửa |
 |---|---|---|
@@ -87,8 +87,8 @@ Hộp thoại Addons liệt kê **Kiểm tra** dưới mỗi addon: cảnh báo 
 | `unknown-part` | `[data-part="x"]` nêu một part không có trong bảng. Nó không khớp phần tử nào. | Sửa tên (xem bảng). |
 | `unprefixed-name` | Tên `@keyframes`, họ phông của `@font-face` hoặc `@property` không có tiền tố addon. Các tên này là toàn cục và có thể thay tên của ứng dụng. | Đặt tên `<addon>-name` (`--<addon>-name` cho `@property`). |
 | `top-level-css` | `css` trong `addon.json` áp dụng cho mọi giao diện, mà addon có giao diện riêng. | Chuyển vào `themes[].css`. |
-| `css-broken` | CSS có chú thích hoặc `url(` chưa đóng. Nó không bị giới hạn trong giao diện của nó. | Đóng lại. |
-| `css-too-large` | Tệp lớn hơn 512 KB. Nó không bị giới hạn trong giao diện của nó. | Chia nhỏ hoặc rút gọn. |
+| `css-broken` | CSS không phân tích được: khối, chú thích hoặc `url(` chưa đóng, thừa `}`, hoặc nhóm lồng quá 32 cấp. CSS của giao diện khi đó được phục vụ không giới hạn và áp dụng cho mọi giao diện. | Sửa lại. |
+| `css-too-large` | Tệp lớn hơn 512 KB. CSS của giao diện khi đó được phục vụ không giới hạn và áp dụng cho mọi giao diện. | Chia nhỏ hoặc rút gọn. |
 
 Bộ chọn dùng `^=`, `$=`, `*=` hoặc `|=` trên `data-part` không được kiểm tra.
 

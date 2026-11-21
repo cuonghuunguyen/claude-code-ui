@@ -1,10 +1,10 @@
 // Addon lint (GH-871, docs/spec.md "Addon lint"): warnings about an addon theme's CSS and manifest. Never blocks an install or an enable.
 // The scan is one linear pass without recursion (`skipToken` of addon-css.ts for comments, strings and url()); broken CSS ends it with a
 // `css-broken` finding, never an exception. Every look-ahead is bounded (an attribute selector 300 characters, an `@font-face` block up to its next brace).
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { PARTS, type AddonLint, type AddonManifest } from "@claude-ui/protocol";
-import { CssScanError, MAX_THEME_CSS, skipToken } from "./addon-css.ts";
+import { CssScanError, MAX_THEME_CSS, scopeCss, skipToken, themeRoot } from "./addon-css.ts";
 
 const PART_SET: ReadonlySet<string> = new Set(PARTS.map((p) => p.name));
 /** Findings kept per file: a file full of mistakes does not flood the list. */
@@ -86,8 +86,13 @@ export function lintCss(css: string, addon: string, file: string): AddonLint[] {
     if (kind === "keyframes") name && global(name, name.startsWith(`${addon}-`), `${addon}-${name}`, pos);
     else if (kind === "property") name && global(name, name.startsWith(`--${addon}-`), `--${addon}-${name.replace(/^--/, "")}`, pos);
     else {
-      let k = brace + 1; // font-face holds declarations only: the block ends at the next brace
-      while (k < n && css[k] !== "}" && css[k] !== "{") k++;
+      let k = brace + 1; // font-face holds declarations only: the block ends at the next brace outside a comment, string or url()
+      while (k < n) {
+        const j = skipToken(css, k);
+        if (j !== k) k = j;
+        else if (css[k] === "}" || css[k] === "{") break;
+        else k++;
+      }
       const f = FAMILY.exec(css.slice(brace + 1, k));
       const family = (f?.[1] ?? f?.[2] ?? f?.[3] ?? "").trim();
       if (!family) return;
@@ -112,29 +117,56 @@ export function lintCss(css: string, addon: string, file: string): AddonLint[] {
 const cache = new Map<string, AddonLint[]>();
 const CACHE_MAX = 64;
 
-/** Findings of an addon: manifest rules, and its CSS files (top-level `css` and every `themes[].css`, each once). Files are checked by size before they are read; a missing file is skipped (the manifest check reports it). */
+/** The text of a regular file up to the scan cap (`size`: false when over it); undefined when it cannot be read or is not a regular file. One open: the checks and the read see the same file. */
+function readCss(path: string): { text: string } | { size: false } | undefined {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const st = fstatSync(fd);
+    if (!st.isFile()) return undefined;
+    if (st.size > MAX_THEME_CSS) return { size: false };
+    return { text: readFileSync(fd, "utf8") };
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/** Findings of an addon: manifest rules, and its CSS files (top-level `css` and every `themes[].css`, each once). A missing or irregular file is skipped (the manifest check reports a missing one). A theme CSS that the daemon cannot scope (`scopeCss` throws: unclosed block, stray `}`, groups nested too deep) is served unscoped, so it gets `css-broken` too. */
 export function lintAddon(root: string, m: AddonManifest): AddonLint[] {
   const out: AddonLint[] = [];
   if (m.css && m.themes.length) out.push({ level: "warning", code: "top-level-css", file: m.css });
   const files = [...new Set([m.css, ...m.themes.map((t) => t.css)].filter((f): f is string => !!f))];
   for (const f of files) {
+    const path = join(root, f);
+    let st: { mtimeMs: number; size: number };
     try {
-      const st = statSync(join(root, f));
-      if (st.size > MAX_THEME_CSS) {
-        out.push({ level: "warning", code: "css-too-large", file: f });
-        continue;
-      }
-      const key = `${root}\0${f}\0${m.name}\0${st.mtimeMs}\0${st.size}`;
-      let l = cache.get(key);
-      if (!l) {
-        l = lintCss(readFileSync(join(root, f), "utf8"), m.name, f);
-        if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value!);
-        cache.set(key, l);
-      }
-      out.push(...l);
+      st = statSync(path);
     } catch {
-      // unreadable: not a lint matter
+      continue;
     }
+    const key = `${root}\0${f}\0${m.name}\0${st.mtimeMs}\0${st.size}`;
+    let l = cache.get(key);
+    if (!l) {
+      const r = readCss(path);
+      if (!r) continue;
+      if ("size" in r) l = [{ level: "warning", code: "css-too-large", file: f }];
+      else {
+        l = lintCss(r.text, m.name, f);
+        const theme = m.themes.find((t) => t.css === f);
+        if (theme && !l.some((x) => x.code === "css-broken"))
+          try {
+            scopeCss(r.text, themeRoot(m.name, theme.id));
+          } catch (e) {
+            if (!(e instanceof CssScanError)) throw e;
+            l = [...l, { level: "warning", code: "css-broken", file: f }];
+          }
+      }
+      if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value!);
+      cache.set(key, l);
+    }
+    out.push(...l);
   }
   return out;
 }

@@ -54,6 +54,8 @@ describe("global names", () => {
     ["/* x */\n@media (width > 1px) { @keyframes pulse { to { opacity: 0 } } }", ["unprefixed-name:pulse"]],
     ['@font-face { font-family: "Inter"; src: url(a.woff2) }', ["unprefixed-name:Inter"]],
     ["@font-face { src: url(a.woff2); font-family: Gojo Display }", []],
+    ["@font-face { /* } */ font-family: Inter }", ["unprefixed-name:Inter"]],
+    ['@font-face { src: url("a}.woff2"); font-family: Inter }', ["unprefixed-name:Inter"]],
     ['@font-face { font-family: "gojo-display"; src: url(a.woff2) }', []],
     ["@property --glow { syntax: '<color>'; inherits: false; initial-value: red }", ["unprefixed-name:--glow"]],
     ["@property --gojo-glow { syntax: '<color>'; inherits: false; initial-value: red }", []],
@@ -145,6 +147,28 @@ describe("lintAddon", () => {
   it("a file over the scan cap is reported without being read", () => {
     const r = root({ "big.css": "a{}".repeat(200_000) });
     expect(lintAddon(r, manifest({ themes: [{ id: "x", name: "X", css: "big.css" }] })).map((x) => x.code)).toEqual(["css-too-large"]);
+  });
+
+  // The daemon serves a theme css that does not scan unscoped (its rules then apply under every theme): the lint must say so.
+  it.each([
+    ["an unclosed block", "a { color: red"],
+    ["a stray }", "a { color: red } }"],
+    ["groups nested too deep", "@media (x) {".repeat(40) + "a{}" + "}".repeat(40)],
+    ["an unclosed comment", "a {} /* open"],
+  ])("a theme css with %s is css-broken (once)", (_, css) => {
+    const r = root({ "t.css": css });
+    expect(lintAddon(r, manifest({ themes: [{ id: "x", name: "X", css: "t.css" }] })).map((x) => x.code)).toEqual(["css-broken"]);
+  });
+
+  it("top-level css is not scoped by the daemon, so only the scan-level breaks are reported for it", () => {
+    const r = root({ "t.css": "a { color: red" });
+    expect(lintAddon(r, manifest({ css: "t.css" }))).toEqual([]);
+  });
+
+  it("a file that is not a regular file is skipped", () => {
+    const r = root({});
+    mkdirSync(join(r, "dir.css"));
+    expect(lintAddon(r, manifest({ themes: [{ id: "x", name: "X", css: "dir.css" }] }))).toEqual([]);
   });
 
   it("a missing file is skipped, not an error", () => {

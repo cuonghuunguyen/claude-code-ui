@@ -79,7 +79,7 @@ The CSS file of an addon (`css` in `addon.json`) is loaded in its own cascade la
 
 ## Checks {#checks}
 
-The Addons dialog lists **Checks** under each addon: warnings from the addon lint. A warning never blocks an install or an enable. Each shows the file and the line.
+The Addons dialog lists **Checks** under each addon: warnings from the addon lint. A warning never blocks an install or an enable. Each shows the file and, where it has one, the line.
 
 | Check | Meaning | Fix |
 |---|---|---|
@@ -87,8 +87,8 @@ The Addons dialog lists **Checks** under each addon: warnings from the addon lin
 | `unknown-part` | `[data-part="x"]` names a part that is not in the table. It matches nothing. | Fix the name (see the table). |
 | `unprefixed-name` | An `@keyframes`, `@font-face` family or `@property` name has no addon prefix. These names are global and can replace a name of the app. | Name it `<addon>-name` (`--<addon>-name` for `@property`). |
 | `top-level-css` | `css` in `addon.json` applies to every theme, and the addon has themes. | Move it to `themes[].css`. |
-| `css-broken` | The CSS has an unclosed comment or `url(`. It is not limited to its theme. | Close it. |
-| `css-too-large` | The file is larger than 512 KB. It is not limited to its theme. | Split or shrink it. |
+| `css-broken` | The CSS does not parse: an unclosed block, comment or `url(`, a stray `}`, or groups nested over 32 deep. A theme CSS is then served unscoped and applies under every theme. | Fix it. |
+| `css-too-large` | The file is larger than 512 KB. A theme CSS is then served unscoped and applies under every theme. | Split or shrink it. |
 
 A selector with `^=`, `$=`, `*=` or `|=` on `data-part` is not checked.
 
