@@ -168,13 +168,18 @@ describe("OpenCode 2 inline task", () => {
       { action: "jira_create_issue", resource: "*", effect: "ask" },
       { action: "gh_*", resource: "*", effect: "deny" },
       { action: "other_*", resource: "*", effect: "deny" },
+      { action: "lin*", resource: "*", effect: "allow" },
     ];
     const r = rig({ script: (c) => c("session.execution.succeeded"), agentRules: [...BUILD, ...parentRules] });
-    await r.run.inlineTask(spec({ tools: [], mcp: ["jira", "mcp__gh__get_issue"] }), hooks());
+    await r.run.inlineTask(spec({ tools: [], mcp: ["jira", "mcp__gh__get_issue", "mcp__linear__get_issue"] }), hooks());
     const rules = r.called("session.create")[0]!.permissions as Json[];
     const at = (action: string, effect: string) => rules.findIndex((x) => x.action === action && x.effect === effect);
     expect(at("jira_create_issue", "ask")).toBeGreaterThan(at("jira_*", "allow"));
-    expect(at("gh_*", "deny")).toBeGreaterThan(at("gh_get_issue", "allow"));
+    // A wider rule applies to the granted tool only: a wider allow gives no other tool of the server.
+    expect(at("gh_get_issue", "deny")).toBeGreaterThan(at("gh_get_issue", "allow"));
+    expect(at("gh_*", "deny")).toBe(-1);
+    expect(at("linear_get_issue", "allow")).toBeGreaterThan(-1);
+    expect(rules.some((x) => x.action === "lin*")).toBe(false);
     expect(at("other_*", "deny")).toBe(-1);
   });
 

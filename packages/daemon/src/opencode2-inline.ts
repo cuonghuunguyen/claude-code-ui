@@ -20,19 +20,19 @@ export const INLINE_META = "claude-ui.inlineOf";
 export function inlineRules(spec: Pick<InlineSpec, "tools" | "mcp">, base: readonly Rule2[]): Rule2[] {
   const mcp = [...new Set(spec.mcp.map(mcpToolKey))];
   const granted = [...new Set([...spec.tools.map((t) => ACTION[t]), ...mcp])];
-  // A parent rule for part of a granted server (`jira_create_issue ask` under a `jira_*` grant) or for a whole server a granted tool is in (`jira_* deny`
-  // under `jira_get_issue`) applies too: OpenCode matches the action with wildcards.
-  const kept = (r: Rule2) => granted.includes(r.action) || mcp.some((g) => overlaps(g, r.action));
+  // A parent rule for part of a granted server (`jira_create_issue ask` under a `jira_*` grant) applies as it is; one wider than a grant (`jira_* deny` or
+  // `jira_* allow` under `jira_get_issue`) applies to the grant only, as a `*` rule does: OpenCode matches the action with wildcards.
+  const forGrants = (r: Rule2): Rule2[] =>
+    granted.includes(r.action) ? [r] : mcp.some((g) => glob(g).test(r.action)) ? [r] : mcp.filter((g) => glob(r.action).test(g)).map((action) => ({ ...r, action }));
   return [
     { action: "*", resource: "*", effect: "deny" },
     ...mcp.map((action): Rule2 => ({ action, resource: "*", effect: "allow" })),
-    ...base.flatMap((r) => (r.action === "*" ? granted.map((action) => ({ ...r, action })) : kept(r) ? [r] : [])),
+    ...base.flatMap((r) => (r.action === "*" ? granted.map((action) => ({ ...r, action })) : forGrants(r))),
   ];
 }
 /** `*` of an action pattern as a regular expression (every other character literal). */
 const glob = (pattern: string) => new RegExp(`^${pattern.split("*").map((p) => p.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`);
-/** Whether two action patterns can match one tool key: one matches the other (OpenCode tool keys contain no `*`). */
-const overlaps = (a: string, b: string) => glob(a).test(b) || glob(b).test(a);
+
 
 export type InlineCap = "turns" | "tokens";
 

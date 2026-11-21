@@ -1058,7 +1058,7 @@ describe("OpenCode 2 sessions: the daemon's MCP servers (orchestration, claude-u
     expect(d.requests("POST", /\/permission\/.+\/reply$/)[0]!.body).toEqual({ decision: "once" });
   });
 
-  it("worker_start over the worker cap shows no card: OpenCode is answered once and the tool itself refuses", async () => {
+  it("worker_start over the worker cap shows no card: OpenCode is answered once (the tool then repeats the refusal)", async () => {
     const d = await boot({ script: ["worker-start"] });
     await d.ok({ type: "settings.set", patch: { orchestration: { enabled: true, workerCap: 1 } } });
     const s = await d.open();
