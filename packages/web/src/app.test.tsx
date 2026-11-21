@@ -72,6 +72,7 @@ let setStatus: (s: string) => void = () => {};
 let settingsChanged: (m: unknown) => void = () => {};
 let slept: (m: unknown) => void = () => {};
 let planUsage: (u: unknown) => void = () => {};
+let accountUsage: (key: string, u: unknown) => void = () => {};
 const sent: { type: string }[] = [];
 vi.mock("./client.ts", async (orig) => ({
   ...(await orig<typeof import("./client.ts")>()),
@@ -80,6 +81,7 @@ vi.mock("./client.ts", async (orig) => ({
     emitBatch = opts.onEvents;
     slept = opts.onSlept ?? (() => {});
     planUsage = (opts as { onPlanUsage?: (u: unknown) => void }).onPlanUsage ?? (() => {});
+    accountUsage = (opts as { onAccountUsage?: (k: string, u: unknown) => void }).onAccountUsage ?? (() => {});
     settingsChanged = opts.onSettingsChanged ?? (() => {});
     sessionsChanged = opts.onSessionsChanged ?? (() => {});
     reconnect = opts.onOpen ?? (() => {});
@@ -6926,5 +6928,89 @@ describe("events applied as one batch (GH-760)", () => {
     await rerender();
     await act(async () => emitBatch(events));
     expect(shown()).toEqual(oneByOne);
+  });
+});
+
+// GH-900: the meter follows the account of the shown Session's Project.
+describe("plan meter of a Project that overrides the Claude account (GH-900)", () => {
+  const use = (percent: number, account?: string, status = "allowed") => ({ plan: "Max", account, windows: [{ kind: "session", label: "Current session", percent, resetsAt: null, severity: "normal", active: true }], status });
+  const OVERRIDE = { settings: { orchestration: {}, claude: { account: "a1" }, projects: { overrides: { local: { "/p/demo": { account: "b2" } } } } }, claudeAccounts: [{ id: "a1", name: "Alpha" }, { id: "b2", name: "Beta" }], daemon: { host: "h" } };
+  const other = { ...session, id: "00000000-0000-4000-8000-0000000000a9", cwd: "/p/other", title: "Other" };
+  const toastText = () => [...document.querySelectorAll('[data-testid="toast"]')].map((t) => t.textContent ?? "").join("|");
+  const meterEl = () => el.querySelector<HTMLElement>('[data-testid="plan-meter"]');
+  const feed = async () => {
+    await act(async () => planUsage(use(10, "Alpha")));
+    await act(async () => accountUsage("a1", use(10, "Alpha")));
+    await act(async () => accountUsage("b2", use(70, "Beta")));
+  };
+
+  it("a Session in the overriding Project shows that account's usage and the chip; a Session in another Project shows the global account's", async () => {
+    const restore = await remount({ "settings.get": OVERRIDE, "session.list": { sessions: [session, other], projects: ["/p/demo", "/p/other"] }, "session.subscribe": (m: { sessionId: string }) => ({ logEpoch: "e1", session: m.sessionId === other.id ? other : session }) });
+    try {
+      await feed();
+      expect(meterEl()!.textContent).toBe("70%Beta");
+      expect(meterEl()!.getAttribute("aria-label")).toContain("Beta (Project demo)");
+      location.hash = `#${other.id}`;
+      localStorage.setItem("claude-ui.tabs", JSON.stringify([ID, other.id]));
+      await rerender();
+      await feed();
+      expect(meterEl()!.textContent).toBe("10%");
+      expect(meterEl()!.querySelector('[data-testid="plan-account-chip"]')).toBeNull();
+    } finally {
+      location.hash = `#${ID}`;
+      restore();
+    }
+  });
+
+  it("the popover switcher writes the Project's override, never the global account; Global unsets it", async () => {
+    const restore = await remount({ "settings.get": OVERRIDE, "settings.set": { settings: {} } });
+    try {
+      await feed();
+      sent.length = 0;
+      await act(async () => meterEl()!.click());
+      const rows = [...document.querySelectorAll<HTMLElement>('[data-testid="plan-account-option"]')];
+      expect(rows.map((r) => r.textContent)).toEqual(["Global (Alpha)", "CLI login", "Alpha", "Beta"]);
+      await act(async () => rows[1]!.click());
+      expect(sent.filter((m) => m.type === "settings.set")).toEqual([{ type: "settings.set", patch: { projects: { overrides: { local: { "/p/demo": { account: "cli" } } } } } }]);
+      sent.length = 0;
+      await act(async () => rows[0]!.click());
+      expect(sent.filter((m) => m.type === "settings.set")).toEqual([{ type: "settings.set", patch: { projects: { overrides: {} } } }]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("an override whose usage is not known yet hides the meter instead of showing the global account's", async () => {
+    const restore = await remount({ "settings.get": OVERRIDE });
+    try {
+      await act(async () => planUsage(use(10, "Alpha")));
+      await act(async () => accountUsage("a1", use(10, "Alpha")));
+      expect(meterEl()).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it("a daemon without account_usage keeps the global meter", async () => {
+    const restore = await remount({ "settings.get": OVERRIDE });
+    try {
+      await act(async () => planUsage(use(10, "Alpha")));
+      expect(meterEl()!.textContent).toBe("10%");
+    } finally {
+      restore();
+    }
+  });
+
+  it("the limit offer follows the shown Session's account: another account's limit does not offer, the shown one's does", async () => {
+    const restore = await remount({ "settings.get": OVERRIDE });
+    try {
+      await feed();
+      await act(async () => accountUsage("a1", use(100, "Alpha", "rejected")));
+      expect(toastText(), "global account limited, Project Session shown").not.toContain("Another account");
+      await act(async () => accountUsage("b2", use(100, "Beta", "rejected")));
+      expect(toastText()).toContain("Another account is available. Switch?");
+    } finally {
+      restore();
+    }
   });
 });

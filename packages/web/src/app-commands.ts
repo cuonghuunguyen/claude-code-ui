@@ -160,8 +160,8 @@ export type CommandContext = {
   addToPrompt?: () => void;
   /** Sends the selected diff lines of the Changes tab; none without a line selection. */
   sendSelection?: () => void;
-  /** Claude accounts: the choices the plan meter's switcher lists (Default, Claude Code login, the named accounts). The row shows with 2 or more. */
-  accounts?: { choices: { id: string; title: string }[]; active?: string; switchTo: (id: string) => void };
+  /** Claude accounts: the choices the plan meter's switcher lists (Default, Claude Code login, the named accounts). The row shows with 2 or more. `project`: the shown Session's Project overrides the account, the pick is the Project's (GH-900). */
+  accounts?: { choices: { id: string; title: string }[]; active?: string; project?: boolean; switchTo: (id: string) => void };
 };
 
 const RECENT_SESSIONS = 5;
@@ -245,7 +245,7 @@ export function appCommands(c: CommandContext): PaletteItem[] {
       c.accounts.choices.length > 1 &&
       page(
         "account.switch",
-        t("app.cmd.accountSwitch"),
+        c.accounts.project ? t("app.cmd.accountSwitchProject") : t("app.cmd.accountSwitch"),
         t("app.cmd.accountChoose"),
         c.accounts.choices.map((a) => ({ id: `account:${a.id || "default"}`, ...grp("app.cmd.groupAccounts"), title: a.title, checked: a.id === c.accounts!.active, run: () => c.accounts!.switchTo(a.id) })),
       ),

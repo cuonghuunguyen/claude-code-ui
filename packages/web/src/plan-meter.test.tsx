@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { PlanUsage } from "@claude-ui/protocol";
-import { PlanMeter, planLevel, resetText, type PlanAccounts } from "./plan-meter.tsx";
+import { PlanMeter, planLevel, resetText, type PlanAccounts, type PlanProject } from "./plan-meter.tsx";
 import { t } from "./i18n.ts";
 
 const OAUTH_UNAVAILABLE = t("app.plan.oauthUnavailable");
@@ -22,11 +22,11 @@ const usage: PlanUsage = {
 let unmount = () => {};
 afterEach(() => unmount());
 
-async function render(u: PlanUsage, switcher?: PlanAccounts) {
+async function render(u: PlanUsage, switcher?: PlanAccounts, project?: PlanProject) {
   const el = document.createElement("div");
   document.body.append(el);
   const root = createRoot(el);
-  await act(async () => root.render(<PlanMeter usage={u} switcher={switcher} />));
+  await act(async () => root.render(<PlanMeter usage={u} switcher={switcher} project={project} />));
   unmount = () => (root.unmount(), el.remove());
   return el;
 }
@@ -198,4 +198,52 @@ it("a token account's note points at CLI login, not at claude login (GH-615)", a
   const note = (await open(el)).querySelector('[data-testid="plan-auth-note"]')!.textContent!;
   expect(note).toContain("Switch to CLI login");
   expect(note).not.toContain("Run claude login");
+});
+
+// GH-900: the shown Session's Project overrides the Claude account.
+const project = (more: Partial<PlanProject> = {}): PlanProject => ({ name: "Acme", account: "bad", globalName: "Personal", onGlobal: vi.fn(), onSettings: vi.fn(), ...more });
+
+it("Project scope: the chip names the account with an icon on desktop and the label names account and Project; no chip in global scope", async () => {
+  const el = await render({ ...usage, account: "bad" }, accounts, project());
+  const chip = meter(el).querySelector<HTMLElement>('[data-testid="plan-account-chip"]')!;
+  expect(chip.textContent).toBe("bad");
+  expect(chip.querySelector("svg")).not.toBeNull();
+  expect(meter(el).getAttribute("aria-label")).toMatch(/^bad \(Project Acme\): Plan usage: Current session 55%.*, show details$/);
+  unmount();
+  const el2 = await render({ ...usage, account: "bad" }, accounts);
+  expect(meter(el2).querySelector('[data-testid="plan-account-chip"]')).toBeNull();
+});
+
+it("Project scope on a phone: the account name is hidden below md, the icon stays", async () => {
+  const el = await render(usage, accounts, project());
+  const chip = meter(el).querySelector<HTMLElement>('[data-testid="plan-account-chip"]')!;
+  expect(chip.querySelector("svg")!.getAttribute("class")).not.toContain("max-md:hidden");
+  expect(chip.querySelector("[data-testid='plan-account-name']")!.getAttribute("class")).toContain("max-md:hidden");
+});
+
+it("Project scope popover: account, who sets it, switcher with Global first; picking writes through onSwitch, Global through onGlobal; footer opens the Project settings", async () => {
+  const p = project();
+  const onSwitch = vi.fn();
+  const el = await render({ ...usage, account: "bad" }, { ...accounts, onSwitch }, p);
+  const pop = await open(el);
+  expect(pop.querySelector('[data-testid="plan-account"]')!.textContent).toBe("Account: bad");
+  expect(pop.querySelector('[data-testid="plan-project"]')!.textContent).toBe("Set by Project Acme");
+  expect(pop.querySelector('[data-testid="plan-accounts"] p')!.textContent).toBe("Account for this Project");
+  const rows = [...pop.querySelectorAll<HTMLElement>('[data-testid="plan-account-option"]')];
+  expect(rows.map((r) => [r.textContent, r.getAttribute("aria-checked")])).toEqual([["Global (Personal)", "false"], ["CLI login", "false"], ["bad", "true"]]);
+  await act(async () => rows[1]!.click());
+  expect(onSwitch).toHaveBeenCalledWith("cli");
+  await act(async () => rows[0]!.click());
+  expect(p.onGlobal).toHaveBeenCalledTimes(1);
+  expect(onSwitch).toHaveBeenCalledTimes(1);
+  await act(async () => pop.querySelector<HTMLElement>('[data-testid="plan-project-settings"]')!.click());
+  expect(p.onSettings).toHaveBeenCalledTimes(1);
+  expect(document.querySelector('[data-testid="plan-usage"]'), "the dialog opens: the popover closes").toBeNull();
+});
+
+it("global scope popover: no Project line, no Global row, no Project settings link", async () => {
+  const pop = await open(await render({ ...usage, account: "bad" }, accounts));
+  expect(pop.querySelector('[data-testid="plan-project"]')).toBeNull();
+  expect(pop.querySelector('[data-testid="plan-project-settings"]')).toBeNull();
+  expect(pop.querySelectorAll('[data-testid="plan-account-option"]')).toHaveLength(2);
 });

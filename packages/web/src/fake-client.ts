@@ -41,6 +41,7 @@ export function connect(opts: Opts): Client {
     if (m.type === "terminal.output" || m.type === "terminal.exit") return terminal.forEach((l) => l(m));
     if (m.type === "sessions.changed") return opts.onSessionsChanged?.(m);
     if (m.type === "plan_usage") return opts.onPlanUsage?.(m.usage);
+    if (m.type === "account_usage") return opts.onAccountUsage?.(m.key, m.usage);
     if (m.type === "settings_changed") return opts.onSettingsChanged?.(m);
     if (m.type === "opencode.providersChanged") return opts.onProvidersChanged?.("opencode");
     if (m.type === "config.changed") return opts.onConfigChanged?.(m);

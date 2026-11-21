@@ -33,7 +33,7 @@ The strip at the top of the Changes tab while the repository has an unfinished m
 _Avoid_: merge bar, conflict panel
 
 **Claude account**:
-The Claude credential the Daemon's CLI processes use: Default (the Daemon's environment), the CLI login, or a named token from `claude setup-token`. Local to the Hub; picked in Settings or in the usage ring's popover.
+The Claude credential the Daemon's CLI processes use: Default (the Daemon's environment), the CLI login, or a named token from `claude setup-token`. Local to the Hub; picked in Settings, in Project settings (a Project's own), or in the usage ring's popover (for the shown Session's Project when it overrides the account).
 _Avoid_: profile, user
 
 **Label**:

@@ -10,12 +10,34 @@ const own = <T>(rec: Record<string, T> | undefined, key: string): T | undefined 
 /** Side id of a folder: `local` unless it lives on a Side. */
 export const sideOfCwd = (cwdSides: Record<string, string>, cwd: string) => own(cwdSides, cwd) ?? LOCAL_SIDE;
 
-/** The overrides that apply to `cwd`: its own entry, else the entry of its Project when it is a Worktree (same order as the daemon). */
-export function overridesOf(all: OverrideMap | undefined, cwdSides: Record<string, string>, cwd: string | undefined, worktrees: Record<string, Worktree[]> = {}): ProjectOverrides {
-  if (!cwd) return {};
-  const at = (c: string) => own(own(all, sideOfCwd(cwdSides, c)), c);
-  return at(cwd) ?? at(projectOf(cwd, worktrees)) ?? {};
+/** The Project entry that applies to `cwd` (its own, else its Project's when it is a Worktree; same order as the daemon) with the folder that holds it. */
+function entryOf(all: OverrideMap | undefined, cwdSides: Record<string, string>, cwd: string | undefined, worktrees: Record<string, Worktree[]> = {}): { cwd: string; overrides: ProjectOverrides } | undefined {
+  if (!cwd) return undefined;
+  const at = (c: string) => {
+    const overrides = own(own(all, sideOfCwd(cwdSides, c)), c);
+    return overrides && { cwd: c, overrides };
+  };
+  return at(cwd) ?? at(projectOf(cwd, worktrees));
 }
+
+/** The overrides that apply to `cwd`: its own entry, else the entry of its Project when it is a Worktree (same order as the daemon). */
+export const overridesOf = (all: OverrideMap | undefined, cwdSides: Record<string, string>, cwd: string | undefined, worktrees: Record<string, Worktree[]> = {}): ProjectOverrides => entryOf(all, cwdSides, cwd, worktrees)?.overrides ?? {};
+
+/** What the account of a Session depends on: the Claude account setting, the saved token accounts and the Project overrides. */
+export type AccountView = { overrides: OverrideMap | undefined; cwdSides: Record<string, string>; worktrees?: Record<string, Worktree[]>; account: string; accounts: { id: string }[] };
+
+/**
+ * The Claude account a Session in `cwd` runs on (GH-900), by the daemon's rule: the key is the setting value (`""` Default, `"cli"`, a token
+ * account id; an unknown id counts as `""`), no Default/CLI merging. A Side Session keeps the Hub's account. `project` is the folder whose entry sets
+ * the account, only when an override does.
+ */
+export function accountScopeOf(v: AccountView, cwd: string | undefined): { key: string; project?: string } {
+  const key = (a: string) => (a === "" || a === "cli" || v.accounts.some((x) => x.id === a) ? a : "");
+  const entry = cwd && sideOfCwd(v.cwdSides, cwd) === LOCAL_SIDE ? entryOf(v.overrides, v.cwdSides, cwd, v.worktrees) : undefined;
+  return entry?.overrides.account === undefined ? { key: key(v.account) } : { key: key(entry.overrides.account), project: entry.cwd };
+}
+
+export const accountKeyOf = (v: AccountView, cwd: string | undefined) => accountScopeOf(v, cwd).key;
 
 /** The field value `undefined` unsets it. Returns the whole next map (a patch replaces the map), empty groups, Projects and Sides pruned. */
 export function setOverride(all: OverrideMap | undefined, side: string, cwd: string, change: { [K in keyof ProjectOverrides]?: ProjectOverrides[K] | undefined }): OverrideMap {

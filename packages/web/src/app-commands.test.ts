@@ -653,3 +653,14 @@ it("GH-722: Switch Claude account is a page only with 2 or more choices and chec
   items[0]!.run();
   expect(switchTo).toHaveBeenCalledWith("cli");
 });
+
+it("GH-900: in a Project that overrides the account the row is named for the Project and its pick is the Project's", () => {
+  const switchTo = vi.fn();
+  const c = ctx({ accounts: { choices: [{ id: "g", title: "Global (Personal)" }, { id: "cli", title: "Claude Code login" }], active: "cli", project: true, switchTo } });
+  const row = appCommands(c).find((i) => i.id === "account.switch")! as PaletteItem & { page: { items: (PaletteItem & { run: () => void })[] } };
+  expect(row.title).toBe("Switch account for this Project…");
+  row.page.items[0]!.run();
+  expect(switchTo).toHaveBeenCalledWith("g");
+  const plain = appCommands(ctx({ accounts: { choices: [{ id: "cli", title: "x" }, { id: "w", title: "W" }], switchTo } })).find((i) => i.id === "account.switch")!;
+  expect(plain.title).toBe("Switch Claude account…");
+});

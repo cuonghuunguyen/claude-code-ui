@@ -42,6 +42,8 @@ export function connect(opts: {
   onSessionsChanged?: (m: Extract<ServerMessage, { type: "sessions.changed" }>) => void;
   /** Account plan usage, on connect and on each change; null = no plan limits. */
   onPlanUsage?: (u: PlanUsage | null) => void;
+  /** Plan usage of one Claude account (`key`: `""` Default, `"cli"`, a token account id), on connect and on each change; the meter of a Project that overrides the account reads it (GH-900). */
+  onAccountUsage?: (key: string, u: PlanUsage | null) => void;
   /** A config write (e.g. an MCP server added) in a project: an open config dialog of it refreshes. */
   onConfigChanged?: (m: Extract<ServerMessage, { type: "config.changed" }>) => void;
   /** OpenCode read a changed provider set (login, logout): its model list is stale. */
@@ -151,8 +153,7 @@ export function connect(opts: {
     if (m.type === "terminal.output" || m.type === "terminal.exit") return terminalListeners.forEach((l) => l(m)), false;
     if (m.type === "sessions.changed") return opts.onSessionsChanged?.(m), false;
     if (m.type === "plan_usage") return opts.onPlanUsage?.(m.usage), false;
-    // The usage of a Project's own account (GH-900): the meter reads it in the next change; until then the page keeps the global one.
-    if (m.type === "account_usage") return false;
+    if (m.type === "account_usage") return opts.onAccountUsage?.(m.key, m.usage), false;
     if (m.type === "config.changed") return opts.onConfigChanged?.(m), false;
     if (m.type === "settings_changed") return opts.onSettingsChanged?.(m), false;
     if (m.type === "opencode.providersChanged") return opts.onProvidersChanged?.("opencode"), false;
