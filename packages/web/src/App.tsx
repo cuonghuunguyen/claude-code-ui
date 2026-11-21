@@ -145,6 +145,7 @@ import { AsideAsk } from "./aside-ask.tsx";
 import { AsidePopup } from "./aside-popup.tsx";
 import { isClearCommand } from "./clear.ts";
 import { asideItem, clampRect, defaultRect, raise, setMinimized, type AsideState } from "./aside.ts";
+import { phaseOf, useJustFinished, useRootLifecycle } from "./lifecycle.ts";
 import { nextWaiting, waitingCount, waitingRequests, waitingStatus } from "./focus.ts";
 import { useAppIcon, useAppName } from "./app-icon.ts";
 import { announcement, faviconHref, setAppleTitle, setAppleTouchIcon, setFavicon } from "./attention.ts";
@@ -428,6 +429,9 @@ export function App() {
   // GH-395 R8: a pane tab (`plan:<session>`) makes its owner the current session: docks, per-session pane history and the sidebar follow it.
   const paneRef = parseRef(activeId);
   const currentId = paneRef ? paneRef.owner : activeId;
+  const phase = phaseOf(currentId ? views[currentId] : undefined);
+  const justFinished = useJustFinished(currentId, phase);
+  useRootLifecycle(phase);
   // A tab switch or route change mid-flight: the ghost must not fly over another view. Not the first prompt's own hand-off (its session already holds the pending prompt).
   useEffect(() => {
     if (!optimistic[activeId ?? ""]?.length) cancelFlight();
@@ -4148,7 +4152,7 @@ export function App() {
               <div
                 ref={areaRef}
                 className={`relative ${splitShown ? `flex min-h-0 min-w-0 flex-1 ${split!.dir === "row" ? "flex-row" : "flex-col"}` : `${card} flex-1`} ${mainShown && pane === "session" ? "" : mainShown ? "hidden lg:flex" : "hidden"}`}
-                data-testid="session-area" data-part="session-area"
+                data-testid="session-area" data-part="session-area" data-phase={phase} data-just-finished={justFinished ? "" : undefined}
                 data-split={splitShown ? split!.dir : undefined}
               >
                 <ViewerContext value={openViewer}>

@@ -66,6 +66,8 @@
 }
 
 @layer host {
+/* Hidden tab (lifecycle.ts sets data-page-hidden): nothing animates, addon themes included. `!important` in the host layer beats an addon's `!important`. */
+:root[data-page-hidden] *, :root[data-page-hidden] *::before, :root[data-page-hidden] *::after { animation-play-state: paused !important; }
 /* Guided tour popover fade-in (guide-tour.tsx). */
 @keyframes guide-in {
     from {

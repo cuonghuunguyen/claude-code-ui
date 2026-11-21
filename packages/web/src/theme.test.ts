@@ -166,6 +166,10 @@ describe("index.css cascade layers", () => {
     expect([...new Set(blocks.map((s) => s.prelude))].sort()).toEqual(["@layer base", "@layer host"]);
   });
 
+  it("pauses every animation while the page is hidden with !important in the host layer", () => {
+    expect(css).toMatch(/@layer host \{\n[^]*?:root\[data-page-hidden\] \*, :root\[data-page-hidden\] \*::before, :root\[data-page-hidden\] \*::after \{ animation-play-state: paused !important; \}/);
+  });
+
   it("a host rule on CodeMirror (.cm-*) is !important: its theme is injected unlayered and beats every layer", () => {
     const rules = [...css.matchAll(/^[^\s@/][^{\n]*\.cm-[^{]*\{([^}]*)\}/gm)];
     expect(rules.length).toBeGreaterThan(0);

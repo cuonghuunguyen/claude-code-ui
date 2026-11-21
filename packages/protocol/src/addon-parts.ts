@@ -69,6 +69,8 @@ const SESSION_STATE = "data-state=running|needs_input|idle|error|closed";
 /** What differs from the default (`since` 1.5, no states). A key that is not a part name does not compile. */
 const META: { [K in PartName]?: Omit<AddonPart, "name" | "since"> } = {
   "session-item": { states: [SESSION_STATE] },
+  "session-area": { states: ["data-phase=thinking|waiting|idle", "data-just-finished (1200 ms after thinking -> idle)"] },
+  "focus-page": { states: ["data-focus-opened (1200 ms after it opens)"] },
   tab: { states: ["data-state=new|running|needs_input|unread|idle", "data-active"] },
   "tool-card": { states: ["data-status=pending|running|done|error|denied|stopped"] },
   "plan-window": { states: ["data-level=ok|warning|limit"] },

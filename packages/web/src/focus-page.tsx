@@ -20,6 +20,7 @@ import { awaitingPermission, timeline, type SessionView } from "./store.ts";
 import { Mark, statusText } from "./todo-dock.tsx";
 import { ProjectAvatar } from "./tabs-bar.tsx";
 import { projectName } from "./tabs.ts";
+import { useHold } from "./lifecycle.ts";
 import { toolSummary } from "./tools.ts";
 import type { TodoItem } from "@claude-ui/protocol";
 
@@ -269,8 +270,9 @@ export function FocusPage({ list, views, worktrees, waiting, selected, onSelect,
   const view = current && views[current.sessionId];
   const tasks = view ? (rowTodos(view).length ? rowTodos(view) : view.lastTodos) : [];
   const n = waiting.length ? new Set(waiting.map((w) => w.sessionId)).size : 0;
+  const opened = useHold(1);
   return (
-    <div ref={page} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border bg-card shadow-raised" data-testid="focus-page" data-part="focus-page">
+    <div ref={page} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border bg-card shadow-raised" data-testid="focus-page" data-part="focus-page" data-focus-opened={opened ? "" : undefined}>
       <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-3">
         <div className="min-w-0 flex-1">
           <h1 ref={heading} tabIndex={-1} className="font-medium text-base outline-none">{t("app.focusPage.title")}</h1>

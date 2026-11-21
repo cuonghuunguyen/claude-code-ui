@@ -481,3 +481,18 @@ it("Come back to: fired reminders first, reason line, third line, actions beside
   expect(onOpenBack).toHaveBeenCalledWith("a", "p2");
   expect(el.querySelector('[data-testid="focus-subtitle"]')!.textContent).toBe("2 need you · 1 working");
 });
+
+it("data-focus-opened is set when the page opens and cleared after 1200 ms", async () => {
+  vi.useFakeTimers();
+  try {
+    await render();
+    const page = () => el.querySelector<HTMLElement>('[data-part="focus-page"]')!;
+    expect(page().hasAttribute("data-focus-opened")).toBe(true);
+    await act(async () => void vi.advanceTimersByTime(1199));
+    expect(page().hasAttribute("data-focus-opened")).toBe(true);
+    await act(async () => void vi.advanceTimersByTime(1));
+    expect(page().hasAttribute("data-focus-opened")).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
+});

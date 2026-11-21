@@ -6683,6 +6683,21 @@ describe("recommendations hooks (GH-518)", () => {
     await press({ key: "Enter" }, promptBox());
   };
 
+  it("lifecycle attributes: session area and <html> follow thinking, waiting, idle; a finish flags the area", async () => {
+    const area = () => document.querySelector<HTMLElement>('[data-part="session-area"]')!;
+    const html = document.documentElement;
+    await sendHello();
+    await state(1, "running");
+    expect([area().dataset.phase, html.dataset.phase]).toEqual(["thinking", "thinking"]);
+    expect(area().hasAttribute("data-just-finished")).toBe(false);
+    await state(2, "needs_input");
+    expect([area().dataset.phase, html.dataset.phase]).toEqual(["waiting", "waiting"]);
+    await state(3, "running");
+    await state(4, "idle");
+    expect([area().dataset.phase, html.dataset.phase]).toEqual(["idle", "idle"]);
+    expect(area().hasAttribute("data-just-finished")).toBe(true);
+  });
+
   it("context breakdown: the turn's context_usage after the idle state decides, not the previous one", async () => {
     await sendHello();
     await state(1, "running");
