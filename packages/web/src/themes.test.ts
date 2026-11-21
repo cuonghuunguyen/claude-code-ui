@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AddonInfo } from "@claude-ui/protocol";
+import { varNameError } from "@claude-ui/protocol";
 import { addonThemes, KEYS, SURFACE, swatchOf, terminalTheme, themeCss, THEMES, tokensOf } from "./themes.ts";
 
 const HEX = /^#[0-9a-f]{6}$/;
@@ -132,6 +133,59 @@ describe("addonThemes", () => {
     const css = themeCss(addonThemes([addon([{ id: "dusk", name: "D", dark: full() }])]));
     expect(css).toContain(':root[data-theme="addon:example:dusk"].dark { --background: #112233;');
     expect(css).not.toContain(":not(.dark)");
+  });
+
+  describe("vars and graph", () => {
+    const graph = ["#000001", "#000002", "#000003", "#000004", "#000005", "#000006", "#000007", "#000008"];
+    const css = (themes: NonNullable<AddonInfo["manifest"]>["themes"]) => themeCss(addonThemes([addon(themes)]));
+
+    it("graph sets --graph-1..8 and, from the first 6, --context-1..6", () => {
+      const out = css([{ id: "dusk", name: "D", dark: { ...full(), graph } }]);
+      for (let i = 1; i <= 8; i++) expect(out).toContain(`--graph-${i}: #00000${i};`);
+      for (let i = 1; i <= 6; i++) expect(out).toContain(`--context-${i}: #00000${i};`);
+      expect(out).not.toContain("--context-7");
+    });
+
+    it("a theme without graph leaves the Default graph colours (no --graph tokens in its rule)", () => {
+      expect(css([{ id: "dusk", name: "D", dark: full() }])).not.toMatch(/--graph-|--context-/);
+    });
+
+    it("vars go into the rule of their mode only; a var overrides the context colour taken from graph", () => {
+      const out = css([{ id: "dusk", name: "D", light: full("#eeeeee"), dark: { ...full(), graph }, vars: { light: { "--glow": "none" }, dark: { "--glow": "0 0 4px red", "--context-2": "#abcdef" } } }]);
+      const [light, dark] = [out.split("\n").find((l) => l.includes(":not(.dark)"))!, out.split("\n").find((l) => l.includes(".dark {"))!];
+      expect(light).toContain("--glow: none;");
+      expect(light).not.toContain("0 0 4px red");
+      expect(dark).toContain("--glow: 0 0 4px red;");
+      expect(dark).toContain("--context-2: #abcdef;");
+      expect(dark).not.toContain("--context-2: #000002");
+    });
+
+    // The daemon refuses these, the browser checks again (a manifest from an older or other hub): one bad var is dropped, the rest stay.
+    it.each([
+      ["--x", "red; } body { display: none"],
+      ["--x", "</style>"],
+      ["--x", "url(x.png)"],
+      ["--background", "#000000"],
+      ["--graph-1", "#000000"],
+      ["color", "red"],
+      ["--x\n", "red"],
+    ])("drops the var %s: %s", (name, value) => {
+      const out = css([{ id: "dusk", name: "D", dark: full(), vars: { dark: { [name]: value, "--ok": "1px" } } }]);
+      expect(out).toContain("--ok: 1px;");
+      expect(out).not.toContain(value);
+      expect(out).toContain("--background: #112233;");
+    });
+
+    it("a graph that is not 8 colours of #rrggbb is ignored", () => {
+      const out = css([{ id: "dusk", name: "D", dark: { ...full(), graph: graph.slice(0, 7) } }, { id: "dawn", name: "W", dark: { ...full(), graph: [...graph.slice(0, 7), "red"] } }]);
+      expect(out).not.toContain("--graph-");
+    });
+
+    it("every token a palette sets is refused as a var name, so a var cannot replace it (--context-* stay free)", () => {
+      const names = Object.keys(tokensOf(THEMES.find((t) => t.id === "catppuccin")!.dark!, "dark")).filter((n) => !/^--(graph|context)-/.test(n));
+      expect(names.length).toBeGreaterThan(40);
+      for (const n of names) expect(varNameError(n), n).toBeDefined();
+    });
   });
 
   it("an id that would not be a safe selector is dropped", () => {

@@ -1321,10 +1321,13 @@ export type AddonCandidate = { path: string; name: string; version: string; desc
 export type AddonView = { id: string; title: string; entry: string; kind: "pane" | "band"; phone?: boolean };
 export type AddonCommand = { name: string; description: string; argumentHint?: string };
 export type AddonRenderer = ({ fence: string } | { tool: string }) & { entry: string };
-/** Colours per palette key (themes.ts KEYS); a mode may be partial: the web drops incomplete modes. */
+/** Colours per palette key (themes.ts KEYS); `graph`: 8 colours for the Git graph lanes (`--graph-1..8`, the first 6 also `--context-1..6`). A mode may be partial: the web drops incomplete modes. */
+export type AddonPalette = Record<string, string | string[]>;
+/** Custom properties an addon theme sets per mode (`--name` -> value, protocol addon-theme.ts rules); written into the theme's colour rule. */
+export type AddonThemeVars = { light?: Record<string, string>; dark?: Record<string, string> };
 /** A boolean switch of a theme (Settings > Appearance): the web app sets `data-opt-<id>="on"|"off"` on <html> while the theme is current. `default` absent = on. */
 export type AddonThemeOption = { id: string; label: string; default?: boolean };
-export type AddonTheme = { id: string; name: string; light?: Record<string, string>; dark?: Record<string, string>; options?: AddonThemeOption[]; /** A `.css` file of the addon that applies only while this theme is picked: the daemon scopes it when it serves it (`?theme=<id>`). */ css?: string };
+export type AddonTheme = { id: string; name: string; light?: AddonPalette; dark?: AddonPalette; vars?: AddonThemeVars; options?: AddonThemeOption[]; /** A `.css` file of the addon that applies only while this theme is picked: the daemon scopes it when it serves it (`?theme=<id>`). */ css?: string };
 export type AddonManifest = {
   name: string;
   version: string;

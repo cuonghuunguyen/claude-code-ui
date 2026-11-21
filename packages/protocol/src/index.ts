@@ -1,5 +1,6 @@
 export * from "./parts.ts";
 export * from "./addon-parts.ts";
+export * from "./addon-theme.ts";
 export { partHash } from "./part-hash.ts";
 export * from "./always-rule.ts";
 export * from "./wire.ts";

@@ -458,6 +458,53 @@ describe("review fixes (GH-516)", () => {
     expect(await installGit()).toMatchObject({ type: "reply" });
   });
 
+  describe("theme vars and graph", () => {
+    const all = Object.fromEntries(["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"].map((k) => [k, "#112233"]));
+    const graph = ["#000001", "#000002", "#000003", "#000004", "#000005", "#000006", "#000007", "#000008"];
+    const theme = (extra: Record<string, unknown>) => commitAddon({ themes: [{ id: "dusk", name: "D", dark: all, ...extra }] });
+
+    it("keeps vars per mode and a graph palette key in the manifest", async () => {
+      theme({ dark: { ...all, graph }, vars: { light: { "--glow": "0 0 4px #fff" }, dark: { "--glow": "none", "--context-2": "#abcdef" } } });
+      await installGit();
+      const [a] = (await list()).addons;
+      expect((a as AddonInfo).manifest!.themes[0]).toMatchObject({ dark: { graph }, vars: { light: { "--glow": "0 0 4px #fff" }, dark: { "--glow": "none", "--context-2": "#abcdef" } } });
+    });
+
+    // A var is written into a <style> text and a palette token has contrast checks: each refusal below is a way to break out of the rule or to bypass the palette.
+    it.each([
+      ["a value that ends the declaration", { dark: { "--x": "red; } body { display: none" } }],
+      ["a value that closes the style element", { dark: { "--x": "</style><script>" } }],
+      ["a value that loads an image", { dark: { "--x": "url(https://example.com/a.png)" } }],
+      ["an unbalanced value", { dark: { "--x": "calc(1px" } }],
+      ["a palette token", { dark: { "--background": "#000000" } }],
+      ["a graph token", { dark: { "--graph-1": "#000000" } }],
+      ["a name that is not a custom property", { dark: { color: "red" } }],
+      ["a value that is not text", { dark: { "--x": 1 } }],
+      ["a mode that is not light or dark", { sepia: { "--x": "1" } }],
+      ["vars that are not an object", []],
+      ["a mode that is not an object", { dark: ["--x"] }],
+      ["more than 64 vars in a mode", { dark: Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`--v${i}`, "1"])) }],
+    ])("refuses %s", async (_n, vars) => {
+      theme({ vars });
+      expect(await installGit()).toMatchObject({ code: "bad_manifest" });
+    });
+
+    it("accepts 64 vars in a mode", async () => {
+      theme({ vars: { dark: Object.fromEntries(Array.from({ length: 64 }, (_, i) => [`--v${i}`, "1"])) } });
+      expect(await installGit()).toMatchObject({ type: "reply" });
+    });
+
+    it.each([
+      ["7 colours", graph.slice(0, 7)],
+      ["9 colours", [...graph, "#000009"]],
+      ["a colour that is not #rrggbb", [...graph.slice(0, 7), "red"]],
+      ["a string", "#000001"],
+    ])("refuses a graph of %s", async (_n, g) => {
+      theme({ dark: { ...all, graph: g } });
+      expect(await installGit()).toMatchObject({ code: "bad_manifest" });
+    });
+  });
+
   it("an edit of a local folder that needs approval stops its assets too, after the next page request", async () => {
     const d = folder("cache");
     await c.request({ type: "addons.install", source: { kind: "local", path: d } });
