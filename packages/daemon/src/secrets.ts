@@ -87,14 +87,17 @@ export function createSecrets({ file }: { file?: string } = {}) {
     jiraOrigins: (): string[] => Object.keys(get().jiraTokens ?? {}),
     /** An old-format token was removed and no token was saved since (Settings says why). */
     jiraTokenReset: (): boolean => !!get().jiraTokenReset,
-    /** Binds a token saved without URL to `origin` (the global URL's), in one write; no-op without such a token or when `origin` has one. */
+    /**
+     * Binds a token saved without URL to `origin` (the global URL's), in one write; no-op without such a token. It replaces a token a Project saved
+     * for `origin` (GH-915): the token typed in Settings › Jira is the one the user means for the global URL.
+     */
     bindJiraToken(origin: string) {
       const t = get().jiraTokens;
-      if (!t || !Object.hasOwn(t, "") || origin === "" || Object.hasOwn(t, origin)) return;
+      if (!t || !Object.hasOwn(t, "") || origin === "") return;
       // Checked again on the freshly loaded data: another daemon may have written since `get()`.
       store.change((x) => {
         const m = x.jiraTokens;
-        if (!m || !Object.hasOwn(m, "") || Object.hasOwn(m, origin)) return;
+        if (!m || !Object.hasOwn(m, "")) return;
         m[origin] = m[""]!;
         delete m[""];
         mirror(x, origin);

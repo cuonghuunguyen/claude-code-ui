@@ -71,6 +71,9 @@ export function jiraSettings(settings: Settings, ref?: ProjectRef): Settings["ji
   return { ...settings.jira, ...(o?.url && { url: o.url }), ...(o?.email && { email: o.email }), ...(o?.jql && { jql: o.jql }), ...(o?.template && { template: o.template }) };
 }
 
+/** The Jira URL the overrides of the Project `ref` set; undefined when it uses the global one. */
+export const ownJiraUrl = (settings: Settings, ref: ProjectRef): string | undefined => refOverrides(settings, ref)?.jira?.url || undefined;
+
 /** Every Jira URL origin in use: the global one ("" without URL) and those of all Project overrides on every Side. Saved tokens of other origins are dropped. */
 export function jiraOriginsInUse(settings: Settings): string[] {
   const urls = [settings.jira.url, ...Object.values(settings.projects.overrides).flatMap((side) => Object.values(side).map((o) => o.jira?.url ?? ""))];

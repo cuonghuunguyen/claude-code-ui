@@ -511,10 +511,13 @@ it("sideSettings: a Side gets the Jira fields of its own Projects (not secret) a
   secrets.setJiraToken("tok-global-SECRET", "https://acme.atlassian.net", "https://acme.atlassian.net");
   secrets.setJiraToken("tok-box-SECRET", "https://box.example.com", "https://acme.atlassian.net");
   secrets.setJiraToken("tok-wsl-SECRET", "https://wsl.example.com", "https://acme.atlassian.net");
-  const patch = JSON.stringify(sideSettings(s, "ssh:box"));
-  expect(patch).toContain("https://box.example.com");
-  expect(patch).not.toContain("wsl.example.com");
+  const patch = sideSettings(s, "ssh:box") as { jira: unknown; projects: unknown };
+  // Exactly the Side's own Project with its Jira fields, and exactly the global Jira fields: a field added to either reaches the Side only by a change here.
+  expect(patch.projects).toEqual({ overrides: { local: { "/box": { jira: { url: "https://box.example.com", jql: "project = BOX" } } } } });
+  expect(patch.jira).toEqual(s.jira);
+  expect(Object.keys(patch.jira as object).sort()).toEqual(["email", "jql", "template", "url"]);
   // Tokens live in secrets.json only: no settings patch, whatever it holds, carries one.
-  for (const token of secrets.values()) expect(patch).not.toContain(token);
-  expect(patch).not.toMatch(/jiraToken/);
+  const text = JSON.stringify(patch);
+  for (const token of secrets.values()) expect(text).not.toContain(token);
+  expect(text).not.toMatch(/jiraToken|wsl\.example\.com/);
 });

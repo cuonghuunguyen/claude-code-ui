@@ -60,6 +60,16 @@ it("bindJiraToken binds a token saved without URL in one write and never rebinds
   expect(s.jiraToken("https://a.example.com")).toBe("tok");
 });
 
+it("bindJiraToken: the token typed in Settings › Jira without URL replaces a Project's token of the first global URL's origin (GH-915)", () => {
+  const X = "https://acme.atlassian.net";
+  const s = createSecrets();
+  s.setJiraToken("tok-project", X, "");
+  s.setJiraToken("tok-global", "", "");
+  s.bindJiraToken(X);
+  expect(s.jiraOrigins()).toEqual([X]);
+  expect(s.jiraToken(X)).toBe("tok-global");
+});
+
 it("Claude token accounts: add, list without tokens, remove; invalid name or token refused; the file is 0600 (GH-615)", () => {
   const file = join(mkdtempSync(join(tmpdir(), "secrets-")), "secrets.json");
   const s = createSecrets({ file });

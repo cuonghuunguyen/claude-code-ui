@@ -33,7 +33,7 @@ const setup = (sameHost: boolean) => {
     covered: new Map(),
     opts: {},
   };
-  const area = createSettingsArea(ctx, { ws: {} as never, sameHost });
+  const area = createSettingsArea(ctx, { ws: {} as never, sameHost, fromHub: false });
   /** The reply or error a handler gives, in the shape of dispatch.ts. */
   const call = async (type: keyof typeof area.handlers, msg: object) => {
     let out: ServerMessage | undefined;
