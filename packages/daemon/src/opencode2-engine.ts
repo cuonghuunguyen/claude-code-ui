@@ -1,18 +1,19 @@
 // The OpenCode 2 Engine (ADR 0015, docs/spec.md "OpenCode engine"): sessions run on the daemon's OpenCode 2 server through `@opencode/client`. One event stream
 // (`GET /api/event`, opencode-server.ts) feeds every open session; prompts, Stop and permission replies go back as client calls.
 // Has: create, list, prompt, stream, stop, permissions, models, the read-only rules of an Aside, rewind, /undo /redo /compact, bash mode, questions, agents, OpenCode's
-// slash commands and inline tasks. MCP is a later slice.
+// slash commands, inline tasks and the daemon's MCP servers (orchestration, claude-ui). No Fork runs yet.
 import { randomUUID } from "node:crypto";
 import type { OpenCodeClient } from "@opencode/client";
 import { permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT } from "./aside.ts";
-import { DAEMON_SERVER } from "./daemon-mcp.ts";
+import { DAEMON_SERVER, ToolError } from "./daemon-mcp.ts";
 import { DeniedRetryError } from "./denied-retry.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
-import { INLINE_TIMEOUT_MS, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
+import { INLINE_TIMEOUT_MS, type ForkResult, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
 import { ascending } from "./opencode-id.ts";
 import { INLINE_SYSTEM, clip } from "./opencode-inline.ts";
-import { LOCAL_COMMANDS, OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels } from "./opencode-engine.ts";
+import { LOCAL_COMMANDS, OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels, type OpenCodeMcpRoute } from "./opencode-engine.ts";
+import { findCall, mcpKeys, mcpName, mcpTimeoutMs, showDaemonCard, WORKER_START, type McpServerKey } from "./opencode-shared.ts";
 import { INLINE_META, InlineCollector2, inlineRules } from "./opencode2-inline.ts";
 import { OpenCode2Mapper, bashPart, failureText, mapTool2, type Failure, type OpenCode2Message, type Shell2 } from "./opencode2-parts.ts";
 import type { OpenCodeServer } from "./opencode-server.ts";
@@ -35,14 +36,29 @@ export function modeRules(mode: PermissionMode): Rule2[] {
 }
 /** Last, so it wins (OpenCode 2 applies the last matching rule): a read-only Aside changes no file. `edit` is also the action of the `write` tool (checked on 2.3.0). */
 const READ_ONLY: Rule2 = rule("edit", "deny");
+/** The session's own daemon MCP servers in OpenCode, when attached: `orchestration` = its orchestration server's name, `daemon` = its claude-ui server's tool rules. */
+export type McpRules = { orchestration?: string; daemon?: Rule2[] };
+/** Whether a rule is one of the daemon MCP servers' (every session's servers are attached to the folder; a session's rules hide the others'). */
+const isDaemonMcp = (r: Rule2) => r.action.startsWith(`${DAEMON_SERVER}-`) || r.action.startsWith("orchestration-");
+/**
+ * The daemon MCP servers' rules (as OpenCode 1's mode block, opencode-engine.ts modeBlock): every session's claude-ui and orchestration tools hidden but the own ones;
+ * the own claude-ui tools as `daemon` says, the own orchestration tools allowed, `worker_start` asking (the user's gate on new workers) except in bypass.
+ */
+export const mcpRules = (mode: PermissionMode, mcp: McpRules = {}): Rule2[] => [
+  rule(`${DAEMON_SERVER}-*`, "deny"),
+  ...(mcp.daemon ?? []),
+  rule("orchestration-*", "deny"),
+  ...(mcp.orchestration ? [rule(`${mcp.orchestration}_*`, "allow"), ...(mode === "bypassPermissions" ? [] : [rule(`${mcp.orchestration}_worker_start`, mode === "dontAsk" ? "deny" : "ask")])] : []),
+];
 /**
  * The session's rules: its mode's, the agent's denials after them (OpenCode 2 applies the session's rules after the agent's, so without them a mode's `edit ask` would
- * beat plan's `edit deny`), and the read-only denial of an Aside. `config` has no rules of its own: the agent's apply as they are.
+ * beat plan's `edit deny`), the daemon MCP servers' rules, and the read-only denial of an Aside. `config` has no rules of its own: the agent's apply as they are
+ * (the MCP servers' too: OpenCode would allow an MCP tool by default).
  */
-export const rulesOf = (mode: PermissionMode, readOnly: boolean, denials: readonly Rule2[] = []): Rule2[] => [...(mode === "config" ? [] : [...modeRules(mode), ...denials]), ...(readOnly ? [READ_ONLY] : [])];
-/** The mode whose rules a session has (its rules start with them; `config`: none or only the read-only denial), undefined for rules of another origin. */
+export const rulesOf = (mode: PermissionMode, readOnly: boolean, denials: readonly Rule2[] = [], mcp?: McpRules): Rule2[] => [...(mode === "config" ? [] : [...modeRules(mode), ...denials]), ...mcpRules(mode, mcp), ...(readOnly ? [READ_ONLY] : [])];
+/** The mode whose rules a session has (its rules start with them; `config`: none or only the read-only denial, besides the MCP servers' rules), undefined for rules of another origin. */
 export const modeOfRules = (rules: readonly Rule2[] | undefined): PermissionMode | undefined => {
-  const r = JSON.stringify(rules ?? []);
+  const r = JSON.stringify((rules ?? []).filter((x) => !isDaemonMcp(x)));
   const starts = (m: PermissionMode) => r.startsWith(JSON.stringify(modeRules(m)).slice(0, -1));
   return (["bypassPermissions", "acceptEdits", "default"] as const).find(starts) ?? ([JSON.stringify([]), JSON.stringify([READ_ONLY])].includes(r) ? "config" : undefined);
 };
@@ -217,6 +233,9 @@ class OpenCode2Session implements EngineSession {
   private retrying: { attempt: number; message: string; next?: number } | undefined;
   /** The model of the running step (`session.step.started`). */
   private stepModel: { id: string; providerID: string } | undefined;
+  /** The daemon MCP servers attached to OpenCode for this session (orchestration on and no unkept Aside; a claude-ui tool group enabled). */
+  private mcpOn = new Set<McpServerKey>();
+  private attaching: Promise<void> | undefined;
 
   constructor(
     private readonly engine: OpenCode2EngineImpl,
@@ -250,6 +269,7 @@ class OpenCode2Session implements EngineSession {
 
   begin() {
     this.engine.add(this);
+    void this.attach();
     this.revertAt = this.history?.revert;
     // The slash menu of an open session: the daemon's own commands at once, OpenCode's once it listed them.
     this.session.emit({ type: "commands", id: "commands", commands: LOCAL_COMMANDS });
@@ -437,7 +457,44 @@ class OpenCode2Session implements EngineSession {
   private async rules(mode: PermissionMode, agent?: string) {
     agent ??= await this.agentName();
     const own = (await this.engine.agents(this.cwd)).find((a) => a.id === agent)?.permissions ?? [];
-    return rulesOf(mode, this.readOnly(), denialsOf2(own));
+    return rulesOf(mode, this.readOnly(), denialsOf2(own), this.ownMcp(mode));
+  }
+  /**
+   * This session's attached MCP servers as rules: the claude-ui tools that ask follow the mode (`config` too: OpenCode would allow an MCP tool by default). The
+   * `fork` tool is hidden: OpenCode 2 has no Fork runs in claude-ui yet (forkRun).
+   */
+  private ownMcp(mode: PermissionMode): McpRules {
+    const name = mcpName(this.id, DAEMON_SERVER);
+    const daemon = this.mcpOn.has(DAEMON_SERVER) ? this.opts.daemonMcp?.openCodeRules(name, mode === "bypassPermissions" ? "allow" : mode === "dontAsk" ? "deny" : "ask") : undefined;
+    return { ...(this.mcpOn.has("orchestration") && { orchestration: mcpName(this.id) }), ...(daemon && { daemon: [...daemon.map((r) => rule(r.permission, r.action)), rule(`${name}_fork`, "deny")] }) };
+  }
+
+  /**
+   * Attaches this session's daemon MCP servers to OpenCode (`PUT /api/experimental/mcp/{name}` in its folder) unless they are connected: at begin and before each turn,
+   * so an OpenCode restart (which drops them) is repaired by the next prompt. Code Mode off: the model calls the tools by their own names (`<name>_<tool>`), which the
+   * rules and the cards know. `mcpServers` binds the tools to this session, as at a Claude query start. A failure is a notice; the prompt still goes.
+   */
+  private attach(): Promise<void> {
+    let attaching: McpServerKey = "orchestration";
+    return (this.attaching ??= (async () => {
+      const route = this.engine.mcp;
+      const url = route?.url();
+      const keys = url ? mcpKeys(this.opts, this.id) : [];
+      this.mcpOn = new Set(keys);
+      if (!keys.length) return;
+      const client = await this.server.client();
+      const location = { directory: this.cwd };
+      const listed = (await client.mcp.list({ location })).data;
+      for (const key of keys) {
+        attaching = key;
+        const name = mcpName(this.id, key);
+        if (listed.some((m) => m.name === name && m.status.status === "connected")) continue;
+        const config = { type: "remote" as const, url: url!, headers: { authorization: `Bearer ${route!.token(this.id, key)}` }, oauth: false as const, codemode: false, timeout: { execution: mcpTimeoutMs(key, this.opts) } };
+        await client.experimental.mcp.add({ server: name, location, config });
+      }
+    })()
+      .catch((err) => this.notice(`mcp_failed:${ascending("msg")}`, `Could not attach the ${attaching} tools to OpenCode: ${(err as Error).message}`))
+      .finally(() => (this.attaching = undefined)));
   }
   private readOnly = () => !!this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_EDIT.includes(t));
 
@@ -580,7 +637,7 @@ class OpenCode2Session implements EngineSession {
    */
   private async prepare(client: OpenCodeClient, live: () => boolean) {
     this.engine.record(this.id);
-    await this.server.streamReady();
+    await Promise.all([this.server.streamReady(), this.attach()]);
     if (!live()) return false;
     const agent = await this.turnAgent();
     const rules = await this.rules(this.permissionMode, agent);
@@ -794,17 +851,26 @@ class OpenCode2Session implements EngineSession {
     const call = callId ? mapper.call(callId) : undefined;
     const mapped = call?.type === "tool_call" ? call : undefined;
     const resources: string[] = e.resources ?? [];
-    // The ask can come before the call has its input: the permission's own data then names the command (shell: the resource).
-    const fallback = mapTool2(e.action, e.action === "shell" ? { command: resources[0] ?? "" } : {});
+    // The ask can come before the call has its input: the permission's own data then names the command (shell: the resource; a daemon MCP tool: its input).
+    const fallback = mapTool2(e.action, e.action === "shell" ? { command: resources[0] ?? "" } : isDaemonMcp(rule(e.action, "ask")) && e.metadata?.input && typeof e.metadata.input === "object" ? e.metadata.input : {});
     const tool = mapped?.tool ?? fallback.tool;
     const input: Record<string, unknown> = mapped && Object.keys(mapped.input as object).length ? (mapped.input as Record<string, unknown>) : { ...(!mapped && { patterns: resources }), ...fallback.input };
-    // OpenCode saves the "always" patterns itself (per project).
-    const suggestions: PermissionUpdate[] = e.save?.length ? [{ type: "addRules", rules: (e.save as string[]).map((ruleContent) => ({ toolName: tool, ruleContent })), behavior: "allow", destination: "session" }] : [];
+    // OpenCode saves the "always" patterns itself (per project). worker_start: none, the card is the user's only gate on new workers (as for Claude).
+    const suggestions: PermissionUpdate[] = e.save?.length && tool !== WORKER_START ? [{ type: "addRules", rules: (e.save as string[]).map((ruleContent) => ({ toolName: tool, ruleContent })), behavior: "allow", destination: "session" }] : [];
     this.reqs.set(e.id, { kind: "permission", callId, sessionID: e.sessionID, mapper, ...(parentId && { parentId }) });
-    this.session.request({
-      part: { type: "permission_request", id: e.id, requestId: e.id, toolUseId: callId ?? e.id, tool, input, ...(!mapped && { title: `OpenCode asks to use ${e.action}: ${resources.join(", ")}` }), noEdit: true as const, suggestions, settled: false, at: Date.now() },
-      reply: (r) => this.answer(e.id, r),
+    const part = { type: "permission_request" as const, id: e.id, requestId: e.id, toolUseId: callId ?? e.id, tool, input, ...(!mapped && { title: `OpenCode asks to use ${e.action}: ${resources.join(", ")}` }), noEdit: true as const, suggestions, settled: false, at: Date.now() };
+    const reply = (r: Reply) => this.answer(e.id, r);
+    // The claude-ui tools that ask (terminal_run) and worker_start get their own cards.
+    const daemonCard = showDaemonCard({
+      opts: this.opts,
+      id: this.id,
+      tool,
+      input,
+      pending: () => this.reqs.has(e.id),
+      show: (title, onAllow) => this.session.request({ part: { ...part, ...(title !== undefined && { title }) }, onAllow, reply }),
+      allowOnce: () => this.answer(e.id, { kind: "allow", decision: "allow" } as Reply),
     });
+    if (!daemonCard) this.session.request({ part, reply });
   }
 
   private answer(id: string, r: Reply) {
@@ -849,8 +915,6 @@ class OpenCode2Session implements EngineSession {
       durationMs: Date.now() - t0,
       ...r,
     });
-    // OpenCode 2's MCP tools are a later slice of claude-ui: a grant of one fails at once, the caller can retry with built-ins.
-    if (spec.mcp.length) return result({ status: "error", error: "OpenCode 2 does not support MCP tools in an inline task in claude-ui yet: grant only built-in tools." });
     let childId: string | undefined;
     let col: InlineCollector2 | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -858,7 +922,7 @@ class OpenCode2Session implements EngineSession {
     let callId: string | undefined;
     let client: OpenCodeClient | undefined;
     try {
-      callId = await this.findCall(() => this.mapper.runningCall(`mcp__${DAEMON_SERVER}__inline_task`, hooks.input, this.inlineClaimed));
+      callId = await findCall(() => this.mapper.runningCall(`mcp__${DAEMON_SERVER}__inline_task`, hooks.input, this.inlineClaimed));
       if (callId) this.inlineClaimed.add(callId);
       client = await this.server.client();
       const agent = await this.agentName();
@@ -933,14 +997,6 @@ class OpenCode2Session implements EngineSession {
     if (run.callId) for (const part of run.mapper.event(type, d)) this.session.emit({ ...part, parentId: run.callId });
   }
 
-  /** The running call a run belongs to (`find` reads the mapper). Its event may come after the tool request, so it is awaited a moment. */
-  private async findCall(find: () => string | undefined) {
-    for (let i = 0; i < 20; i++) {
-      const id = find();
-      if (id || i === 19) return id;
-      await new Promise((r) => setTimeout(r, 50));
-    }
-  }
   /** A question form of OpenCode 2 (`form.created`, metadata kind `question`: the `question` tool) as a question part under its call. Another form: a notice. */
   private askForm(form: Json) {
     if (this.session.pendingRequest(form.id) || this.reqs.has(form.id)) return;
@@ -1048,6 +1104,10 @@ class OpenCode2Session implements EngineSession {
   beforeStateEvent() {}
   idle() {}
   bashCwdPinned = () => false;
+  /** The daemon's `fork` tool: OpenCode 2 has no Fork runs in claude-ui yet; the model gets this as the tool's error. */
+  forkRun = async (): Promise<ForkResult> => {
+    throw new ToolError("OpenCode 2 sessions cannot run forks in claude-ui yet. Use the subagent tool, or inline_task for a mechanical task.");
+  };
   /** Stop agent of a running inline task's card: the run ends as stopped (its session is interrupted). */
   stopSubagent = async (callId: string) => {
     const stop = this.inlineStops.get(callId);
@@ -1074,6 +1134,14 @@ class OpenCode2Session implements EngineSession {
   close = async () => {
     clearInterval(this.shellRun?.timer);
     this.engine.remove(this);
+    // The session's MCP servers leave its folder in OpenCode (until a later open attaches them again); their bearer tokens are dropped.
+    this.engine.mcp?.drop(this.id);
+    const names = [...this.mcpOn].map((k) => mcpName(this.id, k));
+    if (names.length && this.server.running())
+      void this.server
+        .client()
+        .then((c) => Promise.all(names.map((server) => c.experimental.mcp.remove({ server, location: { directory: this.cwd } }).catch(() => undefined))))
+        .catch(() => undefined);
   };
   activity = () => ({ received: 0, at: 0, progress: 0 });
   live = () => this.server.running();
@@ -1099,6 +1167,8 @@ class OpenCode2EngineImpl implements Engine {
     readonly onTitle?: (id: string, title: string) => void,
     /** Writes the adapter record of a session (ADR 0015); throws when it cannot be saved. */
     readonly record: (id: string) => void = () => {},
+    /** The daemon's `/opencode-mcp` route: the URL and bearer tokens of a session's MCP servers. */
+    readonly mcp?: OpenCodeMcpRoute,
   ) {}
 
   permissionModes = (o: { allowBypass?: boolean; supportsAuto?: boolean }) => permissionModesFor({ ...o, modes: OPENCODE_PERMISSION_MODES });
@@ -1296,4 +1366,4 @@ class OpenCode2EngineImpl implements Engine {
 }
 
 export type OpenCode2Engine = OpenCode2EngineImpl;
-export const createOpenCode2Engine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; record?: (id: string) => void } = {}): OpenCode2Engine => new OpenCode2EngineImpl(server, o.onTitle, o.record);
+export const createOpenCode2Engine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; record?: (id: string) => void; mcp?: OpenCodeMcpRoute } = {}): OpenCode2Engine => new OpenCode2EngineImpl(server, o.onTitle, o.record, o.mcp);

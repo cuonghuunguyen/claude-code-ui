@@ -3,7 +3,7 @@
 import { existsSync } from "node:fs";
 import { EFFORTS, type PermissionMode, type SessionListItem } from "@claude-ui/protocol";
 import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type ListCtx, type SavedSession } from "./engine-catalogue.ts";
-import { OPENCODE_MODES } from "./opencode-engine.ts";
+import { OPENCODE_MODES, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { openCodeWanted } from "./opencode-catalogue.ts";
 import { OpenCodeError, type OpenCodeServer } from "./opencode-server.ts";
 import { createOpenCode2Engine, loadOpenCode2History, OPENCODE2_CAPABILITIES } from "./opencode2-engine.ts";
@@ -17,7 +17,7 @@ const PAGE = 100;
 /** A list of one folder reads at most this many pages (a folder with more sessions shows the newest ones). */
 const MAX_PAGES = 10;
 
-export type OpenCode2CatalogueOpts = { server: OpenCodeServer; /** How long `session.list` waits for OpenCode (default 3 s). */ listWaitMs?: number; /** Writes the adapter record of a session (ADR 0015); throws when it cannot be saved. */ record?: (id: string) => void };
+export type OpenCode2CatalogueOpts = { server: OpenCodeServer; /** How long `session.list` waits for OpenCode (default 3 s). */ listWaitMs?: number; /** Writes the adapter record of a session (ADR 0015); throws when it cannot be saved. */ record?: (id: string) => void; /** The daemon's `/opencode-mcp` route (the session's MCP servers). */ mcp?: OpenCodeMcpRoute };
 export type OpenCode2Catalogue = Omit<EngineCatalogue, "listScope" | "ownsId" | "requests" | "settingsChanged" | "settled" | "forget" | "close">;
 
 export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2CatalogueOpts): OpenCode2Catalogue {
@@ -33,6 +33,7 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
       ctx.broadcast({ type: "sessions.changed" });
     },
     record: o.record,
+    mcp: o.mcp,
   });
   const sessionOpts = (initial: Partial<SessionSettings>) => ({ ...ctx.sessionOpts(initial), engine });
   const failure = (err: unknown) => (err instanceof OpenCodeError ? new EngineError(err.code, err.message) : new EngineError("opencode_failed", (err as Error).message));

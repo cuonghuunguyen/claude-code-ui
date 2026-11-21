@@ -18,6 +18,7 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
   const v1 = createOpenCodeCatalogue(ctx, { ...o, server: { ...o.server, instance: srv } });
   const v2 = createOpenCode2Catalogue(ctx, {
     server: srv,
+    mcp: o.mcp,
     listWaitMs: o.server?.listWaitMs,
     record: (id) => {
       try {

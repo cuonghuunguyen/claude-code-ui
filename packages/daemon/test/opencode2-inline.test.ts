@@ -125,7 +125,7 @@ describe("OpenCode 2 inline task", () => {
     expect(await done).toMatchObject({ status: "done" });
   });
 
-  it("the turn cap interrupts it with limit turns; Stop from the card and the abort signal end it as stopped; a failed execution is an error; an MCP grant is refused", async () => {
+  it("the turn cap interrupts it with limit turns; Stop from the card and the abort signal end it as stopped; a failed execution is an error", async () => {
     const step = (c: (type: string, d?: Json) => void, n: number) => (c("session.step.started", { assistantMessageID: `msg_${n}` }), c("session.step.ended", { assistantMessageID: `msg_${n}`, finish: "tool-calls", tokens }));
     const capped = rig({ script: (c) => [1, 2].forEach((n) => step(c, n)) });
     expect(await capped.run.inlineTask(spec({ maxTurns: 2 }), hooks())).toMatchObject({ status: "limit", limit: "turns", turns: 2 });
@@ -147,9 +147,20 @@ describe("OpenCode 2 inline task", () => {
     const failing = rig({ script: (c) => c("session.execution.failed", { error: { type: "provider", message: "rate limited\nstack" } }) });
     expect(await failing.run.inlineTask(spec(), hooks())).toMatchObject({ status: "error", error: "rate limited" });
 
-    const mcp = rig();
-    expect(await mcp.run.inlineTask(spec({ mcp: ["jira"] }), hooks())).toMatchObject({ status: "error", error: expect.stringMatching(/does not support MCP tools in an inline task/) });
-    expect(mcp.called("session.create")).toEqual([]);
+  });
+
+  it("an MCP grant gives the inline session that server's tools, or the one tool, under the parent's rules; no other MCP tool", async () => {
+    const r = rig({ script: (c) => c("session.execution.succeeded") });
+    expect(await r.run.inlineTask(spec({ tools: ["Read"], mcp: ["jira", "mcp__git hub__get_issue"] }), hooks())).toMatchObject({ status: "done" });
+    const rules = r.called("session.create")[0]!.permissions;
+    expect(rules.slice(0, 3)).toEqual([
+      { action: "*", resource: "*", effect: "deny" },
+      { action: "jira_*", resource: "*", effect: "allow" },
+      { action: "git_hub_get_issue", resource: "*", effect: "allow" },
+    ]);
+    // The agent's `* allow` applies to each grant; nothing of the parent's daemon MCP servers is granted.
+    expect(rules).toContainEqual({ action: "jira_*", resource: "*", effect: "allow" });
+    expect(rules.filter((x: Json) => x.action.startsWith("claude-ui-") || x.action.startsWith("orchestration-"))).toEqual([]);
   });
 
   it("model: the input's, else the setting openCodeModel, else the parent's; none when the parent runs OpenCode's default", async () => {
