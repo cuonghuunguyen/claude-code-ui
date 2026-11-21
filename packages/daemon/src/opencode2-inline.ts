@@ -20,12 +20,19 @@ export const INLINE_META = "claude-ui.inlineOf";
 export function inlineRules(spec: Pick<InlineSpec, "tools" | "mcp">, base: readonly Rule2[]): Rule2[] {
   const mcp = [...new Set(spec.mcp.map(mcpToolKey))];
   const granted = [...new Set([...spec.tools.map((t) => ACTION[t]), ...mcp])];
+  // A parent rule for part of a granted server (`jira_create_issue ask` under a `jira_*` grant) or for a whole server a granted tool is in (`jira_* deny`
+  // under `jira_get_issue`) applies too: OpenCode matches the action with wildcards.
+  const kept = (r: Rule2) => granted.includes(r.action) || mcp.some((g) => overlaps(g, r.action));
   return [
     { action: "*", resource: "*", effect: "deny" },
     ...mcp.map((action): Rule2 => ({ action, resource: "*", effect: "allow" })),
-    ...base.flatMap((r) => (r.action === "*" ? granted.map((action) => ({ ...r, action })) : granted.includes(r.action) ? [r] : [])),
+    ...base.flatMap((r) => (r.action === "*" ? granted.map((action) => ({ ...r, action })) : kept(r) ? [r] : [])),
   ];
 }
+/** `*` of an action pattern as a regular expression (every other character literal). */
+const glob = (pattern: string) => new RegExp(`^${pattern.split("*").map((p) => p.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`);
+/** Whether two action patterns can match one tool key: one matches the other (OpenCode tool keys contain no `*`). */
+const overlaps = (a: string, b: string) => glob(a).test(b) || glob(b).test(a);
 
 export type InlineCap = "turns" | "tokens";
 

@@ -236,6 +236,8 @@ class OpenCode2Session implements EngineSession {
   /** The daemon MCP servers attached to OpenCode for this session (orchestration on and no unkept Aside; a claude-ui tool group enabled). */
   private mcpOn = new Set<McpServerKey>();
   private attaching: Promise<void> | undefined;
+  /** The servers this session object added: a server OpenCode lists as connected before that may carry a bearer an earlier close dropped. */
+  private readonly added = new Set<McpServerKey>();
 
   constructor(
     private readonly engine: OpenCode2EngineImpl,
@@ -488,9 +490,10 @@ class OpenCode2Session implements EngineSession {
       for (const key of keys) {
         attaching = key;
         const name = mcpName(this.id, key);
-        if (listed.some((m) => m.name === name && m.status.status === "connected")) continue;
+        if (this.added.has(key) && listed.some((m) => m.name === name && m.status.status === "connected")) continue;
         const config = { type: "remote" as const, url: url!, headers: { authorization: `Bearer ${route!.token(this.id, key)}` }, oauth: false as const, codemode: false, timeout: { execution: mcpTimeoutMs(key, this.opts) } };
         await client.experimental.mcp.add({ server: name, location, config });
+        this.added.add(key);
       }
     })()
       .catch((err) => this.notice(`mcp_failed:${ascending("msg")}`, `Could not attach the ${attaching} tools to OpenCode: ${(err as Error).message}`))
@@ -868,7 +871,7 @@ class OpenCode2Session implements EngineSession {
       input,
       pending: () => this.reqs.has(e.id),
       show: (title, onAllow) => this.session.request({ part: { ...part, ...(title !== undefined && { title }) }, onAllow, reply }),
-      allowOnce: () => this.answer(e.id, { kind: "allow", decision: "allow" } as Reply),
+      allowOnce: () => this.answer(e.id, { kind: "allow", decision: "allow" }),
     });
     if (!daemonCard) this.session.request({ part, reply });
   }

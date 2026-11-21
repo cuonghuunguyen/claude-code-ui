@@ -1058,6 +1058,21 @@ describe("OpenCode 2 sessions: the daemon's MCP servers (orchestration, claude-u
     expect(d.requests("POST", /\/permission\/.+\/reply$/)[0]!.body).toEqual({ decision: "once" });
   });
 
+  it("worker_start over the worker cap shows no card: OpenCode is answered once and the tool itself refuses", async () => {
+    const d = await boot({ script: ["worker-start"] });
+    await d.ok({ type: "settings.set", patch: { orchestration: { enabled: true, workerCap: 1 } } });
+    const s = await d.open();
+    // One worker already runs: the cap is reached.
+    await until(() => adds(d, mcpName(s.id)).length === 1);
+    const o = adds(d, mcpName(s.id))[0]!.body.config;
+    const c = await mcpClient(o.url, o.headers.authorization);
+    expect(JSON.parse(((await c.callTool({ name: "worker_start", arguments: { name: "w1", cwd: d.project, prompt: "do it" } })) as any).content[0].text)).toMatchObject({ name: "w1" });
+    await s.prompt("start a worker");
+    await until(() => d.requests("POST", /\/permission\/.+\/reply$/).length === 1);
+    expect(d.requests("POST", /\/permission\/.+\/reply$/)[0]!.body).toEqual({ decision: "once" });
+    expect(s.find("permission_request")).toBeUndefined();
+  });
+
   it("servers an OpenCode restart dropped are attached again at the next prompt; an attach that fails is a warning and the prompt still goes", async () => {
     const d = await boot();
     await on(d);
