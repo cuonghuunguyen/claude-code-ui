@@ -32,7 +32,7 @@ afterEach(() => cleanups.splice(0).forEach((c) => c()));
 /** A stored OpenCode 2 session row of the fake. */
 const row = (id: string, directory: string, title: string, updated: number, extra = {}) => ({ id, directory, title, time: { created: 1, updated }, ...extra });
 
-async function boot(o: { script?: string[]; data?: object; env?: Record<string, string>; sessionsJson?: object; allowBypass?: boolean; /** The binary (default: the fake OpenCode 2). */ bin?: string; /** The adapter record on disk before the start. */ adapters?: object; /** A folder where the record file should be: a save of the record fails. */ adaptersBroken?: boolean } = {}) {
+async function boot(o: { script?: string[]; data?: object; env?: Record<string, string>; sessionsJson?: object; allowBypass?: boolean; /** The binary (default: the fake OpenCode 2). */ bin?: string; /** The adapter record on disk before the start. */ adapters?: object; /** A folder where the record file should be: a save of the record fails. */ adaptersBroken?: boolean; /** "PROJECT" in `data` stands for the project folder. */ projectDirInData?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "oc2-")));
   const project = join(root, "project");
   const other = join(root, "other");
@@ -40,7 +40,8 @@ async function boot(o: { script?: string[]; data?: object; env?: Record<string, 
   mkdirSync(other, { recursive: true });
   const logFile = join(root, "fake.log");
   const dataFile = join(root, "data.json");
-  writeFileSync(dataFile, JSON.stringify({ sessions: [], messages: {}, ...o.data }));
+  const data = JSON.stringify({ sessions: [], messages: {}, ...o.data });
+  writeFileSync(dataFile, o.projectDirInData ? data.replaceAll('"PROJECT"', JSON.stringify(project)) : data);
   if (o.sessionsJson) writeFileSync(join(root, "sessions.json"), JSON.stringify(o.sessionsJson));
   const adaptersFile = join(root, "opencode-adapters.json");
   if (o.adapters) writeFileSync(adaptersFile, JSON.stringify(o.adapters));
@@ -651,6 +652,19 @@ describe("OpenCode 2 sessions: rename, archive, delete and Aside", { timeout: TE
     const r = await owned([msg("msg_u1", "user"), msg("msg_a1", "assistant", done)], { revert: { messageID: "msg_u1" } });
     expect(await r.request({ type: "aside.open", sessionId: "ses_own", text: "q" })).toMatchObject({ type: "error", code: "aside_unavailable" });
     expect([...d.requests("POST", /\/fork$/), ...r.requests("POST", /\/fork$/)]).toEqual([]);
+  });
+
+  it("an Aside left open by a stopped daemon is deleted in OpenCode 2 at the next start, with its link and record", async () => {
+    // The popup was never closed (reload, crash): the fork, its owner link and its adapter record are what the stopped daemon left.
+    const d = await boot({
+      data: { sessions: [row("ses_own", "PROJECT", "Owner", 5000), row("ses_fork", "PROJECT", "what is two", 6000)], messages: { ses_own: [msg("msg_u1", "user")], ses_fork: [msg("msg_u2", "user")] } },
+      sessionsJson: { ses_fork: { ownerId: "ses_own", readOnly: true }, ses_own: {} },
+      adapters: { ses_own: 2, ses_fork: 2 },
+      projectDirInData: true,
+    });
+    await until(() => d.requests("DELETE", "/api/session/ses_fork").length === 1);
+    await until(() => !d.recorded().ses_fork && !link(d, "ses_fork"));
+    expect(d.recorded()).toEqual({ ses_own: 2 });
   });
 
   it("a failure after the fork deletes the fork and its record", async () => {
