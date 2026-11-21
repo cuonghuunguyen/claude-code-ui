@@ -311,7 +311,10 @@ describe("Jira over the wire", () => {
     // Another computer's Hub syncs its settings (global URL of its own, this Side's Project entries of its own: none).
     expect(await hub({ type: "settings.set", patch: { jira: { url: "https://acme.atlassian.net" }, projects: { overrides: {} } } })).toMatchObject({ type: "reply" });
     expect(JSON.parse(readFileSync(secretsFile, "utf8")).jiraTokens).toEqual({ [OWN]: PROJECT_TOKEN, "": JIRA_TOKEN });
-    // A change of this machine's own settings cleans up the tokens no URL uses.
+    // A later own change that stops using no Jira URL drops nothing, though the sync replaced the URLs those tokens were saved for.
+    await c.request({ type: "settings.set", patch: { labels: { projects: {}, sides: {} } } });
+    expect(JSON.parse(readFileSync(secretsFile, "utf8")).jiraTokens).toEqual({ [OWN]: PROJECT_TOKEN, "": JIRA_TOKEN });
+    // An own change of the global URL binds the token typed without URL; nothing else is dropped.
     await c.request({ type: "settings.set", patch: { jira: { url: OWN } } });
     expect(JSON.parse(readFileSync(secretsFile, "utf8")).jiraTokens).toEqual({ [OWN]: JIRA_TOKEN });
   });
