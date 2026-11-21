@@ -242,6 +242,8 @@ class OpenCodeSession implements EngineSession {
   private sentAt = 0;
   /** The agent chosen with `setAgent`, the plan alias, or followed from OpenCode's own UI; else the worker link's agent, else build. */
   private chosen: string | undefined;
+  /** When `chosen` was last set (ms): a user message OpenCode created before it does not switch the agent back (GH-905). */
+  private chosenAt = 0;
   /** The agent of the last block written (the block holds its denials). */
   private writtenAgent: string | undefined;
   /** A followed agent switch is being written (one block per switch, however many `message.updated` events). */
@@ -309,7 +311,10 @@ class OpenCodeSession implements EngineSession {
     const mode = opts.permissionMode ?? (!marked ? "config" : OPENCODE_MODES.includes(marked) && (marked !== "bypassPermissions" || opts.allowBypass) ? marked : "default");
     // Plan is the plan agent (GH-684): a saved, restored or requested plan mode opens as agent `plan` with the default permission mode.
     this.permissionMode = mode === "plan" ? "default" : mode;
-    if (mode === "plan") this.chosen = "plan";
+    if (mode === "plan") {
+      this.chosen = "plan";
+      this.chosenAt = Date.now();
+    }
     this.effort = opts.effort ?? "default";
     // A new session got its block with `POST /session` (the plan agent for a plan start, else build); a legacy plan block has no agent marker.
     this.written = history ? modeOf(history.permission) : this.permissionMode;
@@ -471,6 +476,7 @@ class OpenCodeSession implements EngineSession {
     if (!list.some((a) => a.name === agent)) throw new Error(`unknown agent ${agent}. OpenCode agents here: ${list.map((a) => a.name).join(", ")}`);
     await this.writeBlock(this.permissionMode, agent);
     this.chosen = agent;
+    this.chosenAt = Date.now();
     this.session.emit({ type: "session_agent", id: "session_agent", agent });
     this.changed("agent", "permissionMode"); // a saved legacy `plan` mode must not win over the agent at the next restore
   }
@@ -1085,7 +1091,9 @@ class OpenCodeSession implements EngineSession {
       case "message.updated": {
         const info = p.info;
         // plan_exit "Yes" (agent build), or another agent chosen in OpenCode's own UI: follow it. Hidden agents (compaction, title) never match.
-        if (root && info.role === "user" && !this.mapper.own.has(info.id) && info.agent !== this.agentNow() && !this.following) {
+        // Only a message created after the last agent choice: a late update of an earlier one (its summary after the turn) is no new choice (GH-905).
+        // Both clocks are this machine's (OpenCode runs beside the daemon); a message without a time is followed.
+        if (root && info.role === "user" && !this.mapper.own.has(info.id) && info.agent !== this.agentNow() && !this.following && (info.time?.created ?? Infinity) > this.chosenAt) {
           this.following = true;
           void this.followAgent(info.agent).finally(() => (this.following = false));
         }
