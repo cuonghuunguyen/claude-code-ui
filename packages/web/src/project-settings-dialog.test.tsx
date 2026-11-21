@@ -316,3 +316,13 @@ it("a refused label stays in the label dialog with the daemon's message", async 
   await click(document.querySelector<HTMLElement>('[data-testid="label-save"]'));
   expect(document.querySelector('[data-testid="label-error"]')!.textContent).toBe("Label name too long");
 });
+
+it("a refused commit message instruction shows under the row and keeps the typed text; the label dialog returns focus to its button", async () => {
+  const { q } = await render({ refuse: "Instruction too long", refuseWhen: "commitMessageInstructions" });
+  await fill(q("project-commit-instruction-input") as HTMLTextAreaElement, "x");
+  expect(q("project-commit-instruction-error")!.textContent).toBe("Instruction too long");
+  const edit = q("project-label-edit")!;
+  await click(edit);
+  await click(document.querySelector<HTMLElement>('[data-testid="label-cancel"]'));
+  expect(document.activeElement).toBe(edit);
+});

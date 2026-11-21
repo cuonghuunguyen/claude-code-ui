@@ -161,6 +161,9 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
   const [fieldError, setFieldError] = useState<{ id: string; message: string }>();
   const [busy, setBusy] = useState(false);
   const [labelOpen, setLabelOpen] = useState(false);
+  const labelButton = useRef<HTMLButtonElement>(null);
+  // The Label dialog never outlives its Project settings dialog or shows for another Project.
+  useEffect(() => setLabelOpen(false), [open, cwd]);
   const ask = useRef(request);
   ask.current = request;
 
@@ -264,7 +267,7 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
                   <div className="flex items-center gap-2 max-md:w-full">
                     {projectLabel?.icon && <LabelIcon icon={projectLabel.icon} className="size-6 text-lg" />}
                     <span className="min-w-0 max-w-40 truncate text-sm max-md:max-w-none max-md:flex-1" data-testid="project-label-name">{projectLabel?.name || name}</span>
-                    <Button variant="outline" type="button" onClick={() => setLabelOpen(true)} className="max-md:h-11" data-testid="project-label-edit">
+                    <Button ref={labelButton} variant="outline" type="button" onClick={() => setLabelOpen(true)} className="max-md:h-11" data-testid="project-label-edit">
                       {t("projectSettings.label.edit")}
                     </Button>
                   </div>
@@ -402,7 +405,7 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
             )}
         </>
       )}
-      {settings?.labels && <LabelDialog open={labelOpen} title={t("label.projectTitle", { name })} fallbackName={baseName(cwd)} label={projectLabel} onSave={saveLabel} onClose={() => setLabelOpen(false)} />}
+      {settings?.labels && <LabelDialog open={labelOpen} title={t("label.projectTitle", { name })} fallbackName={baseName(cwd)} label={projectLabel} onSave={saveLabel} finalFocus={() => labelButton.current} onClose={() => setLabelOpen(false)} />}
     </ConfigDialog>
   );
 }
