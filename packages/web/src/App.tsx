@@ -120,7 +120,7 @@ import { announceDraft, flushDrafts, onDraftWritten, useDraft } from "./use-draf
 import { RunInTerminalContext } from "./shell-fence.tsx";
 import { ClaudeLoginContext, RawPart } from "./raw-part.tsx";
 import { QuoteAction, QuoteButton, QuoteContext } from "./quote-button.tsx";
-import { PlanMeter } from "./plan-meter.tsx";
+import { GLOBAL_ROW, PlanMeter, type PlanProject } from "./plan-meter.tsx";
 import { ContinueDock } from "./continue-dock.tsx";
 import { foregroundShells, StatusBar, totals, type Totals } from "./status-bar.tsx";
 import { rewindOptions } from "./rewind.ts";
@@ -179,7 +179,7 @@ import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { LabelDialog } from "./label-dialog.tsx";
-import { draftStart, overridesOf, sideOfCwd } from "./project-settings.ts";
+import { accountScopeOf, draftStart, overridesOf, setOverride, sideOfCwd } from "./project-settings.ts";
 import { applySettingsChanged, fromSettingsGet, publishSettings, type SettingsView } from "./settings-projection.ts";
 import { projectLabel, saveLabel, useLabels } from "./labels.ts";
 import { ENGINE_ICON, ENGINE_NAME, EngineTag } from "./engine-tag.tsx";
@@ -311,7 +311,12 @@ export function App() {
   const [list, setList] = useState<SessionListItem[]>([]);
   // Account-wide plan limits; null (API key, Bedrock, Vertex) or not yet known hides the meter.
   const [plan, setPlan] = useState<PlanUsage | null>(null);
-  const planStatus = useRef<string>(undefined);
+  // The usage of each Claude account in use (GH-900), by account key; the meter of a Project that overrides the account reads its own.
+  const [accountUsage, setAccountUsage] = useState<Record<string, PlanUsage | null>>({});
+  // The last plan status per account key (a hit limit is offered once), the key of the global account and the one of the shown Session.
+  const planStatus = useRef<Record<string, string | undefined>>({});
+  const globalKey = useRef("");
+  const acctShownKey = useRef("");
   // Known project cwds from the daemon, newest first.
   const [projects, setProjects] = useState<string[]>([]);
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
@@ -1437,6 +1442,16 @@ export function App() {
       stop?.();
     };
   }, []);
+  /** GH-722: the usage of an account turns to a hit limit (the previous status is read from the same stream); offered while a Session of that account shows. */
+  function noteStatus(key: string, u: PlanUsage | null) {
+    if (u?.status === "rejected" && planStatus.current[key] !== "rejected" && key === acctShownKey.current) offer("switchAccount", { accounts: recNow.current.accounts }, () => {
+      // The plan meter's popover holds the switcher; without a meter, Settings opens on the Claude account group.
+      const meter = document.querySelector<HTMLElement>('[data-testid="plan-meter"]');
+      if (meter) meter.click();
+      else (setSettingsOpen(true), saveSettingsGroup("account"));
+    });
+    planStatus.current[key] = u?.status;
+  }
   /** The connection and everything hanging off it; returns the teardown. */
   function connectApp(): () => void {
     const c = connect({
@@ -1447,18 +1462,8 @@ export function App() {
         if (m.deleted) forget(m.deleted, true);
         void refreshList();
       },
-      onPlanUsage: (u) => {
-        // GH-722: the usage turns to a hit limit; the previous status is read from the same stream.
-        const hit = u?.status === "rejected";
-        if (hit && planStatus.current !== "rejected") offer("switchAccount", { accounts: recNow.current.accounts }, () => {
-          // The plan meter's popover holds the switcher; without a meter, Settings opens on the Claude account group.
-          const meter = document.querySelector<HTMLElement>('[data-testid="plan-meter"]');
-          if (meter) meter.click();
-          else (setSettingsOpen(true), saveSettingsGroup("account"));
-        });
-        planStatus.current = u?.status;
-        setPlan(u);
-      },
+      onPlanUsage: (u) => (noteStatus(globalKey.current, u), setPlan(u)),
+      onAccountUsage: (key, u) => (noteStatus(key, u), setAccountUsage((m) => ({ ...m, [key]: u }))),
       onProvidersChanged: catalogue.providersChanged,
       onSettingsChanged: (m) => (publishSettings(m.settings, "changed"), setSettingsView((v) => applySettingsChanged(v, m)), setSettingsChanged((n) => n + 1), setReposSeq((n) => n + 1)),
       onUpdate: (m) => setUpdate((u) => nextUpdate(u, m)),
@@ -3099,6 +3104,19 @@ export function App() {
   const shownEngine: Engine | undefined = draftShown ? draftEngine : shown ? engineOf(shown) : undefined;
   const shownCaps = (draftShown ? engineEntry?.capabilities : shown ? capabilitiesOf(shown) : undefined) ?? ALL_CAPABILITIES;
   const shownCwd = draftShown ? draftProject : shown?.cwd;
+  // GH-900: the Claude account the shown Session (or the draft's Project) runs on. An older daemon sends no per-account usage: the global meter stays.
+  const acctView = { overrides: settingsView?.projectOverrides, cwdSides, worktrees, account: claudeAccount, accounts: claudeAccounts };
+  const acct = accountScopeOf(acctView, shownCwd);
+  const projectScope = !!acct.project && Object.keys(accountUsage).length > 0;
+  globalKey.current = accountScopeOf({ ...acctView, overrides: undefined }, undefined).key;
+  acctShownKey.current = projectScope ? acct.key : globalKey.current;
+  const accountName = (key: string) => (key === "" ? tr("app.plan.accountDefaultShort") : key === "cli" ? tr("app.plan.accountCli") : (claudeAccounts.find((a) => a.id === key)?.name ?? key));
+  const setProjectAccount = (cwd: string, account: string | undefined) =>
+    void client.current!.request({ type: "settings.set", patch: { projects: { overrides: setOverride(settingsView?.projectOverrides, LOCAL_SIDE, cwd, { account }) } } }).catch((e) => setError((e as Error).message));
+  const planProject: PlanProject | undefined = projectScope
+    ? { name: projectName(acct.project!), account: accountName(acct.key), globalName: accountName(globalKey.current), onGlobal: () => setProjectAccount(acct.project!, undefined), onSettings: () => setProjectSettings({ open: true, cwd: acct.project! }) }
+    : undefined;
+  const meterUsage = projectScope ? (accountUsage[acct.key] ?? null) : plan;
   const shownList = shownEngine ? modelsOf(shownEngine, shownCwd) : undefined;
   useEffect(() => {
     if (shownEngine && status === "connected") catalogue.load(sourceOf(shownEngine, shownCwd));
@@ -3299,7 +3317,8 @@ export function App() {
   const selectedChange = changesShown && changesNow.selected ? changesNow.selected : undefined;
   const revealCwd = panelTarget?.cwd ?? shownCwd;
   const revealPath = activeFilesPath ?? selectedChange?.path ?? revealCwd;
-  const accountChoices = [...(claudeEnvToken ? [{ id: "", title: tr("app.plan.accountDefault") }] : []), { id: "cli", title: tr("app.plan.accountCli") }, ...claudeAccounts.map((a) => ({ id: a.id, title: a.name }))];
+  const switcherActive = overridesOf(settingsView?.projectOverrides, cwdSides, shownCwd, worktrees).account;
+  const accountChoices = [...(planProject ? [{ id: GLOBAL_ROW, title: tr("app.plan.accountGlobal", { name: planProject.globalName }) }] : []), ...(claudeEnvToken ? [{ id: "", title: tr("app.plan.accountDefault") }] : []), { id: "cli", title: tr("app.plan.accountCli") }, ...claudeAccounts.map((a) => ({ id: a.id, title: a.name }))];
   const gitAsk = (pane: "changes" | "graph", ask: Parameters<typeof askPanel>[0]) => () => (reveal(pane), askPanel(ask));
   const commands = appCommands({
     newWorktree: canWorktree ? () => setCreatingWt(gitProject) : undefined,
@@ -3391,7 +3410,7 @@ export function App() {
     revealFile: openExternal && revealCwd && revealPath && openExternal.canOpen(revealCwd) ? () => openExternal.run(revealPath, "reveal", revealCwd) : undefined,
     addToPrompt: selectedChange && !selectedChange.deleted ? () => (setInsert(fileMention(selectedChange.path, selectedChange.cwd)), setPane("session")) : undefined,
     sendSelection: changesShown && changesNow.hasDiffSelection ? () => askPanel({ kind: "sendSelection" }) : undefined,
-    accounts: shownCaps.account ? { choices: accountChoices, active: claudeAccount === "" && !claudeEnvToken ? "cli" : claudeAccount, switchTo: (id) => void client.current!.request({ type: "settings.set", patch: { claude: { account: id } } }).catch((e) => setError((e as Error).message)) } : undefined,
+    accounts: shownCaps.account ? (planProject ? { choices: accountChoices, active: switcherActive, project: true, switchTo: (id) => (id === GLOBAL_ROW ? planProject.onGlobal() : setProjectAccount(acct.project!, id)) } : { choices: accountChoices, active: claudeAccount === "" && !claudeEnvToken ? "cli" : claudeAccount, switchTo: (id) => void client.current!.request({ type: "settings.set", patch: { claude: { account: id } } }).catch((e) => setError((e as Error).message)) }) : undefined,
     resetLayout: resetPanes,
     flipSide: () => saveLayout(flipSide(layout)),
     side: layout.side,
@@ -3823,7 +3842,7 @@ export function App() {
           />
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5 max-md:gap-2">
-          {plan && status !== "unauthorized" && shownCaps.planMeter && <PlanMeter usage={plan} switcher={!shownCaps.account ? undefined : { accounts: claudeAccounts, active: claudeAccount, envToken: claudeEnvToken, onSwitch: (id) => void client.current!.request({ type: "settings.set", patch: { claude: { account: id } } }).catch((e) => setError((e as Error).message)), onManage: () => (setSettingsOpen(true), saveSettingsGroup("account")) }} />}
+          {meterUsage && status !== "unauthorized" && shownCaps.planMeter && <PlanMeter usage={meterUsage} project={planProject} switcher={!shownCaps.account ? undefined : { accounts: claudeAccounts, active: planProject ? (switcherActive === "" && !claudeEnvToken ? "cli" : switcherActive!) : claudeAccount, envToken: claudeEnvToken, onSwitch: (id) => (planProject ? setProjectAccount(acct.project!, id) : void client.current!.request({ type: "settings.set", patch: { claude: { account: id } } }).catch((e) => setError((e as Error).message))), onManage: () => (setSettingsOpen(true), saveSettingsGroup("account")) }} />}
           {/* Below sm the tab switcher needs the width for the session name: search and theme live in the drawer. */}
           {canQuickOpen && (
             <IconButton className="max-sm:hidden" label={quickOpenLabel()} onClick={showQuickOpen} testId="quick-open-button" command="file.open">

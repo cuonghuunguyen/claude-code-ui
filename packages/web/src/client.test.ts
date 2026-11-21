@@ -379,6 +379,20 @@ describe("batched apply of received messages (GH-760)", () => {
     d.stop();
   });
 
+  it("account_usage reaches onAccountUsage with its key, in order, and is no unknown reply (GH-900)", async () => {
+    const log: string[] = [];
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const usage = { plan: "pro", windows: [], status: "allowed" };
+    const d = await daemon((s) => [{ type: "plan_usage", usage }, { type: "account_usage", key: "a1", usage }, { type: "account_usage", key: "cli", usage: null }].forEach((m) => s.send(JSON.stringify(m))));
+    const c = connect({ url: d.url, token: "t", wakeEvents: noWake, onEvents: () => {}, onPlanUsage: () => log.push("plan"), onAccountUsage: (k, u) => log.push(`${k}:${u ? "usage" : "null"}`) });
+    await until(() => log.length === 3);
+    expect(log).toEqual(["plan", "a1:usage", "cli:null"]);
+    expect(err).not.toHaveBeenCalled();
+    err.mockRestore();
+    c.close();
+    d.stop();
+  });
+
   it("yields to the page after 8 ms of work, then goes on in the next task", async () => {
     let clock = 0;
     const batches: number[][] = [];

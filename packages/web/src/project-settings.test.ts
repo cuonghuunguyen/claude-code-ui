@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectOverrides } from "@claude-ui/protocol";
-import { draftStart, jiraOf, jiraOriginOf, jiraTokenFor, overridesOf, setOverride } from "./project-settings.ts";
+import { accountKeyOf, accountScopeOf, draftStart, jiraOf, jiraOriginOf, jiraTokenFor, overridesOf, setOverride } from "./project-settings.ts";
 
 const map = (side: string, cwd: string, o: ProjectOverrides) => ({ [side]: { [cwd]: o } });
 
@@ -85,5 +85,28 @@ describe("Jira of a Project", () => {
     // An older daemon reports the one global token only.
     expect(jiraTokenFor({ jiraToken: true }, "https://acme.atlassian.net")).toBe(true);
     expect(jiraTokenFor({ jiraToken: false }, "https://acme.atlassian.net")).toBe(false);
+  });
+});
+
+describe("accountKeyOf (GH-900)", () => {
+  const view = (overrides: Parameters<typeof accountKeyOf>[0]["overrides"], extra: Partial<Parameters<typeof accountKeyOf>[0]> = {}) => ({ overrides, cwdSides: {}, account: "a1", accounts: [{ id: "a1" }, { id: "b2" }], ...extra });
+  it("the Project's account, else the global one", () => {
+    const v = view(map("local", "/p", { account: "b2" }));
+    expect(accountScopeOf(v, "/p")).toEqual({ key: "b2", project: "/p" });
+    expect(accountScopeOf(v, "/q")).toEqual({ key: "a1" });
+    expect(accountKeyOf(v, undefined)).toBe("a1");
+  });
+  it("a Worktree takes its Project's account and names the Project", () => {
+    const worktrees = { "/p": [{ path: "/p-wt" }] } as never;
+    expect(accountScopeOf(view(map("local", "/p", { account: "b2" }), { worktrees }), "/p-wt")).toEqual({ key: "b2", project: "/p" });
+  });
+  it("a Side Session keeps the global account, whatever the entry says", () => {
+    expect(accountScopeOf(view(map("wsl:U", "/p", { account: "b2" }), { cwdSides: { "/p": "wsl:U" } }), "/p")).toEqual({ key: "a1" });
+  });
+  it("the raw value is the key: Default and CLI login stay apart, an unknown id counts as Default", () => {
+    expect(accountKeyOf(view(map("local", "/p", { account: "" })), "/p")).toBe("");
+    expect(accountKeyOf(view(map("local", "/p", { account: "cli" }), { account: "" }), "/p")).toBe("cli");
+    expect(accountKeyOf(view(map("local", "/p", { account: "gone" })), "/p")).toBe("");
+    expect(accountKeyOf(view({}, { account: "gone" }), "/p")).toBe("");
   });
 });

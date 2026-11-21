@@ -1,7 +1,7 @@
 // Plan usage meter (Claude Code /usage): the headline window (the worst one when warning) as ring + percent in the titlebar; click shows every window with its reset time.
 import { useEffect, useState } from "react";
 import { Popover } from "@base-ui/react/popover";
-import { CheckIcon, TriangleAlertIcon } from "lucide-react";
+import { CheckIcon, FolderCogIcon, TriangleAlertIcon } from "lucide-react";
 import type { PlanUsage, PlanWindow } from "@claude-ui/protocol";
 import { Ring } from "./context-meter.tsx";
 import { dateFormat, t, useT } from "./i18n.ts";
@@ -79,10 +79,18 @@ function headline(windows: PlanWindow[], level: PlanLevel) {
 /** The Claude accounts the ring's popover can switch to (GH-615). `active`: the setting (`""` Default, `"cli"`, a token account's id). `envToken`: Default is a token of the daemon's environment (else Default and CLI login are the same login). */
 export type PlanAccounts = { accounts: { id: string; name: string }[]; active: string; envToken: boolean; onSwitch: (id: string) => void; onManage?: () => void };
 
+/** The shown Session's Project sets its own Claude account (GH-900): the meter then reads that account's usage and the switcher changes the Project's account. `account`: its name; `globalName`: the account the Project falls back to (the Global row); `onGlobal` removes the override. */
+export type PlanProject = { name: string; account: string; globalName: string; onGlobal: () => void; onSettings?: () => void };
+
+/** The id of the "Global (name)" row of a Project scope switcher (the palette page uses it too): it unsets the Project's account. */
+export const GLOBAL_ROW = "\0global";
+const rowClass = "flex h-8 items-center gap-2 rounded-md px-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 pointer-coarse:h-11";
+const linkClass = "h-8 rounded-md px-2 text-muted-foreground text-xs underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 pointer-coarse:h-11";
+
 /** Every window with its reset time; a Popover.Root child (titlebar meter, status bar). */
-export function PlanPopup({ usage, side, switcher }: { usage: PlanUsage; side: "top" | "bottom"; switcher?: PlanAccounts }) {
+export function PlanPopup({ usage, side, switcher, project }: { usage: PlanUsage; side: "top" | "bottom"; switcher?: PlanAccounts; project?: PlanProject }) {
   const t = useT();
-  const choices = switcher ? [...(switcher.envToken ? [{ id: "", name: t("app.plan.accountDefault") }] : []), { id: "cli", name: t("app.plan.accountCli") }, ...switcher.accounts] : [];
+  const choices = switcher ? [...(project ? [{ id: GLOBAL_ROW, name: t("app.plan.accountGlobal", { name: project.globalName }) }] : []), ...(switcher.envToken ? [{ id: "", name: t("app.plan.accountDefault") }] : []), { id: "cli", name: t("app.plan.accountCli") }, ...switcher.accounts] : [];
   const canSwitch = choices.length > 1;
   const limited = usage.status === "rejected";
   // Mounted only while open: "in 2h 5m" stays current while it shows.
@@ -98,9 +106,15 @@ export function PlanPopup({ usage, side, switcher }: { usage: PlanUsage; side: "
           <Popover.Title className="font-medium">{t("app.plan.name")}</Popover.Title>
           {usage.plan && <span className="text-muted-foreground text-xs">{t("app.plan.planName", { plan: `${usage.plan[0]!.toUpperCase()}${usage.plan.slice(1)}` })}</span>}
         </div>
-        {usage.account && (
+        {(project?.account ?? usage.account) && (
           <p data-testid="plan-account" className="mt-1 text-muted-foreground text-xs">
-            {t("app.plan.account", { name: usage.account })}
+            {t("app.plan.account", { name: (project?.account ?? usage.account)! })}
+          </p>
+        )}
+        {project && (
+          <p data-testid="plan-project" className="mt-0.5 flex items-center gap-1 text-muted-foreground text-xs">
+            <FolderCogIcon className="size-3.5 shrink-0" aria-hidden />
+            {t("app.plan.setByProject", { project: project.name })}
           </p>
         )}
         {usage.auth === "oauth_token" && (
@@ -135,22 +149,32 @@ export function PlanPopup({ usage, side, switcher }: { usage: PlanUsage; side: "
         </ul>}
         {canSwitch && (
           <div data-testid="plan-accounts" className="mt-3 border-t pt-2">
-            <p className="mb-1 text-muted-foreground text-xs">{t("app.plan.switchAccount")}</p>
+            <p className="mb-1 text-muted-foreground text-xs">{project ? t("app.plan.switchProjectAccount") : t("app.plan.switchAccount")}</p>
             <div role="radiogroup" aria-label={t("app.plan.accountsLabel")} className="flex flex-col">
               {choices.map((c) => {
                 const on = c.id === switcher!.active || (!switcher!.envToken && switcher!.active === "" && c.id === "cli");
                 return (
-                  <button key={c.id || "default"} type="button" role="radio" aria-checked={on} data-testid="plan-account-option" onClick={() => !on && switcher!.onSwitch(c.id)} className="flex h-8 items-center gap-2 rounded-md px-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 pointer-coarse:h-11">
+                  <button key={c.id || "default"} type="button" role="radio" aria-checked={on} data-testid="plan-account-option" onClick={() => !on && (c.id === GLOBAL_ROW ? project!.onGlobal() : switcher!.onSwitch(c.id))} className={rowClass}>
                     <span className="min-w-0 flex-1 truncate">{c.name}</span>
                     {on && <CheckIcon className="size-3.5 shrink-0" aria-hidden />}
                   </button>
                 );
               })}
             </div>
-            {switcher!.onManage && (
-              <button type="button" data-testid="plan-manage-accounts" onClick={switcher!.onManage} className="mt-1 h-8 rounded-md px-2 text-muted-foreground text-xs underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 pointer-coarse:h-11">
-                {t("app.plan.manageAccounts")}
-              </button>
+            {(project?.onSettings || switcher!.onManage) && (
+              <div className="mt-1 flex flex-wrap items-center gap-x-1">
+                {/* The dialog takes the focus: the popover closes with the click. */}
+                {project?.onSettings && (
+                  <Popover.Close data-testid="plan-project-settings" onClick={project.onSettings} className={linkClass}>
+                    {t("app.plan.projectSettings")}
+                  </Popover.Close>
+                )}
+                {switcher!.onManage && (
+                  <button type="button" data-testid="plan-manage-accounts" onClick={switcher!.onManage} className={linkClass}>
+                    {t("app.plan.manageAccounts")}
+                  </button>
+                )}
+              </div>
             )}
           </div>
         )}
@@ -160,7 +184,7 @@ export function PlanPopup({ usage, side, switcher }: { usage: PlanUsage; side: "
   );
 }
 
-export function PlanMeter({ usage, switcher }: { usage: PlanUsage; switcher?: PlanAccounts }) {
+export function PlanMeter({ usage, switcher, project }: { usage: PlanUsage; switcher?: PlanAccounts; project?: PlanProject }) {
   const t = useT();
   const level = planLevel(usage);
   // Settings > Usage limits > Usage ring shows: the number and ring follow the chosen window; level, color and icon stay with the worst one.
@@ -172,7 +196,7 @@ export function PlanMeter({ usage, switcher }: { usage: PlanUsage; switcher?: Pl
     : unavailable
       ? t("app.plan.oauthUnavailable")
       : t("app.plan.summaryWindow", { name: NAME[level](), window: head ? `${head.label} ${head.percent}%${head.resetsAt ? `, ${lower(resetText(head.resetsAt))}` : ""}` : t("app.plan.noWindows") });
-  const named = usage.account ? `${usage.account}: ${summary}` : summary;
+  const named = project ? t("app.plan.namedProject", { account: project.account, project: project.name, summary }) : usage.account ? `${usage.account}: ${summary}` : summary;
   return (
     <Popover.Root>
       <Popover.Trigger
@@ -190,8 +214,15 @@ export function PlanMeter({ usage, switcher }: { usage: PlanUsage; switcher?: Pl
           <TriangleAlertIcon className="size-3.5 shrink-0" data-testid="plan-warning-icon" aria-hidden />
         )}
         {head ? `${head.percent}%` : "–"}
+        {/* Not color only: icon and name. Below md the name only fits in the popover (the titlebar is taken by the tab switcher). */}
+        {project && (
+          <span data-testid="plan-account-chip" className="flex min-w-0 items-center gap-1 text-muted-foreground">
+            <FolderCogIcon className="size-3.5 shrink-0" aria-hidden />
+            <span data-testid="plan-account-name" className="max-w-32 truncate max-md:hidden">{project.account}</span>
+          </span>
+        )}
       </Popover.Trigger>
-      <PlanPopup usage={usage} side="bottom" switcher={switcher} />
+      <PlanPopup usage={usage} side="bottom" switcher={switcher} project={project} />
     </Popover.Root>
   );
 }
