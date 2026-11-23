@@ -97,6 +97,7 @@ import { addonCommandOf, commandRows, AddonApiContext, AddonCommandContext, Addo
 import { AddonBands, AddonFrame, type AddonHandle } from "./addon-frame.tsx";
 import { addonThemes } from "./themes.ts";
 import { Backdrop } from "./backdrop.tsx";
+import { SlotsProvider, useThinkingPhrase } from "./slots.tsx";
 import { saveGroup as saveSettingsGroup } from "./settings-group.ts";
 import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
@@ -3786,6 +3787,7 @@ export function App() {
     <AddonApiContext value={addonApi}>
     <AddonStatusContext value={addonStatus}>
     <AddonCommandContext value={runAddonCommand}>
+    <SlotsProvider>
     <AvatarColors value={colors}>
     <SideLabel value={sideOf.badge}>
     <SideState value={sideState}>
@@ -4774,6 +4776,7 @@ export function App() {
     </SideState>
     </SideLabel>
     </AvatarColors>
+    </SlotsProvider>
     </AddonCommandContext>
     </AddonStatusContext>
     </AddonApiContext>
@@ -5020,7 +5023,7 @@ function StartingSession({ cwd, place, pending }: { cwd: string; place?: string;
             {pending.map((p, i) => (
               <PendingMessage key={p.key} p={p} view={EMPTY_VIEW} index={i} />
             ))}
-            <ThinkingRow className="mt-3" />
+            <ThinkingRow className="mt-3" turn={pending[pending.length - 1]?.key} />
           </>
         }
       />
@@ -5612,7 +5615,7 @@ export function SessionPane({
   const shownPending = current ? [] : unechoed(pending, view);
   // GH-683: while OpenCode waits to retry a failed model call, the retry line (why, and when) stands in for Thinking.
   const thinking = ((view.state === "running" && (!current || current.status === "running")) || shownPending.length > 0) &&
-    (view.retry && view.state === "running" && !current ? <RetryRow retry={view.retry} className="mt-3" /> : <ThinkingRow className={shownPending.length ? "mt-3" : ""} />);
+    (view.retry && view.state === "running" && !current ? <RetryRow retry={view.retry} className="mt-3" /> : <ThinkingRow className={shownPending.length ? "mt-3" : ""} turn={shownPending.length ? shownPending[shownPending.length - 1]!.key : [...view.order].reverse().find((pid) => view.parts.get(pid)?.type === "user_text")} />);
   const [draft, setDraft] = useState<{ text: string; images: string[] }>();
   // A queued message taken back (Edit) or an error of a chip action: the prompt box shows it once per key.
   const [takeBack, setTakeBack] = useState<{ key: string; text: string; images: string[]; bash?: boolean; error?: string }>();
@@ -6814,12 +6817,14 @@ function PendingMessage({ p, view, index }: { p: Pending; view: SessionView; ind
 }
 
 /** The working row: shown while a turn runs, and at once for a just-sent prompt. */
-function ThinkingRow({ className }: { className?: string }) {
+function ThinkingRow({ className, turn }: { className?: string; turn?: string }) {
   const tr = useT();
+  // The theme's phrase for this turn (slots.tsx), else the built-in label.
+  const phrase = useThinkingPhrase(turn);
   return (
     <div data-testid="thinking" data-part="thinking" className={className}>
       <Shimmer as="span" className="font-medium text-sm">
-        {tr("app.timeline.thinking")}
+        {phrase ?? tr("app.timeline.thinking")}
       </Shimmer>
     </div>
   );

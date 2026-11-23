@@ -16,7 +16,6 @@ A theme addon styles claude-ui with CSS. To find the element to style, select a 
 - Select `[data-part="..."]`, never `[data-testid="..."]`. `data-testid` is a test hook.
 - State is an attribute on the part itself. The table lists the attributes a part has. Other attributes are not part of the contract.
 - A part is removed only after one minor release in which it is marked **deprecated** in the table. A new part gets a `since` version.
-- Parts marked **reserved** are named already, but the app does not render them yet.
 - The list is also in `packages/protocol/src/addon-parts.ts` (`PARTS`, `PART_NAMES`, `PartName`, `PARTS_VERSION`).
 
 ## Browser support {#browser}
@@ -102,8 +101,8 @@ Performance budget for animations:
 | `commit-message` | Commit message field | | 1.5 |
 | `changed-file` | One file row in the changes list | | 1.5 |
 | `file-diff` | Diff of one file | | 1.5 |
-| `loader` | Reserved: the loading mark of a running turn | | 1.5 |
-| `done-icon` | Reserved: the done mark of a finished tool call | | 1.5 |
+| `loader` | The loading mark: the spinner of a running tool call, a running session row and a running tab. Holds the theme's [`loader` slot](addons#slots) image when it has one; `<html>` has `data-slot-loader` then | | 1.5 |
+| `done-icon` | The done mark (check) of a finished tool call. Holds the theme's [`done-icon` slot](addons#slots) image when it has one; `<html>` has `data-slot-done-icon` then | | 1.5 |
 | `backdrop` | Full-window background image of a theme with a [`background`](addons#background). Only in the page while the image file exists; fixed behind the app | | 1.5 |
 
 ## Checks {#checks}
@@ -120,6 +119,9 @@ The Addons dialog lists **Checks** under each addon: warnings from the addon lin
 | `css-broken` | The CSS does not parse: an unclosed block, comment or `url(`, a stray `}`, or groups nested over 32 deep. A theme CSS is then served empty: the theme keeps its palette and loses its rules. | Fix it. |
 | `css-too-large` | The file is larger than 512 KB. A theme CSS is then served empty: the theme keeps its palette and loses its rules. | Split or shrink it. |
 | `css-large` | The file is larger than 256 KB (the limit is 512 KB). | Shrink it before it reaches the limit. |
+| `asset-missing` | An `assets` file is not in the addon folder yet (background or slot image). The theme shows no background, or the built-in mark. | Add the file. |
+| `asset-large` | An image is over 2 MB. | Shrink it. |
+| `extends-missing` | A theme's `extends` cannot be used: no such theme, its addon is not enabled, a loop, or more than 3 links. The theme works without it. | Fix the value or enable the addon. |
 | `low-contrast` | A text colour of a palette has less than 4.5:1 contrast on its background: `fg` and `muted` on `bg`, `fg` on `card`, `pfg` on `primary`, `err`, `ok` and `warn` on `bg`. It names the pair, the ratio and the mode. `border` is not checked. | Change the colour. |
 
 `@keyframes`, `@counter-style` and `@font-palette-values` names in a `themes[].css` are renamed by the app, so they are not checked there (they are in the top-level `css`).

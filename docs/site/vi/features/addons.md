@@ -56,7 +56,8 @@ Thẻ liệt kê addon xin quyền gì, mỗi quyền một dòng dễ hiểu, c
 | `version`, `description` | Hiện trong hộp thoại |
 | `capabilities` | Danh sách ở trên; mục nào cần quyền phải được bao phủ |
 | `assets` | `{<id>: {path, label?}}`: các tệp ảnh addon đặt tên theo id, xem [tài nguyên và ảnh nền](#background). `path` có thể trỏ tới tệp chưa tồn tại |
-| `themes` | `[{id, name, light?, dark?, vars?, background?, options?, css?}]`, xem [giao diện màu](#themes). `css`: tệp `.css` chỉ áp dụng khi giao diện này được chọn, trong [lớp cascade `addon`](addon-parts#cascade) |
+| `claudeUi` | Khoảng phiên bản Claude UI mà addon chạy được, xem [tương thích](#compat). Bỏ trống: mọi phiên bản |
+| `themes` | `[{id, name, light?, dark?, vars?, background?, options?, slots?, extends?, css?}]`, xem [giao diện màu](#themes), [slot](#slots) và [kế thừa](#extends). `css`: tệp `.css` chỉ áp dụng khi giao diện này được chọn, trong [lớp cascade `addon`](addon-parts#cascade) |
 | `css` | Cũ. Tệp `.css` áp dụng khi addon đang bật, dù chọn giao diện nào, trong [lớp cascade `addon`](addon-parts#cascade). Quy tắc `:root` và `.dark` của nó cũng ảnh hưởng giao diện có sẵn: dùng `themes[].css` cho một giao diện |
 | `views` | `[{id, title, entry, kind: "pane" \| "band", phone?}]`. `phone: false` ẩn khung dưới 640 px |
 | `commands` | `[{name, description, argumentHint?}]` |
@@ -141,6 +142,49 @@ Khi giao diện đang được chọn, `<html>` có các thuộc tính tùy bi�
 - `panelAlpha` (0 đến 1): các bảng chính (thanh bên, thanh tiêu đề, bảng phiên, hộp nhập, bảng bên) đục đến đâu trên ảnh. Mặc định 1, hoàn toàn đục. CSS của bạn có thể đổi `--panel-alpha`.
 
 Ảnh nền chỉ hiển thị khi giao diện đang được chọn và tệp ảnh của chế độ hiện tại tồn tại. Không có tệp thì giao diện hoạt động như không có `background`, và các bảng vẫn đục. Ảnh là part `backdrop` (`<div data-part="backdrop">`, cố định phía sau ứng dụng) và `<html>` có `data-backdrop` khi ảnh hiển thị, để CSS của bạn thích ứng.
+
+## Slot: loader, biểu tượng hoàn tất, biểu tượng gửi và chữ Thinking riêng {#slots}
+
+Một giao diện có thể thay bốn thứ nhỏ của ứng dụng. `slots` nằm trong giao diện:
+
+```json
+"assets": { "ring": { "path": "art/ring.svg" }, "tick": { "path": "art/tick.svg" } },
+"themes": [{ "id": "void", "name": "Void", "dark": { "...": "..." },
+  "slots": {
+    "loader": "ring",
+    "done-icon": "tick",
+    "send-icon": "ring",
+    "thinking-phrases": { "en": ["Casting", "Expanding"], "vi": ["Đang niệm chú"] }
+  } }]
+```
+
+| Slot | Giá trị | Hiển thị thay cho |
+| --- | --- | --- |
+| `loader` | Một id của asset | Vòng quay của lần gọi công cụ đang chạy, phiên đang chạy ở thanh bên và tab đang chạy. Part là [`loader`](addon-parts) |
+| `done-icon` | Một id của asset | Dấu tích của lần gọi công cụ đã xong. Part là [`done-icon`](addon-parts) |
+| `send-icon` | Một id của asset | Mũi tên của nút gửi. Biểu tượng Stop, Queue và ngoại tuyến giữ nguyên. Nút vẫn giữ tên cho trình đọc màn hình |
+| `thinking-phrases` | `{<ngôn ngữ>: [câu]}` | Chữ "Thinking" của dòng đang làm việc |
+
+- Slot ảnh ghi một id trong [`assets`](#background); id không có thì manifest không hợp lệ. Tệp có thể chưa tồn tại: ứng dụng giữ biểu tượng của mình và hộp thoại Addons cảnh báo `asset-missing`. Dùng `.svg`, `.png`, `.webp`, `.avif` hoặc `.gif`.
+- Ảnh chỉ để trang trí (`alt` rỗng, ẩn với trình đọc màn hình) và có cỡ như biểu tượng nó thay (16 px). Ảnh không tự quay: hãy tạo chuyển động trong `css` của bạn (`[data-part="loader"] img { animation: ... }`, kèm `@media (prefers-reduced-motion: reduce)` hoặc `:root[data-motion="off"]`), hoặc dùng SVG tự chuyển động.
+- Câu: 1 đến 4 ngôn ngữ, ngôn ngữ là `en`, `vi` hoặc bất kỳ `xx` / `xx-XX` (ứng dụng có `en` và `vi`), mỗi ngôn ngữ 1 đến 12 câu, mỗi câu 1 đến 60 ký tự văn bản thuần (không có `<`, `>` hay xuống dòng). Danh sách của ngôn ngữ giao diện được dùng (`pt-BR` trước `pt`); ngôn ngữ không có danh sách giữ "Thinking". Mỗi lượt chọn một câu trong danh sách và giữ nguyên đến hết lượt, nên không nhấp nháy và không chuyển động.
+- `<html>` có `data-slot-loader`, `data-slot-done-icon`, `data-slot-send-icon` và `data-slot-thinking-phrases` khi slot đó đang có hiệu lực (tệp tồn tại; với câu: có danh sách cho ngôn ngữ giao diện). CSS của bạn có thể thích ứng, ví dụ ẩn vòng mà ảnh đã thay.
+
+## Kế thừa giao diện khác {#extends}
+
+`extends` cho một giao diện dựa trên giao diện khác, nên biến thể chỉ cần phần khác biệt: `"extends": "void"` (giao diện của cùng addon) hoặc `"extends": "pack:void"` (giao diện của addon `pack` đang bật).
+
+Giao diện bắt đầu từ bản gốc rồi thêm phần của mình lên trên; phần của chính giao diện thắng:
+
+- `css`, `vars`, `background`, `slots` và `options` của bản gốc áp dụng bên dưới phần của giao diện. `css` của bản gốc được nạp dưới giao diện kế thừa nên quy tắc của nó có hiệu lực ở đó.
+- Bảng màu không được kế thừa: chế độ mà giao diện có là của chính nó. Chế độ không có thì dùng bảng màu của bản gốc.
+- Bản gốc có thể kế thừa tiếp bản gốc khác, tối đa 3 mắc xích.
+
+Khi không dùng được bản gốc (không có giao diện đó, addon của nó chưa cài hoặc chưa bật, bị lặp vòng, hơn 3 mắc xích) thì giao diện chạy không có nó và hộp thoại Addons cảnh báo `extends-missing`. Giá trị sai dạng, giao diện tự kế thừa chính nó và vòng lặp giữa các giao diện của cùng addon làm manifest không hợp lệ.
+
+## Tương thích với Claude UI {#compat}
+
+`claudeUi` cho biết addon chạy được với các phiên bản Claude UI nào: `"claudeUi": ">=1.6"`. Các dạng: `*` (mọi bản), `1.6.0` (đúng bản đó), `>=1.6` hoặc `>=1.6.2` (bản này trở lên), `^1.6` (cùng phiên bản chính, từ 1.6 trở lên), `~1.6` (cùng phiên bản phụ). Bỏ trống thì nhận mọi phiên bản. Ngoài khoảng đó addon có trạng thái **Error** với `needs Claude UI >=1.6 (this is 1.5.0)`, không được bật và không phục vụ tệp nào, nhưng vẫn nằm trong hộp thoại (addon git vẫn kiểm tra được bản cập nhật). Bản chạy từ mã nguồn (phiên bản `dev`) chấp nhận mọi khoảng.
 
 ## Pane, băng và lệnh {#views}
 

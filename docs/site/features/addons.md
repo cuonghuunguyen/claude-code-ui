@@ -56,7 +56,8 @@ The card lists what the addon asks for, one plain line each, and the themes, vie
 | `version`, `description` | Shown in the dialog |
 | `capabilities` | The list above; every entry that needs one must be covered |
 | `assets` | `{<id>: {path, label?}}`: image files the addon names by id, see [assets and background](#background). `path` may point to a file that does not exist yet |
-| `themes` | `[{id, name, light?, dark?, vars?, background?, options?, css?}]`, see [themes](#themes). `css`: a `.css` file that applies only while this theme is picked, in the [`addon` cascade layer](addon-parts#cascade) |
+| `claudeUi` | Version range of Claude UI the addon works with, see [compatibility](#compat). Absent: any version |
+| `themes` | `[{id, name, light?, dark?, vars?, background?, options?, slots?, extends?, css?}]`, see [themes](#themes), [slots](#slots) and [extends](#extends). `css`: a `.css` file that applies only while this theme is picked, in the [`addon` cascade layer](addon-parts#cascade) |
 | `css` | Legacy. A `.css` file applied while the addon is enabled, whichever theme is picked, in the [`addon` cascade layer](addon-parts#cascade). Its `:root` and `.dark` rules also reach the built-in themes: use `themes[].css` for a theme |
 | `views` | `[{id, title, entry, kind: "pane" \| "band", phone?}]`. `phone: false` hides the view below 640 px |
 | `commands` | `[{name, description, argumentHint?}]` |
@@ -141,6 +142,49 @@ A theme `background` puts one of these images behind the app:
 - `panelAlpha` (0 to 1): how opaque the main panels (sidebar, title bar, session panel, prompt box, side panel) are over the image. Default 1, fully opaque. Your CSS can change `--panel-alpha`.
 
 The background shows only while the theme is picked and the image file of the current mode exists. Without the file the theme works as if it had no `background`, and the panels stay opaque. The image is part `backdrop` (`<div data-part="backdrop">`, fixed behind the app) and `<html>` has `data-backdrop` while it shows, so your CSS can adapt.
+
+## Slots: your own loader, done icon, send icon and Thinking text {#slots}
+
+A theme may replace four small things of the app. `slots` goes in the theme:
+
+```json
+"assets": { "ring": { "path": "art/ring.svg" }, "tick": { "path": "art/tick.svg" } },
+"themes": [{ "id": "void", "name": "Void", "dark": { "...": "..." },
+  "slots": {
+    "loader": "ring",
+    "done-icon": "tick",
+    "send-icon": "ring",
+    "thinking-phrases": { "en": ["Casting", "Expanding"], "vi": ["Đang niệm chú"] }
+  } }]
+```
+
+| Slot | Value | Shown instead of |
+| --- | --- | --- |
+| `loader` | An asset id | The spinner of a running tool call, a running session in the sidebar and a running tab. The part is [`loader`](addon-parts) |
+| `done-icon` | An asset id | The check of a finished tool call. The part is [`done-icon`](addon-parts) |
+| `send-icon` | An asset id | The arrow of the send button. The Stop, Queue and offline icons stay. The button keeps its name for screen readers |
+| `thinking-phrases` | `{<language>: [phrases]}` | The "Thinking" text of the working row |
+
+- An image slot names an id of [`assets`](#background); an unknown id makes the manifest invalid. The file may be missing: the app then keeps its own mark and the Addons dialog warns `asset-missing`. Use `.svg`, `.png`, `.webp`, `.avif` or `.gif`.
+- The image is decorative (empty `alt`, hidden from screen readers) and sized like the mark it replaces (16 px). It does not spin by itself: animate it in your `css` (`[data-part="loader"] img { animation: ... }`, with `@media (prefers-reduced-motion: reduce)` or `:root[data-motion="off"]`), or use an SVG that animates itself.
+- Phrases: 1 to 4 languages, a language is `en`, `vi` or any `xx` / `xx-XX` (the app's languages are `en` and `vi`), 1 to 12 phrases each, each 1 to 60 characters of plain text (no `<`, `>` or line break). The list of the UI language is used (`pt-BR` before `pt`); a language without a list keeps "Thinking". One phrase is picked per turn from the list, the same phrase until the turn ends, so nothing flickers and nothing moves.
+- `<html>` has `data-slot-loader`, `data-slot-done-icon`, `data-slot-send-icon` and `data-slot-thinking-phrases` while that slot is in effect (the file exists; for phrases, a list exists for the UI language). Your CSS can adapt, for example hide a ring the image replaces.
+
+## Extend another theme {#extends}
+
+`extends` lets a theme build on another one, so a variant needs only what differs: `"extends": "void"` (a theme of the same addon) or `"extends": "pack:void"` (a theme of the enabled addon `pack`).
+
+The theme starts from the base and adds its own on top; the theme's own wins:
+
+- `css`, `vars`, `background`, `slots` and `options` of the base apply under the theme's own. A base `css` is loaded under the extending theme, so its rules reach it.
+- The palette is not inherited: a mode the theme gives is its own. A mode it does not give uses the palette of the base.
+- A base may extend another base, at most 3 links in all.
+
+When the base cannot be used (no such theme, its addon is not installed or not enabled, a loop, more than 3 links) the theme works without it and the Addons dialog warns `extends-missing`. A malformed value, a theme that extends itself and a loop between themes of the same addon make the manifest invalid.
+
+## Compatibility with Claude UI {#compat}
+
+`claudeUi` says which versions of Claude UI the addon works with: `"claudeUi": ">=1.6"`. Forms: `*` (any), `1.6.0` (exactly), `>=1.6` or `>=1.6.2` (this or newer), `^1.6` (same major version, 1.6 or newer), `~1.6` (same minor version). Leave it out and any version is accepted. Outside the range the addon shows the state **Error** with `needs Claude UI >=1.6 (this is 1.5.0)`, it is not enabled and none of its files are served, but it stays in the dialog (a git addon can still check for an update). A source checkout of the app (version `dev`) accepts every range.
 
 ## Panes, band and commands {#views}
 

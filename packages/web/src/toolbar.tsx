@@ -10,6 +10,7 @@ import type { SendMode } from "./send-mode.ts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ALL_CAPABILITIES, permissionModesFor, type AgentInfo, type ContextUsage, type Effort, type EngineCapabilities, type ModelInfo, type PermissionMode } from "@claude-ui/protocol";
 import { usePhone } from "./lib/use-narrow.ts";
+import { SlotImage, useSendIcon } from "./slots.tsx";
 import { ContextMeter } from "./context-meter.tsx";
 import type { Totals } from "./status-bar.tsx";
 import { Button } from "@/components/ui/button";
@@ -494,6 +495,7 @@ function SendButton({ steering = true, state, hasInput, onSend, onQueue, sendMod
       : state === "idle"
         ? [t("app.toolbar.send"), " (Enter)"]
         : [t(state === "running" ? "app.toolbar.working" : "app.toolbar.needsInput", { action: steer ? verb : t("app.toolbar.stop") }), steer ? " (Enter)" : " (Esc)"];
+  const sendImage = useSendIcon();
   const Icon = state === "disconnected" ? WifiOffIcon : busy && !steer ? SquareIcon : queue ? ListPlusIcon : ArrowUpIcon;
   // The hint above the button: Enter does the setting's mode, Alt+Enter the other (only when the box can queue).
   const hint = sendHint({ steer, canQueue: !!onQueue && steering, queue, shell });
@@ -513,6 +515,8 @@ function SendButton({ steering = true, state, hasInput, onSend, onQueue, sendMod
       {state === "running" && <LoaderCircleIcon aria-hidden className="absolute size-5.5 animate-spin opacity-60 motion-reduce:animate-none pointer-coarse:size-8" />}
       {state === "needs_input" && !steer ? (
         <MessageCircleQuestionIcon aria-hidden className="size-4" />
+      ) : Icon === ArrowUpIcon && sendImage ? (
+        <SlotImage url={sendImage} className="size-4" />
       ) : (
         <Icon aria-hidden className={Icon === SquareIcon ? "size-2.5 fill-current" : state === "running" ? "size-3" : "size-4"} />
       )}

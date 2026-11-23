@@ -1,7 +1,7 @@
 // Color scheme: follows the OS by default (OpenCode `system`), or forced light / dark; kept per browser.
 import { useSyncExternalStore } from "react";
 import { optionCss, optionType, optionValue, type AddonInfo } from "@claude-ui/protocol";
-import { ADDON_THEME_ID, THEMES, themeById, themeCss, type Theme, type ThemeId, type ThemeOption } from "./themes.ts";
+import { ADDON_THEME_ID, baseThemes, THEMES, themeById, themeCss, type Theme, type ThemeId, type ThemeOption } from "./themes.ts";
 export type ThemePref = "system" | "light" | "dark";
 
 const KEY = "claude-ui.theme";
@@ -141,20 +141,22 @@ const STALE_MS = 2000;
 
 /** The stylesheets of the enabled addons, each a `<style>` that imports a file into the addon's cascade layer (`layer(addon.<name>)`: after `host`, so it wins without `!important`, and a broken file cannot leave the layer). Per addon: the legacy top-level `css` (every theme, unscoped). Per theme with `css`: the same file scoped by the daemon to that theme (`?theme=<id>`), loaded for every enabled theme so a switch shows no unstyled flash. Styles of addons or themes no longer there go (GH-516, GH-868). Same-origin, so the app CSP allows it and blocks what a sheet loads from elsewhere. Dev mode (`rev`): `v=<rev>` in the URL makes an edit load the file again; the sheet it replaces stays until the new one has loaded (or 2 s), so the page never shows the unstyled theme between the two. */
 export function applyAddonCss(addons: readonly AddonInfo[]) {
-  const imp = (a: AddonInfo, path: string, theme?: string) => {
-    const q = [...(theme ? [`theme=${theme}`] : []), ...(a.dev && a.rev !== undefined ? [`v=${a.rev}`] : [])].join("&");
-    return `@import url("${a.base + path.split("/").map(encodeURIComponent).join("/") + (q && `?${q}`)}") layer(addon.${identOf(a.name)});`;
+  /** `file`: the addon whose file it is (URL, `v=`); `owner`: the addon whose layer it loads into; `as`: the extending theme (`<addon>:<theme>`) the daemon scopes a base theme's file under. */
+  const imp = (file: AddonInfo, path: string, owner: AddonInfo, theme?: string, as?: string) => {
+    const q = [...(theme ? [`theme=${theme}`] : []), ...(as ? [`as=${as}`] : []), ...(file.dev && file.rev !== undefined ? [`v=${file.rev}`] : [])].join("&");
+    return `@import url("${file.base + path.split("/").map(encodeURIComponent).join("/") + (q && `?${q}`)}") layer(addon.${identOf(owner.name)});`;
   };
+  const running = addons.filter((a) => a.base && a.manifest);
   const want = new Map<string, string>(
-    addons.flatMap((a) =>
-      !a.base || !a.manifest
-        ? []
-        : [
-            ...(a.manifest.css ? [[`addon-css-${a.name}`, imp(a, a.manifest.css)] as const] : []),
-            // An addon name has no `--`, so these ids cannot collide with the legacy one or another addon's.
-            ...a.manifest.themes.flatMap((t) => (t.css ? [[`addon-css-${a.name}--${t.id}`, imp(a, t.css, t.id)] as const] : [])),
-          ],
-    ),
+    running.flatMap((a) => [
+      ...(a.manifest!.css ? [[`addon-css-${a.name}`, imp(a, a.manifest!.css, a)] as const] : []),
+      // An addon name has no `--`, so these ids cannot collide with the legacy one or another addon's.
+      // One sheet per theme: the css of the themes it extends first (the daemon scopes each under this theme, `as`), then its own, so its own wins at equal specificity.
+      ...a.manifest!.themes.flatMap((t) => {
+        const lines = [...baseThemes(running, a, t).flatMap((b) => (b.theme.css ? [imp(b.addon, b.theme.css, a, b.theme.id, `${a.name}:${t.id}`)] : [])), ...(t.css ? [imp(a, t.css, a, t.id)] : [])];
+        return lines.length ? [[`addon-css-${a.name}--${t.id}`, lines.join("\n")] as const] : [];
+      }),
+    ]),
   );
   for (const l of document.querySelectorAll<HTMLElement>('style[id^="addon-css-"], link[id^="addon-css-"]')) {
     if (want.get(l.id) === l.textContent) continue;

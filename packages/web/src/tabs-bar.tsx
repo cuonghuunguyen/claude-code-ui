@@ -25,6 +25,7 @@ import { externalEntries, useOpenExternal } from "./open-external-menu.ts";
 import { kindLabel, type PaneKind } from "./pane-ref.ts";
 import { FileIcon } from "./file-icon.tsx";
 import { t as tt, useT } from "./i18n.ts";
+import { LoaderMark } from "./slots.tsx";
 import { count, offer } from "./recommendations.ts";
 import { usePhone } from "./lib/use-narrow.ts";
 import { ringLocate, useShakeToLocate } from "./locate.ts";
@@ -102,7 +103,12 @@ export function TabIcon({ s, cwd, kind, path }: { s: TabStatus; cwd?: string; ki
   if (kind === "terminal") return <SquareTerminalIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (kind && kind.startsWith("addon:")) return <PuzzleIcon className="size-4 shrink-0 text-faint" aria-hidden />;
   if (s === "new") return <SquarePenIcon className="size-4 shrink-0 text-faint" aria-hidden />;
-  if (s === "running") return <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-faint motion-reduce:animate-none" aria-hidden />;
+  if (s === "running")
+    return (
+      <LoaderMark>
+        <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-faint motion-reduce:animate-none" aria-hidden />
+      </LoaderMark>
+    );
   // Needs input gets its own shape, not only another dot colour than unread.
   if (s === "needs_input") return <CircleAlertIcon className="size-4 shrink-0 text-warning" aria-hidden />;
   if (!cwd) return <span className="size-4 shrink-0 rounded-[3px] border border-border" aria-hidden />;

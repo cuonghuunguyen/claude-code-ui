@@ -16,7 +16,6 @@ Addon giao diện tạo kiểu cho claude-ui bằng CSS. Để tìm phần tử 
 - Chọn `[data-part="..."]`, không bao giờ chọn `[data-testid="..."]`. `data-testid` chỉ dùng cho kiểm thử.
 - Trạng thái là thuộc tính nằm trên chính phần đó. Bảng liệt kê các thuộc tính của từng phần. Thuộc tính khác không thuộc hợp đồng.
 - Một phần chỉ bị gỡ sau một bản minor mà phần đó được đánh dấu **deprecated** trong bảng. Phần mới có phiên bản `since`.
-- Phần đánh dấu **reserved** đã có tên nhưng ứng dụng chưa hiển thị.
 - Danh sách cũng nằm trong `packages/protocol/src/addon-parts.ts` (`PARTS`, `PART_NAMES`, `PartName`, `PARTS_VERSION`).
 
 ## Trình duyệt hỗ trợ {#browser}
@@ -102,8 +101,8 @@ Ngân sách hiệu năng cho animation:
 | `commit-message` | Ô nội dung commit | | 1.5 |
 | `changed-file` | Một dòng tệp trong danh sách thay đổi | | 1.5 |
 | `file-diff` | Diff của một tệp | | 1.5 |
-| `loader` | Reserved: dấu đang tải của một lượt chạy | | 1.5 |
-| `done-icon` | Reserved: dấu hoàn tất của lần gọi công cụ | | 1.5 |
+| `loader` | Dấu đang tải: vòng quay của lần gọi công cụ đang chạy, dòng phiên đang chạy và tab đang chạy. Chứa ảnh của [slot `loader`](addons#slots) khi giao diện có; lúc đó `<html>` có `data-slot-loader` | | 1.5 |
+| `done-icon` | Dấu hoàn tất (dấu tích) của lần gọi công cụ đã xong. Chứa ảnh của [slot `done-icon`](addons#slots) khi giao diện có; lúc đó `<html>` có `data-slot-done-icon` | | 1.5 |
 | `backdrop` | Ảnh nền toàn cửa sổ của giao diện có [`background`](addons#background). Chỉ có trong trang khi tệp ảnh tồn tại; cố định phía sau ứng dụng | | 1.5 |
 
 ## Kiểm tra {#checks}
@@ -120,6 +119,9 @@ Hộp thoại Addons liệt kê **Kiểm tra** dưới mỗi addon: cảnh báo 
 | `css-broken` | CSS không phân tích được: khối, chú thích hoặc `url(` chưa đóng, thừa `}`, hoặc nhóm lồng quá 32 cấp. CSS của giao diện khi đó được phục vụ rỗng: giao diện giữ bảng màu và mất các quy tắc. | Sửa lại. |
 | `css-too-large` | Tệp lớn hơn 512 KB. CSS của giao diện khi đó được phục vụ rỗng: giao diện giữ bảng màu và mất các quy tắc. | Chia nhỏ hoặc rút gọn. |
 | `css-large` | Tệp lớn hơn 256 KB (giới hạn là 512 KB). | Rút gọn trước khi chạm giới hạn. |
+| `asset-missing` | Một tệp trong `assets` chưa có trong thư mục addon (ảnh nền hoặc ảnh slot). Giao diện không có ảnh nền, hoặc dùng biểu tượng có sẵn. | Thêm tệp. |
+| `asset-large` | Ảnh lớn hơn 2 MB. | Thu nhỏ. |
+| `extends-missing` | `extends` của giao diện không dùng được: không có giao diện đó, addon của nó chưa bật, bị lặp vòng, hoặc hơn 3 mắc xích. Giao diện chạy không có nó. | Sửa giá trị hoặc bật addon. |
 | `low-contrast` | Một màu chữ của bảng màu có độ tương phản dưới 4.5:1 so với nền: `fg` và `muted` trên `bg`, `fg` trên `card`, `pfg` trên `primary`, `err`, `ok` và `warn` trên `bg`. Mục này nêu cặp màu, tỉ lệ và chế độ. `border` không được kiểm tra. | Đổi màu. |
 
 Tên `@keyframes`, `@counter-style` và `@font-palette-values` trong `themes[].css` được ứng dụng tự đổi tên, nên không bị kiểm tra ở đó (trong `css` cấp cao nhất thì có).

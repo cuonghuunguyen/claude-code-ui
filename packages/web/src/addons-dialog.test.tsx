@@ -167,13 +167,14 @@ it("an addon row lists its lint warnings under Checks, with the file, line and t
     { level: "warning", code: "deprecated-part", file: "dusk.css", line: 5, name: "tab", until: "1.7" },
     { level: "warning", code: "asset-missing", file: "art/dark.png", name: "bg-dark" },
     { level: "warning", code: "asset-large", file: "art/big.jpg", name: "big", count: 3072 },
+    { level: "warning", code: "extends-missing", name: "gojo", suggest: "base:night" },
   ];
   const d = await render({ addons: [addon("themed", { lint }), addon("plain")], picks: {} });
   const rows = d.all("addons-row");
   const checks = rows[0]!.querySelector<HTMLElement>('[data-testid="addons-checks"]')!;
-  expect(checks.textContent).toContain("Checks (10)");
+  expect(checks.textContent).toContain("Checks (11)");
   const items = [...checks.querySelectorAll("li")].map((li) => li.textContent);
-  expect(items).toHaveLength(10);
+  expect(items).toHaveLength(11);
   expect(items[0]).toContain("dusk.css line 3");
   expect(items[0]).toContain("[data-part]");
   expect(items[1]).toContain('"sidebr"');
@@ -185,7 +186,17 @@ it("an addon row lists its lint warnings under Checks, with the file, line and t
   expect(items[7]).toContain("removed in 1.7");
   expect(items[8]).toContain('"bg-dark" (art/dark.png) is not in the addon folder');
   expect(items[9]).toContain("3072 KB");
+  expect(items[10]).toContain('Theme "gojo" extends "base:night"');
   expect(rows[1]!.querySelector('[data-testid="addons-checks"]')).toBeNull();
+});
+
+it("an addon that needs a newer Claude UI shows the reason (not the dev last-good note), stays listed and a git one can still check for an update", async () => {
+  const d = await render({ addons: [addon("needy", { state: "error", error: "needs Claude UI >=1.6 (this is 1.5.0)" })], picks: {} });
+  const row = d.all("addons-row")[0]!;
+  expect(row.textContent).toContain("needs Claude UI >=1.6 (this is 1.5.0)");
+  expect(row.textContent).not.toContain("last good manifest");
+  expect(row.textContent).toContain("needy addon");
+  expect(row.querySelector('[data-testid="addons-check-update"]')).not.toBeNull();
 });
 
 it("the switch enables and disables; uninstall asks first", async () => {

@@ -30,10 +30,15 @@
         "num": "#ffa66b", "cmt": "#a39dc4", "varc": "#f49ac2", "err": "#ff8a9e", "warn": "#f2c879", "ok": "#8fdca6", "info": "#8ab4ff"
       },
       "background": { "dark": { "image": "backdrop" }, "veil": 0.5, "panelAlpha": 0.85 },
+      "slots": { "loader": "ring", "thinking-phrases": { "en": ["Dusk is thinking", "Weaving"], "vi": ["Dusk đang nghĩ", "Đang dệt"] } },
       "options": [{ "id": "intensity", "label": "Accent intensity", "type": "range", "min": 0, "max": 1, "step": 0.1, "default": 0.5 }]
     }
   ],
-  "assets": { "backdrop": { "path": "art/backdrop.jpg", "label": "Window background in dark mode: add your own image here" } },
+  "assets": {
+    "backdrop": { "path": "art/backdrop.jpg", "label": "Window background in dark mode: add your own image here" },
+    "ring": { "path": "art/ring.svg", "label": "Loader mark: add your own image here" }
+  },
+  "claudeUi": ">=1.5",
   "css": "theme.css",
   "views": [
     { "id": "stats", "title": "Stats", "entry": "pane.html", "kind": "pane", "phone": false },

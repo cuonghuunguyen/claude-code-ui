@@ -7,6 +7,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
+import { DoneMark, LoaderMark } from "@/slots";
 import type { DynamicToolUIPart, ToolUIPart } from "ai";
 import {
   CheckIcon,
@@ -55,9 +56,9 @@ const statusLabel = (state: ToolPart["state"]) => tr(`session.ai.status.${state}
 const statusIcons: Record<ToolPart["state"], ReactNode> = {
   "approval-requested": <ShieldAlertIcon className="size-4 text-warning" />,
   "approval-responded": <CheckIcon className="size-4 text-muted-foreground" />,
-  "input-available": <LoaderCircleIcon className="size-4 animate-spin text-muted-foreground motion-reduce:animate-none" />,
-  "input-streaming": <LoaderCircleIcon className="size-4 animate-spin text-muted-foreground motion-reduce:animate-none" />,
-  "output-available": <CheckIcon className="size-4 text-success" />,
+  "input-available": <LoaderMark><LoaderCircleIcon className="size-4 animate-spin text-muted-foreground motion-reduce:animate-none" /></LoaderMark>,
+  "input-streaming": <LoaderMark><LoaderCircleIcon className="size-4 animate-spin text-muted-foreground motion-reduce:animate-none" /></LoaderMark>,
+  "output-available": <DoneMark><CheckIcon className="size-4 text-success" /></DoneMark>,
   "output-denied": <XCircleIcon className="size-4 text-warning" />,
   "output-error": <XCircleIcon className="size-4 text-destructive" />,
 };
