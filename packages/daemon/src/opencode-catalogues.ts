@@ -19,6 +19,7 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
   const v2 = createOpenCode2Catalogue(ctx, {
     server: srv,
     mcp: o.mcp,
+    mcpWaitMs: o.server?.mcpWaitMs,
     listWaitMs: o.server?.listWaitMs,
     record: (id) => {
       try {
@@ -102,20 +103,11 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
     };
   return {
     engine: v1.engine,
-    // The config dialogs of OpenCode 2 wait for its adapter (GH-863): until then the request is answered, not routed to version 1.
+    // The config dialogs follow the binary's major version: OpenCode 2 has its own (GH-864).
     config: {
-      mcp: async (msg, cwd, c) => {
-        if ((await known()) !== v1) throw new EngineError("opencode_v2_unsupported", "OpenCode 2 does not support the MCP servers dialog in claude-ui yet.");
-        return v1.config!.mcp(msg, cwd, c);
-      },
-      skills: async (msg, cwd) => {
-        if ((await known()) !== v1) throw new EngineError("opencode_v2_unsupported", "OpenCode 2 does not support the skills dialog in claude-ui yet.");
-        return v1.config!.skills(msg, cwd);
-      },
-      plugins: async (msg, cwd) => {
-        if ((await known()) !== v1) throw new EngineError("opencode_v2_unsupported", "OpenCode 2 does not support the Plugins dialog in claude-ui yet.");
-        return v1.config!.plugins(msg, cwd);
-      },
+      mcp: async (msg, cwd, c) => (await known()) === v1 ? v1.config!.mcp(msg, cwd, c) : v2.config!.mcp(msg, cwd, c),
+      skills: async (msg, cwd) => ((await known()) === v1 ? v1.config!.skills(msg, cwd) : v2.config!.skills(msg, cwd)),
+      plugins: async (msg, cwd) => ((await known()) === v1 ? v1.config!.plugins(msg, cwd) : v2.config!.plugins(msg, cwd)),
     },
     listScope: v1.listScope,
     ownsId: v1.ownsId,
@@ -163,7 +155,7 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
     // A leftover Aside is looked up in OpenCode: while the server is down that waits for its start (GH-945).
     deferCleanup: (id) => OPENCODE_ID.test(id) && !srv.running(),
     onServerUp: (cb) => void srv.onUp(cb),
-    settled: () => v1.settled?.(),
+    settled: () => (v1.settled?.(), v2.settled?.()),
     forget: (id) => v1.forget?.(id),
     settingsChanged: (before, after) => {
       if (after.opencode.path === before.opencode.path) return v1.settingsChanged?.(before, after);
@@ -174,6 +166,6 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
       if (wasRunning || openCodeWanted(after.sessions.engine, new Map(ctx.settings.entries()))) void check().finally(() => ctx.broadcast({ type: "sessions.changed" }));
     },
     requests,
-    close: () => v1.close(),
+    close: async () => (await v2.close?.(), v1.close()),
   };
 }

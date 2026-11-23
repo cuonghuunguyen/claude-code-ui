@@ -21,7 +21,11 @@ import type { OpenCodeServer } from "./opencode-server.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 /** What the OpenCode 2 adapter has: as OpenCode 1's (`/compact`, `/undo`, `/redo` are the daemon's commands, the others OpenCode's; `fork`: the Aside). */
-export const OPENCODE2_CAPABILITIES: EngineCapabilities = { ...OPENCODE_CAPABILITIES };
+export const OPENCODE2_CAPABILITIES: EngineCapabilities = {
+  ...OPENCODE_CAPABILITIES,
+  // The config dialogs (GH-864): OpenCode 2 signs an MCP server in through its integrations, not through a route of the server.
+  config: { ...OPENCODE_CAPABILITIES.config!, gaps: { ...OPENCODE_CAPABILITIES.config!.gaps, mcpAuth: "OpenCode 2 signs MCP servers in through its integrations. Sign in with OpenCode's own app." } },
+};
 
 /** A permission rule of OpenCode 2. */
 export type Rule2 = { action: string; resource: string; effect: "allow" | "deny" | "ask" };
@@ -1409,6 +1413,28 @@ class OpenCode2EngineImpl implements Engine {
     if (dir && ![...this.agentLists.keys(), ...this.commandLists.keys(), ...[...this.sessions.values()].map((s) => s.cwd)].includes(dir)) dir = undefined;
     for (const map of [this.agentLists, this.commandLists, this.defaults]) for (const k of [...map.keys()]) if (!dir || k === dir) map.delete(k);
     for (const s of this.sessions.values()) if (!dir || s.cwd === dir) (void s.refreshAgents(), void s.emitCommands());
+  }
+  /** Forgets the cached agents and default agent of `cwd`: the next read asks OpenCode (a config change made them stale before OpenCode's own event). */
+  forgetAgents(cwd: string) {
+    this.agentLists.delete(cwd);
+    this.defaults.delete(cwd);
+  }
+  /**
+   * Reloads OpenCode's locations so a changed config file is read (`POST /api/location/reload`: 2.3.0 never re-reads a file by itself). The reload rebuilds every loaded
+   * location and ends running tools and asks, so it runs only when no session is running anywhere: false = not done (busy, or the server did not answer), the caller keeps
+   * the change pending (folder-reload.ts). The lists of the folders are read again; the daemon's MCP servers the reload drops are attached again by the next prompt.
+   */
+  async reloadLocations(): Promise<boolean> {
+    try {
+      const client = await this.server.client();
+      if (Object.keys((await client.session.active()) ?? {}).length) return false;
+      await client.location.reload();
+    } catch {
+      return false;
+    }
+    this.modelLists.clear();
+    this.listsChanged(undefined);
+    return true;
   }
   private agentLists = new Map<string, { at: number; ttl: number; list: Promise<Agent2[]> }>();
   /**

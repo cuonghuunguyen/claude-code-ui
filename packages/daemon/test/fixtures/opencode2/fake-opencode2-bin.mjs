@@ -19,6 +19,11 @@
 // MCP (as 2.3.0): GET /api/mcp (the folder's servers and status), PUT /api/experimental/mcp/:server {config} (added and connected), DELETE /api/experimental/mcp/:server
 // (404 when absent). POST /__mcp_drop: every server is gone (an OpenCode restart); POST /__mcp_fail: the next adds answer 500. Turn strings `$ORCH` and `$CUI` are the
 // session's orchestration and claude-ui server names (`orchestration-<last 10 of its id>`).
+// FAKE_OPENCODE2_PROJECT_CONFIG=1 (the config dialogs, GH-864): the project's opencode.json(c) files (and the user's `$XDG_CONFIG_HOME/opencode/opencode.json`) are read at the first request of a folder
+// and again only by POST /api/location/reload (as 2.3.0 never re-reads a file by itself), normalised as 2.3.0 does (`mcp.<n>` + `enabled` -> `mcp.servers.<n>` + `disabled`, `permission.skill`
+// -> `permissions`, `plugin` -> `plugins`; an entry of `mcp.servers` that is only `{disabled}` is dropped). They feed GET /api/config (documents), GET /api/mcp (a command
+// `/nonexistent-bin` fails, a remote url with `oauth` needs auth), POST/DELETE/connect/disconnect of /api/experimental/mcp/:server, GET /api/skill (the folder's `.opencode/skills/*/SKILL.md`)
+// and GET /api/plugin (a spec with `broken` fails to load) and the permissions of GET /api/agent (config rules after the base rules).
 // FAKE_OPENCODE2_FAIL: see the session route.
 // FAKE_OPENCODE2_DATA: JSON `{sessions: [{id, directory, title, time, permissions?, parentID?}], messages: {<id>: [v2 messages]}, models?, default?}`.
 // FAKE_OPENCODE2_SCRIPT: comma-separated turn files, one per prompt in order (a prompt after the last one gets a plain "pong" turn). A turn is a JSON list of steps:
@@ -32,7 +37,8 @@
 // POST …/synthetic {text}: stored as a `synthetic` message, no turn. Instruction entries: PUT/DELETE …/instructions/entries/:key and GET …/entries.
 // FAKE_OPENCODE_LOG: JSON lines of `start`, `request` (method, path, authed, body of a write) and `version`.
 import { createServer } from "node:http";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 
 const log = (o) => process.env.FAKE_OPENCODE_LOG && appendFileSync(process.env.FAKE_OPENCODE_LOG, `${JSON.stringify(o)}\n`);
 const args = process.argv.slice(2);
@@ -103,6 +109,42 @@ let nextTurn = 0;
 const mcps = new Map();
 let mcpFail = false;
 
+const projectMode = process.env.FAKE_OPENCODE2_PROJECT_CONFIG === "1";
+/** Folder -> what the config files said when it was loaded (a reload reads them again). */
+const loaded = new Map();
+const mcpState = new Map();
+const mcpGone = new Set();
+const jsonc = (text) => JSON.parse(text.replace(/^\s*\/\/.*$/gm, "").replace(/,(\s*[}\]])/g, "$1"));
+const normalize = (raw) => {
+  const servers = { ...(raw.mcp?.servers ?? {}) };
+  for (const [k, v] of Object.entries(raw.mcp ?? {})) if (k !== "servers" && k !== "timeout" && v && typeof v === "object") servers[k] = { ...Object.fromEntries(Object.entries(v).filter(([x]) => x !== "enabled")), ...(v.enabled === false && { disabled: true }) };
+  for (const [k, v] of Object.entries(servers)) if (!v.type) delete servers[k];
+  const permissions = [...(raw.permissions ?? []), ...Object.entries(raw.permission?.skill ?? {}).map(([resource, effect]) => ({ action: "skill", resource, effect }))];
+  const plugins = [...(raw.plugins ?? []), ...(raw.plugin ?? [])].map((x) => (Array.isArray(x) ? x[0] : typeof x === "object" ? x.package : x));
+  return { mcp: { servers }, permissions, plugins };
+};
+const snapshotOf = (dir) => {
+  const docs = [];
+  for (const file of [join(process.env.XDG_CONFIG_HOME ?? "/nonexistent", "opencode", "opencode.json"), ...["opencode.json", "opencode.jsonc", ".opencode/opencode.json", ".opencode/opencode.jsonc"].map((f) => join(dir, f))])
+    if (existsSync(file)) docs.push({ type: "document", path: file, info: normalize(jsonc(readFileSync(file, "utf8"))) });
+  const servers = Object.assign({}, ...docs.map((d) => d.info.mcp.servers));
+  return { docs, servers, permissions: docs.flatMap((d) => d.info.permissions), plugins: [...new Set(docs.flatMap((d) => d.info.plugins))] };
+};
+const snap = (dir) => loaded.get(dir) ?? (loaded.set(dir, snapshotOf(dir)), loaded.get(dir));
+const mcpRows = (dir) => {
+  const all = new Map(Object.entries(snap(dir).servers).filter(([n]) => !mcpGone.has(`${dir}\0${n}`)));
+  for (const [k, c] of mcps) if (k.startsWith(`${dir}\0`)) all.set(k.split("\0")[1], c);
+  return [...all].map(([name, c]) => {
+    const state = mcpState.get(`${dir}\0${name}`);
+    const status = state === "disconnected" || (c.disabled && state !== "connected") ? { status: "disabled" } : c.command?.[0] === "/nonexistent-bin" ? { status: "failed", error: "spawn /nonexistent-bin ENOENT" } : c.url?.includes("oauth") ? { status: "needs_auth", error: "needs sign-in" } : { status: "connected" };
+    return { name, status };
+  });
+};
+const skillsOf = (dir) => {
+  const root = join(dir, ".opencode", "skills");
+  const own = existsSync(root) ? readdirSync(root).filter((n) => existsSync(join(root, n, "SKILL.md"))) : [];
+  return [...(data.skills ?? []), ...own.map((n) => ({ id: `skl_${n}`, name: n, description: `${n} skill`, path: join(root, n, "SKILL.md"), content: "" }))];
+};
 const fill = (v, vars) => (typeof v === "string" ? vars[v] ?? v.replace(/\$ORCH|\$CUI/g, (k) => vars[k]) : Array.isArray(v) ? v.map((x) => fill(x, vars)) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fill(x, vars)])) : v);
 async function runTurn(sid, userId, steps) {
   const dir = sessions.get(sid).directory;
@@ -319,24 +361,41 @@ const server = createServer((req, res) => {
     if (p === "/api/model/default") return later(() => json(res, 200, { location: { directory: dir }, data: defaultModel }));
 
     // FAKE_OPENCODE2_PARTIAL_AGENTS: the next n reads (after the cold ones) list all but the last agent, as 2.3.0 lists a folder's built-ins before its own agents.
+    if (projectMode && p === "/api/location/reload" && req.method === "POST") {
+      for (const k of loaded.keys()) loaded.set(k, snapshotOf(k));
+      mcps.clear();
+      mcpState.clear();
+      mcpGone.clear();
+      return (res.writeHead(204), res.end());
+    }
+    if (projectMode && p === "/api/skill") return json(res, 200, { location: { directory: dir }, data: skillsOf(dir) });
+    if (projectMode && p === "/api/plugin") {
+      const own = snap(dir).plugins.map((spec) => ({ id: undefined, source: spec.startsWith("file://") ? { type: "local", path: spec.slice(7) } : { type: "package", target: spec, version: "1.0.0" }, features: { server: true }, state: /broken/.test(spec) ? { status: "failed", error: "Plugin failed to load", ref: "err_1" } : { status: "active" } }));
+      return json(res, 200, { location: { directory: dir }, data: [{ id: "opencode.agent", source: { type: "builtin" }, features: { server: true }, state: { status: "active" } }, ...own.map(({ id, ...x }) => x)] });
+    }
     if (p === "/api/agent") {
       const n = ++agentReads - Number(process.env.FAKE_OPENCODE2_COLD_AGENTS ?? 0);
-      return json(res, 200, { location: { directory: dir }, data: n <= 0 ? [] : n <= Number(process.env.FAKE_OPENCODE2_PARTIAL_AGENTS ?? 0) ? agents.slice(0, -1) : agents });
+      return json(res, 200, { location: { directory: dir }, data: (n <= 0 ? [] : n <= Number(process.env.FAKE_OPENCODE2_PARTIAL_AGENTS ?? 0) ? agents.slice(0, -1) : agents).map((a) => (projectMode ? { ...a, permissions: [...base, ...snap(dir).permissions, ...a.permissions.slice(base.length)] } : a)) });
     }
+    if (projectMode && p === "/api/mcp") return json(res, 200, { location: { directory: dir }, data: mcpRows(dir) });
+    if (projectMode && (m = /^\/api\/experimental\/mcp\/([^/]+)\/(connect|disconnect)$/.exec(p))) return (mcpState.set(`${dir}\0${m[1]}`, m[2] === "connect" ? "connected" : "disconnected"), res.writeHead(204), res.end());
     if (p === "/api/mcp") return json(res, 200, { location: { directory: dir }, data: [...mcps.keys()].filter((k) => k.startsWith(`${dir}\0`)).map((k) => ({ name: k.split("\0")[1], status: { status: "connected" } })) });
     if ((m = /^\/api\/experimental\/mcp\/([^/]+)$/.exec(p))) {
       const key = `${dir}\0${m[1]}`;
       if (req.method === "PUT") {
         if (mcpFail) return json(res, 500, { message: "MCP server failed to connect" });
         mcps.set(key, body.config);
+        mcpState.set(key, "connected");
+        mcpGone.delete(key);
         emit("mcp.status.changed", { server: m[1] }, dir);
         return (res.writeHead(204), res.end());
       }
+      if (projectMode && req.method === "DELETE" && !mcps.has(key) && snap(dir).servers[m[1]]) return (mcpGone.add(key), res.writeHead(204), res.end());
       if (req.method === "DELETE") return mcps.delete(key) ? (res.writeHead(204), res.end()) : json(res, 404, { _tag: "McpServerNotFoundError", message: `MCP server not found: ${m[1]}` });
     }
     // FAKE_OPENCODE2_COMMAND_LIST_MS: ms the command list waits (a folder OpenCode is still loading).
     if (p === "/api/command") return void setTimeout(() => json(res, 200, { location: { directory: dir }, data: commands }), Number(process.env.FAKE_OPENCODE2_COMMAND_LIST_MS ?? 0));
-    if (p === "/api/config") return json(res, 200, data.config ?? []);
+    if (p === "/api/config") return json(res, 200, projectMode ? snap(dir).docs : (data.config ?? []));
     // Instruction entries of a session: PUT {value}, DELETE and GET (the list) of …/instructions/entries[/:key].
     if ((m = /^\/api\/experimental\/session\/([^/]+)\/instructions\/entries(?:\/([^/]+))?$/.exec(p))) {
       const entries = (instructions.get(m[1]) ?? instructions.set(m[1], new Map()).get(m[1]));

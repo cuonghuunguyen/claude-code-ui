@@ -2,12 +2,14 @@
 // Create, list, restore, models, rename, archive, delete, the Aside fork, agents and the slash commands (the daemon's and OpenCode's).
 import { existsSync } from "node:fs";
 import { EFFORTS, type PermissionMode, type SessionListItem } from "@claude-ui/protocol";
-import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type ListCtx, type SavedSession } from "./engine-catalogue.ts";
+import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineConfig, type ListCtx, type SavedSession } from "./engine-catalogue.ts";
 import { OPENCODE_MODES, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { openCodeWanted } from "./opencode-catalogue.ts";
 import { OpenCodeError, type OpenCodeServer } from "./opencode-server.ts";
 import { createOpenCode2Engine, loadOpenCode2History, OPENCODE2_CAPABILITIES } from "./opencode2-engine.ts";
+import { createOpenCode2McpConfig } from "./opencode2-config.ts";
 import { INLINE_META } from "./opencode2-inline.ts";
+import { createFolderReloads } from "./folder-reload.ts";
 import { mapLimit } from "./session-scan.ts";
 import { Session, type SessionOpts, type SessionSettings } from "./session.ts";
 
@@ -17,8 +19,8 @@ const PAGE = 100;
 /** A list of one folder reads at most this many pages (a folder with more sessions shows the newest ones). */
 const MAX_PAGES = 10;
 
-export type OpenCode2CatalogueOpts = { server: OpenCodeServer; /** How long `session.list` waits for OpenCode (default 3 s). */ listWaitMs?: number; /** Writes the adapter record of a session (ADR 0015); throws when it cannot be saved. */ record?: (id: string) => void; /** The daemon's `/opencode-mcp` route (the session's MCP servers). */ mcp?: OpenCodeMcpRoute };
-export type OpenCode2Catalogue = Omit<EngineCatalogue, "listScope" | "ownsId" | "requests" | "settingsChanged" | "settled" | "forget" | "close">;
+export type OpenCode2CatalogueOpts = { server: OpenCodeServer; /** The longest a config dialog read waits for OpenCode (default 3 s). */ mcpWaitMs?: number; /** How long `session.list` waits for OpenCode (default 3 s). */ listWaitMs?: number; /** Writes the adapter record of a session (ADR 0015); throws when it cannot be saved. */ record?: (id: string) => void; /** The daemon's `/opencode-mcp` route (the session's MCP servers). */ mcp?: OpenCodeMcpRoute };
+export type OpenCode2Catalogue = Omit<EngineCatalogue, "listScope" | "ownsId" | "requests" | "settingsChanged" | "forget">;
 
 export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2CatalogueOpts): OpenCode2Catalogue {
   const { appSettings, settings } = ctx;
@@ -36,6 +38,17 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     mcp: o.mcp,
     visualizeOn: () => appSettings.get().chat.visualize,
   });
+  /** A config change saved while a session runs: the reload waits for idle (folder-reload.ts). Nothing to reload while the server is down. */
+  const reloads = createFolderReloads({ reload: async () => !server.running() || engine.reloadLocations(), changed: (kind, cwd) => ctx.broadcast({ type: "config.changed", kind, cwd }) });
+  const config: EngineConfig = {
+    mcp: createOpenCode2McpConfig({ server, reload: (cwd, kind) => reloads.request(cwd, [kind]), waitMs: o.mcpWaitMs }),
+    skills: async () => {
+      throw new EngineError("opencode_v2_unsupported", "OpenCode 2 does not support the skills dialog in claude-ui yet.");
+    },
+    plugins: async () => {
+      throw new EngineError("opencode_v2_unsupported", "OpenCode 2 does not support the Plugins dialog in claude-ui yet.");
+    },
+  };
   const sessionOpts = (initial: Partial<SessionSettings>) => ({ ...ctx.sessionOpts(initial), engine });
   const failure = (err: unknown) => (err instanceof OpenCodeError ? new EngineError(err.code, err.message) : new EngineError("opencode_failed", (err as Error).message));
   const notFound = async () => (await import("@opencode/client")).isSessionNotFoundError;
@@ -204,6 +217,9 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
 
   return {
     engine,
+    config,
+    settled: () => reloads.settled(),
+    close: async () => reloads.close(),
     // Listed, created or opened here: not a UUID (the transcript scan's shape), so it is not found by one.
     isLocal: async (id) => meta.has(id),
     knownIds: async () => [...meta.keys()],

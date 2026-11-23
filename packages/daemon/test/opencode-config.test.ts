@@ -1,4 +1,4 @@
-// The MCP servers dialog on OpenCode 1 (GH-864 slice 1): reads and actions through the fake `opencode`, saved changes in the project's opencode.json(c).
+// The MCP servers dialog on OpenCode 1 (GH-864 slice 1) and OpenCode 2 (GH-864, the fake OpenCode 2 reads the project's config files as 2.3.0 does): reads and actions through the fake `opencode`, saved changes in the project's opencode.json(c).
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,7 @@ import { fakeQuery } from "./fake-query.ts";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const BIN = fileURLToPath(new URL("./fixtures/opencode/fake-opencode-bin.mjs", import.meta.url));
+const BIN2 = fileURLToPath(new URL("./fixtures/opencode2/fake-opencode2-bin.mjs", import.meta.url));
 const TEXT_TURN = fileURLToPath(new URL("./fixtures/opencode/turn-text.json", import.meta.url));
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
 const until = async (cond: () => boolean, ms = 8000) => {
@@ -36,7 +37,7 @@ const FILE = `{
 }
 `;
 
-async function boot(o: { config?: object; file?: string; fileName?: string; env?: Record<string, string>; mcpWaitMs?: number; orchestration?: boolean } = {}) {
+async function boot(o: { config?: object; file?: string; fileName?: string; env?: Record<string, string>; mcpWaitMs?: number; orchestration?: boolean; /** The fake OpenCode 2 binary. */ v2?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "occ-")));
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
@@ -44,7 +45,7 @@ async function boot(o: { config?: object; file?: string; fileName?: string; env?
   const logFile = join(root, "fake.log");
   const dataFile = join(root, "data.json");
   writeFileSync(dataFile, JSON.stringify({ sessions: [], messages: {}, ...(o.config && { config: o.config }) }));
-  const env: Record<string, string> = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_DATA: dataFile, FAKE_OPENCODE_SCRIPT: "", XDG_CONFIG_HOME: join(root, "xdg"), ...o.env };
+  const env: Record<string, string> = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_DATA: dataFile, FAKE_OPENCODE_SCRIPT: "", XDG_CONFIG_HOME: join(root, "xdg"), ...(o.v2 && { FAKE_OPENCODE2_DATA: dataFile, FAKE_OPENCODE2_SCRIPT: "", FAKE_OPENCODE2_PROJECT_CONFIG: "1" }), ...o.env };
   const appSettings = createSettings();
   appSettings.set({ terminalAccess: { enabled: false }, inlineTask: { enabled: false }, fork: { enabled: false }, ...(o.orchestration && { orchestration: { enabled: true, workerCap: 20 } }) } as never);
   const http = createDaemon({
@@ -63,7 +64,7 @@ async function boot(o: { config?: object; file?: string; fileName?: string; env?
     projectsDir: join(root, "claude", "projects"),
     uploadSweepMs: 0,
     modelListWaitMs: 0,
-    opencode: { command: [process.execPath, BIN], env: () => env, listWaitMs: 500, ...(o.mcpWaitMs !== undefined && { mcpWaitMs: o.mcpWaitMs }) },
+    opencode: { command: [process.execPath, o.v2 ? BIN2 : BIN], env: () => env, listWaitMs: 500, ...(o.mcpWaitMs !== undefined && { mcpWaitMs: o.mcpWaitMs }) },
   });
   await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
   const port = (http.address() as AddressInfo).port;
@@ -216,11 +217,112 @@ describe("OpenCode MCP servers dialog", { timeout: TEST_MS }, () => {
     await d.mcp({ type: "mcp.add", name: "tool", scope: "project", config: { transport: "http", url: "http://127.0.0.1:1/mcp", headers: [] } });
     expect(JSON.parse(d.file("opencode.json")).mcp.tool).toEqual({ type: "remote", url: "http://127.0.0.1:1/mcp" });
   });
+});
 
-  it("config requests with an OpenCode 2 binary answer opencode_v2_unsupported", async () => {
-    const d = await boot({ file: FILE, env: { FAKE_OPENCODE_VERSION: "2.3.0" } });
-    const r = await d.request({ type: "mcp.list", cwd: d.project, engine: "opencode" });
-    expect(r).toMatchObject({ type: "error", code: "opencode_v2_unsupported" });
+const V2_FILE = `{
+  "mcp": { "servers": {
+    "echo": { "type": "local", "command": ["node", "echo.mjs"] },
+    "off": { "type": "local", "command": ["node", "off.mjs"], "disabled": true }
+  } },
+  "permissions": [{ "action": "shell", "resource": "*", "effect": "ask" }]
+}
+`;
+const USER_FILE = `{ "mcp": { "globalsrv": { "type": "remote", "url": "http://127.0.0.1:1/global" } } }\n`;
+const jsonOf = (text: string) => JSON.parse(text.replace(/^\s*\/\/.*$/gm, ""));
+
+describe("OpenCode 2 MCP servers dialog", { timeout: TEST_MS }, () => {
+  const bootV2 = async (file: string, fileName = "opencode.json") => {
+    const d = await boot({ v2: true, file, fileName });
+    mkdirSync(join(d.root, "xdg", "opencode"), { recursive: true });
+    writeFileSync(join(d.root, "xdg", "opencode", "opencode.json"), USER_FILE);
+    return d;
+  };
+
+  it("mcp.list reads the servers of both config shapes with status and scope, the user's servers as user scope, and no server of the daemon", async () => {
+    const d = await bootV2(`{ "mcp": { "echo": { "type": "local", "command": ["node", "echo.mjs"] }, "broken": { "type": "local", "command": ["/nonexistent-bin"] }, "oauthy": { "type": "remote", "url": "http://127.0.0.1:1/oauth" }, "off": { "type": "local", "command": ["node", "x"], "enabled": false } } }`);
+    const r = await d.mcp({ type: "mcp.list" });
+    expect(d.names(r)).toEqual(["broken", "echo", "globalsrv", "oauthy", "off"]);
+    const by = Object.fromEntries(r.servers.map((s: any) => [s.name, s]));
+    expect(by.echo).toMatchObject({ status: "connected", scope: "project", config: { type: "stdio", command: "node" } });
+    expect(by.broken).toMatchObject({ status: "failed", error: "spawn /nonexistent-bin ENOENT" });
+    expect(by.off.status).toBe("disabled");
+    expect(by.oauthy).toMatchObject({ status: "needs-auth", config: { type: "http", url: "http://127.0.0.1:1/oauth" } });
+    expect(by.globalsrv).toMatchObject({ status: "connected", scope: "user" });
+    expect(d.requests("GET", "/api/mcp")[0]!.query!["location[directory]"]).toBe(d.project);
+  });
+
+  it("mcp.list leaves out the daemon's own servers in OpenCode", async () => {
+    const d = await boot({ v2: true, file: V2_FILE, fileName: "opencode.json", orchestration: true });
+    await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" });
+    await until(() => d.requests("PUT", /^\/api\/experimental\/mcp\/orchestration-/).length > 0);
+    expect(d.names(await d.mcp({ type: "mcp.list" }))).toEqual(["echo", "off"]);
+  });
+
+  it.each([
+    ["an OpenCode 1 file", `{\n  // keep this comment\n  "mcp": { "echo": { "type": "local", "command": ["node", "echo.mjs"] } }\n}\n`, "opencode.jsonc", (t: any) => t.mcp.echo.enabled],
+    ["an OpenCode 2 file", V2_FILE, "opencode.json", (t: any) => !t.mcp.servers.echo.disabled],
+  ])("mcp.toggle in %s writes the switch into the file and connects or disconnects at once", async (_n, file, name, enabledIn) => {
+    const d = await bootV2(file, name);
+    const off = await d.mcp({ type: "mcp.toggle", name: "echo", enabled: false });
+    expect(d.requests("POST", "/api/experimental/mcp/echo/disconnect")).toHaveLength(1);
+    expect(off.servers.find((s: any) => s.name === "echo").status).toBe("disabled");
+    const text = d.file(name);
+    if (name === "opencode.jsonc") expect(text).toContain("keep this comment");
+    expect(enabledIn(jsonOf(text))).toBe(false);
+    await d.mcp({ type: "mcp.toggle", name: "echo", enabled: true });
+    expect(d.requests("POST", "/api/experimental/mcp/echo/connect")).toHaveLength(1);
+    expect(enabledIn(jsonOf(d.file(name)))).toBe(true);
+    expect(d.requests("POST", "/api/location/reload")).toHaveLength(0);
+  });
+
+  it("mcp.toggle of a server of the user's config only switches it at runtime: OpenCode 2 drops a file entry that holds only the switch", async () => {
+    const d = await bootV2(V2_FILE);
+    const r = await d.mcp({ type: "mcp.toggle", name: "globalsrv", enabled: false });
+    expect(r.servers.find((s: any) => s.name === "globalsrv").status).toBe("disabled");
+    expect(d.requests("POST", "/api/experimental/mcp/globalsrv/disconnect")).toHaveLength(1);
+    expect(d.file("opencode.json")).toBe(V2_FILE);
+  });
+
+  it.each([
+    ["an OpenCode 1 file", `{ "mcp": { "echo": { "type": "local", "command": ["node", "echo.mjs"] } } }`, (t: any) => t.mcp],
+    ["an OpenCode 2 file", V2_FILE, (t: any) => t.mcp.servers],
+    ["no file", undefined, (t: any) => t.mcp],
+  ])("mcp.add and mcp.remove in %s edit the project file with its own keys and use the runtime MCP routes, with no folder reload", async (_n, file, servers) => {
+    const d = await bootV2(file ?? "{}", "opencode.json");
+    await d.mcp({ type: "mcp.list" }); // the dialog lists first: OpenCode has loaded the folder before the file changes
+    const added = await d.mcp({ type: "mcp.add", name: "tool", scope: "project", config: { transport: "stdio", command: "node", args: ["t.mjs"], env: ["K=v"] } });
+    expect(servers(jsonOf(d.file("opencode.json"))).tool).toEqual({ type: "local", command: ["node", "t.mjs"], environment: { K: "v" } });
+    expect(d.requests("PUT", "/api/experimental/mcp/tool")[0]!.body.config).toEqual({ type: "local", command: ["node", "t.mjs"], environment: { K: "v" } });
+    expect(added.servers.find((s: any) => s.name === "tool")).toMatchObject({ status: "connected", scope: "project" });
+    const dup = await d.request({ type: "mcp.add", cwd: d.project, engine: "opencode", name: "tool", scope: "project", config: { transport: "http", url: "http://127.0.0.1:1/m", headers: [] } });
+    expect(dup).toMatchObject({ type: "error", code: "already_exists" });
+    const removed = await d.mcp({ type: "mcp.remove", name: "tool", scope: "project" });
+    expect(servers(jsonOf(d.file("opencode.json"))).tool).toBeUndefined();
+    expect(d.requests("DELETE", "/api/experimental/mcp/tool")).toHaveLength(1);
+    expect(d.names(removed)).not.toContain("tool");
+    expect(removed.applied).toBeUndefined();
+    expect(d.requests("POST", "/api/location/reload")).toHaveLength(0);
+  });
+
+  it("mcp.remove of a server of the user's config is refused with the reason", async () => {
+    const d = await bootV2(V2_FILE);
+    const r = await d.request({ type: "mcp.remove", cwd: d.project, engine: "opencode", name: "globalsrv", scope: "project" });
+    expect(r).toMatchObject({ type: "error", code: "invalid_input" });
+    expect(d.file("opencode.json")).toBe(V2_FILE);
+  });
+
+  it("sign-in actions answer with the reason OpenCode 2 has no route for them, and its capabilities carry the mcpAuth gap", async () => {
+    const d = await bootV2(V2_FILE);
+    for (const msg of [{ type: "mcp.authenticate", name: "echo" }, { type: "mcp.clearAuth", name: "echo" }, { type: "mcp.oauthCallback", name: "echo", callbackUrl: "http://127.0.0.1/x?code=1" }])
+      expect(await d.request({ cwd: d.project, engine: "opencode", ...msg })).toMatchObject({ type: "error", code: "unsupported", message: expect.stringContaining("integrations") });
+    const created = await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" });
+    expect(created.session.capabilities.config.gaps.mcpAuth).toContain("integrations");
+  });
+
+  it("mcp.reconnect disconnects and connects the server again", async () => {
+    const d = await bootV2(V2_FILE);
+    await d.mcp({ type: "mcp.reconnect", name: "echo" });
+    expect(d.log().filter((l) => /\/mcp\/echo\/(dis)?connect$/.test(l.path ?? "")).map((l) => l.path)).toEqual(["/api/experimental/mcp/echo/disconnect", "/api/experimental/mcp/echo/connect"]);
   });
 });
 

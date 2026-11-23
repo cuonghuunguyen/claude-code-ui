@@ -33,6 +33,20 @@ function read(file: string): { text: string; data: Record<string, unknown> } {
   return { text, data: data as Record<string, unknown> };
 }
 
+const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+/**
+ * The key set a config file is written in. OpenCode 2 reads the OpenCode 1 shape too (it normalises `mcp.<n>`, `permission` and `plugin`), so a file is "v2" only when it
+ * already uses the OpenCode 2 keys: `mcp.servers`, a `permissions` list or `plugins`. An empty or new file is "v1": the unchanged OpenCode 1 writers apply.
+ */
+export function shapeOf(data: Record<string, unknown>): "v1" | "v2" {
+  const mcp = data.mcp;
+  if (isObject(mcp) && isObject(mcp.servers) && typeof mcp.servers.type !== "string") return "v2";
+  return Array.isArray(data.permissions) || Array.isArray(data.plugins) ? "v2" : "v1";
+}
+export const fileShape = (file: string): "v1" | "v2" => (existsSync(file) ? shapeOf(read(file).data) : "v1");
+/** The existing project config files of `cwd` with their parsed content, lowest precedence first. */
+export const projectDocs = (cwd: string) => projectFiles(cwd).map((file) => ({ file, data: read(file).data }));
+
 /** The value at `path` in the merged project files (the winning file's value for each key), or undefined. */
 export function readProjectValue(cwd: string, path: (string | number)[]): unknown {
   let found: unknown;
@@ -80,6 +94,12 @@ export function editProjectFile(cwd: string, path: (string | number)[], value: u
   for (const f of files) read(f);
   for (const f of files) write(f, path, value);
   return files;
+}
+
+/** Sets (`value` given) or deletes (`undefined`) the value at `path` in one file (not parsing is refused, nothing written). */
+export function editFileAt(file: string, path: (string | number)[], value: unknown) {
+  read(file);
+  write(file, path, value);
 }
 
 /** The entries of the list at `path` in each project file that has one, lowest precedence first (OpenCode joins the lists of its config files). A key that is not a list is refused. */

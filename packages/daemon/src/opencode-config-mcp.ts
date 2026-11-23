@@ -14,7 +14,7 @@ import type { OpenCodeServer } from "./opencode-server.ts";
 export const MCP_WAIT_MS = 3000;
 /** The longest `mcp.authenticate` waits for OpenCode on the local flow: it answers when the sign-in redirect arrived, which the dialog polls for. */
 const AUTH_WAIT_MS = 1500;
-const NAME = /^[a-zA-Z0-9_-]+$/;
+export const NAME = /^[a-zA-Z0-9_-]+$/;
 
 type McpConfig = { type?: string; command?: string[]; url?: string; enabled?: boolean };
 type Status = Record<string, { status: string; error?: string }>;
@@ -38,10 +38,10 @@ function globalNames(): Set<string> {
   return names;
 }
 
-const mapStatus = (s: string) => (s === "needs_auth" || s === "needs_client_registration" ? "needs-auth" : s);
+export const mapStatus = (s: string) => (s === "needs_auth" || s === "needs_client_registration" ? "needs-auth" : s);
 
 /** Header lines "Name: value" and env lines "KEY=value" of the add form as the objects OpenCode takes. */
-const pairs = (lines: string[], sep: string) =>
+export const pairs = (lines: string[], sep: string) =>
   Object.fromEntries(
     lines.flatMap((l) => {
       const at = l.indexOf(sep);

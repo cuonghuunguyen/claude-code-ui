@@ -310,3 +310,20 @@ it("with OpenCode flags the add form offers only Project scope, a user server sh
   expect(group("Transport").some((t) => t.startsWith("SSE"))).toBe(false);
   expect(group("Transport")).toHaveLength(2);
 });
+
+it("with the mcpAuth gap (OpenCode 2) a server that needs sign-in shows the reason and no Authenticate, and a connected remote server no Clear authentication", { timeout: 20_000 }, async () => {
+  const gap = "OpenCode 2 signs MCP servers in through its integrations. Sign in with OpenCode's own app.";
+  const caps: ConfigCapabilities = { ...OPENCODE, gaps: { ...OPENCODE.gaps, mcpAuth: gap } };
+  const servers: McpServerInfo[] = [
+    { name: "needy", status: "needs-auth", scope: "project", config: { type: "http", url: "https://x/mcp" } },
+    { name: "linked", status: "connected", scope: "project", config: { type: "http", url: "https://y/mcp" } },
+  ];
+  const d = await render({}, { engine: "opencode", config: caps, servers });
+  await d.click(d.all("mcp-row").find((r) => r.textContent?.startsWith("needy")));
+  expect(d.q("mcp-authenticate")).toBeNull();
+  expect(d.q("mcp-auth-gap")?.textContent).toBe(gap);
+  await d.click(d.button("← Back to list"));
+  await d.click(d.all("mcp-row").find((r) => r.textContent?.startsWith("linked")));
+  expect(d.q("mcp-clearAuth")).toBeNull();
+  expect(d.q("mcp-reconnect")).not.toBeNull();
+});

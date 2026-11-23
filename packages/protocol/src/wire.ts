@@ -32,7 +32,7 @@ export const OPENCODE_MIN = "1.18.0";
 /** Oldest OpenCode 2 this daemon works with: its API was checked against 2.3.0. */
 export const OPENCODE2_MIN = "2.3.0";
 /** Config dialog controls an Engine lacks (ADR 0012): each gap hides its control and shows the reason text in its place. */
-export type ConfigGap = "mcpTools" | "mcpRemoveScope" | "skillTokens" | "pluginSwitch" | "pluginUpdate" | "pluginCatalog" | "pluginRemoveScope" | "pluginStatus" | "marketplaces";
+export type ConfigGap = "mcpTools" | "mcpAuth" | "mcpRemoveScope" | "skillTokens" | "pluginSwitch" | "pluginUpdate" | "pluginCatalog" | "pluginRemoveScope" | "pluginStatus" | "marketplaces";
 export type ConfigCapabilities = {
   /** Scopes `mcp.add` and `mcp.remove` write. */
   mcpScopes: ConfigScope[];
