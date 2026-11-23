@@ -39,6 +39,10 @@
 // {key, answer?} (a credential), POST …/connect/oauth {methodID, answer?} -> an attempt (`browser`: auto, ended by POST /__oauth {result: "success"|"failed"}; `code`: mode code, an answer
 // `team: bad` answers 400), GET/DELETE …/connect/oauth/:attempt, POST …/connect/oauth/:attempt/complete {code} (`good` connects, else 400); GET /api/credential, DELETE /api/credential/:id.
 // `envprov` is connected by an environment variable.
+// Background shells of the model (GH-922, as 2.3.0): the turn step `{shell: {command, output}}` starts one for the turn's session (`shell.created`, `$SHELL1`..`$SHELL2` name them; the shell's own
+// session in `metadata.sessionID`); `data.shells` [{id, command, sessionID}] are running at start. GET /api/shell lists the running ones of the folder; DELETE /api/shell/:id kills one (the synthetic inbox item
+// `state: error`, `shell.exited` killed, `shell.deleted`; its output is gone: 404 as 2.3.0); POST /__shell_exit {id, exit, output} ends one as a command that finished (`shell.exited`, then the synthetic
+// inbox item `state: completed` with the output).
 // FAKE_OPENCODE_LOG: JSON lines of `start`, `request` (method, path, authed, body of a write) and `version`.
 import { createServer } from "node:http";
 import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
@@ -108,6 +112,11 @@ const forms = new Map();
 /** Running shells by id: `{kill()}`. */
 const shells = new Map();
 const shellOut = new Map();
+for (const x of data.shells ?? []) {
+  const sh = { id: x.id, status: "running", command: x.command, cwd: sessions.get(x.sessionID)?.directory, shell: "/bin/sh", metadata: { sessionID: x.sessionID }, time: { started: 1 } };
+  shells.set(x.id, { command: x.command, info: sh, kill() {}, exit() {} });
+  shellOut.set(x.id, x.output ?? "");
+}
 let nextTurn = 0;
 /** MCP servers by `<directory>\0<name>`: their config. */
 const mcps = new Map();
@@ -174,10 +183,26 @@ const skillsOf = (dir) => {
   const own = existsSync(root) ? readdirSync(root).filter((n) => existsSync(join(root, n, "SKILL.md"))) : [];
   return [...(data.skills ?? []), ...own.map((n) => ({ id: `skl_${n}`, name: n, description: `${n} skill`, path: join(root, n, "SKILL.md"), content: "" }))];
 };
-const fill = (v, vars) => (typeof v === "string" ? vars[v] ?? v.replace(/\$ORCH|\$CUI/g, (k) => vars[k]) : Array.isArray(v) ? v.map((x) => fill(x, vars)) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fill(x, vars)])) : v);
+const fill = (v, vars) => (typeof v === "string" ? vars[v] ?? v.replace(/\$ORCH|\$CUI|\$SHELL\d/g, (k) => vars[k]) : Array.isArray(v) ? v.map((x) => fill(x, vars)) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fill(x, vars)])) : v);
+const synthetic = (sid, sh, command, state, text, extra, dir) =>
+  emit("session.inbox.enqueued", { inboxID: id("msg"), sessionID: sid, item: { type: "synthetic", payload: { text: `<shell id="${sh}" state="${state}" command="${command}">\n${text}\n</shell>`, metadata: { source: "shell", shellID: sh, jobID: sh, state, ...extra } }, delivery: "steer" } }, dir);
+/** A background shell of the model's command (`shell` tool with `background: true`): running until it is killed or POST /__shell_exit ends it. */
+function agentShell(sid, spec, dir) {
+  const sh = spec.id;
+  const info = { id: sh, status: "running", command: spec.command, cwd: dir, shell: "/bin/sh", metadata: { sessionID: sid }, time: { started: Date.now() } };
+  shellOut.set(sh, spec.output ?? "");
+  // 2.3.0 sends the synthetic inbox item after `shell.exited` for a finished command, before it for a killed one.
+  shells.set(sh, {
+    command: spec.command,
+    info,
+    kill: () => (shells.delete(sh), synthetic(sid, sh, spec.command, "error", "Shell.NotFoundError", {}, dir), emit("shell.exited", { id: sh, status: "killed" }, dir), emit("shell.deleted", { id: sh }, dir), shellOut.delete(sh)),
+    exit: (exit, output) => (shellOut.set(sh, output), emit("shell.exited", { id: sh, status: "exited", exit }, dir), synthetic(sid, sh, spec.command, "completed", output, { truncated: false, exit }, dir), shells.delete(sh)),
+  });
+  emit("shell.created", { info }, dir);
+}
 async function runTurn(sid, userId, steps) {
   const dir = sessions.get(sid).directory;
-  const vars = { $SESSION: sid, $USER: userId, $DIR: dir, ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`$A${n}`, id("msg")])), $PERM: id("per"), $FORM: id("frm"), $CALL: id("call"), $ORCH: `orchestration-${sid.slice(-10)}`, $CUI: `claude-ui-${sid.slice(-10)}` };
+  const vars = { $SESSION: sid, $USER: userId, $DIR: dir, ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`$A${n}`, id("msg")])), $PERM: id("per"), $FORM: id("frm"), $CALL: id("call"), $SHELL1: id("sh"), $SHELL2: id("sh"), $ORCH: `orchestration-${sid.slice(-10)}`, $CUI: `claude-ui-${sid.slice(-10)}` };
   let reply;
   let formDone;
   let interrupt;
@@ -191,6 +216,7 @@ async function runTurn(sid, userId, steps) {
     if (step.when && !(step.when === last || (step.when === "allowed" && (last === "once" || last === "always")))) continue;
     if (step.sleep) await sleep(step.sleep);
     else if (step.hold) await stop;
+    else if (step.shell) agentShell(sid, fill(step.shell, vars), dir);
     else if (step.wait === "permission") {
       last = await Promise.race([new Promise((r) => (reply = r)), stop]);
       if (turn.stopped) break;
@@ -367,6 +393,8 @@ const server = createServer((req, res) => {
       for (const a of attempts.values()) if (a.mode === "auto" && a.status === "pending") (a.status = body.result === "success" ? "complete" : "failed"), a.status === "complete" && credit(a.integrationID, "oauth");
       return json(res, 200, {});
     }
+    // POST /__shell_exit {id, exit, output}: a background shell's command finished (a test seam like /__drop).
+    if (url.pathname === "/__shell_exit") return (shells.get(body.id)?.exit(body.exit ?? 0, body.output ?? ""), json(res, 200, {}));
     if (url.pathname === "/__mcp_drop") return (mcps.clear(), json(res, 200, {}));
     if (url.pathname === "/__mcp_fail") return ((mcpFail = true), json(res, 200, {}));
     if (url.pathname.startsWith("/__clear/")) {
@@ -438,6 +466,7 @@ const server = createServer((req, res) => {
       if (m[2] && req.method === "DELETE") return (entries.delete(m[2]), res.writeHead(204), res.end());
     }
     if (p === "/api/form") return json(res, 200, { location: { directory: dir }, data: [...forms.values()].map((f) => f.form).filter((f) => sessions.get(f.sessionID)?.directory === dir || !dir) });
+    if (p === "/api/shell" && req.method === "GET") return json(res, 200, { location: { directory: dir }, data: [...shells.values()].filter((x) => x.info && x.info.cwd === dir).map((x) => x.info) });
     if ((m = /^\/api\/shell\/([^/]+)(\/output)?$/.exec(p))) {
       if (m[2]) return shellOut.has(m[1]) ? json(res, 200, { location: { directory: dir }, data: { output: shellOut.get(m[1]), cursor: 0, size: 0, truncated: false } }) : json(res, 404, { message: "shell not found" });
       if (req.method === "DELETE") return (shells.get(m[1])?.kill(), res.writeHead(204), res.end());

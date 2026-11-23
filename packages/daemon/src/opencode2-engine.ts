@@ -172,6 +172,8 @@ const TURN_END_WAIT_MS = 10_000;
 const POSTING_WAIT_MS = 3000;
 const ANSWERED = "Answered in OpenCode";
 /** How often a running bash mode command's output is read (OpenCode 2 sends no output events). */
+/** The most of a background shell's output the Shells list gets. */
+const SHELL_TAIL = 30_000;
 const SHELL_POLL_MS = 500;
 /** A user message that shows in the timeline (text or an image). */
 const shownUser = (m: OpenCode2Message) => m.type === "user" && (!!m.text || !!m.files?.some((f) => f.mime?.startsWith("image/") && f.data));
@@ -320,6 +322,24 @@ class OpenCode2Session implements EngineSession {
     for (const part of this.mapper.history(h.messages)) this.session.emit(part);
     for (const m of h.messages) this.noteUsage(m);
     void this.emitUsage();
+    void this.reconcileShells();
+  }
+
+  /** A background shell of the model that OpenCode no longer lists as running ended while the daemon was away (its end notice, if any, is already read): the card stops. */
+  private async reconcileShells() {
+    const open = this.mapper.openShells();
+    if (!open.length) return;
+    const running = await this.server
+      .client()
+      .then((c) => c.shell.list({ location: { directory: this.cwd } }))
+      .then((r) => new Set(r.data.map((x) => x.id)))
+      .catch(() => undefined);
+    if (!running) return;
+    for (const [, sh] of open) if (!running.has(sh)) this.shellExited({ id: sh, status: "killed" });
+  }
+  /** `shell.exited` of any shell: the card of the call that started it ends. */
+  shellExited(d: Json) {
+    this.emitAll(this.mapper.shellExited(d.id, d.status, typeof d.exit === "number" ? d.exit : undefined));
   }
 
   private noteUsage(m: { type?: string; tokens?: Json; model?: { id: string; providerID: string } }) {
@@ -1301,8 +1321,35 @@ class OpenCode2Session implements EngineSession {
     this.toIdle();
     return true;
   };
-  stopShell = async () => false;
-  shellOutput = async () => undefined;
+  /** The shell a card of the Shells list stands for: a background call of the model, or a bash mode command moved to the background (its part id is the shell id). */
+  private shellFor = (id: string) => this.mapper.shellOf(id) ?? (this.backgrounded.has(id) ? id : undefined);
+  /** Kill: OpenCode removes the shell (its end then shows on the card). False for an unknown or ended shell. */
+  stopShell = async (id: string) => {
+    const sh = this.shellFor(id);
+    if (!sh || this.mapper.shellEnd(sh)) return false;
+    const client = await this.server.client();
+    await client.shell.remove({ id: sh, location: { directory: this.cwd } });
+    return true;
+  };
+  /** Output tails shown in the Shells list: the last read while the shell ran, for a killed one (OpenCode forgets its output). */
+  private readonly shellTails = new Map<string, string>();
+  /** The tail of a background shell's output: read from OpenCode while it runs, the end notice's text after. */
+  shellOutput = async (id: string) => {
+    const sh = this.shellFor(id);
+    if (!sh) return undefined;
+    const end = this.mapper.shellEnd(sh);
+    let out = end?.output ?? (end ? this.shellTails.get(sh) : undefined);
+    let truncated = false;
+    if (out === undefined && end) return undefined;
+    if (out === undefined) {
+      const client = await this.server.client();
+      const r = await client.shell.output({ id: sh, location: { directory: this.cwd } });
+      out = r.data.output;
+      truncated = r.data.truncated;
+      this.shellTails.set(sh, out);
+    }
+    return out.length > SHELL_TAIL ? { output: out.slice(-SHELL_TAIL), truncated: true } : { output: out, truncated };
+  };
   sync = async () => {};
   close = async () => {
     clearInterval(this.shellRun?.timer);
@@ -1361,6 +1408,8 @@ class OpenCode2EngineImpl implements Engine {
         event: (dir, payload) => {
           // OpenCode loaded or changed a folder's agents or commands (its first load included): read them again.
           if (payload.type === "agent.updated" || payload.type === "command.updated") return this.listsChanged(dir);
+          // A shell's end names no session: the session whose call started it shows it.
+          if (payload.type === "shell.exited") return this.sessions.forEach((o) => o.shellExited(payload.properties));
           // A form names its session inside the form.
           const sid: unknown = payload.properties.sessionID ?? payload.properties.form?.sessionID;
           if (typeof sid !== "string") return;

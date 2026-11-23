@@ -101,9 +101,9 @@ async function boot(o: { script?: string[]; data?: object; env?: Record<string, 
   };
   const requests = (method: string, path: RegExp | string) => log().filter((l) => l.type === "request" && l.method === method && (typeof path === "string" ? l.path === path : path.test(l.path)));
   /** The fake server's own route (no authentication). */
-  const fake = async (path: string) => {
+  const fake = async (path: string, body?: object) => {
     const port2 = log().find((l) => l.type === "start")!.port;
-    await fetch(`http://127.0.0.1:${port2}${path}`, { method: "POST" });
+    await fetch(`http://127.0.0.1:${port2}${path}`, { method: "POST", ...(body && { body: JSON.stringify(body) }) });
   };
   const view = (id: string) => {
     const parts = () => inbox.filter((m): m is Extract<ServerMessage, { type: "event" }> => m.type === "event" && m.sessionId === id).map((m) => m.part);
@@ -983,6 +983,52 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     await until(() => s.states().at(-1) === "idle");
     expect(s.find("bash", (p) => p.command === "sleep 31")).toMatchObject({ status: "running", shell: "background" });
     expect(d.requests("DELETE", /^\/api\/shell\/sh_/)).toHaveLength(1);
+  });
+
+  const shellId = (s: ReturnType<Awaited<ReturnType<typeof boot>>["view"]>, call: string) => /shell ID: (sh_\w+)/.exec(String(s.find("tool_result", (p) => p.toolUseId === call)!.output))![1]!;
+  it("a background shell of the model lists in Shells with its output read from OpenCode; its end sets the card's status and exit code; Kill removes it in OpenCode", async () => {
+    const d = await boot({ script: ["background-shell", "background-shell"] });
+    const s = await d.open();
+    await s.prompt("serve");
+    await until(() => s.states().at(-1) === "idle" && !!s.find("tool_result"));
+    const sh = shellId(s, "call_bg");
+    // Still running after its call returned: a background shell with its command, never a user bubble.
+    expect(s.find("tool_call", (p) => p.id === "call_bg")).toMatchObject({ tool: "Bash", status: "running", shell: "background", input: { command: "npm run dev" } });
+    expect(await d.ok({ type: "session.shellOutput", sessionId: s.id, toolUseId: "call_bg" })).toEqual({ output: "listening on 3000\n", truncated: false });
+    // The command finished: exit code on the card, its final output kept, the synthetic notice is no bubble.
+    await d.fake("/__shell_exit", { id: sh, exit: 3, output: "boom\n" });
+    await until(() => s.find("tool_call", (p) => p.id === "call_bg")?.status === "error");
+    expect(s.find("tool_call", (p) => p.id === "call_bg")).toMatchObject({ exitCode: 3, shell: "background" });
+    expect(await d.ok({ type: "session.shellOutput", sessionId: s.id, toolUseId: "call_bg" })).toEqual({ output: "boom\n", truncated: false });
+    expect(s.parts().filter((p) => p.type === "user_text")).toHaveLength(1);
+    expect((await d.request({ type: "session.stopShell", sessionId: s.id, toolUseId: "call_bg" })).type).toBe("error");
+    // A second one: Kill deletes the shell in OpenCode and the card shows stopped.
+    await until(() => s.states().at(-1) === "idle");
+    await s.prompt("serve again");
+    await until(() => s.states().at(-1) === "idle" && s.parts().filter((p) => p.type === "tool_result").length === 2);
+    const second = s.find("tool_call", (p) => p.id === "call_bg")!;
+    expect(second.status).toBe("running");
+    await d.ok({ type: "session.stopShell", sessionId: s.id, toolUseId: "call_bg" });
+    await until(() => s.find("tool_call", (p) => p.id === "call_bg")?.status === "stopped");
+    expect(d.requests("DELETE", /^\/api\/shell\/sh_/)).toHaveLength(1);
+  });
+
+  it("a restored background shell shows running while OpenCode lists it, done with its exit code once its end notice is stored, else stopped", async () => {
+    const call = (id: string, sh: string) => ({ type: "tool", id, name: "shell", state: { status: "completed", input: { command: `cmd ${id}`, background: true }, content: [{ type: "text", text: `Command moved to the background (shell ID: ${sh}).` }] }, time: { created: 2, completed: 3 } });
+    const messages = [
+      { id: "msg_u", type: "user", text: "q", time: { created: 1 } },
+      { id: "msg_a", type: "assistant", agent: "build", model: { id: "m", providerID: "fake" }, time: { created: 2, completed: 3 }, content: [call("c_run", "sh_run"), call("c_done", "sh_done"), call("c_lost", "sh_lost")] },
+      { id: "msg_s", type: "synthetic", time: { created: 4 }, text: '<shell id="sh_done" state="completed" command="cmd c_done">\nall good\n</shell>', metadata: { source: "shell", shellID: "sh_done", state: "completed", exit: 0 } },
+    ];
+    const d = await owned(messages, {}, { data: { shells: [{ id: "sh_run", command: "cmd c_run", sessionID: "ses_own", output: "still going\n" }] } });
+    await d.ok({ type: "session.subscribe", sessionId: "ses_own", sinceSeq: 0 });
+    const s = d.view("ses_own");
+    const status = (id: string) => s.find("tool_call", (p) => p.id === id)?.status;
+    await until(() => status("c_lost") === "stopped");
+    expect(status("c_run")).toBe("running");
+    expect(status("c_done")).toBe("done");
+    expect(await d.ok({ type: "session.shellOutput", sessionId: "ses_own", toolUseId: "c_run" })).toEqual({ output: "still going\n", truncated: false });
+    expect(await d.ok({ type: "session.shellOutput", sessionId: "ses_own", toolUseId: "c_done" })).toEqual({ output: "all good", truncated: false });
   });
 
   it("Stop before OpenCode named the shell kills the command once it is named", async () => {
