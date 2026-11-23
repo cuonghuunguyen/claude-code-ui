@@ -19,13 +19,18 @@ const addon = {
 } as AddonInfo;
 const state = { addons: [addon], picks: {}, log: new Map() };
 
-let root: ReturnType<typeof createRoot> | undefined;
-afterEach(() => (act(() => root?.unmount()), (document.body.innerHTML = "")));
+// Every root is unmounted and its queued work flushed before the file ends: a React task left in the scheduler runs after jsdom is torn down ("window is not defined").
+const roots: ReturnType<typeof createRoot>[] = [];
+afterEach(async () => {
+  await act(async () => roots.splice(0).forEach((r) => r.unmount()));
+  document.body.innerHTML = "";
+});
 async function mount(node: React.ReactNode) {
   const el = document.createElement("div");
   document.body.append(el);
-  root = createRoot(el);
-  await act(async () => root!.render(node));
+  const root = createRoot(el);
+  roots.push(root);
+  await act(async () => root.render(node));
   return el;
 }
 const click = (e: Element | null) => act(async () => void (e as HTMLElement).click());
