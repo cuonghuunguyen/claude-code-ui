@@ -3,6 +3,7 @@
 // the message, as the `session.text.*` events do); a tool call's id = its call id. Shapes recorded in development-docs (planner-spike/v2-events.json).
 import type { Part, ToolStatus } from "@claude-ui/protocol";
 import { canon, mapTool } from "./opencode-parts.ts";
+import { FORK_TOOL } from "./opencode-fork.ts";
 
 /** `SessionStructuredError` of OpenCode 2. */
 export type Failure = { type?: string; message?: string };
@@ -139,8 +140,13 @@ export class OpenCode2Mapper {
   /** Whether call `id` is still pending or running. */
   isRunning = (id: string) => {
     const c = this.calls.get(id);
-    return !!c && c.type === "tool_call" && (c.status === "running" || c.status === "pending");
+    return !!c && (c.type === "tool_call" || c.agentType === "fork") && (c.status === "running" || c.status === "pending");
   };
+  /** The newest running Fork run call (`fork` tool) whose input equals `input` and is not in `skip`. */
+  runningFork(input: Record<string, unknown> | undefined, skip: ReadonlySet<string>): string | undefined {
+    const want = JSON.stringify(canon(input ?? {}));
+    return [...this.calls.values()].reverse().find((c) => c.type === "subagent" && c.agentType === "fork" && (c.status === "running" || c.status === "pending") && !skip.has(c.id) && JSON.stringify(canon(this.raw.get(c.id)?.input ?? {})) === want)?.id;
+  }
   /** The newest running call of `tool` (its card name) whose input equals `input` and is not in `skip` (the call an inline run belongs to). */
   runningCall(tool: string, input: Record<string, unknown> | undefined, skip: ReadonlySet<string>): string | undefined {
     const want = JSON.stringify(canon(input ?? {}));
@@ -235,6 +241,12 @@ export class OpenCode2Mapper {
       return [sub];
     }
     const { tool, input: mapped } = mapTool2(name, parsed);
+    // A Fork run (docs/spec.md "Fork runs"): the `fork` tool of the claude-ui server shows as the Fork run card (a `subagent` part), as on OpenCode 1.
+    if (tool === FORK_TOOL) {
+      const run = { type: "subagent" as const, id: callId, toolUseId: callId, description: String(mapped.description ?? ""), status: st, startedAt: time?.ran ?? time?.created ?? 0, agentType: "fork", ...(time?.completed && { endedAt: time.completed }) };
+      this.calls.set(callId, run);
+      return [run];
+    }
     let exit = state.metadata?.exit;
     // A background shell runs on after its call returned: the card runs until the shell's end (`shell.exited`, its notice), the call's own end is only "moved to the background".
     const background = name === "shell" && parsed.background === true;

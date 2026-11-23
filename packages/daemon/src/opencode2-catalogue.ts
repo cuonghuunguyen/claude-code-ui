@@ -4,13 +4,14 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { EFFORTS, type PermissionMode, type SessionListItem } from "@claude-ui/protocol";
 import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineConfig, type ListCtx, type SavedSession } from "./engine-catalogue.ts";
-import { OPENCODE_MODES, type OpenCodeMcpRoute } from "./opencode-engine.ts";
+import { OPENCODE_MODES, type ForkLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { openCodeWanted } from "./opencode-catalogue.ts";
 import { OpenCodeError, type OpenCodeServer } from "./opencode-server.ts";
 import { createOpenCode2Engine, loadOpenCode2History, OPENCODE2_CAPABILITIES } from "./opencode2-engine.ts";
 import { createOpenCode2McpConfig, createOpenCode2PluginsConfig, createOpenCode2SkillsConfig } from "./opencode2-config.ts";
 import { createOpenCode2Login } from "./opencode2-providers.ts";
 import { INLINE_META } from "./opencode2-inline.ts";
+import { FORK_META, forkCut } from "./opencode2-fork.ts";
 import { createFolderReloads } from "./folder-reload.ts";
 import { mapLimit } from "./session-scan.ts";
 import { Session, type SessionOpts, type SessionSettings } from "./session.ts";
@@ -29,6 +30,8 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
   const server = o.server;
   /** Directory and title of each session this daemon listed, created or opened. */
   const meta = new Map<string, { cwd: string; title: string }>();
+  /** The fork sessions of the Fork runs of session `id` (sessions.json `forkOf`). */
+  const forksOf = (id: string): ForkLink[] => settings.entries().flatMap(([forkId, l]) => (l.forkOf?.sessionId === id ? [{ forkId, callId: l.forkOf.callId, prefix: l.forkOf.prefix }] : []));
   const engine = createOpenCode2Engine(server, {
     onTitle: (id, title) => {
       const m = meta.get(id);
@@ -39,6 +42,8 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     record: o.record,
     mcp: o.mcp,
     visualizeOn: () => appSettings.get().chat.visualize,
+    onFork: (id, forkOf) => ctx.saveSettings(() => settings.set(id, { forkOf })),
+    forksOf,
   });
   /** A config change saved while a session runs: the reload waits for idle (folder-reload.ts). Nothing to reload while the server is down. */
   const reloads = createFolderReloads({ all: true, reload: async (_cwd, folders) => !server.running() || engine.reloadLocations(folders), changed: (kind, cwd) => ctx.broadcast({ type: "config.changed", kind, cwd }) });
@@ -94,8 +99,8 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
           let cursor: string | undefined;
           for (let page = 0; page < MAX_PAGES; page++) {
             const r = await client.session.list({ directory: cwd, parentID: null, limit: PAGE, ...(cursor && { cursor }) });
-            // An inline task's session (opencode2-inline.ts) is no session of the user's.
-            rows.push(...r.data.filter((x) => !x.metadata?.[INLINE_META]).map((x) => ({ id: x.id, title: x.title ?? "New session", updated: x.time.updated, archived: !!x.time.archived, ...(x.agent && { agent: x.agent }) })));
+            // An inline task's and a Fork run's session (opencode2-inline.ts, opencode2-fork.ts) are no sessions of the user's.
+            rows.push(...r.data.filter((x) => !x.metadata?.[INLINE_META] && !x.metadata?.[FORK_META]).map((x) => ({ id: x.id, title: x.title ?? "New session", updated: x.time.updated, archived: !!x.time.archived, ...(x.agent && { agent: x.agent }) })));
             cursor = r.data.length >= PAGE ? (r.cursor.next ?? undefined) : undefined;
             if (!cursor) break;
           }
@@ -113,8 +118,13 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
       out.ran = true;
       for (const [cwd, rows] of folders)
         for (const row of rows) {
-          const loaded = ctx.session(row.id);
           const saved = linked.get(row.id);
+          // A fork whose metadata PATCH failed: its link hides it.
+          if (saved?.forkOf) {
+            out.ids.add(row.id);
+            continue;
+          }
+          const loaded = ctx.session(row.id);
           const savedMode = OPENCODE_MODES.find((m) => m === saved?.permissionMode) ?? "default";
           const mode = savedMode === "plan" ? "default" : savedMode;
           // The agent OpenCode has for it, else the folder's default as last read.
@@ -173,7 +183,7 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     const row = await client.session.get({ sessionID: id }).catch((err) => (isSessionNotFoundError(err) ? undefined : Promise.reject(err)));
     const cwd = row && ctx.allowed(known?.cwd ?? row.location.directory);
     if (!row || !cwd || ctx.isRemoving(cwd)) return undefined;
-    const history = await loadOpenCode2History(client, id, cwd, (sid) => engine.isOurs(id, sid));
+    const history = await loadOpenCode2History(client, id, cwd, (sid) => engine.isOurs(id, sid), forksOf(id));
     meta.set(id, { cwd, title: row.title ?? "New session" });
     const saved = settings.get(id);
     const permissionMode = OPENCODE_MODES.includes(saved?.permissionMode as never) ? (saved!.permissionMode as SessionSettings["permissionMode"]) : undefined;
@@ -182,26 +192,9 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     return ctx.track(Session.restore(id, cwd, history as never, sessionOpts({ model, permissionMode, effort })));
   }
 
-  /**
-   * Where an Aside forks (as the OpenCode 1 adapter): at a rewind (OpenCode's `revert`) its message, else before the unfinished assistant message of a running turn, else
-   * after the whole history. `before` excludes that message. Nothing kept before the cut = no Aside.
-   */
-  async function asideCut(client: Awaited<ReturnType<OpenCodeServer["client"]>>, id: string): Promise<{ before?: string } | undefined> {
-    const [info, first, newest] = await Promise.all([
-      client.session.get({ sessionID: id }),
-      client.message.list({ sessionID: id, order: "asc", limit: 1 }),
-      client.message.list({ sessionID: id, order: "desc", limit: 20 }),
-    ]);
-    const oldest = first.data[0];
-    if (!oldest) return undefined;
-    const running = newest.data.find((m) => m.type === "assistant" && !(m as { time?: { completed?: number } }).time?.completed)?.id;
-    const before = info.revert?.messageID ?? running;
-    return before === oldest.id ? undefined : { ...(before && { before }) };
-  }
-
   async function forkForAside(owner: Session, title: string): Promise<{ id: string } | { unavailable: string }> {
     const client = await server.client();
-    const cut = await asideCut(client, owner.id);
+    const cut = await forkCut(client, owner.id);
     if (!cut) return { unavailable: "An aside needs a message in this session first" };
     const row = await client.session.fork({ sessionID: owner.id, ...cut });
     try {
@@ -286,6 +279,14 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
         throw failure(err);
       }
       meta.delete(id);
+      // Its Fork runs' forks go with it (OpenCode 1 does the same).
+      const forks = forksOf(id).map((f) => f.forkId);
+      if (forks.length) {
+        const client = await server.client().catch(() => undefined);
+        // One already gone (or a failed remove) is no failure of the delete.
+        await Promise.all(forks.map((forkId) => client?.session.remove({ sessionID: forkId }).catch(() => undefined)));
+        ctx.saveSettings(() => settings.delete(forks));
+      }
     },
     forkForAside: (owner, title) => forkForAside(owner, title).catch((err) => Promise.reject(failure(err))),
     commands: (cwd) => engine.commands(cwd),

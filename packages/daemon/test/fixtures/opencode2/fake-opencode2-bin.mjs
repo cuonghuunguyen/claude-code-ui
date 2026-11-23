@@ -3,7 +3,7 @@
 // GET /api/info -> {version, pid, urls}; GET /api/event -> SSE (`server.connected`, the turns' events, `: heartbeat` comments). There is no /global/health: it answers 404.
 // Routes: GET /api/model, /api/model/default, /api/session, /api/session/active, /api/session/:id, /api/session/:id/message, /api/session/:id/message/:mid, /api/permission/request;
 // POST /api/session, /api/session/:id/prompt, /api/session/:id/model, /api/session/:id/interrupt, /api/session/:id/permission/:rid/reply, /api/session/:id/fork;
-// PATCH /api/session/:id (permissions, title, archived); DELETE /api/session/:id.
+// PATCH /api/session/:id (permissions, title, archived, metadata); DELETE /api/session/:id.
 // Revert (as 2.3.0): POST …/revert/stage {messageID, files?} (stored messages stay listed; `session.revert` marks the cut), POST …/revert/commit, DELETE …/revert
 // (clear: `session.revert.cleared`, then an empty `execution.started`/`succeeded`, as 2.3.0 sends; FAKE_OPENCODE2_CLEAR_ACTIVE_MS: the session active that long meanwhile; FAKE_OPENCODE2_CLEAR_DELAY_MS: it starts that late, a prompt posted meanwhile runs after it), a prompt while staged commits first. A prompt's turn sends `session.inbox.delivered` after its `execution.started`. GET …/diff?from=&to= sums the
 // fake `diff` lists ([{file, additions, deletions}]) of the user messages from `from` up to `to` (excluded; default the next user message).
@@ -565,7 +565,7 @@ const server = createServer((req, res) => {
       if (!sub && req.method === "PATCH") {
         // A title "fail-title" answers 500 (a failed rename).
         if (body.title === "fail-title") return json(res, 500, { message: "rename failed" });
-        Object.assign(s, body.permissions !== undefined && { permissions: body.permissions }, body.title !== undefined && { title: body.title });
+        Object.assign(s, body.permissions !== undefined && { permissions: body.permissions }, body.title !== undefined && { title: body.title }, body.metadata !== undefined && { metadata: { ...s.metadata, ...body.metadata } });
         if (body.archived === true) s.time.archived = Date.now();
         if (body.archived === false) delete s.time.archived;
         return (res.writeHead(204), res.end());
@@ -579,7 +579,9 @@ const server = createServer((req, res) => {
         const fid = id("ses");
         const now = Date.now();
         const f = { ...s, id: fid, title: `${s.title ?? "New session"} (fork #1)`, fork: { sessionID: s.id }, time: { created: now, updated: now } };
+        // As 2.3.0: the fork has no revert, no metadata and no parent.
         delete f.revert;
+        delete f.metadata;
         sessions.set(fid, f);
         messages.set(fid, (cut < 0 ? list : list.slice(0, cut)).map((x) => ({ ...x, id: id("msg") })));
         return json(res, 200, { data: f });
