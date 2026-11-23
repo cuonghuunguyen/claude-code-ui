@@ -15,6 +15,9 @@
 // command's template is stored as the user prompt and runs a turn (a command `fail` answers 500 CommandExecutionError, an unknown one 404 CommandNotFoundError).
 // PUT /api/experimental/session/:id/instructions/entries/:key {value}. POST /__agent/<sid>/<agent>: an agent chosen in OpenCode's own app; POST /__lists: the
 // agents and commands changed (`agent.updated`, `command.updated`; `data.commands2` and `data.agents2` replace them).
+// MCP (as 2.3.0): GET /api/mcp (the folder's servers and status), PUT /api/experimental/mcp/:server {config} (added and connected), DELETE /api/experimental/mcp/:server
+// (404 when absent). POST /__mcp_drop: every server is gone (an OpenCode restart); POST /__mcp_fail: the next adds answer 500. Turn strings `$ORCH` and `$CUI` are the
+// session's orchestration and claude-ui server names (`orchestration-<last 10 of its id>`).
 // FAKE_OPENCODE2_FAIL: see the session route.
 // FAKE_OPENCODE2_DATA: JSON `{sessions: [{id, directory, title, time, permissions?, parentID?}], messages: {<id>: [v2 messages]}, models?, default?}`.
 // FAKE_OPENCODE2_SCRIPT: comma-separated turn files, one per prompt in order (a prompt after the last one gets a plain "pong" turn). A turn is a JSON list of steps:
@@ -92,11 +95,14 @@ const forms = new Map();
 const shells = new Map();
 const shellOut = new Map();
 let nextTurn = 0;
+/** MCP servers by `<directory>\0<name>`: their config. */
+const mcps = new Map();
+let mcpFail = false;
 
-const fill = (v, vars) => (typeof v === "string" ? vars[v] ?? v : Array.isArray(v) ? v.map((x) => fill(x, vars)) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fill(x, vars)])) : v);
+const fill = (v, vars) => (typeof v === "string" ? vars[v] ?? v.replace(/\$ORCH|\$CUI/g, (k) => vars[k]) : Array.isArray(v) ? v.map((x) => fill(x, vars)) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fill(x, vars)])) : v);
 async function runTurn(sid, userId, steps) {
   const dir = sessions.get(sid).directory;
-  const vars = { $SESSION: sid, $USER: userId, $DIR: dir, ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`$A${n}`, id("msg")])), $PERM: id("per"), $FORM: id("frm"), $CALL: id("call") };
+  const vars = { $SESSION: sid, $USER: userId, $DIR: dir, ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`$A${n}`, id("msg")])), $PERM: id("per"), $FORM: id("frm"), $CALL: id("call"), $ORCH: `orchestration-${sid.slice(-10)}`, $CUI: `claude-ui-${sid.slice(-10)}` };
   let reply;
   let formDone;
   let interrupt;
@@ -265,6 +271,8 @@ const server = createServer((req, res) => {
       emit("command.updated", {});
       return json(res, 200, {});
     }
+    if (url.pathname === "/__mcp_drop") return (mcps.clear(), json(res, 200, {}));
+    if (url.pathname === "/__mcp_fail") return ((mcpFail = true), json(res, 200, {}));
     if (url.pathname.startsWith("/__clear/")) {
       const s = sessions.get(url.pathname.slice(9));
       delete s.revert;
@@ -272,7 +280,7 @@ const server = createServer((req, res) => {
       clearExecution(s);
       return json(res, 200, {});
     }
-    log({ type: "request", method: req.method, path: url.pathname, authed, ...(body !== undefined && { body }) });
+    log({ type: "request", method: req.method, path: url.pathname, authed, ...(url.search && { query: Object.fromEntries(url.searchParams) }), ...(body !== undefined && { body }) });
     if (!authed) return json(res, 401, { error: "unauthorized" });
     const p = url.pathname;
     let m;
@@ -294,6 +302,17 @@ const server = createServer((req, res) => {
     if (p === "/api/agent") {
       const n = ++agentReads - Number(process.env.FAKE_OPENCODE2_COLD_AGENTS ?? 0);
       return json(res, 200, { location: { directory: dir }, data: n <= 0 ? [] : n <= Number(process.env.FAKE_OPENCODE2_PARTIAL_AGENTS ?? 0) ? agents.slice(0, -1) : agents });
+    }
+    if (p === "/api/mcp") return json(res, 200, { location: { directory: dir }, data: [...mcps.keys()].filter((k) => k.startsWith(`${dir}\0`)).map((k) => ({ name: k.split("\0")[1], status: { status: "connected" } })) });
+    if ((m = /^\/api\/experimental\/mcp\/([^/]+)$/.exec(p))) {
+      const key = `${dir}\0${m[1]}`;
+      if (req.method === "PUT") {
+        if (mcpFail) return json(res, 500, { message: "MCP server failed to connect" });
+        mcps.set(key, body.config);
+        emit("mcp.status.changed", { server: m[1] }, dir);
+        return (res.writeHead(204), res.end());
+      }
+      if (req.method === "DELETE") return mcps.delete(key) ? (res.writeHead(204), res.end()) : json(res, 404, { _tag: "McpServerNotFoundError", message: `MCP server not found: ${m[1]}` });
     }
     if (p === "/api/command") return json(res, 200, { location: { directory: dir }, data: commands });
     if (p === "/api/config") return json(res, 200, data.config ?? []);

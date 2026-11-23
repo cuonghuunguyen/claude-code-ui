@@ -1,0 +1,11 @@
+[
+ { "event": "session.execution.started", "data": { "sessionID": "$SESSION" } },
+ { "event": "session.step.started", "data": { "sessionID": "$SESSION", "agent": "build", "model": { "id": "m", "providerID": "fake" }, "assistantMessageID": "$A1" } },
+ { "event": "session.tool.input.started", "data": { "sessionID": "$SESSION", "assistantMessageID": "$A1", "id": "$CALL", "name": "$ORCH_worker_start" } },
+ { "event": "session.tool.called", "data": { "sessionID": "$SESSION", "assistantMessageID": "$A1", "id": "$CALL", "input": { "name": "w2", "cwd": "$DIR", "prompt": "p", "engine": "opencode" }, "executed": false } },
+ { "event": "permission.asked", "data": { "id": "$PERM", "sessionID": "$SESSION", "action": "$ORCH_worker_start", "resources": ["*"], "save": ["*"], "metadata": { "input": { "name": "w2", "cwd": "$DIR", "prompt": "p", "engine": "opencode" } }, "source": { "type": "tool", "messageID": "$A1", "id": "$CALL" } } },
+ { "wait": "permission" },
+ { "when": "reject", "event": "session.tool.failed", "data": { "sessionID": "$SESSION", "assistantMessageID": "$A1", "id": "$CALL", "error": { "type": "permission", "message": "$REJECT" } } },
+ { "event": "session.step.ended", "data": { "sessionID": "$SESSION", "assistantMessageID": "$A1", "finish": "stop", "rawFinish": "stop", "tokens": { "input": 1, "output": 1, "reasoning": 0, "cache": { "read": 0, "write": 0 } }, "cost": 0, "files": [] } },
+ { "event": "session.execution.succeeded", "data": { "sessionID": "$SESSION" } }
+]

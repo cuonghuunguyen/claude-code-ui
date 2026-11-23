@@ -2,11 +2,11 @@
 // stream of the server feeds every open session; prompts, permissions and questions go back as HTTP calls.
 import { randomUUID } from "node:crypto";
 import { permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
-import { ASIDE_NO_EDIT, ASIDE_NO_WORKERS } from "./aside.ts";
+import { ASIDE_NO_EDIT } from "./aside.ts";
 import { DeniedRetryError } from "./denied-retry.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
-import { MAX_WAIT_MS } from "./orchestration.ts";
 import { DAEMON_SERVER } from "./daemon-mcp.ts";
+import { findCall, MCP_KEYS, mcpKeys, mcpName, mcpTimeoutMs, showDaemonCard, WORKER_START, type McpServerKey } from "./opencode-shared.ts";
 import { errorKey, errorText, firstLine } from "./opencode-errors.ts";
 import { ascending } from "./opencode-id.ts";
 import { INLINE_SYSTEM, InlineCollector, clip, inlineTools, lastAssistantText } from "./opencode-inline.ts";
@@ -63,16 +63,10 @@ const SELF_ABORT = "OpenCode ended this turn on its own before the model answere
 const MCP_RELOADED = "OpenCode's MCP servers for this folder had failed to load, so claude-ui reloaded the folder in OpenCode. Send the prompt again.";
 const MCP_HEALTHY = "OpenCode's MCP servers for this folder work again. Send the prompt again.";
 const MCP_BROKEN_BUSY = "OpenCode's MCP servers for this folder failed to load; claude-ui reloads the folder when the turn running in it ends. Send the prompt again then.";
-/** The daemon's MCP servers a session attaches to OpenCode: orchestration, and `claude-ui` (daemon-mcp.ts). */
-export type McpServerKey = "orchestration" | typeof DAEMON_SERVER;
-const MCP_KEYS: McpServerKey[] = ["orchestration", DAEMON_SERVER];
 const sameKeys = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every((k) => b.has(k));
-/** The name of a session's MCP server in OpenCode; its tool keys are `<name>_<tool>` (fit OpenCode's tool name limit). */
-export const mcpName = (id: string, server: McpServerKey = "orchestration") => `${server}-${id.slice(-10)}`;
+export { mcpName, type McpServerKey };
 /** The message of a request refused in Don't ask mode: the model reads it as the user's feedback. */
 const DONT_ASK = "Don't ask mode: this call is not pre-approved";
-const WORKER_START = "mcp__orchestration__worker_start";
-const ORCHESTRATION = { name: "orchestration", source: "sdk" };
 
 /**
  * The rules a permission mode appends to a session (OpenCode evaluates last match wins; rules cannot be removed through the API, so a mode
@@ -510,9 +504,7 @@ class OpenCodeSession implements EngineSession {
     return (this.attaching ??= (async () => {
       const route = this.engine.mcp;
       const url = route?.url();
-      // `mcpServers` binds the tools to this session; its keys say which servers apply. An unkept Aside gets no orchestration.
-      const noWorkers = !!this.opts.disallowedTools?.(this.id)?.some((t) => ASIDE_NO_WORKERS.includes(t));
-      const keys = url ? Object.keys(this.opts.mcpServers?.(this.id, "opencode") ?? {}).filter((k): k is McpServerKey => (MCP_KEYS as string[]).includes(k) && !(k === "orchestration" && noWorkers)) : [];
+      const keys = url ? mcpKeys(this.opts, this.id) : [];
       this.mcpOn = new Set(keys);
       if (!keys.length) return;
       // These wait for OpenCode's MCP load of the folder: never cut off (see brokenState); a folder whose load was cut off earlier is reloaded.
@@ -523,7 +515,7 @@ class OpenCodeSession implements EngineSession {
         const name = mcpName(this.id, key);
         this.engine.attached.add(name);
         if (status[name]?.status === "connected") continue;
-        const timeout = key === "orchestration" ? MAX_WAIT_MS + 60_000 : (this.opts.daemonMcp?.timeoutMs() ?? 120_000);
+        const timeout = mcpTimeoutMs(key, this.opts);
         const config = { type: "remote", url, headers: { authorization: `Bearer ${route!.token(this.id, key)}` }, oauth: false, timeout };
         await this.server.request("/mcp", { method: "POST", directory: this.cwd, timeoutMs: 0, body: { name, config } });
       }
@@ -813,7 +805,7 @@ class OpenCodeSession implements EngineSession {
     let callId: string | undefined;
     let messageID: string | undefined;
     try {
-      callId = await this.findCall(() => this.mapper.runningCall(`mcp__${DAEMON_SERVER}__inline_task`, hooks.input, this.inlineClaimed));
+      callId = await findCall(() => this.mapper.runningCall(`mcp__${DAEMON_SERVER}__inline_task`, hooks.input, this.inlineClaimed));
       if (callId) this.inlineClaimed.add(callId);
       const model = await this.inlineModel(spec, hooks);
       const agent = await this.agentName();
@@ -872,15 +864,6 @@ class OpenCodeSession implements EngineSession {
     }
   };
 
-  /** The running call a run belongs to (`find` reads the mapper). Its event may come after the tool request, so it is awaited a moment. */
-  private async findCall(find: () => string | undefined) {
-    for (let i = 0; i < 20; i++) {
-      const id = find();
-      if (id || i === 19) return id;
-      await new Promise((r) => setTimeout(r, 50));
-    }
-  }
-
   /**
    * Fork run (docs/spec.md "Fork runs"): a fork of this session (OpenCode's own fork route, cut at the running step: `forkAt`) runs the prompt with the
    * history, foreground: the tool call returns when the fork's turn ended. Its parts show under the running `fork` call; permission asks go to this
@@ -897,7 +880,7 @@ class OpenCodeSession implements EngineSession {
     let messageID: string | undefined;
     let linked = false;
     try {
-      callId = await this.findCall(() => this.mapper.runningFork(hooks.input, this.inlineClaimed));
+      callId = await findCall(() => this.mapper.runningFork(hooks.input, this.inlineClaimed));
       if (callId) this.inlineClaimed.add(callId);
       const agent = await this.agentName();
       const own = await this.agentPermission(agent).catch(() => [] as Rule[]);
@@ -1210,20 +1193,18 @@ class OpenCodeSession implements EngineSession {
       at: Date.now(),
     };
     const reply = (r: Reply) => this.answerPermission(e.id, r);
-    // The claude-ui tools that ask (terminal_run): the card title names the terminal and the command; "always" suggestions stay.
-    if (tool.startsWith(`mcp__${DAEMON_SERVER}__`)) {
-      void Promise.resolve(this.opts.permissionCard?.(this.id, tool, input, { name: DAEMON_SERVER, source: "sdk" }))
-        .catch(() => undefined)
-        .then((card) => this.reqs.has(e.id) && this.session.request({ part: { ...part, ...(card && { title: card.title }) }, reply }));
-      return;
-    }
-    if (!start) return this.session.request({ part, reply });
-    // Over a limit: no card, the call runs and the tool repeats the refusal (orchestration.ts preflight).
-    if (this.opts.preflight?.(this.id, tool, input, ORCHESTRATION) !== undefined) return (this.reqs.delete(e.id), this.post(`/permission/${e.id}/reply`, { reply: "once" }));
-    // shortcut: noEdit, so the card's input (the inherited mode pinned) is not sent; the handler reads the coordinator's mode when it runs.
-    void Promise.resolve(this.opts.permissionCard?.(this.id, tool, input, ORCHESTRATION))
-      .catch(() => undefined)
-      .then((card) => this.reqs.has(e.id) && this.session.request({ part: { ...part, ...(card && { title: card.title }) }, onAllow: card?.onAllow, reply }));
+    // The claude-ui tools that ask (terminal_run) and worker_start: their cards ("always" suggestions stay for the claude-ui ones).
+    // shortcut: noEdit, so the worker card's input (the inherited mode pinned) is not sent; the handler reads the coordinator's mode when it runs.
+    const daemonCard = showDaemonCard({
+      opts: this.opts,
+      id: this.id,
+      tool,
+      input,
+      pending: () => this.reqs.has(e.id),
+      show: (title, onAllow) => this.session.request({ part: { ...part, ...(title !== undefined && { title }) }, onAllow, reply }),
+      allowOnce: () => (this.reqs.delete(e.id), this.post(`/permission/${e.id}/reply`, { reply: "once" })),
+    });
+    if (!daemonCard) this.session.request({ part, reply });
   }
 
   private askQuestion(e: QuestionAsked) {

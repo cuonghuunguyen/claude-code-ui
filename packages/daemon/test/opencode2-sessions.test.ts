@@ -6,11 +6,14 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type Part, type ServerMessage } from "@claude-ui/protocol";
 import { createProjects } from "../src/projects.ts";
 import { createSettings } from "../src/settings.ts";
 import { createDaemon } from "../src/server.ts";
-import { createOpenCode2Engine, modeRules, OPENCODE2_CAPABILITIES } from "../src/opencode2-engine.ts";
+import { createOpenCode2Engine, mcpRules, modeRules, OPENCODE2_CAPABILITIES } from "../src/opencode2-engine.ts";
+import { mcpName } from "../src/opencode-shared.ts";
 import { fakeQuery } from "./fake-query.ts";
 
 const BIN2 = fileURLToPath(new URL("./fixtures/opencode2/fake-opencode2-bin.mjs", import.meta.url));
@@ -48,7 +51,7 @@ async function boot(o: { script?: string[]; data?: object; env?: Record<string, 
   if (o.adaptersBroken) mkdirSync(adaptersFile);
   const env: Record<string, string> = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE2_DATA: dataFile, FAKE_OPENCODE2_SCRIPT: (o.script ?? []).map(turn).join(","), FAKE_OPENCODE_DATA: dataFile, ...o.env };
   const appSettings = createSettings();
-  appSettings.set({ terminalAccess: { enabled: false }, inlineTask: { enabled: false } } as never);
+  appSettings.set({ terminalAccess: { enabled: false }, inlineTask: { enabled: false }, fork: { enabled: false } } as never);
   const http = createDaemon({
     webRoot: root,
     roots: [root],
@@ -121,6 +124,8 @@ async function boot(o: { script?: string[]; data?: object; env?: Record<string, 
 
 /** The fake's `build` agent denials: the rules of a mode end with them. */
 const BUILD = [{ action: "browser", resource: "*", effect: "deny" }];
+/** The daemon MCP servers' rules of a session that has none attached: every session's servers hidden. */
+const MCP = mcpRules("default");
 const done = { time: { created: 2, completed: 3 } };
 const msg = (id: string, type: "user" | "assistant", extra: object = {}) => ({ id, type, time: { created: 1 }, ...(type === "user" ? { text: "q" } : { agent: "build", model: { id: "m", providerID: "fake" }, content: [{ type: "text", text: "a" }] }), ...extra });
 /** A daemon whose OpenCode 2 holds `ses_own` (in the project) with `messages`, listed once. */
@@ -141,7 +146,7 @@ describe("OpenCode 2 sessions", { timeout: TEST_MS }, () => {
     expect(created).toMatchObject({ engine: "opencode", capabilities: OPENCODE2_CAPABILITIES });
     expect(created.id).toMatch(/^ses_/);
     const [post] = d.requests("POST", "/api/session");
-    expect(post!.body).toEqual({ location: { directory: d.project }, permissions: modeRules(created.permissionMode) });
+    expect(post!.body).toEqual({ location: { directory: d.project }, permissions: [...modeRules(created.permissionMode), ...MCP] });
     expect(d.log().filter((l) => l.type === "request" && !l.path.startsWith("/api/"))).toEqual([]);
     expect(d.log().filter((l) => l.type === "start")).toHaveLength(1);
     // Once the binary is known to be version 2, the engine rows say what the version 2 adapter has.
@@ -311,7 +316,7 @@ describe("OpenCode 2 sessions", { timeout: TEST_MS }, () => {
     const d = await boot();
     const s = await d.open();
     await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "acceptEdits" });
-    expect(d.requests("PATCH", `/api/session/${s.id}`).map((r) => r.body)).toEqual([{ permissions: [...modeRules("acceptEdits"), ...BUILD] }]);
+    expect(d.requests("PATCH", `/api/session/${s.id}`).map((r) => r.body)).toEqual([{ permissions: [...modeRules("acceptEdits"), ...BUILD, ...MCP] }]);
     await d.ok({ type: "session.setModel", sessionId: s.id, model: "fake/m" });
     await d.ok({ type: "session.setEffort", sessionId: s.id, effort: "low" });
     await s.prompt("hi");
@@ -621,7 +626,7 @@ describe("OpenCode 2 sessions: rename, archive, delete and Aside", { timeout: TE
     // The rules of the Aside's mode, edits denied last (the last matching rule wins in OpenCode 2), written before the prompt.
     const writes = d.log().filter((l) => l.type === "request" && l.path.startsWith(`/api/session/${session.id}`) && (l.method === "PATCH" ? !!l.body.permissions : l.path.endsWith("/prompt")));
     expect(writes.map((l) => l.method)).toEqual(["PATCH", "POST"]);
-    expect(writes[0]!.body.permissions).toEqual([...modeRules("default"), ...BUILD, { action: "edit", resource: "*", effect: "deny" }]);
+    expect(writes[0]!.body.permissions).toEqual([...modeRules("default"), ...BUILD, ...MCP, { action: "edit", resource: "*", effect: "deny" }]);
     await d.ok({ type: "aside.close", sessionId: session.id });
     await until(() => d.requests("DELETE", `/api/session/${session.id}`).length > 0);
     expect((await d.ok({ type: "session.list" })).sessions.map((s: any) => s.id)).toEqual(["ses_own"]);
@@ -636,7 +641,7 @@ describe("OpenCode 2 sessions: rename, archive, delete and Aside", { timeout: TE
     await d.ok({ type: "session.prompt", sessionId: session.id, text: "now edit" });
     await until(() => d.requests("POST", `/api/session/${session.id}/prompt`).length === 2);
     const rules = d.requests("PATCH", `/api/session/${session.id}`).map((r) => r.body.permissions).filter(Boolean);
-    expect(rules.at(-1)).toEqual([...modeRules("acceptEdits"), ...BUILD]);
+    expect(rules.at(-1)).toEqual([...modeRules("acceptEdits"), ...BUILD, ...MCP]);
   });
 
   it("an Aside of a running owner forks before the unfinished assistant message; after a rewind in OpenCode it forks at the revert message", async () => {
@@ -909,12 +914,12 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
     const s = await d.open();
     await until(() => names(s.find("agents")?.agents).join() === "build,plan,mine");
     await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "default" });
-    expect(d.requests("PATCH", `/api/session/${s.id}`).at(-1)!.body.permissions).toEqual([...modeRules("default"), ...BUILD]);
+    expect(d.requests("PATCH", `/api/session/${s.id}`).at(-1)!.body.permissions).toEqual([...modeRules("default"), ...BUILD, ...MCP]);
     await expect(d.ok({ type: "session.setAgent", sessionId: s.id, agent: "general" })).rejects.toThrow(/unknown agent general/);
     await d.ok({ type: "session.setAgent", sessionId: s.id, agent: "plan" });
     expect(d.requests("POST", `/api/session/${s.id}/agent`).map((r) => r.body)).toEqual([{ agent: "plan" }]);
     // The plan agent's denials (with its plan-file exception) come after the mode's rules: the mode's `edit ask` must not beat them.
-    expect(d.requests("PATCH", `/api/session/${s.id}`).at(-1)!.body.permissions).toEqual([...modeRules("default"), ...plan]);
+    expect(d.requests("PATCH", `/api/session/${s.id}`).at(-1)!.body.permissions).toEqual([...modeRules("default"), ...plan, ...MCP]);
     expect(s.find("session_agent")).toMatchObject({ agent: "plan" });
     await s.prompt("hi");
     await until(() => s.parts().some((p) => p.type === "turn_result"));
@@ -977,3 +982,113 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
   });
 });
 
+
+describe("OpenCode 2 sessions: the daemon's MCP servers (orchestration, claude-ui tools)", { timeout: TEST_MS }, () => {
+  const on = (d: Awaited<ReturnType<typeof boot>>) => d.ok({ type: "settings.set", patch: { orchestration: { enabled: true, workerCap: 20 }, terminalAccess: { enabled: true }, fork: { enabled: true } } });
+  const adds = (d: Awaited<ReturnType<typeof boot>>, name?: string) => d.requests("PUT", /^\/api\/experimental\/mcp\//).filter((r) => !name || r.path.endsWith(`/${name}`));
+  const mcpClient = async (url: string, bearer: string) => {
+    const c = new Client({ name: "test", version: "1" });
+    await c.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { authorization: bearer } } }));
+    cleanups.push(() => void c.close());
+    return c;
+  };
+
+  it("a session attaches its orchestration and claude-ui servers to its folder before its first prompt, Code Mode off; the route serves their tools; the rules hide other sessions' servers, allow its own and ask for worker_start and terminal_run; the delete removes both", async () => {
+    const d = await boot();
+    // Both off: nothing attached, other sessions' servers hidden.
+    const off = await d.open();
+    await off.prompt("hi");
+    await until(() => off.states().at(-1) === "idle" && !!off.find("turn_result"));
+    expect(adds(d)).toEqual([]);
+    await on(d);
+    const s = await d.open();
+    await s.prompt("hi");
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
+    const orch = mcpName(s.id);
+    const cui = mcpName(s.id, "claude-ui");
+    const port = (d.http.address() as AddressInfo).port;
+    const [o] = adds(d, orch);
+    const [c] = adds(d, cui);
+    expect(o!.query).toEqual({ "location[directory]": d.project });
+    expect(o!.body.config).toMatchObject({ type: "remote", url: `http://127.0.0.1:${port}/opencode-mcp`, oauth: false, codemode: false, timeout: { execution: 30 * 60_000 + 60_000 } });
+    expect(c!.body.config).toMatchObject({ type: "remote", oauth: false, codemode: false, timeout: { execution: expect.any(Number) } });
+    expect(o!.body.config.headers.authorization).toMatch(/^Bearer .{40,}$/);
+    expect(c!.body.config.headers.authorization).not.toBe(o!.body.config.headers.authorization);
+    // Attached and ruled before the prompt.
+    const log = d.log().filter((l) => l.type === "request").map((l) => `${l.method} ${l.path}`);
+    expect(log.indexOf(`PUT /api/experimental/mcp/${orch}`)).toBeLessThan(log.indexOf(`POST /api/session/${s.id}/prompt`));
+    const rules = d.requests("PATCH", `/api/session/${s.id}`).filter((r) => r.body.permissions).at(-1)!.body.permissions as { action: string; effect: string }[];
+    const at = (action: string, effect: string) => rules.findIndex((r) => r.action === action && r.effect === effect);
+    expect(at("claude-ui-*", "deny")).toBeGreaterThan(-1);
+    expect(at(`${cui}_terminal_list`, "allow")).toBeGreaterThan(at("claude-ui-*", "deny"));
+    expect(at(`${cui}_terminal_run`, "ask")).toBeGreaterThan(at("claude-ui-*", "deny"));
+    // No Fork runs on OpenCode 2 yet: the fork tool is hidden.
+    expect(at(`${cui}_fork`, "deny")).toBeGreaterThan(at("claude-ui-*", "deny"));
+    expect(at(`${orch}_*`, "allow")).toBeGreaterThan(at("orchestration-*", "deny"));
+    expect(at(`${orch}_worker_start`, "ask")).toBeGreaterThan(at(`${orch}_*`, "allow"));
+    // A token serves only its own server.
+    const oc = await mcpClient(o!.body.config.url, o!.body.config.headers.authorization);
+    expect((await oc.listTools()).tools.map((t) => t.name)).toEqual(expect.arrayContaining(["worker_start", "worker_list", "worker_wait"]));
+    const cc = await mcpClient(c!.body.config.url, c!.body.config.headers.authorization);
+    expect((await cc.listTools()).tools.map((t) => t.name)).toEqual(expect.arrayContaining(["terminal_run"]));
+    expect((await cc.listTools()).tools.map((t) => t.name)).not.toContain("worker_start");
+    // A second prompt finds both connected: no second add.
+    await s.prompt("again");
+    await until(() => d.requests("POST", `/api/session/${s.id}/prompt`).length === 2);
+    expect(adds(d)).toHaveLength(2);
+    await until(() => s.states().at(-1) === "idle");
+    await d.ok({ type: "session.delete", sessionId: s.id });
+    await until(() => d.requests("DELETE", /^\/api\/experimental\/mcp\//).length === 2);
+    expect(d.requests("DELETE", /^\/api\/experimental\/mcp\//).map((r) => r.path).sort()).toEqual([`/api/experimental/mcp/${cui}`, `/api/experimental/mcp/${orch}`].sort());
+    expect((await fetch(o!.body.config.url, { method: "POST", headers: { authorization: o!.body.config.headers.authorization, "content-type": "application/json" }, body: "{}" })).status).toBe(401);
+  });
+
+  it("worker_start asks with the orchestration card and no always-allow; Allow replies once", async () => {
+    const d = await boot({ script: ["worker-start"] });
+    await on(d);
+    const s = await d.open();
+    await s.prompt("start a worker");
+    await until(() => !!s.find("permission_request"));
+    const call = s.find("tool_call");
+    expect(call).toMatchObject({ tool: "mcp__orchestration__worker_start" });
+    expect(s.find("permission_request")).toMatchObject({ tool: "mcp__orchestration__worker_start", suggestions: [], title: expect.stringMatching(/^Start OpenCode worker w2/) });
+    const req = s.find("permission_request")!;
+    await d.ok({ type: "permission.respond", requestId: req.requestId, decision: "allow" });
+    await until(() => d.requests("POST", /\/permission\/.+\/reply$/).length === 1);
+    expect(d.requests("POST", /\/permission\/.+\/reply$/)[0]!.body).toEqual({ decision: "once" });
+  });
+
+  it("worker_start over the worker cap shows no card: OpenCode is answered once (the tool then repeats the refusal)", async () => {
+    const d = await boot({ script: ["worker-start"] });
+    await d.ok({ type: "settings.set", patch: { orchestration: { enabled: true, workerCap: 1 } } });
+    const s = await d.open();
+    // One worker already runs: the cap is reached.
+    await until(() => adds(d, mcpName(s.id)).length === 1);
+    const o = adds(d, mcpName(s.id))[0]!.body.config;
+    const c = await mcpClient(o.url, o.headers.authorization);
+    expect(JSON.parse(((await c.callTool({ name: "worker_start", arguments: { name: "w1", cwd: d.project, prompt: "do it" } })) as any).content[0].text)).toMatchObject({ name: "w1" });
+    await s.prompt("start a worker");
+    await until(() => d.requests("POST", /\/permission\/.+\/reply$/).length === 1);
+    expect(d.requests("POST", /\/permission\/.+\/reply$/)[0]!.body).toEqual({ decision: "once" });
+    expect(s.find("permission_request")).toBeUndefined();
+  });
+
+  it("servers an OpenCode restart dropped are attached again at the next prompt; an attach that fails is a warning and the prompt still goes", async () => {
+    const d = await boot();
+    await on(d);
+    const s = await d.open();
+    await s.prompt("hi");
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
+    expect(adds(d)).toHaveLength(2);
+    await d.fake("/__mcp_drop");
+    await s.prompt("again");
+    await until(() => d.requests("POST", `/api/session/${s.id}/prompt`).length === 2);
+    expect(adds(d)).toHaveLength(4);
+    await until(() => s.states().at(-1) === "idle");
+    await d.fake("/__mcp_drop");
+    await d.fake("/__mcp_fail");
+    await s.prompt("third");
+    await until(() => d.requests("POST", `/api/session/${s.id}/prompt`).length === 3);
+    expect(s.find("notice", (n) => n.id.startsWith(`${s.id}:mcp_failed:`))).toMatchObject({ level: "warning", text: expect.stringMatching(/^Could not attach the orchestration tools to OpenCode: /) });
+  });
+});

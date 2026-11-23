@@ -1,5 +1,6 @@
 
 import { expect, type Page } from "@playwright/test";
+import { TURN_MS } from "../support/ui.ts";
 import { Then, When } from "./fixtures.ts";
 
 const panel = (page: Page) => page.getByTestId("permission-panel");
@@ -61,4 +62,8 @@ Then("the palette row {string} is enabled", async ({ page }, title: string) => {
   await expect(row).not.toHaveAttribute("aria-disabled", "true");
   await expect(row).not.toContainText("Not supported by this session's engine");
   await page.keyboard.press("Escape");
+});
+
+Then("the inline task card is done", async ({ page }) => {
+  await expect(page.getByTestId("run-card").last()).toHaveAttribute("data-status", "done", { timeout: TURN_MS });
 });

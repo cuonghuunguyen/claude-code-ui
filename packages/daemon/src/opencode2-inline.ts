@@ -1,6 +1,7 @@
 // Inline task on OpenCode 2 (GH-734, docs/spec.md "Inline tasks"): what the daemon reads of the child session's events (usage, turns, last text, files) and the
 // rules that give the child only the granted tools. The session side (child create, stop, waiting) is OpenCode2Session.inlineTask.
 import { INLINE_OUTPUT_TOKENS, type InlineBuiltin, type InlineSpec } from "./inline-types.ts";
+import { mcpToolKey } from "./opencode-inline.ts";
 import { failureText } from "./opencode2-parts.ts";
 import type { Rule2 } from "./opencode2-engine.ts";
 
@@ -12,13 +13,26 @@ const ACTION: Record<InlineBuiltin, string> = { Bash: "shell", Read: "read", Wri
 export const INLINE_META = "claude-ui.inlineOf";
 
 /**
- * The child's rules: everything denied (OpenCode 2 then offers no tool of a denied action), then, for each granted action, the parent's rules for it in order
- * (`base`: the agent's rules, then the session's), a `*` rule applied to each granted action. Last match wins, so the parent's asks and denials still hold.
+ * The child's rules: everything denied (OpenCode 2 then offers no tool of a denied action); each granted MCP server or tool allowed (its action is its tool key,
+ * `<server>_<tool>`; OpenCode allows an MCP tool by default); then, for each granted action, the parent's rules for it in order (`base`: the agent's rules, then
+ * the session's), a `*` rule applied to each granted action. Last match wins, so the parent's asks and denials still hold.
  */
-export function inlineRules(spec: Pick<InlineSpec, "tools">, base: readonly Rule2[]): Rule2[] {
-  const granted = [...new Set(spec.tools.map((t) => ACTION[t]))];
-  return [{ action: "*", resource: "*", effect: "deny" }, ...base.flatMap((r) => (r.action === "*" ? granted.map((action) => ({ ...r, action })) : granted.includes(r.action) ? [r] : []))];
+export function inlineRules(spec: Pick<InlineSpec, "tools" | "mcp">, base: readonly Rule2[]): Rule2[] {
+  const mcp = [...new Set(spec.mcp.map(mcpToolKey))];
+  const granted = [...new Set([...spec.tools.map((t) => ACTION[t]), ...mcp])];
+  // A parent rule for part of a granted server (`jira_create_issue ask` under a `jira_*` grant) applies as it is; one wider than a grant (`jira_* deny` or
+  // `jira_* allow` under `jira_get_issue`) applies to the grant only, as a `*` rule does: OpenCode matches the action with wildcards.
+  const forGrants = (r: Rule2): Rule2[] =>
+    granted.includes(r.action) ? [r] : mcp.some((g) => glob(g).test(r.action)) ? [r] : mcp.filter((g) => glob(r.action).test(g)).map((action) => ({ ...r, action }));
+  return [
+    { action: "*", resource: "*", effect: "deny" },
+    ...mcp.map((action): Rule2 => ({ action, resource: "*", effect: "allow" })),
+    ...base.flatMap((r) => (r.action === "*" ? granted.map((action) => ({ ...r, action })) : forGrants(r))),
+  ];
 }
+/** `*` of an action pattern as a regular expression (every other character literal). */
+const glob = (pattern: string) => new RegExp(`^${pattern.split("*").map((p) => p.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`);
+
 
 export type InlineCap = "turns" | "tokens";
 

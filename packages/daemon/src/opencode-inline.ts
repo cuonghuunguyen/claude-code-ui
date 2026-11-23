@@ -12,15 +12,20 @@ export const INLINE_SYSTEM =
 
 const BUILTIN: Record<InlineBuiltin, string> = { Bash: "bash", Read: "read", Write: "write", Edit: "edit", Grep: "grep", Glob: "glob" };
 /** OpenCode names an MCP tool `<server>_<tool>` with every other character of both replaced by `_`. */
-const clean = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "_");
+export const clean = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "_");
+
+/** OpenCode's tool key of an MCP grant (both versions): `mcp__<server>__<tool>` = that tool, a server name = all its tools (`<server>_*`). */
+export const mcpToolKey = (grant: string) => {
+  const one = /^mcp__(.+?)__(.+)$/.exec(grant);
+  return one ? `${clean(one[1]!)}_${clean(one[2]!)}` : `${clean(grant)}_*`;
+};
 
 /** The `tools` map of the child prompt: nothing but the granted built-ins and MCP servers or tools. */
 export function inlineTools(spec: Pick<InlineSpec, "tools" | "mcp">): Record<string, boolean> {
   const tools: Record<string, boolean> = { "*": false };
   for (const t of spec.tools) tools[BUILTIN[t]] = true;
   for (const m of spec.mcp) {
-    const one = /^mcp__(.+?)__(.+)$/.exec(m);
-    tools[one ? `${clean(one[1]!)}_${clean(one[2]!)}` : `${clean(m)}_*`] = true;
+    tools[mcpToolKey(m)] = true;
   }
   return tools;
 }

@@ -15,7 +15,7 @@ const BUILD = [{ action: "*", resource: "*", effect: "allow" }, { action: "read"
 const tokens = { input: 100, output: 10, reasoning: 0, cache: { read: 5, write: 1 } };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; stored?: Json[]; model?: string } = {}) {
+function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; stored?: Json[]; model?: string; /** The build agent's rules (default BUILD). */ agentRules?: Json[] } = {}) {
   const calls: { name: string; input: Json }[] = [];
   const handlers = new Set<{ event: (dir: string | undefined, p: { type: string; properties: Json }) => void; resync: () => void }>();
   const emit = (type: string, d: Json) => handlers.forEach((h) => h.event("/p", { type, properties: d }));
@@ -24,7 +24,7 @@ function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; sto
     (name: string, f: (i: Json) => unknown = () => undefined) =>
     async (input: Json) => (calls.push({ name, input }), f(input));
   const client = {
-    agent: { list: rec("agent.list", () => ({ data: [{ id: "build", mode: "primary", hidden: false, permissions: BUILD }] })) },
+    agent: { list: rec("agent.list", () => ({ data: [{ id: "build", mode: "primary", hidden: false, permissions: o.agentRules ?? BUILD }] })) },
     config: { get: rec("config.get", () => []) },
     command: { list: rec("command.list", () => ({ data: [] })) },
     session: {
@@ -125,7 +125,7 @@ describe("OpenCode 2 inline task", () => {
     expect(await done).toMatchObject({ status: "done" });
   });
 
-  it("the turn cap interrupts it with limit turns; Stop from the card and the abort signal end it as stopped; a failed execution is an error; an MCP grant is refused", async () => {
+  it("the turn cap interrupts it with limit turns; Stop from the card and the abort signal end it as stopped; a failed execution is an error", async () => {
     const step = (c: (type: string, d?: Json) => void, n: number) => (c("session.step.started", { assistantMessageID: `msg_${n}` }), c("session.step.ended", { assistantMessageID: `msg_${n}`, finish: "tool-calls", tokens }));
     const capped = rig({ script: (c) => [1, 2].forEach((n) => step(c, n)) });
     expect(await capped.run.inlineTask(spec({ maxTurns: 2 }), hooks())).toMatchObject({ status: "limit", limit: "turns", turns: 2 });
@@ -147,9 +147,40 @@ describe("OpenCode 2 inline task", () => {
     const failing = rig({ script: (c) => c("session.execution.failed", { error: { type: "provider", message: "rate limited\nstack" } }) });
     expect(await failing.run.inlineTask(spec(), hooks())).toMatchObject({ status: "error", error: "rate limited" });
 
-    const mcp = rig();
-    expect(await mcp.run.inlineTask(spec({ mcp: ["jira"] }), hooks())).toMatchObject({ status: "error", error: expect.stringMatching(/does not support MCP tools in an inline task/) });
-    expect(mcp.called("session.create")).toEqual([]);
+  });
+
+  it("an MCP grant gives the inline session that server's tools, or the one tool, under the parent's rules; no other MCP tool", async () => {
+    const r = rig({ script: (c) => c("session.execution.succeeded") });
+    expect(await r.run.inlineTask(spec({ tools: ["Read"], mcp: ["jira", "mcp__git hub__get_issue"] }), hooks())).toMatchObject({ status: "done" });
+    const rules = r.called("session.create")[0]!.permissions;
+    expect(rules.slice(0, 3)).toEqual([
+      { action: "*", resource: "*", effect: "deny" },
+      { action: "jira_*", resource: "*", effect: "allow" },
+      { action: "git_hub_get_issue", resource: "*", effect: "allow" },
+    ]);
+    // The agent's `* allow` applies to each grant; nothing of the parent's daemon MCP servers is granted.
+    expect(rules).toContainEqual({ action: "jira_*", resource: "*", effect: "allow" });
+    expect(rules.filter((x: Json) => x.action.startsWith("claude-ui-") || x.action.startsWith("orchestration-"))).toEqual([]);
+  });
+
+  it("the parent's rules for part of a granted server, or for the whole server of a granted tool, hold in the inline session", async () => {
+    const parentRules = [
+      { action: "jira_create_issue", resource: "*", effect: "ask" },
+      { action: "gh_*", resource: "*", effect: "deny" },
+      { action: "other_*", resource: "*", effect: "deny" },
+      { action: "lin*", resource: "*", effect: "allow" },
+    ];
+    const r = rig({ script: (c) => c("session.execution.succeeded"), agentRules: [...BUILD, ...parentRules] });
+    await r.run.inlineTask(spec({ tools: [], mcp: ["jira", "mcp__gh__get_issue", "mcp__linear__get_issue"] }), hooks());
+    const rules = r.called("session.create")[0]!.permissions as Json[];
+    const at = (action: string, effect: string) => rules.findIndex((x) => x.action === action && x.effect === effect);
+    expect(at("jira_create_issue", "ask")).toBeGreaterThan(at("jira_*", "allow"));
+    // A wider rule applies to the granted tool only: a wider allow gives no other tool of the server.
+    expect(at("gh_get_issue", "deny")).toBeGreaterThan(at("gh_get_issue", "allow"));
+    expect(at("gh_*", "deny")).toBe(-1);
+    expect(at("linear_get_issue", "allow")).toBeGreaterThan(-1);
+    expect(rules.some((x) => x.action === "lin*")).toBe(false);
+    expect(at("other_*", "deny")).toBe(-1);
   });
 
   it("model: the input's, else the setting openCodeModel, else the parent's; none when the parent runs OpenCode's default", async () => {
