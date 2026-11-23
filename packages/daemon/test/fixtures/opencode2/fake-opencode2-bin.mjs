@@ -157,6 +157,7 @@ const credit = (integrationID, method) => {
 const projectMode = process.env.FAKE_OPENCODE2_PROJECT_CONFIG === "1";
 /** Folder -> what the config files said when it was loaded (a reload reads them again). */
 const loaded = new Map();
+let reloadEmptyUntil = 0;
 const mcpState = new Map();
 const mcpGone = new Set();
 const jsonc = (text) => JSON.parse(text.replace(/^\s*\/\/.*$/gm, "").replace(/,(\s*[}\]])/g, "$1"));
@@ -432,16 +433,21 @@ const server = createServer((req, res) => {
     // FAKE_OPENCODE2_PARTIAL_AGENTS: the next n reads (after the cold ones) list all but the last agent, as 2.3.0 lists a folder's built-ins before its own agents.
     if (projectMode && p === "/api/location/reload" && req.method === "POST") {
       for (const k of loaded.keys()) loaded.set(k, snapshotOf(k));
+      reloadEmptyUntil = Date.now() + Number(process.env.FAKE_OPENCODE2_RELOAD_EMPTY_MS ?? 0);
       mcps.clear();
       mcpState.clear();
       mcpGone.clear();
       return (res.writeHead(204), res.end());
     }
-    if (projectMode && p === "/api/skill") return json(res, 200, { location: { directory: dir }, data: skillsOf(dir) });
+    // FAKE_OPENCODE2_RELOAD_EMPTY_MS: after a location reload the skill, plugin and agent lists are empty for this long (2.3.0 rebuilds the locations for 1-3 s).
+    const rebuilding = Date.now() < reloadEmptyUntil;
+    if (projectMode && p === "/api/skill") return json(res, 200, { location: { directory: dir }, data: rebuilding ? [] : skillsOf(dir) });
+    if (projectMode && p === "/api/plugin" && rebuilding) return json(res, 200, { location: { directory: dir }, data: [] });
     if (projectMode && p === "/api/plugin") {
       const own = snap(dir).plugins.map((spec) => ({ id: undefined, source: spec.startsWith("file://") ? { type: "local", path: spec.slice(7) } : { type: "package", target: spec, version: "1.0.0" }, features: { server: true }, state: /broken/.test(spec) ? { status: "failed", error: "Plugin failed to load", ref: "err_1" } : { status: "active" } }));
       return json(res, 200, { location: { directory: dir }, data: [{ id: "opencode.agent", source: { type: "builtin" }, features: { server: true }, state: { status: "active" } }, ...own.map(({ id, ...x }) => x)] });
     }
+    if (p === "/api/agent" && rebuilding) return json(res, 200, { location: { directory: dir }, data: [] });
     if (p === "/api/agent") {
       const n = ++agentReads - Number(process.env.FAKE_OPENCODE2_COLD_AGENTS ?? 0);
       return json(res, 200, { location: { directory: dir }, data: (n <= 0 ? [] : n <= Number(process.env.FAKE_OPENCODE2_PARTIAL_AGENTS ?? 0) ? agents.slice(0, -1) : agents).map((a) => (projectMode ? { ...a, permissions: [...base, ...snap(dir).permissions, ...a.permissions.slice(base.length)] } : a)) });

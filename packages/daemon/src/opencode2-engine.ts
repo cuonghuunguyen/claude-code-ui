@@ -91,6 +91,9 @@ export const denialsOf2 = (rules: readonly Rule2[]): Rule2[] => {
 const LOCAL_NAMES = LOCAL_COMMANDS.map((c) => c.name);
 /** How often, and how many times, an agent list is read again while OpenCode has not loaded the folder (2.3.0 lists no agent then). */
 const AGENT_POLL_MS = 250;
+const SETTLE_MS = 500;
+/** The longest wait for a folder to list again after a location reload. */
+const RELOAD_SETTLE_MS = 5_000;
 const AGENT_POLLS = 120;
 /** How long an agent list is kept; a cold folder's first list (read without an event stream) only briefly: OpenCode lists the folder's own agents after its built-ins. */
 const AGENTS_MS = 60_000;
@@ -1527,11 +1530,21 @@ class OpenCode2EngineImpl implements Engine {
    * location and ends running tools and asks, so it runs only when no session is running anywhere: false = not done (busy, or the server did not answer), the caller keeps
    * the change pending (folder-reload.ts). The lists of the folders are read again; the daemon's MCP servers the reload drops are attached again by the next prompt.
    */
-  async reloadLocations(): Promise<boolean> {
+  async reloadLocations(cwds: string[] = []): Promise<boolean> {
     try {
       const client = await this.server.client();
       if (Object.keys((await client.session.active()) ?? {}).length) return false;
       await client.location.reload();
+      // 2.3.0 answers empty lists for 1-3 s after a reload: the dialogs are told only once the folders list again (at most RELOAD_SETTLE_MS).
+      const until = Date.now() + RELOAD_SETTLE_MS;
+      for (const cwd of cwds) {
+        const location = { location: { directory: cwd } };
+        while (Date.now() < until) {
+          const [a, p] = await Promise.all([client.agent.list(location), client.plugin.list(location)]);
+          if ((a.data as unknown[]).length && (p.data as unknown[]).length) break;
+          await new Promise((r) => setTimeout(r, AGENT_POLL_MS));
+        }
+      }
     } catch {
       return false;
     }

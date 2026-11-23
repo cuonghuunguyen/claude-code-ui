@@ -17,28 +17,39 @@ export type FolderReloads = {
   close(): void;
 };
 
-export function createFolderReloads(o: { reload(cwd: string): Promise<boolean>; changed(kind: ConfigKind, cwd: string): void; retryMs?: number; settledRetryMs?: number }): FolderReloads {
+export function createFolderReloads(o: {
+  /** One reload applies to every folder (OpenCode 2 reloads every location): `reload` gets the folders to wait for, and all pending folders are done with it. */
+  all?: boolean;
+  reload(cwd: string, folders: string[]): Promise<boolean>;   changed(kind: ConfigKind, cwd: string): void;
+  retryMs?: number;
+  settledRetryMs?: number;
+}): FolderReloads {
   const waiting = new Map<string, Set<ConfigKind>>();
-  const running = new Set<string>();
+  /** The reload of each folder in flight: a second one of the same folder runs after it (its change may be newer than what the first read). */
+  const running = new Map<string, Promise<boolean>>();
   let timer: NodeJS.Timeout | undefined;
   let again: NodeJS.Timeout | undefined;
 
-  /** A reload that worked also applies what earlier requests of the folder waited for: their dialogs are told. */
+  const run = (cwd: string): Promise<boolean> => {
+    const prev = running.get(cwd);
+    const folders = o.all ? [...new Set([cwd, ...waiting.keys()])] : [cwd];
+    const p = (prev ? prev.then(() => undefined, () => undefined).then(() => o.reload(cwd, folders)) : o.reload(cwd, folders)).finally(() => running.get(cwd) === p && running.delete(cwd));
+    running.set(cwd, p);
+    return p;
+  };
+  /** A reload that worked also applies what earlier requests of the folder waited for: their dialogs are told. With `all`, every waiting folder. */
   const done = (cwd: string) => {
-    const kinds = waiting.get(cwd);
-    waiting.delete(cwd);
+    for (const f of o.all ? [...waiting.keys()] : [cwd]) {
+      const kinds = waiting.get(f);
+      waiting.delete(f);
+      for (const k of kinds ?? []) o.changed(k, f);
+    }
     if (!waiting.size && timer) (clearInterval(timer), (timer = undefined));
-    for (const k of kinds ?? []) o.changed(k, cwd);
   };
   const retry = async () => {
     for (const cwd of [...waiting.keys()]) {
-      if (running.has(cwd)) continue;
-      running.add(cwd);
-      try {
-        if (await o.reload(cwd)) done(cwd);
-      } finally {
-        running.delete(cwd);
-      }
+      if (running.has(cwd) || !waiting.has(cwd)) continue;
+      if (await run(cwd)) done(cwd);
     }
   };
   const arm = () => {
@@ -49,14 +60,7 @@ export function createFolderReloads(o: { reload(cwd: string): Promise<boolean>; 
 
   return {
     async request(cwd, kinds) {
-      running.add(cwd);
-      let ok = false;
-      try {
-        ok = await o.reload(cwd);
-      } finally {
-        running.delete(cwd);
-      }
-      if (ok) {
+      if (await run(cwd)) {
         // The caller's own kinds are answered by the reply; earlier ones are told.
         done(cwd);
         return true;

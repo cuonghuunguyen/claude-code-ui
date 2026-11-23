@@ -41,7 +41,7 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     visualizeOn: () => appSettings.get().chat.visualize,
   });
   /** A config change saved while a session runs: the reload waits for idle (folder-reload.ts). Nothing to reload while the server is down. */
-  const reloads = createFolderReloads({ reload: async () => !server.running() || engine.reloadLocations(), changed: (kind, cwd) => ctx.broadcast({ type: "config.changed", kind, cwd }) });
+  const reloads = createFolderReloads({ all: true, reload: async (_cwd, folders) => !server.running() || engine.reloadLocations(folders), changed: (kind, cwd) => ctx.broadcast({ type: "config.changed", kind, cwd }) });
   const config: EngineConfig = {
     mcp: createOpenCode2McpConfig({ server, reload: (cwd, kind) => reloads.request(cwd, [kind]), waitMs: o.mcpWaitMs }),
     skills: createOpenCode2SkillsConfig({ server, engine, reload: (cwd, kind) => reloads.request(cwd, [kind]), waitMs: o.mcpWaitMs }),

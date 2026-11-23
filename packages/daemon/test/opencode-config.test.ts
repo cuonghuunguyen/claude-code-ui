@@ -728,7 +728,7 @@ describe("OpenCode 2 config saved while a session is running", { timeout: TEST_M
     process.env.HOME = join(root0, "home");
     process.env.XDG_CONFIG_HOME = join(root0, "xdg");
     cleanups.push(() => Object.entries(saved).forEach(([k, v]) => (v === undefined ? delete process.env[k] : (process.env[k] = v))));
-    const d = await boot({ v2: true, file: `{ "plugins": ["listed-one"] }`, fileName: "opencode.json", env: { FAKE_OPENCODE2_SCRIPT: HOLD } });
+    const d = await boot({ v2: true, file: `{ "plugins": ["listed-one"] }`, fileName: "opencode.json", env: { FAKE_OPENCODE2_SCRIPT: HOLD, FAKE_OPENCODE2_RELOAD_EMPTY_MS: "900" } });
     mkdirSync(join(d.project, ".opencode/skills/review"), { recursive: true });
     writeFileSync(join(d.project, ".opencode/skills/review/SKILL.md"), "---\nname: review\n---\n");
     await d.ok({ type: "skills.list", cwd: d.project, engine: "opencode" });
@@ -743,6 +743,9 @@ describe("OpenCode 2 config saved while a session is running", { timeout: TEST_M
     expect(d.requests("POST", "/api/location/reload")).toHaveLength(0);
     await d.ok({ type: "session.interrupt", sessionId: id });
     await until(() => d.requests("POST", "/api/location/reload").length === 1);
+    const reloaded = Date.now();
     await until(() => d.inbox.some((m) => m.type === "config.changed" && m.kind === kind && m.cwd === d.project));
+    // OpenCode lists nothing for 900 ms after a reload: config.changed is sent once the folder lists again, so a dialog's read at once is full.
+    expect(Date.now() - reloaded).toBeGreaterThanOrEqual(700);
   });
 });
