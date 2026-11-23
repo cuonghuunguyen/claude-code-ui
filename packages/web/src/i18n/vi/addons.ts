@@ -51,6 +51,8 @@ export default {
   "addons.state.needs_approval": "Cần duyệt",
   "addons.state.error": "Lỗi",
   "addons.enable": "Bật {name}",
+  "addons.dev": "Chế độ dev cho {name}",
+  "addons.devLastGood": "Giữ manifest tốt gần nhất:",
   "addons.checkUpdate": "Kiểm tra cập nhật",
   "addons.uninstall": "Gỡ {name}",
   "addons.confirmUninstall": "Gỡ {name}?",

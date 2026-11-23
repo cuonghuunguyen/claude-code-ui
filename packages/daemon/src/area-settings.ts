@@ -233,6 +233,7 @@ export function createSettingsArea(ctx: SettingsAreaContext, conn: Pick<Connecti
     "addons.update": addonsRun,
     "addons.approve": addonsRun,
     "addons.setEnabled": addonsRun,
+    "addons.setDev": addonsRun,
     "addons.uninstall": addonsRun,
     "addons.pickRenderer": addonsRun,
     "update.check": updateRun,

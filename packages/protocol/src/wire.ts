@@ -520,6 +520,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   /** Approves `capabilities` (must equal the declared set) and enables. Reply AddonInfo. */
   | { type: "addons.approve"; name: string; capabilities: string[] }
   | { type: "addons.setEnabled"; name: string; enabled: boolean }
+  /** Dev mode of a local-folder addon: the daemon watches the folder while the addon is enabled (`rev` of the AddonInfo changes on an edit). Reply AddonInfo. */
+  | { type: "addons.setDev"; name: string; dev: boolean }
   /** Removes the record and, for git, `<config>/addons/<name>/`. Reply `{}`. */
   | { type: "addons.uninstall"; name: string }
   /** `target`: `fence:<lang>` or `tool:<name>`. Reply `{}`. */
@@ -1359,6 +1361,6 @@ export type AddonLint = {
   /** `selects-testid`: how many selectors. */
   count?: number;
 };
-export type AddonInfo = { name: string; source: AddonSource; sha?: string; manifest?: AddonManifest; /** Lint findings of the manifest and its CSS; absent when there are none. */ lint?: AddonLint[]; approved: string[]; state: AddonState; error?: string; /** `/addon/<nonce>/<name>/`: only when enabled. */ base?: string };
+export type AddonInfo = { name: string; source: AddonSource; sha?: string; manifest?: AddonManifest; /** Lint findings of the manifest and its CSS; absent when there are none. */ lint?: AddonLint[]; approved: string[]; state: AddonState; error?: string; /** Dev mode is on (local folders only). With `error` and a `manifest`: the manifest is the last good one. */ dev?: boolean; /** Dev mode only: changes at every edit of the folder; the client appends it to file URLs (`?v=`). */ rev?: number; /** `/addon/<nonce>/<name>/`: only when enabled. */ base?: string };
 export type AddonsListResult = { addons: AddonInfo[]; picks: Record<string, string> };
 export type AddonUpdateCheck = { name: string; current: string; latest: string; added: string[]; removed: string[]; error?: string };

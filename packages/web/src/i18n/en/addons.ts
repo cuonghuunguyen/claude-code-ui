@@ -51,6 +51,8 @@ export default {
   "addons.state.needs_approval": "Needs approval",
   "addons.state.error": "Error",
   "addons.enable": "Enable {name}",
+  "addons.dev": "Dev mode for {name}",
+  "addons.devLastGood": "Keeping the last good manifest:",
   "addons.checkUpdate": "Check for updates",
   "addons.uninstall": "Uninstall {name}",
   "addons.confirmUninstall": "Uninstall {name}?",

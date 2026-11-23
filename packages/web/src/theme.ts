@@ -120,9 +120,15 @@ export function applyAddonThemes(themes: readonly Theme[]) {
 /** CSS identifier for an addon name (`[a-z0-9-]`): a leading digit is escaped (`\31 `), else the layer name would be invalid and the whole import dropped. */
 const identOf = (name: string) => name.replace(/^[0-9]/, (d) => `\\3${d} `);
 
-/** The stylesheets of the enabled addons, each a `<style>` that imports a file into the addon's cascade layer (`layer(addon.<name>)`: after `host`, so it wins without `!important`, and a broken file cannot leave the layer). Per addon: the legacy top-level `css` (every theme, unscoped). Per theme with `css`: the same file scoped by the daemon to that theme (`?theme=<id>`), loaded for every enabled theme so a switch shows no unstyled flash. Styles of addons or themes no longer there go (GH-516, GH-868). Same-origin, so the app CSP allows it and blocks what a sheet loads from elsewhere. */
+/** How long the sheet an edit replaced (dev mode) stays when the new one never reports load or error. */
+const STALE_MS = 2000;
+
+/** The stylesheets of the enabled addons, each a `<style>` that imports a file into the addon's cascade layer (`layer(addon.<name>)`: after `host`, so it wins without `!important`, and a broken file cannot leave the layer). Per addon: the legacy top-level `css` (every theme, unscoped). Per theme with `css`: the same file scoped by the daemon to that theme (`?theme=<id>`), loaded for every enabled theme so a switch shows no unstyled flash. Styles of addons or themes no longer there go (GH-516, GH-868). Same-origin, so the app CSP allows it and blocks what a sheet loads from elsewhere. Dev mode (`rev`): `v=<rev>` in the URL makes an edit load the file again; the sheet it replaces stays until the new one has loaded (or 2 s), so the page never shows the unstyled theme between the two. */
 export function applyAddonCss(addons: readonly AddonInfo[]) {
-  const imp = (a: AddonInfo, path: string, query = "") => `@import url("${a.base + path.split("/").map(encodeURIComponent).join("/") + query}") layer(addon.${identOf(a.name)});`;
+  const imp = (a: AddonInfo, path: string, theme?: string) => {
+    const q = [...(theme ? [`theme=${theme}`] : []), ...(a.dev && a.rev !== undefined ? [`v=${a.rev}`] : [])].join("&");
+    return `@import url("${a.base + path.split("/").map(encodeURIComponent).join("/") + (q && `?${q}`)}") layer(addon.${identOf(a.name)});`;
+  };
   const want = new Map<string, string>(
     addons.flatMap((a) =>
       !a.base || !a.manifest
@@ -130,16 +136,27 @@ export function applyAddonCss(addons: readonly AddonInfo[]) {
         : [
             ...(a.manifest.css ? [[`addon-css-${a.name}`, imp(a, a.manifest.css)] as const] : []),
             // An addon name has no `--`, so these ids cannot collide with the legacy one or another addon's.
-            ...a.manifest.themes.flatMap((t) => (t.css ? [[`addon-css-${a.name}--${t.id}`, imp(a, t.css, `?theme=${t.id}`)] as const] : [])),
+            ...a.manifest.themes.flatMap((t) => (t.css ? [[`addon-css-${a.name}--${t.id}`, imp(a, t.css, t.id)] as const] : [])),
           ],
     ),
   );
-  for (const l of document.querySelectorAll<HTMLElement>('style[id^="addon-css-"], link[id^="addon-css-"]')) if (want.get(l.id) !== l.textContent) l.remove();
+  for (const l of document.querySelectorAll<HTMLElement>('style[id^="addon-css-"], link[id^="addon-css-"]')) {
+    if (want.get(l.id) === l.textContent) continue;
+    if (l.tagName === "STYLE" && want.has(l.id)) {
+      // Replaced, not gone: the id moves to the new sheet; this one is dropped when that one has loaded.
+      l.setAttribute("data-addon-stale", l.id);
+      l.removeAttribute("id");
+      setTimeout(() => l.remove(), STALE_MS);
+    } else l.remove();
+  }
   for (const [id, text] of want)
     if (!document.getElementById(id)) {
       const s = document.createElement("style");
       s.id = id;
       s.textContent = text;
+      const done = () => s.id === id && document.querySelectorAll(`style[data-addon-stale="${id}"]`).forEach((x) => x.remove());
+      s.addEventListener("load", done, { once: true });
+      s.addEventListener("error", done, { once: true });
       document.head.append(s);
     }
 }

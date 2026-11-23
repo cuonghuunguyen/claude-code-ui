@@ -10,6 +10,7 @@ const meta = () => document.querySelector('meta[name="theme-color"]')!.getAttrib
 
 beforeEach(() => {
   localStorage.clear();
+  document.querySelectorAll("style[id^='addon-css-'], style[data-addon-stale]").forEach((x) => x.remove());
   root.removeAttribute("data-theme");
   root.removeAttribute("data-opt-rain");
   root.removeAttribute("data-opt-rain-light");
@@ -145,6 +146,49 @@ describe("addon themes and CSS (GH-516)", () => {
     ]);
     applyAddonCss([]);
     expect(sheets()).toEqual([]);
+  });
+
+  it("dev mode: the file URLs carry ?v=<rev>; a new rev loads a new sheet and drops the old one when the new one is loaded, or after 2 s", () => {
+    vi.useFakeTimers();
+    try {
+      const dev = (rev: number) => {
+        const a = { ...addon("example"), dev: true, rev };
+        a.manifest!.css = "legacy.css";
+        a.manifest!.themes = [{ id: "dusk", name: "Dusk", css: "dusk.css" }];
+        return a;
+      };
+      const base = `/addon/${"0".repeat(32)}/example`;
+      applyAddonCss([dev(1)]);
+      expect(sheets()).toEqual([
+        ["addon-css-example", `@import url("${base}/legacy.css?v=1") layer(addon.example);`],
+        ["addon-css-example--dusk", `@import url("${base}/dusk.css?theme=dusk&v=1") layer(addon.example);`],
+      ]);
+      applyAddonCss([dev(1)]);
+      expect(sheets()).toHaveLength(2); // same rev: untouched
+      applyAddonCss([dev(2)]);
+      const all = () => document.querySelectorAll("style[id^='addon-css-'], style[data-addon-stale]");
+      expect(all()).toHaveLength(4); // old sheets stay until the new ones are loaded: no unstyled flash
+      expect(sheets().map((x) => x[1])).toEqual([`@import url("${base}/legacy.css?v=2") layer(addon.example);`, `@import url("${base}/dusk.css?theme=dusk&v=2") layer(addon.example);`]);
+      document.getElementById("addon-css-example")!.dispatchEvent(new Event("load"));
+      expect(all()).toHaveLength(3);
+      vi.advanceTimersByTime(2000);
+      expect(all()).toHaveLength(2);
+      applyAddonCss([]);
+      expect(all()).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("dev mode: a sheet replaced before it loaded does not drop the older sheets when it fires load", () => {
+    const dev = (rev: number) => ({ ...addon("example", "legacy.css"), dev: true, rev });
+    applyAddonCss([dev(1)]);
+    applyAddonCss([dev(2)]);
+    const first = document.querySelector<HTMLElement>("style[data-addon-stale]")!;
+    applyAddonCss([dev(3)]);
+    const stale = document.querySelectorAll("style[data-addon-stale]").length;
+    first.dispatchEvent(new Event("load")); // rev 2 never became the current sheet: nothing may go yet
+    expect(document.querySelectorAll("style[data-addon-stale]")).toHaveLength(stale);
   });
 
   it("an addon name that starts with a digit still gets a valid layer name", () => {
