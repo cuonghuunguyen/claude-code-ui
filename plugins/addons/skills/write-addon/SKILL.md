@@ -103,7 +103,7 @@ newer than their claude-ui.
   Select app elements with `[data-part="<name>"]` (stable parts, list: `docs/site/features/addon-parts.md`),
   never `[data-testid=...]` or Tailwind class names: those change without notice.
   React to the session with lifecycle attributes (list and budget: "Lifecycle" in the same doc): `data-phase="thinking|waiting|idle"` on `session-area` and `<html>`, `data-just-finished` on `session-area` (1200 ms after a turn ends), `data-focus-opened` on `focus-page`, `<html data-motion="on|off">` (reduced motion: give a still version), `<html data-page-hidden>` (the app pauses all animations then). Animate `transform` and `opacity` only.
-  The Addons dialog lists lint warnings (Checks) per addon, never blocking: `[data-testid]` selectors, unknown `[data-part]` names, `@keyframes` / `@font-face` / `@property` names without the addon prefix (name them `<addon>-spin`), top-level `css` next to themes (move it to `themes[].css`), unparsable or over-512 KB css. Fix every one.
+  The Addons dialog lists lint warnings (Checks) per addon, never blocking: `[data-testid]` selectors, unknown or deprecated `[data-part]` names (and `^=` `$=` `*=` `|=` values no part matches; a near name is suggested), `@font-face` / `@property` / top-level `@keyframes` names without the addon prefix (name them `<addon>-spin`), top-level `css` next to themes (move it to `themes[].css`), unparsable or over-512 KB css (over 256 KB warns), and palette text pairs under 4.5:1 contrast (`low-contrast`). Fix every one.
 - Paths are relative, without `..` or `\`, and must exist. Every view, command and renderer needs
   its capability, or install fails naming it.
 

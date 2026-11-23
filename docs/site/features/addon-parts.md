@@ -109,13 +109,16 @@ The Addons dialog lists **Checks** under each addon: warnings from the addon lin
 | Check | Meaning | Fix |
 |---|---|---|
 | `selects-testid` | A selector uses `[data-testid]`. It is a test hook and changes without notice. | Select `[data-part="..."]`. |
-| `unknown-part` | `[data-part="x"]` names a part that is not in the table. It matches nothing. | Fix the name (see the table). |
+| `unknown-part` | `[data-part="x"]` names a part that is not in the table, or `^=`, `$=`, `*=`, `|=` has a value that no part name can match. It matches nothing. A near name is offered ("Did you mean"). | Fix the name (see the table). |
+| `deprecated-part` | The selector uses a part that is on its way out. | Move to the replacement before the named release. |
 | `unprefixed-name` | An `@keyframes`, `@font-face` family or `@property` name has no addon prefix. These names are global and can replace a name of the app. The daemon renames the `@keyframes`, `@counter-style` and `@font-palette-values` of a `themes[].css` itself (the top-level `css` is not renamed); `@font-face` and `@property` stay global. | Name it `<addon>-name` (`--<addon>-name` for `@property`). |
 | `top-level-css` | `css` in `addon.json` applies to every theme, and the addon has themes. | Move it to `themes[].css`. |
 | `css-broken` | The CSS does not parse: an unclosed block, comment or `url(`, a stray `}`, or groups nested over 32 deep. A theme CSS is then served empty: the theme keeps its palette and loses its rules. | Fix it. |
 | `css-too-large` | The file is larger than 512 KB. A theme CSS is then served empty: the theme keeps its palette and loses its rules. | Split or shrink it. |
+| `css-large` | The file is larger than 256 KB (the limit is 512 KB). | Shrink it before it reaches the limit. |
+| `low-contrast` | A text colour of a palette has less than 4.5:1 contrast on its background: `fg` and `muted` on `bg`, `fg` on `card`, `pfg` on `primary`, `err`, `ok` and `warn` on `bg`. It names the pair, the ratio and the mode. `border` is not checked. | Change the colour. |
 
-A selector with `^=`, `$=`, `*=` or `|=` on `data-part` is not checked.
+`@keyframes`, `@counter-style` and `@font-palette-values` names in a `themes[].css` are renamed by the app, so they are not checked there (they are in the top-level `css`).
 
 ## Changelog {#changelog}
 

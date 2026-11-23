@@ -247,7 +247,7 @@ export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onCl
                   {a.lint.map((l, i) => (
                     <li key={i} className="flex items-start gap-1.5 [overflow-wrap:anywhere]" data-testid="addons-check" data-code={l.code}>
                       <TriangleAlertIcon className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
-                      <span>{t(`addons.lint.${l.code}`, { file: l.file ?? "", where: l.line ? t("addons.lint.where", { file: l.file ?? "", line: l.line }) : (l.file ?? ""), name: l.name ?? "", suggest: l.suggest ?? "", count: l.count ?? 0 })}</span>
+                      <span>{t(l.code === "unknown-part" && l.suggest ? "addons.lint.unknown-part-suggest" : `addons.lint.${l.code}`, { until: l.until ?? "", file: l.file ?? "", where: l.line ? t("addons.lint.where", { file: l.file ?? "", line: l.line }) : (l.file ?? ""), name: l.name ?? "", suggest: l.suggest ?? "", count: l.count ?? 0 })}</span>
                     </li>
                   ))}
                 </ul>

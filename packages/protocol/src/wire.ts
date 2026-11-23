@@ -1347,17 +1347,19 @@ export type AddonManifest = {
 /** needs_approval: declared capabilities not all approved (never enabled). error: the manifest does not load. */
 export type AddonState = "enabled" | "disabled" | "needs_approval" | "error";
 /** One finding of the addon lint (docs/spec.md "Addon lint"). Warnings only: a finding never blocks an install or an enable. `text` is built by the client from `code` and the fields. */
-export type AddonLintCode = "selects-testid" | "unknown-part" | "unprefixed-name" | "top-level-css" | "css-broken" | "css-too-large";
+export type AddonLintCode = "selects-testid" | "unknown-part" | "unprefixed-name" | "top-level-css" | "css-broken" | "css-too-large" | "css-large" | "deprecated-part" | "low-contrast";
 export type AddonLint = {
   level: "warning";
   code: AddonLintCode;
   /** Addon-relative path of the CSS file. */
   file?: string;
   line?: number;
-  /** The part name, `@keyframes` / `@font-face` family / `@property` name. */
+  /** The part name (`unknown-part` with `^=` `$=` `*=` `|=`: the value as a glob such as `side*`), `@keyframes` / `@font-face` family / `@property` name. `low-contrast`: `<theme>: fg on bg 3.2:1 (dark)`. */
   name?: string;
-  /** The prefixed form of `name`. */
+  /** The prefixed form of `name`; for `unknown-part` the nearest part name (at most 2 edits away). */
   suggest?: string;
+  /** `deprecated-part`: the release that removes the part. */
+  until?: string;
   /** `selects-testid`: how many selectors. */
   count?: number;
 };

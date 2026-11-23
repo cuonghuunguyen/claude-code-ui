@@ -109,13 +109,16 @@ Hộp thoại Addons liệt kê **Kiểm tra** dưới mỗi addon: cảnh báo 
 | Kiểm tra | Ý nghĩa | Cách sửa |
 |---|---|---|
 | `selects-testid` | Một bộ chọn dùng `[data-testid]`. Đó là mốc kiểm thử và đổi mà không báo trước. | Chọn `[data-part="..."]`. |
-| `unknown-part` | `[data-part="x"]` nêu một part không có trong bảng. Nó không khớp phần tử nào. | Sửa tên (xem bảng). |
+| `unknown-part` | `[data-part="x"]` nêu một part không có trong bảng, hoặc `^=`, `$=`, `*=`, `|=` có giá trị mà không tên part nào khớp. Nó không khớp phần tử nào. Tên gần đúng được gợi ý ("Ý bạn là"). | Sửa tên (xem bảng). |
+| `deprecated-part` | Bộ chọn dùng một part sắp bị bỏ. | Chuyển sang part thay thế trước bản được nêu. |
 | `unprefixed-name` | Tên `@keyframes`, họ phông của `@font-face` hoặc `@property` không có tiền tố addon. Các tên này là toàn cục và có thể thay tên của ứng dụng. Daemon tự đổi tên `@keyframes`, `@counter-style` và `@font-palette-values` trong `themes[].css` (`css` cấp cao nhất không được đổi tên); `@font-face` và `@property` vẫn toàn cục. | Đặt tên `<addon>-name` (`--<addon>-name` cho `@property`). |
 | `top-level-css` | `css` trong `addon.json` áp dụng cho mọi giao diện, mà addon có giao diện riêng. | Chuyển vào `themes[].css`. |
 | `css-broken` | CSS không phân tích được: khối, chú thích hoặc `url(` chưa đóng, thừa `}`, hoặc nhóm lồng quá 32 cấp. CSS của giao diện khi đó được phục vụ rỗng: giao diện giữ bảng màu và mất các quy tắc. | Sửa lại. |
 | `css-too-large` | Tệp lớn hơn 512 KB. CSS của giao diện khi đó được phục vụ rỗng: giao diện giữ bảng màu và mất các quy tắc. | Chia nhỏ hoặc rút gọn. |
+| `css-large` | Tệp lớn hơn 256 KB (giới hạn là 512 KB). | Rút gọn trước khi chạm giới hạn. |
+| `low-contrast` | Một màu chữ của bảng màu có độ tương phản dưới 4.5:1 so với nền: `fg` và `muted` trên `bg`, `fg` trên `card`, `pfg` trên `primary`, `err`, `ok` và `warn` trên `bg`. Mục này nêu cặp màu, tỉ lệ và chế độ. `border` không được kiểm tra. | Đổi màu. |
 
-Bộ chọn dùng `^=`, `$=`, `*=` hoặc `|=` trên `data-part` không được kiểm tra.
+Tên `@keyframes`, `@counter-style` và `@font-palette-values` trong `themes[].css` được ứng dụng tự đổi tên, nên không bị kiểm tra ở đó (trong `css` cấp cao nhất thì có).
 
 ## Nhật ký thay đổi {#changelog}
 

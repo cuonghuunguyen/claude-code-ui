@@ -161,18 +161,26 @@ it("an addon row lists its lint warnings under Checks, with the file, line and t
     { level: "warning", code: "unknown-part", file: "dusk.css", line: 9, name: "sidebr" },
     { level: "warning", code: "unprefixed-name", file: "dusk.css", line: 12, name: "spin", suggest: "dusk-spin" },
     { level: "warning", code: "top-level-css", file: "legacy.css" },
+    { level: "warning", code: "unknown-part", file: "dusk.css", line: 4, name: "tabs", suggest: "tab" },
+    { level: "warning", code: "low-contrast", name: "dusk: fg on bg 3.3:1 (dark)" },
+    { level: "warning", code: "css-large", file: "dusk.css" },
+    { level: "warning", code: "deprecated-part", file: "dusk.css", line: 5, name: "tab", until: "1.7" },
   ];
   const d = await render({ addons: [addon("themed", { lint }), addon("plain")], picks: {} });
   const rows = d.all("addons-row");
   const checks = rows[0]!.querySelector<HTMLElement>('[data-testid="addons-checks"]')!;
-  expect(checks.textContent).toContain("Checks (4)");
+  expect(checks.textContent).toContain("Checks (8)");
   const items = [...checks.querySelectorAll("li")].map((li) => li.textContent);
-  expect(items).toHaveLength(4);
+  expect(items).toHaveLength(8);
   expect(items[0]).toContain("dusk.css line 3");
   expect(items[0]).toContain("[data-part]");
   expect(items[1]).toContain('"sidebr"');
   expect(items[2]).toContain('"dusk-spin"');
   expect(items[3]).toContain("themes[].css");
+  expect(items[4]).toContain('Did you mean "tab"?');
+  expect(items[5]).toContain("fg on bg 3.3:1 (dark)");
+  expect(items[6]).toContain("256 KB");
+  expect(items[7]).toContain("removed in 1.7");
   expect(rows[1]!.querySelector('[data-testid="addons-checks"]')).toBeNull();
 });
 
