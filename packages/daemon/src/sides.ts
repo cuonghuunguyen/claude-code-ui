@@ -1668,6 +1668,11 @@ export function createRouter(opts: {
 
   type Msg = ClientMessage & Record<string, unknown>;
   /** Hub-class types the router answers itself (the rest of the `hub` class goes to `opts.local`). */
+  async function settingsChange(msg: Msg) {
+    const r = await opts.localCall(msg);
+    send(r);
+    if (r.type === "reply") for (const id of conns.keys()) if (sides.attachStarted(id)) void syncSettings(id, (r.result as SettingsResult).settings);
+  }
   const hubOwn: { [T in ClientMessage["type"]]?: (msg: Msg) => Promise<unknown> } = {
     "side.start": async (msg) => {
       if (typeof msg.side !== "string" || !sides.has(msg.side)) return send({ type: "error", reqId: msg.reqId, code: "unknown_side", message: `unknown side ${String(msg.side)}` });
@@ -1711,12 +1716,9 @@ export function createRouter(opts: {
       if (typeof msg.side !== "string" || !sides.has(msg.side)) return send({ type: "error", reqId: msg.reqId, code: "unknown_side", message: `unknown side ${String(msg.side)}` });
       return send({ type: "reply", reqId: msg.reqId, result: await sides.check(msg.side) });
     },
-    "settings.set": async (msg) => {
-      const r = await opts.localCall(msg);
-      send(r);
-      if (r.type === "reply") for (const id of conns.keys()) if (sides.attachStarted(id)) void syncSettings(id, (r.result as SettingsResult).settings);
-      return;
-    },
+    // A change of one Project (`settings.project`) syncs like a whole patch: each Side gets its own entries from the Hub's merged settings.
+    "settings.set": settingsChange,
+    "settings.project": settingsChange,
   };
 
   /** `fanOut` class: the router splits the message over the Hub and every ready side. */

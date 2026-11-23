@@ -1,6 +1,6 @@
 // Project settings dialog (docs/spec.md "Project settings"): the settings of one Project that replace the global ones. One row pattern for
 // every field: a control whose first option (or empty text) is "Global (<value>)", a Global / Project status in text, and a reset button
-// while the Project sets it. A change is saved at once through settings.set (the whole overrides map, like labels).
+// while the Project sets it. A change is saved at once: one Project's entry (settings.project), or the whole overrides map for an older daemon.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { DEFAULT_COMMIT_INSTRUCTION, DEFAULT_ENGINE, EFFORTS, jiraIsCloud, LOCAL_SIDE, SESSION_MODES, type ClaudeAccountInfo, type Label, type Effort, type Engine, type ModelInfo, type ProjectOverrides, type Settings, type SettingsPatch, type SettingsResult } from "@claude-ui/protocol";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,7 @@ import { LabelIcon } from "./label-icon.tsx";
 import { setLabels, withLabel } from "./labels.ts";
 import { useT } from "./i18n.ts";
 import { ProjectJiraToken } from "./project-jira-token.tsx";
-import { jiraOf, jiraOriginOf, jiraTokenFor, overridesOf, setOverride } from "./project-settings.ts";
+import { jiraOf, jiraOriginOf, jiraTokenFor, overridesOf, overridesRequest } from "./project-settings.ts";
 import { EFFORT_LABEL, MODE_LABEL } from "./toolbar.tsx";
 
 const GLOBAL = "__global__";
@@ -157,6 +157,8 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
   const [accounts, setAccounts] = useState<ClaudeAccountInfo[]>([]);
   const [envToken, setEnvToken] = useState(false);
   const [tokens, setTokens] = useState<Pick<SettingsResult, "jiraToken" | "jiraTokens">>({});
+  // The daemon takes one Project's entry (settings.project); an older one only the whole map.
+  const [projectPatch, setProjectPatch] = useState<boolean>();
   const [error, setError] = useState<string>();
   const [fieldError, setFieldError] = useState<{ id: string; message: string }>();
   const [busy, setBusy] = useState(false);
@@ -167,7 +169,7 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
   const ask = useRef(request);
   ask.current = request;
 
-  const take = (r: SettingsResult) => (setSettings(r.settings), setAccounts(r.claudeAccounts ?? []), setEnvToken(!!r.daemon?.claudeEnvToken), setTokens({ jiraToken: r.jiraToken, jiraTokens: r.jiraTokens }));
+  const take = (r: SettingsResult) => (setSettings(r.settings), setAccounts(r.claudeAccounts ?? []), setEnvToken(!!r.daemon?.claudeEnvToken), setProjectPatch(r.projectPatch), setTokens({ jiraToken: r.jiraToken, jiraTokens: r.jiraTokens }));
   useEffect(() => {
     if (!open) return;
     let live = true;
@@ -189,8 +191,7 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
   const save = async (id: string, change: Change): Promise<boolean> => {
     setBusy(true);
     try {
-      const patch = { projects: { overrides: setOverride(all, side, cwd, change) } } as SettingsPatch;
-      take(await ask.current<SettingsResult>({ type: "settings.set", patch }));
+      take(await ask.current<SettingsResult>(overridesRequest(all, side, cwd, change, projectPatch)));
       setFieldError(undefined);
       return true;
     } catch (e) {

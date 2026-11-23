@@ -77,6 +77,45 @@ describe("settings area", () => {
     expect(ctx.appSettings.get().projects.overrides).toEqual({});
   });
 
+  it("two clients saving different Projects at the same time both persist; the same Project is last write wins", async () => {
+    const { ctx, call } = setup(true);
+    await Promise.all([
+      call("settings.project", { side: "local", cwd: "/a", overrides: { mode: "plan" } }),
+      call("settings.project", { side: "local", cwd: "/b", overrides: { effort: "high" } }),
+      call("settings.project", { side: "ssh:box", cwd: "/a", overrides: { model: "opus" } }),
+    ]);
+    expect(ctx.appSettings.get().projects.overrides).toEqual({ local: { "/a": { mode: "plan" }, "/b": { effort: "high" } }, "ssh:box": { "/a": { model: "opus" } } });
+    await call("settings.project", { side: "local", cwd: "/a", overrides: { mode: "auto" } });
+    expect(ctx.appSettings.get().projects.overrides.local).toEqual({ "/a": { mode: "auto" }, "/b": { effort: "high" } });
+  });
+
+  it("null or an empty entry removes only that Project (and an emptied Side); a refused entry changes nothing", async () => {
+    const { ctx, call, sent } = setup(true);
+    await call("settings.set", { patch: { projects: { overrides: { local: { "/a": { mode: "plan" }, "/b": { mode: "auto" } }, "ssh:box": { "/a": { mode: "plan" } } } } } });
+    expect(await call("settings.project", { side: "local", cwd: "/a", overrides: null })).toMatchObject({ type: "reply" });
+    expect(await call("settings.project", { side: "ssh:box", cwd: "/a", overrides: {} })).toMatchObject({ type: "reply" });
+    expect(ctx.appSettings.get().projects.overrides).toEqual({ local: { "/b": { mode: "auto" } } });
+    sent.length = 0;
+    const bad = [
+      { side: "local", cwd: "/b", overrides: { mode: "bypassPermissions" } },
+      { side: "local", cwd: "/b", overrides: { jira: { url: "http://jira.example.com" } } },
+      { side: "local", cwd: "/b", overrides: { account: "nope" } },
+      { side: "local", cwd: "/b", overrides: { bogus: 1 } },
+      { side: "", cwd: "/b", overrides: null },
+      { side: "local", cwd: "", overrides: null },
+    ];
+    for (const m of bad) expect(await call("settings.project", m), JSON.stringify(m)).toMatchObject({ type: "error", code: "bad_settings" });
+    expect(ctx.appSettings.get().projects.overrides).toEqual({ local: { "/b": { mode: "auto" } } });
+    expect(sent).toEqual([]);
+  });
+
+  it("a per-Project change broadcasts settings_changed and replies with the whole settings", async () => {
+    const { call, sent } = setup(true);
+    const r = await call("settings.project", { side: "local", cwd: "/a", overrides: { mode: "plan" } });
+    expect(r).toMatchObject({ type: "reply", result: { settings: { projects: { overrides: { local: { "/a": { mode: "plan" } } } } } } });
+    expect(sent).toHaveLength(1);
+  });
+
   it("removing a Claude account clears it from every Project override in the same write; other overrides stay", async () => {
     const { ctx, call } = setup(true);
     await call("claude.account.add", { name: "work", token: "sk-ant-oat01-abc" });

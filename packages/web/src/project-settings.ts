@@ -1,6 +1,7 @@
 // Project overrides in the web app (docs/spec.md "Project settings"): lookup, whole-map writes and the draft defaults. The daemon applies the
 // Permission mode, Claude account, inline task model and local history itself; the new-session tab reads Engine, model and effort here.
 import { LOCAL_SIDE, type Effort, type Engine, type ProjectOverrides, type Settings, type SettingsResult, type Worktree } from "@claude-ui/protocol";
+import type { Request } from "./client.ts";
 import { projectOf } from "./sessions.ts";
 
 export type OverrideMap = Settings["projects"]["overrides"];
@@ -57,6 +58,16 @@ export function setOverride(all: OverrideMap | undefined, side: string, cwd: str
   else delete projects[cwd];
   if (!Object.keys(projects).length) delete sides[side];
   return sides;
+}
+
+/**
+ * The request that saves `change` of one Project (GH-903). `projectPatch` (the daemon advertises it): only this Project's entry, so another
+ * browser's save of a different Project is never undone; an older daemon only takes the whole map.
+ */
+export function overridesRequest(all: OverrideMap | undefined, side: string, cwd: string, change: Parameters<typeof setOverride>[3], projectPatch: boolean | undefined): Request {
+  const overrides = setOverride(all, side, cwd, change);
+  if (!projectPatch) return { type: "settings.set", patch: { projects: { overrides } } };
+  return { type: "settings.project", side, cwd, overrides: own(overrides[side], cwd) ?? null };
 }
 
 /**

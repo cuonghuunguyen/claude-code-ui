@@ -53,13 +53,13 @@ describe("settings_changed gives the same view as settings.get", () => {
 describe("settings_changed keeps the daemon facts", () => {
   it("of the last settings.get", () => {
     const d = { ...daemon, desktopForcedOff: true, claudeEnvToken: true } as NonNullable<SettingsResult["daemon"]>;
-    const v = applySettingsChanged(fromSettingsGet(get(base, { daemon: d })), msg(patch({ editor: { command: "subl", name: "" } })));
-    expect(v).toMatchObject({ desktopForcedOff: true, claudeEnvToken: true, keepAwakeSupported: true });
+    const v = applySettingsChanged(fromSettingsGet(get(base, { daemon: d, projectPatch: true })), msg(patch({ editor: { command: "subl", name: "" } })));
+    expect(v).toMatchObject({ desktopForcedOff: true, claudeEnvToken: true, keepAwakeSupported: true, projectPatch: true });
     expect(v.appEditors).toEqual([{ id: "code", label: "VS Code" }, { id: "custom", label: "subl" }]);
   });
   it("with no prior get they take the initial values", () => {
     const v = applySettingsChanged(undefined, msg(patch({ power: { keepAwake: true } })));
-    expect(v).toMatchObject({ desktopForcedOff: false, claudeEnvToken: false, computerAwake: undefined, appEditors: undefined });
+    expect(v).toMatchObject({ desktopForcedOff: false, claudeEnvToken: false, projectPatch: false, computerAwake: undefined, appEditors: undefined });
   });
 });
 

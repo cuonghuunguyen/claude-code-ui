@@ -588,6 +588,20 @@ describe("settings sync only to a Hub an attach started", () => {
     expect(s.attachStarted("wsl:A")).toBe(!!startedBy);
     s.close();
   });
+  it("a per-Project change syncs the Sides like a whole patch: each gets only its own entries, never the account", async () => {
+    const p = pipe();
+    p.out({ ...READY, startedBy: "attach" });
+    const s = createSides({ targets: [wslSide("A")], spawn: async () => p.proc });
+    const h = hub(s);
+    await h.ask({ type: "side.start", side: "wsl:A" });
+    await new Promise((r) => setTimeout(r, 50));
+    const before = settingsFrames(p).length;
+    expect(await h.ask({ type: "settings.project", side: "wsl:A", cwd: "/a", overrides: { mode: "acceptEdits" } })).toMatchObject({ type: "reply" });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(settingsFrames(p)).toHaveLength(before + 1);
+    expect(settingsFrames(p).at(-1)!.m.patch).toEqual({ orchestration: { enabled: true }, projects: { overrides: { local: { "/a": { mode: "acceptEdits" } } } } });
+    s.close();
+  });
   it("a Side too old to know `projects` refuses the patch: the rest of the settings are sent again without it", async () => {
     const p = pipe();
     p.out({ ...READY, startedBy: "attach" });

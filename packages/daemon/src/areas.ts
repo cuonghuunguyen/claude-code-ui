@@ -17,7 +17,7 @@ export type FilesTypes = Exclude<Extract<ClientType, `fs.${string}`>, "fs.upload
 export type TerminalTypes = Extract<ClientType, `terminal.${string}`>;
 export type ConfigTypes = Extract<ClientType, `mcp.${string}` | `plugins.${string}` | `marketplace.${string}` | `skills.${string}`>;
 export type EngineTypes = Extract<ClientType, `opencode.${string}`>;
-export type SettingsTypes = "settings.get" | "settings.set" | "launcher.shortcut" | Extract<ClientType, `jira.${string}` | `claude.account.${string}` | `perf.${string}` | `push.${string}` | `addons.${string}` | `update.${string}`>;
+export type SettingsTypes = "settings.get" | "settings.set" | "settings.project" | "launcher.shortcut" | Extract<ClientType, `jira.${string}` | `claude.account.${string}` | `perf.${string}` | `push.${string}` | `addons.${string}` | `update.${string}`>;
 
 /** The sessions, the remainder of the dispatched types: every new type has exactly one home. */
 export type SessionsTypes = Exclude<DispatchedType, EngineTypes | SettingsTypes | GitTypes | WorktreeTypes | FilesTypes | TerminalTypes | ConfigTypes>;

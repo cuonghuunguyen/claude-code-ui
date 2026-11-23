@@ -102,7 +102,7 @@ const overridesMap = (v: Record<string, unknown>, keep: (o: unknown) => boolean)
       .map(([side, projects]) => [side, Object.fromEntries(Object.entries(projects as Record<string, unknown>).filter(([cwd, o]) => keyOk(cwd) && keep(o)).slice(0, LABEL_ENTRIES_MAX).map(([cwd, o]) => [cwd, pruneOverrides(o as ProjectOverrides)]).filter((e): e is [string, ProjectOverrides] => !!e[1]))] as const)
       .filter(([, projects]) => Object.keys(projects).length),
   );
-// shortcut: the whole map is one setting and a patch replaces it (see labels); split into per-key patches if two browsers collide.
+// A settings.set patch replaces the whole map (old clients); `setProject` merges one Project's entry (GH-903).
 const overrides = (label: string): Check => ({
   valid: (v) =>
     isObj(v) &&
@@ -330,6 +330,32 @@ export function createSettings({ file }: { file?: string } = {}) {
             if (same(v, defaults[s]![k])) delete d[s]?.[k];
             else (d[s] ??= {})[k] = copy(v);
           }
+        }
+      });
+      return parseSettings(store.get());
+    },
+    /**
+     * Sets one Project's entry of `projects.overrides`, or removes it (`entry` null or empty), in one change() of the latest file: every other entry
+     * stays, so two browsers saving different Projects both persist. Same rules as the whole-map patch. Throws when refused or the save fails.
+     */
+    setProject(side: string, cwd: string, entry: ProjectOverrides | null) {
+      const problem = checkPatch({ projects: { overrides: { [side]: { [cwd]: entry ?? {} } } } });
+      if (problem) throw new Error(problem);
+      const pruned = entry && pruneOverrides(entry);
+      store.change((d) => {
+        // Maps: a Side or cwd named "__proto__" is a plain key.
+        const current = overridesMap(isObj(d.projects?.overrides) ? d.projects!.overrides! : {}, () => true);
+        const sides = new Map(Object.entries(current).map(([s, projects]) => [s, new Map(Object.entries(projects))] as const));
+        const projects = sides.get(side) ?? new Map<string, ProjectOverrides>();
+        if (pruned) projects.set(cwd, pruned);
+        else projects.delete(cwd);
+        if (projects.size) sides.set(side, projects);
+        else sides.delete(side);
+        if (sides.size > PROJECT_OVERRIDES_SIDES_MAX || projects.size > LABEL_ENTRIES_MAX) throw new Error(`${CHECKS.projects.overrides.label} must be ${CHECKS.projects.overrides.rule}`);
+        if (sides.size) (d.projects ??= {}).overrides = Object.fromEntries([...sides].map(([s, p]) => [s, Object.fromEntries(p)]));
+        else if (d.projects) {
+          delete d.projects.overrides;
+          if (!Object.keys(d.projects).length) delete d.projects;
         }
       });
       return parseSettings(store.get());

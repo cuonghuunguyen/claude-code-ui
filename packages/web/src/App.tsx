@@ -179,7 +179,7 @@ import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { LabelDialog } from "./label-dialog.tsx";
-import { accountScopeOf, draftStart, overridesOf, setOverride, sideOfCwd } from "./project-settings.ts";
+import { accountScopeOf, draftStart, overridesOf, overridesRequest, sideOfCwd } from "./project-settings.ts";
 import { applySettingsChanged, fromSettingsGet, publishSettings, type SettingsView } from "./settings-projection.ts";
 import { projectLabel, saveLabel, useLabels } from "./labels.ts";
 import { ENGINE_ICON, ENGINE_NAME, EngineTag } from "./engine-tag.tsx";
@@ -3112,7 +3112,7 @@ export function App() {
   acctShownKey.current = projectScope ? acct.key : globalKey.current;
   const accountName = (key: string) => (key === "" ? tr("app.plan.accountDefaultShort") : key === "cli" ? tr("app.plan.accountCli") : (claudeAccounts.find((a) => a.id === key)?.name ?? key));
   const setProjectAccount = (cwd: string, account: string | undefined) =>
-    void client.current!.request({ type: "settings.set", patch: { projects: { overrides: setOverride(settingsView?.projectOverrides, LOCAL_SIDE, cwd, { account }) } } }).catch((e) => setError((e as Error).message));
+    void client.current!.request(overridesRequest(settingsView?.projectOverrides, LOCAL_SIDE, cwd, { account }, settingsView?.projectPatch)).catch((e) => setError((e as Error).message));
   const planProject: PlanProject | undefined = projectScope
     ? { name: projectName(acct.project!), account: accountName(acct.key), globalName: accountName(globalKey.current), onGlobal: () => setProjectAccount(acct.project!, undefined), onSettings: () => setProjectSettings({ open: true, cwd: acct.project! }) }
     : undefined;

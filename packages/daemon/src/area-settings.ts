@@ -8,7 +8,7 @@ import type { AddonsRequest } from "./addons.ts";
 import type { Area, Connection, Handlers, Msg, Respond } from "./dispatch.ts";
 import { JiraError, jiraOrigin } from "./jira.ts";
 import { usesOauthToken } from "./plan-usage.ts";
-import type { ProjectRef } from "@claude-ui/protocol";
+import type { ProjectRef, Settings, SettingsPatch } from "@claude-ui/protocol";
 import { jiraOriginsInUse, jiraSettings, ownJiraUrl } from "./project-overrides.ts";
 import { overrideAccounts, withoutOverrideAccount } from "./settings.ts";
 
@@ -120,23 +120,24 @@ export function createSettingsArea(ctx: SettingsAreaContext, conn: Pick<Connecti
     }
   };
 
-  const settingsSet = async (msg: Msg<"settings.set">, { reply, fail }: Respond) => {
+  /** `patch`: what the change sets (the checks and follow-ups read it); `write` saves it and returns the new settings. */
+  const settingsWrite = async (patch: SettingsPatch | undefined, write: () => Settings, { reply, fail }: Respond) => {
     // The command runs on the daemon machine's desktop: a remote browser must not plant it for the local user's next click.
-    if (msg.patch?.editor !== undefined && !conn.sameHost) return fail("not_local", "Only a browser on the daemon machine can change the editor command");
+    if (patch?.editor !== undefined && !conn.sameHost) return fail("not_local", "Only a browser on the daemon machine can change the editor command");
     try {
-      const picked = msg.patch?.claude?.account;
+      const picked = patch?.claude?.account;
       if (picked !== undefined && picked !== "" && picked !== "cli" && !secrets.claudeAccounts().some((a) => a.id === picked)) return fail("bad_settings", "Claude account: unknown account");
-      const unknown = overrideAccounts(msg.patch?.projects?.overrides ?? {}).find((a) => a !== "" && a !== "cli" && !secrets.claudeAccounts().some((x) => x.id === a));
+      const unknown = overrideAccounts(patch?.projects?.overrides ?? {}).find((a) => a !== "" && a !== "cli" && !secrets.claudeAccounts().some((x) => x.id === a));
       if (unknown !== undefined) return fail("bad_settings", "Claude account: unknown account");
       const before = appSettings.get().claude.account;
       const settingsBefore = appSettings.get();
-      const settings = appSettings.set(msg.patch);
-      if (msg.patch?.git?.commitMessageWarm !== undefined) (settings.git.commitMessageWarm ? ctx.warmCommit.prewarm() : ctx.warmCommit.stop());
+      const settings = write();
+      if (patch?.git?.commitMessageWarm !== undefined) (settings.git.commitMessageWarm ? ctx.warmCommit.prewarm() : ctx.warmCommit.stop());
       for (const c of ctx.catalogues.all) c.settingsChanged?.(settingsBefore, settings);
       if (settings.claude.account !== before) (ctx.applyAccountToken(), ctx.claudeLoginChanged());
       else ctx.projectAccountsChanged(settingsBefore);
       const origin = jiraOrigin(settings.jira.url);
-      const urlPatched = msg.patch?.jira?.url !== undefined;
+      const urlPatched = patch?.jira?.url !== undefined;
       // GH-487: a token saved without URL takes the first URL set here, in one write: only when the URL before was empty, so never a URL a hand edit
       // or a Hub sync set (GH-915). Dropped (cleanup, never sent anyway): the token of an origin this change stops using (neither the global URL nor a
       // Project override names it any more), and the token saved without URL once the global URL is set.
@@ -158,6 +159,17 @@ export function createSettingsArea(ctx: SettingsAreaContext, conn: Pick<Connecti
     } catch (err) {
       return fail("bad_settings", (err as Error).message);
     }
+  };
+
+  const settingsSet = (msg: Msg<"settings.set">, r: Respond) => settingsWrite(msg.patch, () => appSettings.set(msg.patch), r);
+
+  /** One Project's overrides (GH-903): merged into the map under the store's change(), so a save of another Project is never undone. */
+  const settingsProject = (msg: Msg<"settings.project">, r: Respond) => {
+    if (typeof msg.side !== "string" || typeof msg.cwd !== "string") return r.fail("bad_settings", "side and cwd must be strings");
+    const entry = msg.overrides === undefined ? null : msg.overrides;
+    // Own key, never a prototype name: the checks and the account lookup read this shape.
+    const patch = { projects: { overrides: Object.fromEntries([[msg.side, Object.fromEntries([[msg.cwd, entry ?? {}]])]]) } } as SettingsPatch;
+    return settingsWrite(patch, () => appSettings.setProject(msg.side, msg.cwd, entry), r);
   };
 
   const pushFocus = (msg: Msg<"push.focus">, { reply, fail }: Respond) => {
@@ -207,6 +219,7 @@ export function createSettingsArea(ctx: SettingsAreaContext, conn: Pick<Connecti
     "jira.test": jiraRun,
     "jira.search": jiraRun,
     "settings.set": settingsSet,
+    "settings.project": settingsProject,
     "push.key": (_msg, { reply, fail }) => (opts.push ? reply({ publicKey: opts.push.publicKey }) : fail("push_unavailable", "push is not configured")),
     "push.subscribe": (msg, { reply, fail }) => {
       if (!opts.push) return fail("push_unavailable", "push is not configured");
