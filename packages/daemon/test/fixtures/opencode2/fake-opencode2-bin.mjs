@@ -12,7 +12,8 @@
 // Forms: GET …/form, GET /api/form, POST …/form/:fid/reply {answer}, DELETE …/form/:fid (cancel: the turn ends interrupted, as 2.3.0).
 // Agents and commands (as 2.3.0): GET /api/agent (FAKE_OPENCODE2_COLD_AGENTS: the first n reads list none, a folder not loaded yet), GET /api/command, GET /api/config
 // (the config documents: `data.config`), POST …/agent {agent} (`session.agent.selected`; an unknown agent is taken too), POST …/command {name, text}: the
-// command's template is stored as the user prompt and runs a turn (a command `fail` answers 500 CommandExecutionError, an unknown one 404 CommandNotFoundError).
+// command's template is stored as the user prompt and runs a turn (a command `fail` answers 500 CommandExecutionError, `noturn` runs none, an unknown one 404
+// CommandNotFoundError; FAKE_OPENCODE2_COMMAND_MS delays it). FAKE_OPENCODE2_COMMAND_LIST_MS delays GET /api/command.
 // PUT /api/experimental/session/:id/instructions/entries/:key {value}. POST /__agent/<sid>/<agent>: an agent chosen in OpenCode's own app; POST /__lists: the
 // agents and commands changed (`agent.updated`, `command.updated`; `data.commands2` and `data.agents2` replace them).
 // MCP (as 2.3.0): GET /api/mcp (the folder's servers and status), PUT /api/experimental/mcp/:server {config} (added and connected), DELETE /api/experimental/mcp/:server
@@ -278,11 +279,13 @@ const server = createServer((req, res) => {
       s.agent = agent;
       return json(res, 200, {});
     }
+    // POST /__lists[?dir=<folder>]: the events name that folder (OpenCode names a folder by its real path).
     if (url.pathname === "/__lists") {
       if (data.commands2) commands = data.commands2;
       if (data.agents2) agents = data.agents2;
-      emit("agent.updated", {});
-      emit("command.updated", {});
+      const where = url.searchParams.get("dir") ?? undefined;
+      emit("agent.updated", {}, where);
+      emit("command.updated", {}, where);
       return json(res, 200, {});
     }
     if (url.pathname === "/__mcp_drop") return (mcps.clear(), json(res, 200, {}));
@@ -328,7 +331,8 @@ const server = createServer((req, res) => {
       }
       if (req.method === "DELETE") return mcps.delete(key) ? (res.writeHead(204), res.end()) : json(res, 404, { _tag: "McpServerNotFoundError", message: `MCP server not found: ${m[1]}` });
     }
-    if (p === "/api/command") return json(res, 200, { location: { directory: dir }, data: commands });
+    // FAKE_OPENCODE2_COMMAND_LIST_MS: ms the command list waits (a folder OpenCode is still loading).
+    if (p === "/api/command") return void setTimeout(() => json(res, 200, { location: { directory: dir }, data: commands }), Number(process.env.FAKE_OPENCODE2_COMMAND_LIST_MS ?? 0));
     if (p === "/api/config") return json(res, 200, data.config ?? []);
     if ((m = /^\/api\/experimental\/session\/([^/]+)\/instructions\/entries\/([^/]+)$/.exec(p)) && req.method === "PUT") return (res.writeHead(204), res.end());
     if (p === "/api/form") return json(res, 200, { location: { directory: dir }, data: [...forms.values()].map((f) => f.form).filter((f) => sessions.get(f.sessionID)?.directory === dir || !dir) });
@@ -392,7 +396,10 @@ const server = createServer((req, res) => {
       if (sub === "command") {
         if (body.name === "fail") return json(res, 500, { _tag: "CommandExecutionError", command: body.name, message: "Usage: /fail <what>" });
         if (!commands.some((c) => c.name === body.name)) return json(res, 404, { _tag: "CommandNotFoundError", command: body.name, message: `Command not found: ${body.name}` });
-        return takePrompt(s, { text: `Run ${body.name}: ${body.text}`, files: body.files }, res, true);
+        // A command that runs no turn (as `/goal pause`).
+        if (body.name === "noturn") return (res.writeHead(204), res.end());
+        // FAKE_OPENCODE2_COMMAND_MS: ms before OpenCode takes the command (its turn starts then).
+        return void setTimeout(() => takePrompt(s, { text: `Run ${body.name}: ${body.text}`, files: body.files }, res, true), Number(process.env.FAKE_OPENCODE2_COMMAND_MS ?? 0));
       }
       if (sub === "revert/stage") {
         const list = messages.get(s.id) ?? [];

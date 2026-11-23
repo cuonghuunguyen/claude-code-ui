@@ -14,7 +14,7 @@ import { ascending } from "./opencode-id.ts";
 import { INLINE_SYSTEM, clip } from "./opencode-inline.ts";
 import { DONT_ASK, LOCAL_COMMANDS, OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { findCall, mcpKeys, mcpName, mcpTimeoutMs, showDaemonCard, WORKER_START, type McpServerKey } from "./opencode-shared.ts";
-import { INLINE_META, InlineCollector2, inlineRules } from "./opencode2-inline.ts";
+import { INLINE_META, InlineCollector2, inlineRules, storedEnd, type StoredEnd } from "./opencode2-inline.ts";
 import { OpenCode2Mapper, bashPart, failureText, mapTool2, type Failure, type OpenCode2Message, type Shell2 } from "./opencode2-parts.ts";
 import type { OpenCodeServer } from "./opencode-server.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
@@ -82,8 +82,11 @@ const LOCAL_NAMES = LOCAL_COMMANDS.map((c) => c.name);
 /** How often, and how many times, an agent list is read again while OpenCode has not loaded the folder (2.3.0 lists no agent then). */
 const AGENT_POLL_MS = 250;
 const AGENT_POLLS = 120;
-/** How long after a first non-empty agent list it is read again while no event stream runs. */
-const SETTLE_MS = 500;
+/** How long an agent list is kept; a cold folder's first list (read without an event stream) only briefly: OpenCode lists the folder's own agents after its built-ins. */
+const AGENTS_MS = 60_000;
+const COLD_AGENTS_MS = 5_000;
+/** The longest a `/name` typed before OpenCode's command list came waits for it. */
+const COMMANDS_WAIT_MS = 5_000;
 /** The instruction entry that carries an inline task's system text. */
 const INLINE_ENTRY = "claude-ui-inline";
 
@@ -163,7 +166,7 @@ const SHELL_POLL_MS = 500;
 const shownUser = (m: OpenCode2Message) => m.type === "user" && (!!m.text || !!m.files?.some((f) => f.mime?.startsWith("image/") && f.data));
 type Req = { kind: "permission"; callId?: string; sessionID: string; /** The mapper of the call: an inline run's own. */ mapper: OpenCode2Mapper; /** An inline run's call: its denied card shows under it. */ parentId?: string } | { kind: "question"; sessionID: string; questions: Question[]; fields: { key: string; type: string }[] };
 /** A running inline task: its child session's events feed `notify`; `callId` = the call its steps show under. */
-type InlineRun = { callId?: string; mapper: OpenCode2Mapper; notify: (type: string, d: Json) => void; /** Its prompt reached OpenCode: a check that finds it not running ends it. */ posted?: boolean; /** Ends the run as it is in OpenCode (an end event lost with a stream drop). */ settle: () => void };
+type InlineRun = { callId?: string; mapper: OpenCode2Mapper; notify: (type: string, d: Json) => void; /** Its prompt reached OpenCode: a check that finds it not running ends it. */ posted?: boolean; /** Ends the run as OpenCode stored its end (an end event lost with a stream drop). */ settle: (end: StoredEnd) => void };
 /** The text of the last assistant message of a stored child session (the fallback when its events were missed). */
 const lastAssistantText2 = (messages: readonly OpenCode2Message[]) => {
   for (const m of [...messages].reverse()) {
@@ -234,6 +237,11 @@ class OpenCode2Session implements EngineSession {
   private agentInOpenCode: string | undefined;
   /** Names of OpenCode's commands last listed: `/name` of one of them runs it. */
   private commandNames = new Set<string>();
+  /** OpenCode listed its commands once; `commandsReady` settles when the first read ended (listed or failed). */
+  private commandsLoaded = false;
+  private commandsReady: Promise<void> = Promise.resolve();
+  /** OpenCode started an execution for the running turn (`session.execution.started`). */
+  private turnExecuted = false;
   /** Running inline tasks by child session id. */
   private readonly inlineRuns = new Map<string, InlineRun>();
   /** The `inline_task` calls an inline run already took. */
@@ -285,7 +293,7 @@ class OpenCode2Session implements EngineSession {
     this.revertAt = this.history?.revert;
     // The slash menu of an open session: the daemon's own commands at once, OpenCode's once it listed them.
     this.session.emit({ type: "commands", id: "commands", commands: LOCAL_COMMANDS });
-    void this.emitCommands();
+    this.commandsReady = this.emitCommands();
     void this.refreshAgents();
     if (!this.history) return;
     this.apply(this.history);
@@ -331,12 +339,17 @@ class OpenCode2Session implements EngineSession {
     for (const id of [...this.reqs.keys()]) if (!live.has(id) && this.session.pendingRequest(id)) this.session.cancel(id, ANSWERED);
   }
 
-  /** After a reconnect: an inline run OpenCode no longer runs lost its end event; it ends (its text from the stored messages). */
+  /** After a reconnect: an inline run OpenCode no longer runs lost its end event; it ends as OpenCode stored it (its newest `idle` row; its text from the stored messages). */
   private async checkInlines(client: OpenCodeClient) {
     const posted = [...this.inlineRuns].filter(([, r]) => r.posted);
     if (!posted.length) return;
     const active = await client.session.active().catch(() => undefined);
-    if (active) for (const [id, r] of posted) if (!(id in active)) r.settle();
+    if (!active) return;
+    for (const [id, r] of posted) {
+      if (id in active) continue;
+      const newest = await client.message.list({ sessionID: id, order: "desc", limit: 5 }).then((p) => p.data as unknown as Json[], () => []);
+      r.settle(storedEnd(newest));
+    }
   }
 
   resync(): Promise<void> {
@@ -366,6 +379,7 @@ class OpenCode2Session implements EngineSession {
     const list = await this.engine.commands(this.cwd).catch(() => undefined);
     if (!list) return;
     this.commandNames = new Set(list.map((c) => c.name).filter((n) => !LOCAL_NAMES.includes(n)));
+    this.commandsLoaded = true;
     this.session.emit({ type: "commands", id: "commands", commands: list });
   };
   /** The `agents` part, the default agent first; `failed: true` when OpenCode did not answer (the web offers a retry, which calls this again). */
@@ -535,8 +549,22 @@ class OpenCode2Session implements EngineSession {
     }
     // `/name args` of an OpenCode command, while no turn runs (else it is a plain prompt that joins the turn).
     const cmd = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
+    const idle = () => this.session.currentState() === "idle";
     // Like a local command it has no message of ours (no draft; the web drops its pending bubble): the prompt OpenCode makes of it shows.
-    if (cmd && this.commandNames.has(cmd[1]!) && this.session.currentState() === "idle") return void ((this.localRun = undefined), this.runCommand(cmd[1]!, cmd[2] ?? "", images));
+    if (cmd && this.commandNames.has(cmd[1]!) && idle()) return void ((this.localRun = undefined), this.runCommand(cmd[1]!, cmd[2] ?? "", images));
+    // Typed before OpenCode listed its commands: wait for the list (at most 5 s), then run it as a command, or send it as a prompt (shown then).
+    if (cmd && !this.commandsLoaded && idle()) {
+      this.localRun = undefined;
+      void Promise.race([this.commandsReady, new Promise((r) => setTimeout(r, COMMANDS_WAIT_MS))]).then(() =>
+        this.commandNames.has(cmd[1]!) && idle() ? this.runCommand(cmd[1]!, cmd[2] ?? "", images) : this.sendPlain(text, images),
+      );
+      return undefined;
+    }
+    return this.sendPlain(text, images);
+  }
+
+  /** A prompt of ours: its `user_text` at once, then sent (a new turn when idle, else joining the running one). */
+  private sendPlain(text: string, images: string[]): string {
     // Stop was pressed and the stopped turn still runs: a joining prompt would be lost with it, so it starts the next turn when this one has ended.
     const afterStop = this.turnStop < this.stops && this.session.currentState() !== "idle";
     const messageID = ascending("msg");
@@ -668,14 +696,34 @@ class OpenCode2Session implements EngineSession {
    */
   private runCommand(name: string, args: string, images: string[]) {
     const stops = this.stops;
+    // Running from the start (Stop works, no second command goes): a Stop while it is prepared ends it here, as a prompt's.
+    this.beginTurn();
+    this.turnPosted = false;
+    this.session.setState("running");
+    const key = this.turnKey;
+    const waiting = () => this.turnKey === key && !this.turnExecuted && this.session.currentState() !== "idle";
     void (async () => {
       const client = await this.server.client();
       if (!(await this.prepare(client, () => this.stops === stops))) return;
       this.posted();
+      this.turnPosted = true;
       const files = images.map((uri) => ({ uri, source: { type: "inline" as const }, name: "image" }));
       this.posts++;
-      await client.session.command({ sessionID: this.id, name, text: args, ...(files.length && { files }) });
-    })().catch((err) => this.notice(`command_failed:${ascending("msg")}`, `/${name} failed: ${(err as Error).message}`));
+      const post = client.session.command({ sessionID: this.id, name, text: args, ...(files.length && { files }) });
+      this.posting.add(post);
+      try {
+        await post;
+      } finally {
+        this.posting.delete(post);
+      }
+      // OpenCode took it and runs no turn for it (`/goal pause`): the session is not active there.
+      if (!waiting()) return;
+      const active = await client.session.active().catch(() => undefined);
+      if (active && !(this.id in active) && waiting()) this.toIdle();
+    })().catch((err) => {
+      this.notice(`command_failed:${ascending("msg")}`, `/${name} failed: ${(err as Error).message}`);
+      if (this.turnKey === key) this.toIdle();
+    });
   }
 
   private async send(messageID: string, text: string, images: string[]) {
@@ -708,6 +756,7 @@ class OpenCode2Session implements EngineSession {
     this.openTurnEnd();
     this.turnStop = this.stops;
     this.turnPosted = true;
+    this.turnExecuted = false;
     this.turnAt = Date.now();
     this.aborted = false;
     this.failed = false;
@@ -771,6 +820,7 @@ class OpenCode2Session implements EngineSession {
         // OpenCode 2.3.0 follows a revert clear with an empty execution: no turn.
         if (this.clear && !this.clear.prompted) return void (this.clear.run = true);
         if (this.session.currentState() === "idle") (this.beginTurn(), this.session.setState("running"));
+        this.turnExecuted = true;
         return;
       case "session.execution.succeeded":
         // The clear's empty execution ended: its start was skipped, or a prompt of ours waits behind it (not delivered yet).
@@ -978,7 +1028,7 @@ class OpenCode2Session implements EngineSession {
             else if (collector.idle) resolve({ status: "done" });
             else if (collector.interrupted) resolve({ status: "stopped" });
           },
-          settle: () => resolve({ status: "done" }),
+          settle: resolve,
         });
         this.engine.adoptInline(id, this);
         timer = setTimeout(() => resolve({ status: "limit", limit: "time" }), INLINE_TIMEOUT_MS);
@@ -1275,26 +1325,26 @@ class OpenCode2EngineImpl implements Engine {
     for (const map of [this.agentLists, this.commandLists, this.defaults]) for (const k of [...map.keys()]) if (!dir || k === dir) map.delete(k);
     for (const s of this.sessions.values()) if (!dir || s.cwd === dir) (void s.refreshAgents(), void s.emitCommands());
   }
-  private agentLists = new Map<string, { at: number; list: Promise<Agent2[]> }>();
+  private agentLists = new Map<string, { at: number; ttl: number; list: Promise<Agent2[]> }>();
   /**
-   * `GET /api/agent` of a folder (project agents differ per folder), cached 60 s and until OpenCode says they changed. A folder OpenCode has not loaded yet lists
+   * `GET /api/agent` of a folder (project agents differ per folder), cached 60 s (a cold folder's first list 5 s) and until OpenCode says they changed. A folder OpenCode has not loaded yet lists
    * no agent (2.3.0): read again until it lists some. A failure drops the entry, so the next call (session open, the chooser's retry) asks again.
    */
   agents(cwd: string): Promise<Agent2[]> {
     const hit = this.agentLists.get(cwd);
-    if (hit && Date.now() - hit.at < 60_000) return hit.list;
-    const list = (async () => {
+    if (hit && Date.now() - hit.at < hit.ttl) return hit.list;
+    const entry = { at: Date.now(), ttl: AGENTS_MS } as { at: number; ttl: number; list: Promise<Agent2[]> };
+    const list = (entry.list = (async () => {
       const c = await this.server.client();
       for (let i = 0; ; i++) {
         const l = (await c.agent.list({ location: { directory: cwd } })).data as unknown as Agent2[];
-        // Without an event stream no `agent.updated` says the folder's own agents came (2.3.0 lists them ~0.2 s after its built-ins): read once more a moment later.
-        if (l.length && !this.unsubscribe) await new Promise((r) => setTimeout(r, SETTLE_MS));
-        if (l.length) return !this.unsubscribe ? ((await c.agent.list({ location: { directory: cwd } })).data as unknown as Agent2[]) : l;
+        // A folder that was cold lists its built-ins first (2.3.0 lists its own agents ~0.2 s later); without an event stream no `agent.updated` says they came.
+        if (l.length) return ((entry.at = Date.now()), (entry.ttl = i > 0 && !this.unsubscribe ? COLD_AGENTS_MS : AGENTS_MS), l);
         if (i >= AGENT_POLLS) throw new Error("OpenCode lists no agent for this folder");
         await new Promise((r) => setTimeout(r, AGENT_POLL_MS));
       }
-    })();
-    this.agentLists.set(cwd, { at: Date.now(), list });
+    })());
+    this.agentLists.set(cwd, entry);
     list.catch(() => this.agentLists.get(cwd)?.list === list && this.agentLists.delete(cwd));
     return list;
   }

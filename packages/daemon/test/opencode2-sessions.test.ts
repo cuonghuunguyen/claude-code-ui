@@ -1032,7 +1032,7 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
   it("the chooser lists OpenCode's primary agents once the folder loaded, the config's default first; a chosen agent is switched in OpenCode with its denials in the rules; plan mode is the plan agent", async () => {
     // 2.3.0 lists no agent before the folder loaded; the config's `default_agent` comes from its documents.
     const agents = [plan2, build2, { id: "general", mode: "subagent", hidden: false, permissions: [] }, { id: "title", mode: "primary", hidden: true, permissions: [] }, { id: "mine", mode: "all", hidden: false, permissions: [] }];
-    const d = await boot({ env: { FAKE_OPENCODE2_COLD_AGENTS: "2", FAKE_OPENCODE2_PARTIAL_AGENTS: "2" }, data: { agents, config: [{ type: "document", path: "/x/opencode.json", info: { default_agent: "build" } }] } });
+    const d = await boot({ env: { FAKE_OPENCODE2_COLD_AGENTS: "2", FAKE_OPENCODE2_PARTIAL_AGENTS: "1" }, data: { agents, config: [{ type: "document", path: "/x/opencode.json", info: { default_agent: "build" } }] } });
     await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
     // The chooser read the folder before OpenCode listed its own agents (2.3.0 lists the built-ins first; its `agent.updated` came before any event stream).
     expect(names((await d.ok({ type: "session.agents", cwd: d.project, engine: "opencode" })).agents)).toEqual(["build", "plan"]);
@@ -1056,10 +1056,58 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
     expect((await d.ok({ type: "session.list" })).sessions.find((x: { id: string }) => x.id === s.id)).toMatchObject({ agent: "plan", permissionMode: "default" });
   });
 
-  it("the chooser of a new session, before any session runs, lists the folder's own agents that OpenCode lists after its built-ins", async () => {
-    const d = await boot({ env: { FAKE_OPENCODE2_PARTIAL_AGENTS: "1" }, data: { agents: [plan2, build2, { id: "mine", mode: "primary", hidden: false, permissions: [] }] } });
+  it("the chooser of a new session, before any session runs, shows the folder's own agents that OpenCode lists after its built-ins at its next read within 5 s", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_COLD_AGENTS: "1", FAKE_OPENCODE2_PARTIAL_AGENTS: "1" }, data: { agents: [plan2, build2, { id: "mine", mode: "primary", hidden: false, permissions: [] }] } });
     await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
-    expect(names((await d.ok({ type: "session.agents", cwd: d.project, engine: "opencode" })).agents)).toEqual(["build", "plan", "mine"]);
+    const chooser = async () => names((await d.ok({ type: "session.agents", cwd: d.project, engine: "opencode" })).agents);
+    // A cold folder: the first list OpenCode gives has its built-ins only.
+    expect(await chooser()).toEqual(["build", "plan"]);
+    await sleep(5100);
+    expect(await chooser()).toEqual(["build", "plan", "mine"]);
+  });
+
+  it("agents and commands that changed in a folder OpenCode names by another path (a link to it) reach the session of that folder", async () => {
+    const d = await boot({ data: { commands2: [{ name: "deploy" }] } });
+    // The name OpenCode gives the folder matches no folder of ours.
+    const link = join(d.root, "link");
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    const s = await d.open();
+    await until(() => names(s.find("commands")?.commands).includes("hello"));
+    await d.fake(`/__lists?dir=${encodeURIComponent(link)}`);
+    await until(() => names(s.find("commands")?.commands).join() === "compact,undo,redo,deploy");
+  });
+
+  it("a /name typed before OpenCode's command list loaded runs the command once the list came; an unknown one goes as a prompt", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_COMMAND_LIST_MS: "800" } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    const s = await d.open();
+    expect(await s.prompt("/hello world")).toEqual({ local: true });
+    await until(() => s.parts().some((p) => p.type === "turn_result"));
+    expect(d.requests("POST", `/api/session/${s.id}/command`).map((r) => r.body)).toEqual([{ name: "hello", text: "world" }]);
+    expect(d.requests("POST", `/api/session/${s.id}/prompt`)).toEqual([]);
+    const t = await d.open();
+    await t.prompt("/nosuch x");
+    await until(() => t.parts().some((p) => p.type === "turn_result"));
+    expect(d.requests("POST", `/api/session/${t.id}/prompt`).map((r) => r.body.text)).toEqual(["/nosuch x"]);
+    expect(t.parts().filter((p) => p.type === "user_text").map((p) => (p as { text: string }).text)).toEqual(["/nosuch x"]);
+  });
+
+  it("a command shows running until OpenCode answers: one that starts no turn ends at once; Stop while OpenCode takes one interrupts its turn", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_COMMAND_MS: "600" }, script: ["hold"], data: { commands: ["noturn", "hello"].map((name) => ({ name })) } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    const s = await d.open();
+    await until(() => names(s.find("commands")?.commands).includes("noturn"));
+    await s.prompt("/noturn");
+    await until(() => s.states().includes("running") && s.states().at(-1) === "idle");
+    expect(s.parts().some((p) => p.type === "turn_result")).toBe(false);
+    await s.prompt("/hello");
+    // The command reached OpenCode, which has not taken it yet.
+    await until(() => d.requests("POST", `/api/session/${s.id}/command`).length === 2);
+    expect(s.states().at(-1)).toBe("running");
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => !!s.find("turn_interrupted") && s.states().at(-1) === "idle");
+    expect(d.requests("POST", `/api/session/${s.id}/interrupt`)).toHaveLength(1);
+    expect(s.parts().some((p) => p.type === "turn_result")).toBe(false);
   });
 
   it("a restored session opens as the agent OpenCode has; an agent chosen in OpenCode's own app is followed; an agent the config lost runs the prompt as the default with a notice", async () => {
@@ -1098,10 +1146,10 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
     // The prompt OpenCode made of the command shows, not the typed command.
     expect(s.parts().filter((p) => p.type === "user_text").map((p) => (p as { text: string }).text)).toEqual(["first", "Run hello: world"]);
     // A command OpenCode refuses runs no turn: its reason is a notice.
-    const states = s.states().length;
+    const results = s.parts().filter((p) => p.type === "turn_result").length;
     await s.prompt("/fail now");
-    await until(() => !!s.find("notice", (n) => /^\/fail failed: .*Usage: \/fail <what>/.test(n.text)));
-    expect(s.states().slice(states)).not.toContain("running");
+    await until(() => !!s.find("notice", (n) => /^\/fail failed: .*Usage: \/fail <what>/.test(n.text)) && s.states().at(-1) === "idle");
+    expect(s.parts().filter((p) => p.type === "turn_result")).toHaveLength(results);
     await d.fake("/__lists");
     await until(() => names(s.find("commands")?.commands).join() === "compact,undo,redo,deploy");
   });
