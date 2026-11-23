@@ -12,7 +12,7 @@ import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type Part, type ServerMessage } fro
 import { createProjects } from "../src/projects.ts";
 import { createSettings } from "../src/settings.ts";
 import { createDaemon } from "../src/server.ts";
-import { createOpenCode2Engine, mcpRules, modeRules, OPENCODE2_CAPABILITIES } from "../src/opencode2-engine.ts";
+import { createOpenCode2Engine, mcpRules, modeOfRules, modeRules, rulesOf, OPENCODE2_CAPABILITIES } from "../src/opencode2-engine.ts";
 import { mcpName } from "../src/opencode-shared.ts";
 import { fakeQuery } from "./fake-query.ts";
 
@@ -439,6 +439,35 @@ describe("OpenCode 2 sessions: list and restore", { timeout: TEST_MS }, () => {
     await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
     expect(d.requests("POST", `/api/session/ses_child/permission/${req.requestId}/reply`)[0]!.body).toEqual({ decision: "once" });
     expect(d.requests("POST", new RegExp(`/api/session/ses_one/permission/`))).toEqual([]);
+  });
+
+  it("Don't ask on OpenCode 2: an ask of the session or of its subagent is rejected at once with a message, the card shows denied and no needs-input", async () => {
+    const d = await boot({ script: ["shell"] });
+    const s = await d.open();
+    await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "dontAsk" });
+    expect(d.requests("PATCH", `/api/session/${s.id}`).at(-1)!.body.permissions.slice(0, 2)).toEqual([{ action: "claude-ui-mode", resource: "dontAsk", effect: "deny" }, ...modeRules("default").slice(0, 1)]);
+    expect(modeOfRules(rulesOf("dontAsk", false))).toBe("dontAsk");
+    expect(modeOfRules(rulesOf("default", false))).toBe("default");
+    await s.prompt("make b.txt");
+    await until(() => d.requests("POST", new RegExp(`/api/session/${s.id}/permission/.+/reply`)).length === 1);
+    expect(d.requests("POST", new RegExp(`/api/session/${s.id}/permission/.+/reply`))[0]!.body).toMatchObject({ decision: "reject", message: expect.stringContaining("Don't ask") });
+    expect(s.find("permission_request")).toBeUndefined();
+    expect(s.states()).not.toContain("needs_input");
+    expect(s.last("call_1")).toMatchObject({ status: "denied" });
+
+    const c = await bootWith({ script: ["child-permission"] });
+    await c.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await c.ok({ type: "session.list" });
+    await until(() => c.log().some((l) => l.type === "start"));
+    await c.ok({ type: "session.subscribe", sessionId: "ses_one", sinceSeq: 0 });
+    const k = c.view("ses_one");
+    await until(() => !!k.find("assistant_text"));
+    await c.ok({ type: "session.setPermissionMode", sessionId: "ses_one", mode: "dontAsk" });
+    await k.prompt("run the subagent");
+    await until(() => c.requests("POST", /^\/api\/session\/ses_child\/permission\/.+\/reply$/).length === 1);
+    expect(c.requests("POST", /^\/api\/session\/ses_child\/permission\/.+\/reply$/)[0]!.body).toMatchObject({ decision: "reject" });
+    expect(k.find("permission_request")).toBeUndefined();
+    expect(k.states()).not.toContain("needs_input");
   });
 
   it("a question of a subagent's session shows in the session and is answered under the subagent's id", async () => {

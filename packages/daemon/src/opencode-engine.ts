@@ -66,7 +66,7 @@ const MCP_BROKEN_BUSY = "OpenCode's MCP servers for this folder failed to load; 
 const sameKeys = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every((k) => b.has(k));
 export { mcpName, type McpServerKey };
 /** The message of a request refused in Don't ask mode: the model reads it as the user's feedback. */
-const DONT_ASK = "Don't ask mode: this call is not pre-approved";
+export const DONT_ASK = "Don't ask mode: this call is not pre-approved";
 
 /**
  * The rules a permission mode appends to a session (OpenCode evaluates last match wins; rules cannot be removed through the API, so a mode

@@ -12,7 +12,7 @@ import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 import { INLINE_TIMEOUT_MS, type ForkResult, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
 import { ascending } from "./opencode-id.ts";
 import { INLINE_SYSTEM, clip } from "./opencode-inline.ts";
-import { LOCAL_COMMANDS, OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels, type OpenCodeMcpRoute } from "./opencode-engine.ts";
+import { DONT_ASK, LOCAL_COMMANDS, OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { findCall, mcpKeys, mcpName, mcpTimeoutMs, showDaemonCard, WORKER_START, type McpServerKey } from "./opencode-shared.ts";
 import { INLINE_META, InlineCollector2, inlineRules } from "./opencode2-inline.ts";
 import { OpenCode2Mapper, bashPart, failureText, mapTool2, type Failure, type OpenCode2Message, type Shell2 } from "./opencode2-parts.ts";
@@ -32,8 +32,12 @@ const rule = (action: string, effect: Rule2["effect"]): Rule2 => ({ action, reso
 export function modeRules(mode: PermissionMode): Rule2[] {
   if (mode === "config") return [];
   if (mode === "bypassPermissions") return [rule("*", "allow")];
+  // Don't ask: the `default` asks plus a marker that matches no tool; the engine answers every ask with a reject (a deny rule would hide the tool and beat the project's saved approvals).
+  if (mode === "dontAsk") return [MARK_DONT_ASK, ...modeRules("default")];
   return [rule("shell", "ask"), rule("edit", mode === "acceptEdits" ? "allow" : "ask"), rule("webfetch", "ask"), rule("websearch", "ask")];
 }
+/** Marks Don't ask in the session's rules (`modeOfRules` tells it from `default`); its action matches no tool. */
+const MARK_DONT_ASK: Rule2 = { action: "claude-ui-mode", resource: "dontAsk", effect: "deny" };
 /** Last, so it wins (OpenCode 2 applies the last matching rule): a read-only Aside changes no file. `edit` is also the action of the `write` tool (checked on 2.3.0). */
 const READ_ONLY: Rule2 = rule("edit", "deny");
 /** The session's own daemon MCP servers in OpenCode, when attached: `orchestration` = its orchestration server's name, `daemon` = its claude-ui server's tool rules. */
@@ -58,6 +62,7 @@ export const mcpRules = (mode: PermissionMode, mcp: McpRules = {}): Rule2[] => [
 export const rulesOf = (mode: PermissionMode, readOnly: boolean, denials: readonly Rule2[] = [], mcp?: McpRules): Rule2[] => [...(mode === "config" ? [] : [...modeRules(mode), ...denials]), ...mcpRules(mode, mcp), ...(readOnly ? [READ_ONLY] : [])];
 /** The mode whose rules a session has (its rules start with them; `config`: none or only the read-only denial, besides the MCP servers' rules), undefined for rules of another origin. */
 export const modeOfRules = (rules: readonly Rule2[] | undefined): PermissionMode | undefined => {
+  if ((rules ?? []).some((x) => x.action === MARK_DONT_ASK.action && x.resource === MARK_DONT_ASK.resource)) return "dontAsk";
   const r = JSON.stringify((rules ?? []).filter((x) => !isDaemonMcp(x)));
   const starts = (m: PermissionMode) => r.startsWith(JSON.stringify(modeRules(m)).slice(0, -1));
   return (["bypassPermissions", "acceptEdits", "default"] as const).find(starts) ?? ([JSON.stringify([]), JSON.stringify([READ_ONLY])].includes(r) ? "config" : undefined);
@@ -851,6 +856,16 @@ class OpenCode2Session implements EngineSession {
   private askPermission(e: Json, mapper = this.mapper, parentId?: string) {
     if (this.session.pendingRequest(e.id) || this.reqs.has(e.id)) return;
     const callId: string | undefined = e.source?.type === "tool" ? e.source.id : undefined;
+    // Don't ask: whatever asks is refused at once, no card and no needs-input (the session's and its subagents' asks).
+    if (this.permissionMode === "dontAsk") {
+      const card = callId && mapper.deny(callId);
+      if (card) this.session.emit({ ...card, ...(parentId && { parentId }) });
+      void this.server
+        .client()
+        .then((c) => c.permission.reply({ sessionID: e.sessionID, requestID: e.id, decision: "reject", message: DONT_ASK }))
+        .catch((err) => this.notice(`answer_failed:${ascending("msg")}`, `Could not answer OpenCode: ${(err as Error).message}`));
+      return;
+    }
     const call = callId ? mapper.call(callId) : undefined;
     const mapped = call?.type === "tool_call" ? call : undefined;
     const resources: string[] = e.resources ?? [];
