@@ -899,6 +899,15 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     expect(s.states()).not.toContain("running");
   });
 
+  it("a turn started in OpenCode's own app after a clear whose empty execution never came shows as a turn", async () => {
+    const { d, s } = await opened();
+    await d.fake("/__clear/ses_own?empty=0");
+    await d.fake("/__run/ses_own");
+    await until(() => s.states().includes("running"));
+    await until(() => s.parts().some((p) => p.type === "turn_result"));
+    expect(s.states().at(-1)).toBe("idle");
+  });
+
   it("a prompt sent here, cut and cleared in OpenCode's own app (the cut seen live or only by the read after a reconnect), comes back once", async () => {
     const { d, s } = await opened();
     for (const missed of [false, true]) {

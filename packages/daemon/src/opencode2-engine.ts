@@ -921,12 +921,16 @@ class OpenCode2Session implements EngineSession {
       case "session.execution.interrupted":
         if (this.clear?.run) return void (this.clear = undefined);
         return this.session.currentState() === "idle" ? undefined : this.interrupted();
-      case "session.step.started":
+      case "session.step.started": {
+        // A step after a skipped start is a real run (the clear's empty execution has none): a turn of OpenCode's own app, shown as one.
+        const own = this.clear?.run && this.session.currentState() === "idle";
         this.clear = undefined;
+        if (own) (this.beginTurn(), this.session.setState("running"), (this.turnExecuted = true));
         this.stepStart(this.id, d);
         this.turnAssistant = d.assistantMessageID;
         this.stepModel = d.model;
         return this.setRetry(undefined);
+      }
       case "session.step.ended":
         this.stepPatch(this.id, d);
         this.mapper.step(d.assistantMessageID, d.tokens, d.cost);

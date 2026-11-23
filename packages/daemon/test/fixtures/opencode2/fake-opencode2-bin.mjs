@@ -409,7 +409,22 @@ const server = createServer((req, res) => {
       const s = sessions.get(url.pathname.slice(9));
       delete s.revert;
       emit("session.revert.cleared", { sessionID: s.id }, s.directory);
-      clearExecution(s);
+      // ?empty=0: the clear's empty execution never comes (another OpenCode version).
+      if (url.searchParams.get("empty") !== "0") clearExecution(s);
+      return json(res, 200, {});
+    }
+    // /__run/:id: a turn started in OpenCode's own app (no prompt of ours): its execution, one step with a text, its end.
+    if (url.pathname.startsWith("/__run/")) {
+      const s = sessions.get(url.pathname.slice(7));
+      const sid = s.id;
+      const base = { sessionID: sid, assistantMessageID: "msg_ext" };
+      emit("session.execution.started", { sessionID: sid }, s.directory);
+      emit("session.step.started", { ...base, agent: "build", model: { id: "m", providerID: "fake" } }, s.directory);
+      emit("session.text.started", { ...base, ordinal: 0 }, s.directory);
+      emit("session.text.delta", { ...base, ordinal: 0, delta: "own app" }, s.directory);
+      emit("session.text.ended", { ...base, ordinal: 0, text: "own app" }, s.directory);
+      emit("session.step.ended", { ...base, finish: "stop", rawFinish: "stop", tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0, files: [] }, s.directory);
+      emit("session.execution.succeeded", { sessionID: sid }, s.directory);
       return json(res, 200, {});
     }
     log({ type: "request", method: req.method, path: url.pathname, authed, ...(url.search && { query: Object.fromEntries(url.searchParams) }), ...(body !== undefined && { body }) });
