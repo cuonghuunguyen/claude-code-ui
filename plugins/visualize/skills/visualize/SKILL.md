@@ -1,6 +1,6 @@
 ---
 name: visualize
-description: Draw a ```visualize fence beside the text whenever the reply covers architecture, flow, sequence, comparison, metrics, a UI mock-up, a plan or a tunable value. Also under terse styles. Plain lists and short answers stay text.
+description: Draw a ```visualize fence beside the text whenever the reply covers architecture, flow, sequence, comparison, metrics, a UI mock-up, a plan or a tunable value. Also under terse styles. Plain lists and short answers stay text. Show every screenshot or image file for the user as ![alt](absolute path), never as a path in backticks.
 ---
 # visualize
 
@@ -57,4 +57,9 @@ Example fragment (the file content, or the fence content without an uploads fold
 
 # Images
 
-To show an existing image file (screenshot, generated chart, picture in the repo), write Markdown `![alt](path)` with its absolute path, or a path relative to the session folder. claude-ui loads it from the session's machine, local or SSH side. Remote `http(s)` images are blocked: download the file first.
+Every image the reply points the user at — a screenshot you took, a before/after shot, a generated chart, a picture in the repo — goes in as Markdown `![alt](path)`, one per line, with its absolute path or a path relative to the session folder. claude-ui draws it inline, loaded from the session's machine, local or SSH side.
+
+- A path in backticks or plain text draws nothing: the user sees a file name, not the picture. Never write "Screenshot: `/tmp/x/after.png`" or a list of `.png` names; write `![after](/tmp/x/after.png)`.
+- Several shots: one `![...](...)` each, with a short alt text naming what it shows (`![dark mode](...)`, `![phone 390px](...)`).
+- Remote `http(s)` images are blocked: download the file first, then embed the local path.
+- Not for: a file named only as code or an asset being discussed (`icon-512.webp` in `theme.css`), or a report whose reader is another agent (a worker's RESULT); there a plain path is right.
