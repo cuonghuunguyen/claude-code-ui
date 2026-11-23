@@ -2,6 +2,47 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
+## 1.5.0 - 2026-11-23
+
+### Added
+
+- OpenCode 2: sessions run on the OpenCode 2 binary; the adapter follows the binary's version. They can be created, renamed, archived, deleted, rewound and asked an Aside; `/compact`, `/undo`, `/redo`, OpenCode commands, bash mode and questions work ([#863](https://github.com/cuonghuunguyen/claude-code-ui/issues/863), [#862](https://github.com/cuonghuunguyen/claude-code-ui/issues/862)).
+- OpenCode: **MCP servers**, **Skills** and **Plugins** dialogs edit the project's `opencode.json`; a change saved while a session is busy applies when the folder is idle ([#864](https://github.com/cuonghuunguyen/claude-code-ui/issues/864), [#891](https://github.com/cuonghuunguyen/claude-code-ui/issues/891)).
+- OpenCode: **Don't ask** mode, the configured default agent, and `/undo` puts the text back in the prompt box ([#865](https://github.com/cuonghuunguyen/claude-code-ui/issues/865)).
+- OpenCode: the agent can start a **Fork** card; Local history keeps the content before the agent's edit ([#866](https://github.com/cuonghuunguyen/claude-code-ui/issues/866), [#885](https://github.com/cuonghuunguyen/claude-code-ui/issues/885)).
+- OpenCode 2: provider login, **Shells** for background commands, forms with any field type, and the same inline tasks and claude-ui tools as OpenCode 1 ([#879](https://github.com/cuonghuunguyen/claude-code-ui/issues/879), [#922](https://github.com/cuonghuunguyen/claude-code-ui/issues/922), [#923](https://github.com/cuonghuunguyen/claude-code-ui/issues/923), [#863](https://github.com/cuonghuunguyen/claude-code-ui/issues/863)).
+- OpenCode: inline visualizations draw, and `/visualize` is in the `/` popup ([#867](https://github.com/cuonghuunguyen/claude-code-ui/issues/867), [#930](https://github.com/cuonghuunguyen/claude-code-ui/issues/930)).
+- Project settings: a Project sets its own Engine, model, effort, Permission mode, Claude account, inline task model, local history, Jira URL, email, ticket filter and branch template. The Label editor and the commit message instruction moved there; a Settings row that the current Project overrides is marked ([#894](https://github.com/cuonghuunguyen/claude-code-ui/issues/894), [#901](https://github.com/cuonghuunguyen/claude-code-ui/issues/901), [#902](https://github.com/cuonghuunguyen/claude-code-ui/issues/902)).
+- Usage ring: shows the Project's own Claude account, with a chip and a Project switcher ([#900](https://github.com/cuonghuunguyen/claude-code-ui/issues/900)).
+- Sidebar: one group per repository across Sides and clones, with a row per Side and worktree ([#591](https://github.com/cuonghuunguyen/claude-code-ui/issues/591)).
+- Add-on themes: stable `data-part` elements to style, a per-mode background image with veil and panel alpha, select, slider and colour options, custom CSS variables, lifecycle attributes (`data-phase`, `data-just-finished`, `data-motion` …) ([#868](https://github.com/cuonghuunguyen/claude-code-ui/issues/868), [#870](https://github.com/cuonghuunguyen/claude-code-ui/issues/870)).
+- Add-on themes: replace the loader, done icon, send icon and Thinking phrases; build on another theme; an add-on that needs a newer Claude UI shows why it is off ([#870](https://github.com/cuonghuunguyen/claude-code-ui/issues/870)).
+- Add-on authoring: `claude-ui addon dev <path>` installs a local folder in Dev mode and reloads it on change; a preview page at `#/addon-preview` shows every part in every state; lint warnings for contrast, unknown parts, missing files and files over 256 KB ([#871](https://github.com/cuonghuunguyen/claude-code-ui/issues/871), [#957](https://github.com/cuonghuunguyen/claude-code-ui/issues/957), [#949](https://github.com/cuonghuunguyen/claude-code-ui/issues/949)).
+- Orchestration: the coordinator hears when a waiting worker goes quiet or its CLI closes ([#852](https://github.com/cuonghuunguyen/claude-code-ui/issues/852)).
+
+### Changed
+
+- Add-on theme CSS applies only while its theme is picked, in a cascade layer after the app styles, so it wins without `!important` ([#868](https://github.com/cuonghuunguyen/claude-code-ui/issues/868)).
+- Add-on theme CSS that is broken or over the size cap is ignored instead of leaking into other themes; keyframe, counter-style and palette names are renamed per theme ([#938](https://github.com/cuonghuunguyen/claude-code-ui/issues/938), [#939](https://github.com/cuonghuunguyen/claude-code-ui/issues/939)).
+- Project settings save only the edited Project ([#903](https://github.com/cuonghuunguyen/claude-code-ui/issues/903)).
+- Jira tokens are saved per site and shared by the Projects on it ([#894](https://github.com/cuonghuunguyen/claude-code-ui/issues/894), [#915](https://github.com/cuonghuunguyen/claude-code-ui/issues/915)).
+- Inline task: runs no hooks when the session turned hooks off; a Bash deny hook of the parent also denies inside it; steps stay after a daemon restart; a denied step shows **Denied** ([#857](https://github.com/cuonghuunguyen/claude-code-ui/issues/857)).
+- OpenCode 1 on a database that OpenCode 2 created says so and how to recover ([#874](https://github.com/cuonghuunguyen/claude-code-ui/issues/874)).
+
+### Fixed
+
+- OpenCode: an undone and redone prompt is shown once and not sent again at a reconnect ([#920](https://github.com/cuonghuunguyen/claude-code-ui/issues/920)).
+- OpenCode: a late update of an earlier message no longer switches the agent back after a switch to Plan ([#905](https://github.com/cuonghuunguyen/claude-code-ui/issues/905)).
+- OpenCode: sessions show in the list after a restart when the last session was Claude ([#862](https://github.com/cuonghuunguyen/claude-code-ui/issues/862)).
+- OpenCode: changing the binary path refreshes the session list and the status ([#880](https://github.com/cuonghuunguyen/claude-code-ui/issues/880)).
+- OpenCode: an Aside left open by a stopped daemon is deleted at the next start; errors keep their code when the server is down ([#944](https://github.com/cuonghuunguyen/claude-code-ui/issues/944), [#907](https://github.com/cuonghuunguyen/claude-code-ui/issues/907), [#945](https://github.com/cuonghuunguyen/claude-code-ui/issues/945)).
+- Aside: a refused `/btw` no longer leaves its text in the message box ([#908](https://github.com/cuonghuunguyen/claude-code-ui/issues/908)).
+- Project settings (Jira): a refused URL keeps the input and gives its own reason; clearing a shared token asks first ([#912](https://github.com/cuonghuunguyen/claude-code-ui/issues/912), [#913](https://github.com/cuonghuunguyen/claude-code-ui/issues/913), [#914](https://github.com/cuonghuunguyen/claude-code-ui/issues/914)).
+- A Project's own Claude account no longer writes the global plan meter; its CLIs, models and commit message use that account ([#900](https://github.com/cuonghuunguyen/claude-code-ui/issues/900)).
+- Visualize images and files load from the session's Side.
+- claude-ui starts again with the bundled JSON-with-comments parser.
+- Worker waiting on a Monitor is no longer closed by the daemon when the Monitor expires ([#852](https://github.com/cuonghuunguyen/claude-code-ui/issues/852)).
+
 ## 1.4.0 - 2026-11-19
 
 ### Added
