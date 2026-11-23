@@ -690,6 +690,31 @@ describe("OpenCode 2 sessions: rename, archive, delete and Aside", { timeout: TE
     expect((await d.ok({ type: "session.list" })).sessions.map((s: any) => s.id)).toEqual(["ses_own"]);
   });
 
+  it("a Fork run's fork is hidden from the list, restores under its call with its assistant steps only, and is deleted with its parent", async () => {
+    const call = { type: "tool", id: "call_fork", name: "claude-ui-ownxxxxxxx_fork", state: { status: "completed", input: { description: "probe fork", prompt: "count" }, content: [{ type: "text", text: "fork answer" }] }, time: { ran: 2, completed: 3 } };
+    const parent = [msg("msg_u1", "user"), msg("msg_a1", "assistant", { ...done, content: [call] })];
+    // The copied history (3 messages), OpenCode's fork notice, the fork's prompt (not shown), then its own reply.
+    const copied = [msg("msg_c_1", "user"), msg("msg_c_2", "assistant", { ...done, content: [{ type: "text", text: "copied reply" }] }), msg("msg_c_3", "user", { text: "copy" })];
+    const own = [{ id: "msg_n1", type: "synthetic", text: "<fork-notice>" }, msg("msg_f_u", "user", { text: "You are a fork of the conversation" }), msg("msg_f_a", "assistant", { ...done, content: [{ type: "text", text: "fork answer" }] })];
+    const d = await boot({ sessionsJson: { ses_fork: { forkOf: { sessionId: "ses_own", callId: "call_fork", prefix: 3 } } }, projectDirInData: true, adapters: { ses_own: 2, ses_fork: 2 }, data: { sessions: [row("ses_own", "PROJECT", "Owner", 5000), row("ses_fork", "PROJECT", "Fork: probe fork", 6000, { metadata: { "claude-ui.forkOf": "ses_own" } })], messages: { ses_own: parent, ses_fork: [...copied, ...own] } } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    await until(() => d.log().some((l) => l.type === "start"));
+    for (let i = 0; i < 80 && !(await d.ok({ type: "session.list" })).sessions.some((x: any) => x.id === "ses_own"); i++) await sleep(50);
+    expect((await d.ok({ type: "session.list" })).sessions.map((x: any) => x.id)).toEqual(["ses_own"]);
+    await d.ok({ type: "session.subscribe", sessionId: "ses_own", sinceSeq: 0 });
+    const s = d.view("ses_own");
+    await until(() => !!s.parts().find((p) => p.parentId === "call_fork"));
+    expect(s.last("call_fork")).toMatchObject({ type: "subagent", agentType: "fork", description: "probe fork", status: "done" });
+    const steps = s.parts().filter((p) => p.parentId === "call_fork");
+    expect([...new Set(steps.map((p) => `${p.type}:${p.id}`))]).toEqual(["assistant_text:msg_f_a:text:0"]);
+    expect(steps.some((p) => p.type === "user_text")).toBe(false);
+    await until(() => (s.states().at(-1) === "idle"));
+    await d.ok({ type: "session.delete", sessionId: "ses_own" });
+    await until(() => d.requests("DELETE", "/api/session/ses_fork").length === 1);
+    await until(() => !link(d, "ses_fork"));
+  });
+
   it("a mode change of an Aside drops the edit denial at its next prompt", async () => {
     const d = await owned([msg("msg_u1", "user"), msg("msg_a1", "assistant", done)]);
     const { session } = await d.ok({ type: "aside.open", sessionId: "ses_own", text: "q" });
@@ -1235,6 +1260,34 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
     expect(t.parts().filter((p) => p.type === "user_text").map((p) => (p as { text: string }).text)).toEqual(["/nosuch x"]);
   });
 
+  it("a plain prompt typed while an early /name waits for OpenCode's command list is sent after the command", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_COMMAND_LIST_MS: "800" } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    const s = await d.open();
+    await s.prompt("/hello world");
+    await s.prompt("then this");
+    await until(() => d.requests("POST", `/api/session/${s.id}/prompt`).length === 1);
+    const sent = d.log().filter((l) => l.type === "request" && l.method === "POST" && new RegExp(`/api/session/${s.id}/(command|prompt)$`).test(l.path));
+    expect(sent.map((l) => l.path.split("/").at(-1))).toEqual(["command", "prompt"]);
+    await until(() => s.parts().filter((p) => p.type === "turn_result").length === 2);
+    expect(s.parts().filter((p) => p.type === "user_text").map((p) => (p as { text: string }).text)).toEqual(["Run hello: world", "then this"]);
+  });
+
+  it("a Stop while an early /name prepares drops the prompt typed meanwhile", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_COMMAND_LIST_MS: "300", FAKE_OPENCODE2_COMMAND_MS: "1500" }, script: ["hold"] });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    const s = await d.open();
+    await s.prompt("/hello world");
+    await s.prompt("then this");
+    // The command reached OpenCode, which has not answered yet: the session is running, the prompt still waits.
+    await until(() => d.requests("POST", `/api/session/${s.id}/command`).length === 1);
+    expect(s.states().at(-1)).toBe("running");
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await sleep(1200);
+    expect(d.requests("POST", `/api/session/${s.id}/prompt`)).toEqual([]);
+    expect(s.parts().filter((p) => p.type === "user_text").map((p) => (p as { text: string }).text)).not.toContain("then this");
+  });
+
   it("a command shows running until OpenCode answers: one that starts no turn ends at once; Stop while OpenCode takes one interrupts its turn", async () => {
     const d = await boot({ env: { FAKE_OPENCODE2_COMMAND_MS: "600" }, script: ["hold"], data: { commands: ["noturn", "hello"].map((name) => ({ name })) } });
     await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
@@ -1367,8 +1420,9 @@ describe("OpenCode 2 sessions: the daemon's MCP servers (orchestration, claude-u
     expect(at("claude-ui-*", "deny")).toBeGreaterThan(-1);
     expect(at(`${cui}_terminal_list`, "allow")).toBeGreaterThan(at("claude-ui-*", "deny"));
     expect(at(`${cui}_terminal_run`, "ask")).toBeGreaterThan(at("claude-ui-*", "deny"));
-    // No Fork runs on OpenCode 2 yet: the fork tool is hidden.
-    expect(at(`${cui}_fork`, "deny")).toBeGreaterThan(at("claude-ui-*", "deny"));
+    // The fork tool (Fork runs work on OpenCode 2) is one of the claude-ui tools: no rule hides it.
+    expect(at(`${cui}_fork`, "allow")).toBeGreaterThan(at("claude-ui-*", "deny"));
+    expect(at(`${cui}_fork`, "deny")).toBe(-1);
     expect(at(`${orch}_*`, "allow")).toBeGreaterThan(at("orchestration-*", "deny"));
     expect(at(`${orch}_worker_start`, "ask")).toBeGreaterThan(at(`${orch}_*`, "allow"));
     // A token serves only its own server.

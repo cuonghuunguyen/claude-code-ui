@@ -15,7 +15,7 @@ const BUILD = [{ action: "*", resource: "*", effect: "allow" }, { action: "read"
 const tokens = { input: 100, output: 10, reasoning: 0, cache: { read: 5, write: 1 } };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; stored?: Json[]; model?: string; /** The build agent's rules (default BUILD). */ agentRules?: Json[]; /** The permission requests OpenCode lists. */ pending?: Json[]; /** The sessions OpenCode runs. */ active?: Json } = {}) {
+function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; stored?: Json[]; model?: string; /** The build agent's rules (default BUILD). */ agentRules?: Json[]; /** The permission requests OpenCode lists. */ pending?: Json[]; /** The sessions OpenCode runs (a function: read at each call). */ active?: Json | (() => Json) } = {}) {
   const calls: { name: string; input: Json }[] = [];
   const handlers = new Set<{ event: (dir: string | undefined, p: { type: string; properties: Json }) => void; resync: () => void }>();
   const emit = (type: string, d: Json) => handlers.forEach((h) => h.event("/p", { type, properties: d }));
@@ -33,7 +33,7 @@ function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; sto
       interrupt: rec("session.interrupt", () => ({ interrupted: true })),
       remove: rec("session.remove"),
       update: rec("session.update"),
-      active: rec("session.active", () => o.active ?? {}),
+      active: rec("session.active", () => (typeof o.active === "function" ? o.active() : o.active ?? {})),
       get: rec("session.get", () => ({ id: "ses_parent", permissions: [] })),
     },
     form: { list: rec("form.list", () => ({ data: [] })) },
@@ -102,7 +102,7 @@ describe("OpenCode 2 inline task", () => {
       { action: "edit", resource: "*", effect: "ask" },
     ]);
     expect(r.called("instructions.put")).toEqual([{ sessionID: "ses_child", key: "claude-ui-inline", value: INLINE_SYSTEM }]);
-    expect(r.called("session.prompt")).toEqual([{ sessionID: "ses_child", text: "find foo" }]);
+    expect(r.called("session.prompt")).toEqual([{ id: expect.any(String), sessionID: "ses_child", text: "find foo" }]);
     const steps = r.emitted.filter((p) => p.parentId === "call_1");
     expect(steps.map((p) => `${p.type}:${p.id}`)).toEqual(expect.arrayContaining(["tool_call:c1", "tool_result:c1:result", "assistant_text:msg_a2:text:0"]));
     await sleep(0);
@@ -213,6 +213,24 @@ describe("OpenCode 2 inline task", () => {
     // The newest end row counts (stored newest first, as read).
     expect(await lostEnd([{ id: "msg_i2", type: "idle", outcome: "failed" }, { id: "msg_a2", type: "assistant", content: [], error: { type: "provider", message: "rate limited\nstack" } }, { id: "msg_i1", type: "idle", outcome: "succeeded" }])).toMatchObject({ status: "error", error: "rate limited" });
     expect(await lostEnd([{ id: "msg_i1", type: "idle", outcome: "interrupted" }])).toMatchObject({ status: "stopped" });
+  });
+
+  it("a run OpenCode lists as active only after its prompt request answered is not ended by a reconnect in that gap", async () => {
+    // Its prompt is stored (the user message) but nothing ran yet and OpenCode does not list the session: the run is starting, not ended.
+    let listed = false;
+    const r = rig({ stored: [{ id: "msg_u1", type: "user", text: "find foo" }], active: () => (listed ? { ses_child: {} } : {}) });
+    let end: unknown;
+    const running = r.run.inlineTask(spec(), hooks()).then((x) => (end = x));
+    for (let i = 0; i < 40 && !r.called("session.prompt").length; i++) await sleep(25);
+    await sleep(0);
+    r.reconnect();
+    await sleep(50);
+    expect(end).toBeUndefined();
+    listed = true;
+    r.child("session.execution.started");
+    r.child("session.text.ended", { assistantMessageID: "msg_a1", ordinal: 0, text: "foo is in a.txt" });
+    r.child("session.execution.succeeded");
+    expect(await running).toMatchObject({ status: "done", text: "foo is in a.txt" });
   });
 
   it("an ask of the run first seen at a reconnect (its event lost) keeps the run's call data: tool and input, and its denied card under the inline call", async () => {

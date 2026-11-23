@@ -3,7 +3,7 @@
 // GET /api/info -> {version, pid, urls}; GET /api/event -> SSE (`server.connected`, the turns' events, `: heartbeat` comments). There is no /global/health: it answers 404.
 // Routes: GET /api/model, /api/model/default, /api/session, /api/session/active, /api/session/:id, /api/session/:id/message, /api/session/:id/message/:mid, /api/permission/request;
 // POST /api/session, /api/session/:id/prompt, /api/session/:id/model, /api/session/:id/interrupt, /api/session/:id/permission/:rid/reply, /api/session/:id/fork;
-// PATCH /api/session/:id (permissions, title, archived); DELETE /api/session/:id.
+// PATCH /api/session/:id (permissions, title, archived, metadata); DELETE /api/session/:id.
 // Revert (as 2.3.0): POST …/revert/stage {messageID, files?} (stored messages stay listed; `session.revert` marks the cut), POST …/revert/commit, DELETE …/revert
 // (clear: `session.revert.cleared`, then an empty `execution.started`/`succeeded`, as 2.3.0 sends; FAKE_OPENCODE2_CLEAR_ACTIVE_MS: the session active that long meanwhile; FAKE_OPENCODE2_CLEAR_DELAY_MS: it starts that late, a prompt posted meanwhile runs after it), a prompt while staged commits first. A prompt's turn sends `session.inbox.delivered` after its `execution.started`. GET …/diff?from=&to= sums the
 // fake `diff` lists ([{file, additions, deletions}]) of the user messages from `from` up to `to` (excluded; default the next user message).
@@ -39,6 +39,8 @@
 // {key, answer?} (a credential), POST …/connect/oauth {methodID, answer?} -> an attempt (`browser`: auto, ended by POST /__oauth {result: "success"|"failed"}; `code`: mode code, an answer
 // `team: bad` answers 400), GET/DELETE …/connect/oauth/:attempt, POST …/connect/oauth/:attempt/complete {code} (`good` connects, else 400); GET /api/credential, DELETE /api/credential/:id.
 // `envprov` is connected by an environment variable.
+// MCP sign-in (as 2.3.0; project config mode): a remote server whose url has `oauth` is needs_auth with `integrationID: mcp-<name>` until that integration has a credential; its OAuth
+// attempt (mode auto) completes on its second status read. Plugin update: a package spec with `outdated` lists `package.outdated` until POST /api/plugin/update {targets} (204).
 // Background shells of the model (GH-922, as 2.3.0): the turn step `{shell: {command, output}}` starts one for the turn's session (`shell.created`, `$SHELL1`..`$SHELL2` name them; the shell's own
 // session in `metadata.sessionID`); `data.shells` [{id, command, sessionID}] are running at start. GET /api/shell lists the running ones of the folder; DELETE /api/shell/:id kills one (the synthetic inbox item
 // `state: error`, `shell.exited` killed, `shell.deleted`; its output is gone: 404 as 2.3.0); POST /__shell_exit {id, exit, output} ends one as a command that finished (`shell.exited`, then the synthetic
@@ -159,6 +161,7 @@ const projectMode = process.env.FAKE_OPENCODE2_PROJECT_CONFIG === "1";
 const loaded = new Map();
 let reloadEmptyUntil = 0;
 const mcpState = new Map();
+const updatedPlugins = new Set();
 const mcpGone = new Set();
 const jsonc = (text) => JSON.parse(text.replace(/^\s*\/\/.*$/gm, "").replace(/,(\s*[}\]])/g, "$1"));
 const normalize = (raw) => {
@@ -177,13 +180,16 @@ const snapshotOf = (dir) => {
   return { docs, servers, permissions: docs.flatMap((d) => d.info.permissions), plugins: [...new Set(docs.flatMap((d) => d.info.plugins))] };
 };
 const snap = (dir) => loaded.get(dir) ?? (loaded.set(dir, snapshotOf(dir)), loaded.get(dir));
+const signedIn = (integrationID) => [...credentials.values()].some((c) => c.integrationID === integrationID);
+/** The integration of each remote MCP server whose url has `oauth` (as 2.3.0: a server that needs auth carries an `integrationID`): one OAuth method, ended by the attempt's second status read. */
+const mcpIntegrations = (dir) => (projectMode ? Object.keys(snap(dir).servers) : []).filter((n) => snap(dir).servers[n].url?.includes("oauth")).map((n) => ({ id: `mcp-${n}`, name: n, methods: [{ id: "oauth", type: "oauth", label: "Sign in" }] }));
 const mcpRows = (dir) => {
   const all = new Map(Object.entries(snap(dir).servers).filter(([n]) => !mcpGone.has(`${dir}\0${n}`)));
   for (const [k, c] of mcps) if (k.startsWith(`${dir}\0`)) all.set(k.split("\0")[1], c);
   return [...all].map(([name, c]) => {
     const state = mcpState.get(`${dir}\0${name}`);
-    const status = state === "disconnected" || (c.disabled && state !== "connected") ? { status: "disabled" } : c.command?.[0] === "/nonexistent-bin" ? { status: "failed", error: "spawn /nonexistent-bin ENOENT" } : c.url?.includes("oauth") ? { status: "needs_auth", error: "needs sign-in" } : { status: "connected" };
-    return { name, status };
+    const status = state === "disconnected" || (c.disabled && state !== "connected") ? { status: "disabled" } : c.command?.[0] === "/nonexistent-bin" ? { status: "failed", error: "spawn /nonexistent-bin ENOENT" } : c.url?.includes("oauth") && !signedIn(`mcp-${name}`) ? { status: "needs_auth", error: "needs sign-in" } : { status: "connected" };
+    return { name, status, ...(c.url?.includes("oauth") && { integrationID: `mcp-${name}` }) };
   });
 };
 const skillsOf = (dir) => {
@@ -457,9 +463,11 @@ const server = createServer((req, res) => {
     // FAKE_OPENCODE2_RELOAD_EMPTY_MS: after a location reload the skill, plugin and agent lists are empty for this long (2.3.0 rebuilds the locations for 1-3 s).
     const rebuilding = Date.now() < reloadEmptyUntil;
     if (projectMode && p === "/api/skill") return json(res, 200, { location: { directory: dir }, data: rebuilding ? [] : skillsOf(dir) });
+    // POST /api/plugin/update {targets} (204): the packages are no longer outdated.
+    if (projectMode && p === "/api/plugin/update" && req.method === "POST") return (body.targets.forEach((t) => updatedPlugins.add(t)), res.writeHead(204), res.end());
     if (projectMode && p === "/api/plugin" && rebuilding) return json(res, 200, { location: { directory: dir }, data: [] });
     if (projectMode && p === "/api/plugin") {
-      const own = snap(dir).plugins.map((spec) => ({ id: undefined, source: spec.startsWith("file://") ? { type: "local", path: spec.slice(7) } : { type: "package", target: spec, version: "1.0.0" }, features: { server: true }, state: /broken/.test(spec) ? { status: "failed", error: "Plugin failed to load", ref: "err_1" } : { status: "active" } }));
+      const own = snap(dir).plugins.map((spec) => ({ id: undefined, source: spec.startsWith("file://") ? { type: "local", path: spec.slice(7) } : { type: "package", target: spec, version: "1.0.0", ...(/outdated/.test(spec) && !updatedPlugins.has(spec) && { outdated: true }) }, features: { server: true }, state: /broken/.test(spec) ? { status: "failed", error: "Plugin failed to load", ref: "err_1" } : { status: "active" } }));
       return json(res, 200, { location: { directory: dir }, data: [{ id: "opencode.agent", source: { type: "builtin" }, features: { server: true }, state: { status: "active" } }, ...own.map(({ id, ...x }) => x)] });
     }
     if (p === "/api/agent" && rebuilding) return json(res, 200, { location: { directory: dir }, data: [] });
@@ -502,15 +510,15 @@ const server = createServer((req, res) => {
     }
     if (p === "/api/integration") {
       const cold = ++integrationReads <= Number(process.env.FAKE_OPENCODE2_COLD_INTEGRATIONS ?? 0);
-      return json(res, 200, { location: { directory: dir }, data: cold || !dir ? [] : integrations.map((i) => ({ ...i, connections: connectionsOf(i) })) });
+      return json(res, 200, { location: { directory: dir }, data: cold || !dir ? [] : [...integrations, ...mcpIntegrations(dir)].map((i) => ({ ...i, connections: connectionsOf(i) })) });
     }
     if ((m = /^\/api\/integration\/([^/]+)\/connect\/(key|oauth)(?:\/([^/]+))?(\/complete)?$/.exec(p))) {
       const [, iid, kind, aid, complete] = m;
-      if (!integrations.some((i) => i.id === iid)) return json(res, 404, { _tag: "IntegrationNotFoundError", integrationID: iid, message: `Integration not found: ${iid}` });
+      if (![...integrations, ...mcpIntegrations(dir)].some((i) => i.id === iid)) return json(res, 404, { _tag: "IntegrationNotFoundError", integrationID: iid, message: `Integration not found: ${iid}` });
       if (kind === "key") return (credit(iid, "key"), res.writeHead(204), res.end());
       if (!aid) {
         if (body.answer?.team === "bad") return json(res, 400, { _tag: "InvalidRequestError", message: "Team is not valid" });
-        const a = { attemptID: id("con"), integrationID: iid, methodID: body.methodID, mode: body.methodID === "code" ? "code" : "auto", status: "pending" };
+        const a = { attemptID: id("con"), integrationID: iid, methodID: body.methodID, mode: body.methodID === "code" ? "code" : "auto", status: "pending", polls: 0 };
         attempts.set(a.attemptID, a);
         const time = { created: Date.now(), expires: Date.now() + 600_000 };
         return json(res, 200, { location: { directory: dir }, data: { attemptID: a.attemptID, url: `https://example.com/fake-login?provider=${iid}`, instructions: a.mode === "code" ? "Paste the code" : "Code: ABCD-1234", mode: a.mode, time } });
@@ -524,6 +532,7 @@ const server = createServer((req, res) => {
         attempts.delete(aid);
         return (credit(iid, "oauth"), res.writeHead(204), res.end());
       }
+      if (iid.startsWith("mcp-") && a.status === "pending" && ++a.polls >= 2) (a.status = "complete"), credit(iid, "oauth");
       return json(res, 200, { location: { directory: dir }, data: { status: a.status, ...(a.status === "failed" && { message: "The browser login failed" }), time: { created: 0, expires: 1 } } });
     }
     if (p === "/api/credential") return json(res, 200, { data: [...credentials.values()].map((c) => ({ id: c.id, integrationID: c.integrationID, label: c.integrationID, active: true, value: { type: c.method, key: "x" } })) });
@@ -556,7 +565,7 @@ const server = createServer((req, res) => {
       if (!sub && req.method === "PATCH") {
         // A title "fail-title" answers 500 (a failed rename).
         if (body.title === "fail-title") return json(res, 500, { message: "rename failed" });
-        Object.assign(s, body.permissions !== undefined && { permissions: body.permissions }, body.title !== undefined && { title: body.title });
+        Object.assign(s, body.permissions !== undefined && { permissions: body.permissions }, body.title !== undefined && { title: body.title }, body.metadata !== undefined && { metadata: { ...s.metadata, ...body.metadata } });
         if (body.archived === true) s.time.archived = Date.now();
         if (body.archived === false) delete s.time.archived;
         return (res.writeHead(204), res.end());
@@ -570,7 +579,9 @@ const server = createServer((req, res) => {
         const fid = id("ses");
         const now = Date.now();
         const f = { ...s, id: fid, title: `${s.title ?? "New session"} (fork #1)`, fork: { sessionID: s.id }, time: { created: now, updated: now } };
+        // As 2.3.0: the fork has no revert, no metadata and no parent.
         delete f.revert;
+        delete f.metadata;
         sessions.set(fid, f);
         messages.set(fid, (cut < 0 ? list : list.slice(0, cut)).map((x) => ({ ...x, id: id("msg") })));
         return json(res, 200, { data: f });

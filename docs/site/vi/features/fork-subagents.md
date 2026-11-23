@@ -4,7 +4,7 @@ Fork là một subagent bắt đầu với bản sao toàn bộ cuộc trò chuy
 
 Fork không phải là một phiên mới và không phải là [aside](aside). Nó hiện dưới dạng thẻ **Fork** trong transcript, ngay dưới lần gọi của agent.
 
-Fork hoạt động trong phiên Claude Code. OpenCode không có fork: subagent của OpenCode luôn bắt đầu mới, với bản mô tả do agent viết.
+Fork hoạt động trong phiên Claude Code và trong phiên OpenCode (OpenCode 1 và 2). Trong Claude Code, fork chạy nền. Trong OpenCode, agent gọi công cụ `fork` và bước của nó chờ đến khi fork kết thúc. Subagent riêng của OpenCode (`task`) vẫn bắt đầu mới, với bản mô tả do agent viết.
 
 ## Khi nào fork {#when-to-fork}
 
@@ -53,7 +53,7 @@ Trong **Settings › Sessions › Fork subagents**:
 | --- | --- | --- |
 | Cho agent tự fork | Bật | Tắt: các lượt bắt đầu sau đó không fork được, và agent không nhận hướng dẫn về fork |
 
-Cài đặt áp dụng cho lượt bắt đầu sau khi đổi. Không áp dụng cho phiên OpenCode.
+Cài đặt áp dụng cho lượt bắt đầu sau khi đổi. Nó cũng bật hoặc tắt công cụ `fork` của OpenCode.
 
 ## Cần biết {#good-to-know}
 

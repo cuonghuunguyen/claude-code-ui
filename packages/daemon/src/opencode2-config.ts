@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { OpenCodeClient } from "@opencode/client";
-import type { InstalledPlugin, McpAddConfig, McpListResult, McpServerInfo, PluginsListResult, PluginWriteResult, SkillRow, SkillsResult, SkillsSetStateResult, SkillState } from "@claude-ui/protocol";
+import type { InstalledPlugin, McpAddConfig, McpAuthResult, McpListResult, McpServerInfo, PluginsListResult, PluginUpdateResult, PluginWriteResult, SkillRow, SkillsResult, SkillsSetStateResult, SkillState } from "@claude-ui/protocol";
 import { DAEMON_SERVER } from "./daemon-mcp.ts";
 import { EngineError, type EngineConfig } from "./engine-catalogue.ts";
 import { ConfigFileError, editFileAt, editProjectFile, editProjectList, fileShape, projectDocs, readProjectValue, shapeOf, writeTarget } from "./opencode-config-file.ts";
@@ -73,6 +73,8 @@ export function createOpenCode2McpConfig(o: Config2Deps): EngineConfig["mcp"] {
   const { server } = o;
   const waitMs = o.waitMs ?? MCP_WAIT_MS;
   type Row = { name: string; status: { status: string; error?: string }; integrationID?: string };
+  /** The sign-in attempt of each server being signed in (one at a time), by `<folder>\0<name>`. OpenCode 2 has no MCP sign-in route: it signs a server in through the OAuth attempt of its integration (as the provider login). */
+  const attempts = new Map<string, { integrationID: string; attemptID: string }>();
   /** `GET /api/mcp` of a folder in flight: concurrent reads share it. */
   const reads = new Map<string, Promise<Row[]>>();
   const read = (cwd: string): Promise<Row[]> => {
@@ -89,7 +91,78 @@ export function createOpenCode2McpConfig(o: Config2Deps): EngineConfig["mcp"] {
   };
   const doc = async (cwd: string) => (await server.client().then((c) => documents(c, cwd))).reverse();
 
+  /** The server's row (with its `integrationID`). */
+  const rowOf = async (cwd: string, name: string) => (await read(cwd)).find((r) => r.name === name);
+  /** The OAuth method of an integration, as the integration list of the folder has it (a folder OpenCode has not loaded yet lists none for a moment). */
+  async function oauthMethod(cwd: string, integrationID: string): Promise<string> {
+    const c = await server.client();
+    for (const stop = Date.now() + 5000; ; await sleep(250)) {
+      const all = (await c.integration.list({ location: { directory: cwd } })).data as unknown as { id: string; methods: { type: string; id?: string }[] }[];
+      const m = all.find((i) => i.id === integrationID)?.methods.find((x) => x.type === "oauth" && x.id);
+      if (m) return m.id!;
+      if (all.length || Date.now() >= stop) throw fail("unsupported", "OpenCode 2 offers no sign-in for this server.");
+    }
+  }
+  /** The attempts of the folder are asked once (the dialog polls the list while it waits): a completed one reconnects the server, an ended one is dropped. */
+  async function pollAttempts(cwd: string): Promise<boolean> {
+    let changed = false;
+    for (const [key, a] of [...attempts]) {
+      if (!key.startsWith(`${cwd}\0`)) continue;
+      const name = key.slice(cwd.length + 1);
+      const s = await server.client().then((c) => c.integration.oauth.status({ integrationID: a.integrationID, attemptID: a.attemptID, location: { directory: cwd } })).then((r) => (r.data as unknown as { status: string }).status, () => "failed");
+      if (s === "pending") continue;
+      attempts.delete(key);
+      changed = true;
+      if (s === "complete") await server.client().then((c) => c.experimental.mcp.connect({ server: name, location: { directory: cwd } })).catch(() => {});
+    }
+    return changed;
+  }
+  async function authenticate(cwd: string, name: string): Promise<McpAuthResult> {
+    const row = await rowOf(cwd, name);
+    if (!row?.integrationID) throw fail("unsupported", "OpenCode 2 offers no sign-in for this server.");
+    const key = `${cwd}\0${name}`;
+    const c = await server.client();
+    const old = attempts.get(key);
+    attempts.delete(key);
+    if (old) await c.integration.oauth.cancel({ integrationID: old.integrationID, attemptID: old.attemptID, location: { directory: cwd } }).catch(() => {});
+    const methodID = await oauthMethod(cwd, row.integrationID);
+    const r = (await c.integration.oauth.connect({ integrationID: row.integrationID, location: { directory: cwd }, methodID })).data as unknown as { attemptID: string; url?: string };
+    if (!r.url) throw fail("login_failed", "OpenCode gave no sign-in page for this server.");
+    attempts.set(key, { integrationID: row.integrationID, attemptID: r.attemptID });
+    return { requiresUserAction: true, authUrl: r.url };
+  }
+  /** The code of the page that opened after the sign-in: the `code` of the pasted address, or the pasted code itself. */
+  async function finish(cwd: string, name: string, pasted: string) {
+    const a = attempts.get(`${cwd}\0${name}`);
+    if (!a) throw fail("login_failed", "The sign-in expired. Start it again.");
+    let code: string | null = pasted.trim();
+    try {
+      code = new URL(code).searchParams.get("code");
+    } catch {
+      // Not an address: the code itself.
+    }
+    if (!code) throw fail("invalid_input", "The pasted address has no code. Paste the address of the page that opened after you signed in.");
+    try {
+      await server.client().then((c) => c.integration.oauth.complete({ integrationID: a.integrationID, attemptID: a.attemptID, location: { directory: cwd }, code: code! }));
+    } catch (e) {
+      throw fail("login_failed", (e as { body?: { message?: string } }).body?.message ?? (e as Error).message);
+    }
+    attempts.delete(`${cwd}\0${name}`);
+    await server.client().then((c) => c.experimental.mcp.connect({ server: name, location: { directory: cwd } })).catch(() => {});
+  }
+  /** Signs the server out: its credentials go, then it connects again (and asks for the sign-in). */
+  async function clearAuth(cwd: string, name: string) {
+    const row = await rowOf(cwd, name);
+    if (!row?.integrationID) throw fail("unsupported", "OpenCode 2 offers no sign-in for this server.");
+    const c = await server.client();
+    const all = (await c.integration.list({ location: { directory: cwd } })).data as unknown as { id: string; connections: { type: string; id?: string }[] }[];
+    for (const x of all.find((i) => i.id === row.integrationID)?.connections ?? []) if (x.type === "credential" && x.id) await c.credential.remove({ credentialID: x.id });
+    await c.experimental.mcp.disconnect({ server: name, location: { directory: cwd } }).catch(() => {});
+    await c.experimental.mcp.connect({ server: name, location: { directory: cwd } }).catch(() => {});
+  }
+
   async function list(cwd: string): Promise<McpListResult> {
+    if (attempts.size) await pollAttempts(cwd).catch(() => false);
     // A failed read of the documents gives no type, command or scope; never an unhandled rejection.
     const docs = doc(cwd).then((d) => d, () => undefined);
     const project = projectServers(cwd);
@@ -179,9 +252,16 @@ export function createOpenCode2McpConfig(o: Config2Deps): EngineConfig["mcp"] {
           return await list(cwd);
         }
         case "mcp.authenticate":
+          named(msg.name);
+          return await authenticate(cwd, msg.name);
         case "mcp.oauthCallback":
+          named(msg.name);
+          await finish(cwd, msg.name, msg.callbackUrl);
+          return {};
         case "mcp.clearAuth":
-          throw fail("unsupported", "OpenCode 2 signs MCP servers in through its integrations. Sign in with OpenCode's own app.");
+          named(msg.name);
+          await clearAuth(cwd, msg.name);
+          return await list(cwd);
       }
     } catch (e) {
       if (e instanceof ConfigFileError) throw fail(e.code, e.message);
@@ -291,7 +371,7 @@ const WRITTEN: PluginWriteResult = { reload: { reloaded: 0, failed: [], errorCou
 
 export function createOpenCode2PluginsConfig(o: Config2Deps): EngineConfig["plugins"] {
   const waitMs = o.waitMs ?? WAIT_MS;
-  type Row = { id?: string; source: { type: string; target?: string; version?: string; path?: string }; state: { status: string; error?: string } };
+  type Row = { id?: string; source: { type: string; target?: string; version?: string; path?: string; outdated?: boolean; updating?: boolean }; state: { status: string; error?: string } };
   const read = async (cwd: string): Promise<Row[]> => {
     let timer: NodeJS.Timeout | undefined;
     const p = o.server.client().then((c) => c.plugin.list({ location: { directory: cwd } })).then((r) => r.data as unknown as Row[]);
@@ -313,7 +393,7 @@ export function createOpenCode2PluginsConfig(o: Config2Deps): EngineConfig["plug
       const id = idOf(r);
       if (!id) return [];
       const failed = r.state.status === "failed";
-      return [{ id, ...(r.source.version && { version: r.source.version }), scope: project.has(id) ? "project" : inPluginFolder(id, cwd) ? "folder" : "user", enabled: !failed, ...(failed && { description: `Failed to load: ${r.state.error ?? "unknown error"}` }), updatable: false } satisfies InstalledPlugin];
+      return [{ id, ...(r.source.version && { version: r.source.version }), scope: project.has(id) ? "project" : inPluginFolder(id, cwd) ? "folder" : "user", enabled: !failed, ...(failed && { description: `Failed to load: ${r.state.error ?? "unknown error"}` }), updatable: r.source.type === "package" && !!r.source.outdated && !r.source.updating } satisfies InstalledPlugin];
     });
     return { installed, available: [], marketplaces: [] };
   }
@@ -346,17 +426,38 @@ export function createOpenCode2PluginsConfig(o: Config2Deps): EngineConfig["plug
     return WRITTEN;
   }
 
+  /** Updates a package plugin OpenCode reports as outdated (`POST /api/plugin/update`), then reloads the folder so the new version loads and waits until the list no longer calls it outdated. */
+  async function update(cwd: string, id: string): Promise<PluginUpdateResult> {
+    const row = (await read(cwd)).find((r) => r.source.type === "package" && r.source.target === id);
+    if (!row) return { outcome: "failed", kind: "not_installed", message: `${id} is not installed.` };
+    if (!row.source.outdated) return { outcome: "ok", message: `${id} is already up to date.` };
+    try {
+      await o.server.client().then((c) => c.plugin.update({ targets: [id] }));
+    } catch (e) {
+      return { outcome: "failed", kind: "other", message: (e as { body?: { message?: string } }).body?.message ?? (e as Error).message };
+    }
+    if (await o.reload(cwd, "plugins")) {
+      for (const stop = Date.now() + SHOW_MS; Date.now() < stop; await sleep(250)) {
+        const rows = await read(cwd).catch(() => []);
+        if (rows.some((r) => r.source.target === id && !r.source.outdated && !r.source.updating)) break;
+      }
+    }
+    return { outcome: "ok" };
+  }
+
   return async (msg, cwd) => {
     try {
       switch (msg.type) {
         case "plugins.list":
           return await list(cwd);
+        case "plugins.update":
+          return await update(cwd, msg.pluginId);
         case "plugins.install":
           return await install(cwd, msg.pluginId);
         case "plugins.uninstall":
           return await uninstall(cwd, msg.pluginId, msg.scope);
         default:
-          throw fail("unsupported", "OpenCode 2 plugins are installed or uninstalled here. They have no switch, update or marketplace in this dialog.");
+          throw fail("unsupported", "OpenCode 2 plugins are installed or uninstalled here. They have no switch or marketplace in this dialog.");
       }
     } catch (e) {
       if (e instanceof ConfigFileError) throw fail(e.code, e.message);
