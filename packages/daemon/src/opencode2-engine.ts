@@ -12,15 +12,25 @@ import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 import { INLINE_TIMEOUT_MS, type ForkResult, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
 import { ascending } from "./opencode-id.ts";
 import { INLINE_SYSTEM, clip } from "./opencode-inline.ts";
-import { LOCAL_COMMANDS, OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels, type OpenCodeMcpRoute } from "./opencode-engine.ts";
+import { DONT_ASK, LOCAL_COMMANDS, OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels, withVisualize, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { findCall, mcpKeys, mcpName, mcpTimeoutMs, showDaemonCard, WORKER_START, type McpServerKey } from "./opencode-shared.ts";
-import { INLINE_META, InlineCollector2, inlineRules } from "./opencode2-inline.ts";
+import { INLINE_META, InlineCollector2, inlineRules, storedEnd, type StoredEnd } from "./opencode2-inline.ts";
+import { contentBefore, type PatchPart, type SnapshotSource } from "./opencode-snapshot.ts";
+import { visualizeSystem } from "./visualize.ts";
 import { OpenCode2Mapper, bashPart, failureText, mapTool2, type Failure, type OpenCode2Message, type Shell2 } from "./opencode2-parts.ts";
 import type { OpenCodeServer } from "./opencode-server.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 /** What the OpenCode 2 adapter has: as OpenCode 1's (`/compact`, `/undo`, `/redo` are the daemon's commands, the others OpenCode's; `fork`: the Aside). */
-export const OPENCODE2_CAPABILITIES: EngineCapabilities = { ...OPENCODE_CAPABILITIES };
+export const OPENCODE2_CAPABILITIES: EngineCapabilities = {
+  ...OPENCODE_CAPABILITIES,
+  // The config dialogs (GH-864): OpenCode 2 signs an MCP server in through its integrations, not through a route of the server, and reports a plugin's load result
+  // (a row shows its error), which OpenCode 1 does not (`pluginStatus` is no gap here).
+  config: (({ pluginStatus: _status, ...gaps }) => ({
+    ...OPENCODE_CAPABILITIES.config!,
+    gaps: { ...gaps, mcpAuth: "OpenCode 2 signs MCP servers in through its integrations. Sign in with OpenCode's own app.", pluginUpdate: "claude-ui does not update OpenCode 2 plugins. Update them in OpenCode's own app." },
+  }))(OPENCODE_CAPABILITIES.config!.gaps),
+};
 
 /** A permission rule of OpenCode 2. */
 export type Rule2 = { action: string; resource: string; effect: "allow" | "deny" | "ask" };
@@ -32,8 +42,12 @@ const rule = (action: string, effect: Rule2["effect"]): Rule2 => ({ action, reso
 export function modeRules(mode: PermissionMode): Rule2[] {
   if (mode === "config") return [];
   if (mode === "bypassPermissions") return [rule("*", "allow")];
+  // Don't ask: the `default` asks plus a marker that matches no tool; the engine answers every ask with a reject (a deny rule would hide the tool and beat the project's saved approvals).
+  if (mode === "dontAsk") return [MARK_DONT_ASK, ...modeRules("default")];
   return [rule("shell", "ask"), rule("edit", mode === "acceptEdits" ? "allow" : "ask"), rule("webfetch", "ask"), rule("websearch", "ask")];
 }
+/** Marks Don't ask in the session's rules (`modeOfRules` tells it from `default`); its action matches no tool. */
+const MARK_DONT_ASK: Rule2 = { action: "claude-ui-mode", resource: "dontAsk", effect: "deny" };
 /** Last, so it wins (OpenCode 2 applies the last matching rule): a read-only Aside changes no file. `edit` is also the action of the `write` tool (checked on 2.3.0). */
 const READ_ONLY: Rule2 = rule("edit", "deny");
 /** The session's own daemon MCP servers in OpenCode, when attached: `orchestration` = its orchestration server's name, `daemon` = its claude-ui server's tool rules. */
@@ -58,6 +72,7 @@ export const mcpRules = (mode: PermissionMode, mcp: McpRules = {}): Rule2[] => [
 export const rulesOf = (mode: PermissionMode, readOnly: boolean, denials: readonly Rule2[] = [], mcp?: McpRules): Rule2[] => [...(mode === "config" ? [] : [...modeRules(mode), ...denials]), ...mcpRules(mode, mcp), ...(readOnly ? [READ_ONLY] : [])];
 /** The mode whose rules a session has (its rules start with them; `config`: none or only the read-only denial, besides the MCP servers' rules), undefined for rules of another origin. */
 export const modeOfRules = (rules: readonly Rule2[] | undefined): PermissionMode | undefined => {
+  if ((rules ?? []).some((x) => x.action === MARK_DONT_ASK.action && x.resource === MARK_DONT_ASK.resource)) return "dontAsk";
   const r = JSON.stringify((rules ?? []).filter((x) => !isDaemonMcp(x)));
   const starts = (m: PermissionMode) => r.startsWith(JSON.stringify(modeRules(m)).slice(0, -1));
   return (["bypassPermissions", "acceptEdits", "default"] as const).find(starts) ?? ([JSON.stringify([]), JSON.stringify([READ_ONLY])].includes(r) ? "config" : undefined);
@@ -76,11 +91,19 @@ export const denialsOf2 = (rules: readonly Rule2[]): Rule2[] => {
 const LOCAL_NAMES = LOCAL_COMMANDS.map((c) => c.name);
 /** How often, and how many times, an agent list is read again while OpenCode has not loaded the folder (2.3.0 lists no agent then). */
 const AGENT_POLL_MS = 250;
-const AGENT_POLLS = 120;
-/** How long after a first non-empty agent list it is read again while no event stream runs. */
 const SETTLE_MS = 500;
+/** The longest wait for a folder to list again after a location reload. */
+const RELOAD_SETTLE_MS = 5_000;
+const AGENT_POLLS = 120;
+/** How long an agent list is kept; a cold folder's first list (read without an event stream) only briefly: OpenCode lists the folder's own agents after its built-ins. */
+const AGENTS_MS = 60_000;
+const COLD_AGENTS_MS = 5_000;
+/** The longest a `/name` typed before OpenCode's command list came waits for it. */
+const COMMANDS_WAIT_MS = 5_000;
 /** The instruction entry that carries an inline task's system text. */
 const INLINE_ENTRY = "claude-ui-inline";
+/** The instruction entry that carries the visualize skill's text while the setting is on (docs/spec.md "Inline visualizations"). */
+const VISUALIZE_ENTRY = "claude-ui-visualize";
 
 type Json = Record<string, any>;
 /** A model of `GET /api/model` and its default. */
@@ -153,14 +176,14 @@ const TURN_END_WAIT_MS = 10_000;
 const POSTING_WAIT_MS = 3000;
 const ANSWERED = "Answered in OpenCode";
 /** How often a running bash mode command's output is read (OpenCode 2 sends no output events). */
+/** The most of a background shell's output the Shells list gets. */
+const SHELL_TAIL = 30_000;
 const SHELL_POLL_MS = 500;
-/** How long after a revert clear its empty execution (OpenCode 2.3.0 sends `execution.started`/`succeeded` after `session.revert.cleared`) is expected. */
-const CLEAR_EXECUTION_MS = 2000;
 /** A user message that shows in the timeline (text or an image). */
 const shownUser = (m: OpenCode2Message) => m.type === "user" && (!!m.text || !!m.files?.some((f) => f.mime?.startsWith("image/") && f.data));
-type Req = { kind: "permission"; callId?: string; sessionID: string; /** The mapper of the call: an inline run's own. */ mapper: OpenCode2Mapper; /** An inline run's call: its denied card shows under it. */ parentId?: string } | { kind: "question"; sessionID: string; questions: Question[]; fields: { key: string; type: string }[] };
+type Req = { kind: "permission"; callId?: string; sessionID: string; /** The mapper of the call: an inline run's own. */ mapper: OpenCode2Mapper; /** An inline run's call: its denied card shows under it. */ parentId?: string } | { kind: "question"; sessionID: string; form: Json; questions: Question[]; /** The shown fields, one per question. */ fields: Json[] };
 /** A running inline task: its child session's events feed `notify`; `callId` = the call its steps show under. */
-type InlineRun = { callId?: string; mapper: OpenCode2Mapper; notify: (type: string, d: Json) => void; /** Its prompt reached OpenCode: a check that finds it not running ends it. */ posted?: boolean; /** Ends the run as it is in OpenCode (an end event lost with a stream drop). */ settle: () => void };
+type InlineRun = { callId?: string; mapper: OpenCode2Mapper; notify: (type: string, d: Json) => void; /** Its prompt reached OpenCode: a check that finds it not running ends it. */ posted?: boolean; /** Ends the run as OpenCode stored its end (an end event lost with a stream drop). */ settle: (end: StoredEnd) => void };
 /** The text of the last assistant message of a stored child session (the fallback when its events were missed). */
 const lastAssistantText2 = (messages: readonly OpenCode2Message[]) => {
   for (const m of [...messages].reverse()) {
@@ -186,13 +209,20 @@ class OpenCode2Session implements EngineSession {
   private readonly unshown = new Set<string>();
   /** The message OpenCode's staged revert cuts the conversation at, undefined when none (a prompt commits it: OpenCode removes the cut messages then). */
   private revertAt: string | undefined;
-  /** When a revert clear was seen: the empty execution that follows it is no turn (its start is skipped once, and a resync in that time starts no turn). */
-  private clearedAt = 0;
-  private clearSkipped = false;
-  private inClearWindow = () => Date.now() - this.clearedAt < CLEAR_EXECUTION_MS;
+  /**
+   * A revert clear was asked or seen and no step ran since. OpenCode 2.3.0 follows a clear with an empty execution (`execution.started`/`succeeded`, no step),
+   * which is no turn: `run` = its start was skipped (its end is skipped too); `prompted` = a prompt or command of ours was posted since (its turn's start is
+   * not skipped); `prompt` = that prompt's message id and `delivered` = OpenCode delivered it (`session.inbox.delivered`): an execution end before that is the
+   * clear's. The first step ends it. A resync while it is set starts no turn (OpenCode lists the session active during the empty execution).
+   */
+  private clear: { run: boolean; prompted: boolean; prompt?: string; delivered: boolean } | undefined;
   private markClear() {
-    this.clearedAt = Date.now();
-    this.clearSkipped = false;
+    this.clear = { run: false, prompted: false, delivered: false };
+  }
+  /** A prompt (`id`) or command of ours goes to OpenCode: it commits a staged revert, and the clear's empty execution is not its turn. */
+  private posted(id?: string) {
+    this.revertAt = undefined;
+    if (this.clear) Object.assign(this.clear, { prompted: true, prompt: id, delivered: false });
   }
   /** The bash mode command running as this session's turn: OpenCode's shell id once `session.shell.started` named it, Stop pressed before that, the output read so far. */
   /** Shell ids of our commands moved to the background: their request still ends them (`shell: background` kept). */
@@ -224,6 +254,11 @@ class OpenCode2Session implements EngineSession {
   private agentInOpenCode: string | undefined;
   /** Names of OpenCode's commands last listed: `/name` of one of them runs it. */
   private commandNames = new Set<string>();
+  /** OpenCode listed its commands once; `commandsReady` settles when the first read ended (listed or failed). */
+  private commandsLoaded = false;
+  private commandsReady: Promise<void> = Promise.resolve();
+  /** OpenCode started an execution for the running turn (`session.execution.started`). */
+  private turnExecuted = false;
   /** Running inline tasks by child session id. */
   private readonly inlineRuns = new Map<string, InlineRun>();
   /** The `inline_task` calls an inline run already took. */
@@ -275,7 +310,7 @@ class OpenCode2Session implements EngineSession {
     this.revertAt = this.history?.revert;
     // The slash menu of an open session: the daemon's own commands at once, OpenCode's once it listed them.
     this.session.emit({ type: "commands", id: "commands", commands: LOCAL_COMMANDS });
-    void this.emitCommands();
+    this.commandsReady = this.emitCommands();
     void this.refreshAgents();
     if (!this.history) return;
     this.apply(this.history);
@@ -291,6 +326,45 @@ class OpenCode2Session implements EngineSession {
     for (const part of this.mapper.history(h.messages)) this.session.emit(part);
     for (const m of h.messages) this.noteUsage(m);
     void this.emitUsage();
+    void this.reconcileShells();
+  }
+
+  /** A background shell of the model that OpenCode no longer lists as running ended while the daemon was away (its end notice, if any, is already read): the card stops. */
+  private async reconcileShells() {
+    const open = this.mapper.openShells();
+    if (!open.length) return;
+    const running = await this.server
+      .client()
+      .then((c) => c.shell.list({ location: { directory: this.cwd } }))
+      .then((r) => new Set(r.data.map((x) => x.id)))
+      .catch(() => undefined);
+    if (!running) return;
+    for (const [, sh] of open) if (!running.has(sh)) this.shellExited({ id: sh, status: "killed" });
+  }
+  /** The tree before each running step (`session.step.started` `snapshot`), by assistant message id. `session.step.ended` carries the tree after it. */
+  private readonly stepTrees = new Map<string, string>();
+  private stepStart(sessionID: string, d: Json) {
+    if (typeof d.snapshot !== "string" || !this.opts.onFileEdit) return;
+    if (this.stepTrees.size >= 200) this.stepTrees.clear();
+    this.stepTrees.set(`${sessionID}:${d.assistantMessageID}`, d.snapshot);
+  }
+  /**
+   * A step of the agent (this session's, or an inline run's) changed files: the content they had before the step goes to Local history (opencode-snapshot.ts).
+   * `files` are relative to the project folder. Async, never blocks the event pump.
+   */
+  private stepPatch(sessionID: string, d: Json) {
+    const key = `${sessionID}:${d.assistantMessageID}`;
+    const hash = this.stepTrees.get(key);
+    this.stepTrees.delete(key);
+    const onEdit = this.opts.onFileEdit;
+    const files: unknown = d.files;
+    if (!onEdit || !hash || !Array.isArray(files) || !files.length) return;
+    const part: PatchPart = { id: key, hash, files: files.filter((f): f is string => typeof f === "string") };
+    void contentBefore(this.engine.snapshots, this.cwd, sessionID, part).then((list) => list.forEach(([path, before]) => onEdit(path, before)), () => {});
+  }
+  /** `shell.exited` of any shell: the card of the call that started it ends. */
+  shellExited(d: Json) {
+    this.emitAll(this.mapper.shellExited(d.id, d.status, typeof d.exit === "number" ? d.exit : undefined));
   }
 
   private noteUsage(m: { type?: string; tokens?: Json; model?: { id: string; providerID: string } }) {
@@ -321,12 +395,17 @@ class OpenCode2Session implements EngineSession {
     for (const id of [...this.reqs.keys()]) if (!live.has(id) && this.session.pendingRequest(id)) this.session.cancel(id, ANSWERED);
   }
 
-  /** After a reconnect: an inline run OpenCode no longer runs lost its end event; it ends (its text from the stored messages). */
+  /** After a reconnect: an inline run OpenCode no longer runs lost its end event; it ends as OpenCode stored it (its newest `idle` row; its text from the stored messages). */
   private async checkInlines(client: OpenCodeClient) {
     const posted = [...this.inlineRuns].filter(([, r]) => r.posted);
     if (!posted.length) return;
     const active = await client.session.active().catch(() => undefined);
-    if (active) for (const [id, r] of posted) if (!(id in active)) r.settle();
+    if (!active) return;
+    for (const [id, r] of posted) {
+      if (id in active) continue;
+      const newest = await client.message.list({ sessionID: id, order: "desc", limit: 5 }).then((p) => p.data as unknown as Json[], () => []);
+      r.settle(storedEnd(newest));
+    }
   }
 
   resync(): Promise<void> {
@@ -342,9 +421,10 @@ class OpenCode2Session implements EngineSession {
         this.requests(h);
         const state = this.session.currentState();
         // OpenCode lists the session as active during a clear's empty execution: that is no turn.
-        if (h.busy && state === "idle" && !this.inClearWindow()) (this.beginTurn(), this.openTurnEnd(), this.session.setState("running"));
+        if (h.busy && state === "idle" && !this.clear) (this.beginTurn(), this.openTurnEnd(), this.session.setState("running"));
         // A prompt that is still being prepared is not in OpenCode yet: only a turn that reached it can have ended there. A bash mode command is no OpenCode turn.
-        else if (!h.busy && state === "running" && !this.shellRun && this.turnPosted && this.posting.size === 0 && this.posts === posts) this.turnStop < this.stops ? this.endStopped() : this.finish();
+        // A prompt behind a clear's empty execution may not run yet.
+        else if (!h.busy && state === "running" && !this.shellRun && !this.clear && this.turnPosted && this.posting.size === 0 && this.posts === posts) this.turnStop < this.stops ? this.endStopped() : this.finish();
       })
       .catch(() => {})
       .finally(() => (this.resyncing = undefined)));
@@ -352,10 +432,12 @@ class OpenCode2Session implements EngineSession {
 
   /** The `commands` part: the daemon's commands, then OpenCode's (built-ins, project and user commands). */
   emitCommands = async () => {
-    const list = await this.engine.commands(this.cwd).catch(() => undefined);
-    if (!list) return;
-    this.commandNames = new Set(list.map((c) => c.name).filter((n) => !LOCAL_NAMES.includes(n)));
-    this.session.emit({ type: "commands", id: "commands", commands: list });
+    const raw = await this.engine.serverCommands(this.cwd).catch(() => undefined);
+    if (!raw) return;
+    // /visualize is the daemon's: never a server command (unless OpenCode lists one of that name).
+    this.commandNames = new Set(raw.map((c) => c.name).filter((n) => !LOCAL_NAMES.includes(n)));
+    this.commandsLoaded = true;
+    this.session.emit({ type: "commands", id: "commands", commands: withVisualize(raw, !!this.engine.visualizeOn?.()) });
   };
   /** The `agents` part, the default agent first; `failed: true` when OpenCode did not answer (the web offers a retry, which calls this again). */
   refreshAgents = async () => {
@@ -524,14 +606,27 @@ class OpenCode2Session implements EngineSession {
     }
     // `/name args` of an OpenCode command, while no turn runs (else it is a plain prompt that joins the turn).
     const cmd = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
+    const idle = () => this.session.currentState() === "idle";
     // Like a local command it has no message of ours (no draft; the web drops its pending bubble): the prompt OpenCode makes of it shows.
-    if (cmd && this.commandNames.has(cmd[1]!) && this.session.currentState() === "idle") return void ((this.localRun = undefined), this.runCommand(cmd[1]!, cmd[2] ?? "", images));
-    // OpenCode commits a staged revert at the next prompt: the cut messages are gone.
-    this.revertAt = undefined;
-    this.clearedAt = 0;
+    if (cmd && this.commandNames.has(cmd[1]!) && idle()) return void ((this.localRun = undefined), this.runCommand(cmd[1]!, cmd[2] ?? "", images));
+    // Typed before OpenCode listed its commands: wait for the list (at most 5 s), then run it as a command, or send it as a prompt (shown then).
+    if (cmd && !this.commandsLoaded && idle()) {
+      this.localRun = undefined;
+      void Promise.race([this.commandsReady, new Promise((r) => setTimeout(r, COMMANDS_WAIT_MS))]).then(() =>
+        this.commandNames.has(cmd[1]!) && idle() ? this.runCommand(cmd[1]!, cmd[2] ?? "", images) : this.sendPlain(text, images),
+      );
+      return undefined;
+    }
+    return this.sendPlain(text, images);
+  }
+
+  /** A prompt of ours: its `user_text` at once, then sent (a new turn when idle, else joining the running one). */
+  private sendPlain(text: string, images: string[]): string {
     // Stop was pressed and the stopped turn still runs: a joining prompt would be lost with it, so it starts the next turn when this one has ended.
     const afterStop = this.turnStop < this.stops && this.session.currentState() !== "idle";
     const messageID = ascending("msg");
+    // OpenCode commits a staged revert at the next prompt: the cut messages are gone.
+    this.posted(messageID);
     this.mapper.own.add(messageID);
     this.session.emit({ type: "user_text", id: messageID, text, images });
     const steer = this.session.currentState() !== "idle";
@@ -540,7 +635,7 @@ class OpenCode2Session implements EngineSession {
       // A Stop while this prompt waited for the stopped turn drops it (as a prompt being prepared).
       if (this.stops !== stops) return;
       if (!steer || afterStop) (this.beginTurn(), (this.turnPosted = false), this.session.setState("running"));
-      void this.send(messageID, text, images).catch((err) => {
+      void this.send(messageID, text, images, this.visualizeDirective(text)).catch((err) => {
         this.notice(`prompt_failed:${messageID}`, `Could not send the prompt to OpenCode: ${(err as Error).message}`);
         if (!steer || afterStop) this.toIdle();
       });
@@ -649,6 +744,7 @@ class OpenCode2Session implements EngineSession {
     await this.switchAgent(client, agent);
     if (!live()) return false;
     await this.applyModel(client);
+    await this.syncVisualize(client);
     return live();
   }
 
@@ -658,18 +754,60 @@ class OpenCode2Session implements EngineSession {
    */
   private runCommand(name: string, args: string, images: string[]) {
     const stops = this.stops;
+    // Running from the start (Stop works, no second command goes): a Stop while it is prepared ends it here, as a prompt's.
+    this.beginTurn();
+    this.turnPosted = false;
+    this.session.setState("running");
+    const key = this.turnKey;
+    const waiting = () => this.turnKey === key && !this.turnExecuted && this.session.currentState() !== "idle";
     void (async () => {
       const client = await this.server.client();
       if (!(await this.prepare(client, () => this.stops === stops))) return;
-      this.revertAt = undefined;
-      this.clearedAt = 0;
+      this.posted();
+      this.turnPosted = true;
       const files = images.map((uri) => ({ uri, source: { type: "inline" as const }, name: "image" }));
       this.posts++;
-      await client.session.command({ sessionID: this.id, name, text: args, ...(files.length && { files }) });
-    })().catch((err) => this.notice(`command_failed:${ascending("msg")}`, `/${name} failed: ${(err as Error).message}`));
+      const post = client.session.command({ sessionID: this.id, name, text: args, ...(files.length && { files }) });
+      this.posting.add(post);
+      try {
+        await post;
+      } finally {
+        this.posting.delete(post);
+      }
+      // OpenCode took it and runs no turn for it (`/goal pause`): the session is not active there.
+      if (!waiting()) return;
+      const active = await client.session.active().catch(() => undefined);
+      if (active && !(this.id in active) && waiting()) this.toIdle();
+    })().catch((err) => {
+      this.notice(`command_failed:${ascending("msg")}`, `/${name} failed: ${(err as Error).message}`);
+      if (this.turnKey === key) this.toIdle();
+    });
   }
 
-  private async send(messageID: string, text: string, images: string[]) {
+  /** The hidden directive of `/visualize [what]` while the setting is on and OpenCode has no `visualize` command of its own; the typed text stays the prompt. */
+  private visualizeDirective(text: string): string | undefined {
+    if (!visualizeSystem(this.opts.visualizePlugin?.(), "opencode") || this.commandNames.has("visualize")) return undefined;
+    const viz = /^\/visualize(?:\s+([\s\S]*))?$/.exec(text.trim());
+    if (!viz) return undefined;
+    return viz[1]?.trim() ? `Answer this with a visualize fence: ${viz[1].trim()}` : "Draw your last answer, or the current topic, as a visualize fence.";
+  }
+
+  /** The visualize text as an instruction entry of the session: put when it changed since the last put, removed once when the setting went off (a run that did not put it lists the entries to know an earlier run's). */
+  private visualized: string | null | undefined;
+  private async syncVisualize(client: OpenCodeClient) {
+    const system = visualizeSystem(this.opts.visualizePlugin?.(), "opencode") ?? null;
+    if (system === this.visualized) return;
+    try {
+      if (system !== null) await client.experimental.session.instructions.entry.put({ sessionID: this.id, key: VISUALIZE_ENTRY, value: system });
+      else if (this.visualized || (await client.experimental.session.instructions.entry.list({ sessionID: this.id })).some((e) => e.key === VISUALIZE_ENTRY)) await client.experimental.session.instructions.entry.remove({ sessionID: this.id, key: VISUALIZE_ENTRY });
+      this.visualized = system;
+    } catch (err) {
+      // A failed sync is tried again at the next prompt; the prompt itself goes on.
+      console.error("OpenCode 2 visualize instruction failed:", (err as Error).message);
+    }
+  }
+
+  private async send(messageID: string, text: string, images: string[], directive?: string) {
     const stops = this.stops;
     // A Stop while the prompt is prepared ends the wait: nothing was posted, interrupt() ended the turn.
     const live = () => this.stops === stops;
@@ -677,6 +815,8 @@ class OpenCode2Session implements EngineSession {
     if (!(await this.prepare(client, live))) return;
     this.turnPosted = true;
     const files = images.map((uri) => ({ uri, source: { type: "inline" as const }, name: "image" }));
+    // A hidden message for the model right before the prompt: `resume: false` starts no turn of its own, the prompt's turn reads it.
+    if (directive) await client.session.synthetic({ sessionID: this.id, text: directive, delivery: "steer", resume: false });
     this.posts++;
     const post = client.session.prompt({ sessionID: this.id, id: messageID, text, ...(files.length && { files }) });
     this.posting.add(post);
@@ -699,6 +839,7 @@ class OpenCode2Session implements EngineSession {
     this.openTurnEnd();
     this.turnStop = this.stops;
     this.turnPosted = true;
+    this.turnExecuted = false;
     this.turnAt = Date.now();
     this.aborted = false;
     this.failed = false;
@@ -711,6 +852,7 @@ class OpenCode2Session implements EngineSession {
   /** The turn ended (execution succeeded or failed, or the Stop's end): its result, then idle. */
   private finish() {
     if (this.session.currentState() === "idle") return;
+    this.clear = undefined;
     const { usage, cost } = this.mapper.turn();
     if (!this.aborted) this.session.emit({ type: "turn_result", id: `turn:${ascending("msg")}`, durationMs: Date.now() - this.turnAt, ...(cost > 0 && { costUsd: cost }), usage, isError: this.failed });
     this.toIdle();
@@ -759,22 +901,38 @@ class OpenCode2Session implements EngineSession {
     switch (type) {
       case "session.execution.started":
         // OpenCode 2.3.0 follows a revert clear with an empty execution: no turn.
-        if (this.inClearWindow() && !this.clearSkipped) return void (this.clearSkipped = true);
+        if (this.clear && !this.clear.prompted) return void (this.clear.run = true);
         if (this.session.currentState() === "idle") (this.beginTurn(), this.session.setState("running"));
+        this.turnExecuted = true;
         return;
       case "session.execution.succeeded":
+        // The clear's empty execution ended: its start was skipped, or a prompt of ours waits behind it (not delivered yet).
+        if (this.clear && (this.clear.run || (this.clear.prompted && !this.clear.delivered))) return void (this.clear = undefined);
         return this.finish();
+      case "session.inbox.delivered":
+        // Our prompt reached a run: that run is its turn.
+        if (this.clear?.prompt && d.inboxID === this.clear.prompt) Object.assign(this.clear, { delivered: true, run: false });
+        return;
       case "session.execution.failed":
+        if (this.clear?.run) return void (this.clear = undefined);
         this.failed = true;
         this.showError(d.error);
         return this.finish();
       case "session.execution.interrupted":
+        if (this.clear?.run) return void (this.clear = undefined);
         return this.session.currentState() === "idle" ? undefined : this.interrupted();
-      case "session.step.started":
+      case "session.step.started": {
+        // A step after a skipped start is a real run (the clear's empty execution has none): a turn of OpenCode's own app, shown as one.
+        const own = this.clear?.run && this.session.currentState() === "idle";
+        this.clear = undefined;
+        if (own) (this.beginTurn(), this.session.setState("running"), (this.turnExecuted = true));
+        this.stepStart(this.id, d);
         this.turnAssistant = d.assistantMessageID;
         this.stepModel = d.model;
         return this.setRetry(undefined);
+      }
       case "session.step.ended":
+        this.stepPatch(this.id, d);
         this.mapper.step(d.assistantMessageID, d.tokens, d.cost);
         if (d.tokens && this.stepModel) this.usage = { tokens: d.tokens, providerID: this.stepModel.providerID, id: this.stepModel.id };
         return;
@@ -851,6 +1009,16 @@ class OpenCode2Session implements EngineSession {
   private askPermission(e: Json, mapper = this.mapper, parentId?: string) {
     if (this.session.pendingRequest(e.id) || this.reqs.has(e.id)) return;
     const callId: string | undefined = e.source?.type === "tool" ? e.source.id : undefined;
+    // Don't ask: whatever asks is refused at once, no card and no needs-input (the session's and its subagents' asks).
+    if (this.permissionMode === "dontAsk") {
+      const card = callId && mapper.deny(callId);
+      if (card) this.session.emit({ ...card, ...(parentId && { parentId }) });
+      void this.server
+        .client()
+        .then((c) => c.permission.reply({ sessionID: e.sessionID, requestID: e.id, decision: "reject", message: DONT_ASK }))
+        .catch((err) => this.notice(`answer_failed:${ascending("msg")}`, `Could not answer OpenCode: ${(err as Error).message}`));
+      return;
+    }
     const call = callId ? mapper.call(callId) : undefined;
     const mapped = call?.type === "tool_call" ? call : undefined;
     const resources: string[] = e.resources ?? [];
@@ -949,7 +1117,7 @@ class OpenCode2Session implements EngineSession {
             else if (collector.idle) resolve({ status: "done" });
             else if (collector.interrupted) resolve({ status: "stopped" });
           },
-          settle: () => resolve({ status: "done" }),
+          settle: resolve,
         });
         this.engine.adoptInline(id, this);
         timer = setTimeout(() => resolve({ status: "limit", limit: "time" }), INLINE_TIMEOUT_MS);
@@ -995,25 +1163,81 @@ class OpenCode2Session implements EngineSession {
     const run = this.inlineRuns.get(childId);
     if (!run) return;
     run.notify(type, d);
+    if (type === "session.step.started") this.stepStart(childId, d);
+    else if (type === "session.step.ended") this.stepPatch(childId, d);
     if (type === "permission.asked") return this.askPermission(d, run.mapper, run.callId);
     if (type === "permission.replied") return this.session.pendingRequest(d.requestID) ? this.session.cancel(d.requestID, ANSWERED) : undefined;
     if (run.callId) for (const part of run.mapper.event(type, d)) this.session.emit({ ...part, parentId: run.callId });
   }
 
-  /** A question form of OpenCode 2 (`form.created`, metadata kind `question`: the `question` tool) as a question part under its call. Another form: a notice. */
+  /**
+   * A form of OpenCode 2 (`form.created`) as a question part under its call (docs/spec.md "OpenCode 2 adapter", Questions): `metadata.kind` `question` is the
+   * `question` tool, another kind has no call (the part's `toolUseId` is the form's id). A form with no shown field: a notice.
+   */
   private askForm(form: Json) {
     if (this.session.pendingRequest(form.id) || this.reqs.has(form.id)) return;
-    const fields: Json[] = form.fields ?? [];
-    if (form.metadata?.kind !== "question" || !fields.length || fields.some((f) => f.type !== "string" && f.type !== "multiselect")) {
+    const all: Json[] = form.fields ?? [];
+    const shown = all.filter((f) => !f.hidden);
+    if (!shown.length) {
       if (!this.unshown.has(form.id)) this.notice(`form:${form.id}`, `OpenCode asks for input claude-ui cannot show yet (${form.title ?? "a form"}). Answer it in OpenCode.`);
       return void this.unshown.add(form.id);
     }
-    const questions: Question[] = fields.map((f) => ({ question: f.description ?? f.title ?? f.key, header: f.title ?? "", options: (f.options ?? []).map((o: Json) => ({ label: o.label, description: o.description ?? "" })), multiSelect: f.type === "multiselect" }));
-    this.reqs.set(form.id, { kind: "question", sessionID: form.sessionID, questions, fields: fields.map((f) => ({ key: f.key, type: f.type })) });
+    const titleOf = (key: string) => all.find((f) => f.key === key)?.title ?? key;
+    const seen = new Map<string, number>();
+    const questions: Question[] = shown.map((f, i) => {
+      const base = f.description ?? f.title ?? f.key;
+      // Questions are answered by their text: an equal text gets a number.
+      const n = (seen.get(base) ?? 0) + 1;
+      seen.set(base, n);
+      const when = (f.when as Json[] | undefined)?.map((w) => `${titleOf(w.key)} ${w.op === "neq" ? "is not" : "is"} ${w.value}`).join(" and ");
+      const header = `${i === 0 && form.metadata?.kind !== "question" ? (form.title ?? "") : (f.title ?? "")}${when ? ` (if ${when})` : ""}`;
+      const options: Question["options"] =
+        f.type === "boolean" ? [{ label: "Yes", description: "" }, { label: "No", description: "" }] : f.type === "external" ? [{ label: "Done", description: f.url ?? "" }] : (f.options ?? []).map((o: Json) => ({ label: o.label, description: o.description ?? "" }));
+      return { question: n > 1 ? `${base} (${n})` : base, header, options, multiSelect: f.type === "multiselect" };
+    });
+    this.reqs.set(form.id, { kind: "question", sessionID: form.sessionID, form, questions, fields: shown });
     this.session.request({ part: { type: "question", id: form.id, requestId: form.id, toolUseId: form.metadata?.tool?.id ?? form.id, questions, settled: false, at: Date.now() }, reply: (r) => this.answerQuestion(form.id, r) });
   }
 
-  /** The answer by field key (a multi-select field as the list of chosen labels); anything else cancels the form, which ends OpenCode's turn. */
+  /**
+   * The reply of a form: each shown field's answer as OpenCode expects it (an option by its value, a boolean, a number), the defaults of hidden fields, and no answer
+   * for a field whose `when` does not hold. A string OpenCode would refuse is `{error}`.
+   */
+  private formAnswer(req: Extract<Req, { kind: "question" }>, r: Extract<Reply, { kind: "answer" }>): { answer: Record<string, string | number | boolean | string[]> } | { error: string } {
+    const answer: Record<string, string | number | boolean | string[]> = {};
+    for (const [i, f] of req.fields.entries()) {
+      const q = req.questions[i]!;
+      const text = r.answers[q.question]?.trim();
+      if (text === undefined) continue;
+      const labels = r.choices?.[q.question] ?? (q.multiSelect ? splitLabels(text, q.options.map((o) => o.label)) : [text]);
+      const value = (label: string) => (f.options as Json[] | undefined)?.find((o) => o.label === label)?.value ?? label;
+      if (f.type === "multiselect") answer[f.key] = labels.map(value);
+      else if (f.type === "boolean") {
+        const yes = /^(yes|true|y)$/i.test(text);
+        if (!yes && !/^(no|false|n)$/i.test(text)) return { error: `${f.title ?? f.key} needs Yes or No` };
+        answer[f.key] = yes;
+      } else if (f.type === "number" || f.type === "integer") {
+        const n = text === "" ? NaN : Number(text);
+        const bound = (b: unknown) => (typeof b === "number" ? b : undefined);
+        if (!Number.isFinite(n) || (f.type === "integer" && !Number.isInteger(n))) return { error: `${f.title ?? f.key} needs ${f.type === "integer" ? "a whole" : "a"} number` };
+        if ((bound(f.minimum) ?? -Infinity) > n || (bound(f.maximum) ?? Infinity) < n) return { error: `${f.title ?? f.key} must be ${bound(f.minimum) !== undefined && bound(f.maximum) !== undefined ? `between ${f.minimum} and ${f.maximum}` : bound(f.minimum) !== undefined ? `at least ${f.minimum}` : `at most ${f.maximum}`}` };
+        answer[f.key] = n;
+      } else if (f.type === "external") answer[f.key] = true;
+      else answer[f.key] = value(labels[0] ?? text);
+    }
+    // Hidden fields answer with their default, when they have one.
+    for (const f of (req.form.fields ?? []) as Json[]) if (f.hidden && f.default !== undefined) answer[f.key] = f.default;
+    // A field whose condition does not hold is not active: OpenCode refuses an answer for it.
+    const active = (f: Json) => ((f.when as Json[] | undefined) ?? []).every((w) => (answer[w.key] === w.value) === (w.op !== "neq"));
+    let again = true;
+    while (again) {
+      again = false;
+      for (const f of (req.form.fields ?? []) as Json[]) if (f.key in answer && !active(f)) (delete answer[f.key], (again = true));
+    }
+    return { answer };
+  }
+
+  /** The answer of a question (a multi-select field as the list of chosen labels); anything else cancels the form, which ends OpenCode's turn. */
   private answerQuestion(id: string, r: Reply) {
     const req = this.reqs.get(id);
     this.reqs.delete(id);
@@ -1024,14 +1248,13 @@ class OpenCode2Session implements EngineSession {
         .then(f)
         .catch((err) => this.notice(`answer_failed:${ascending("msg")}`, `Could not answer OpenCode: ${(err as Error).message}`));
     if (r.kind === "answer") {
-      const answer: Record<string, string | string[]> = {};
-      req.questions.forEach((q, i) => {
-        const text = r.answers[q.question];
-        if (text === undefined) return;
-        const labels = r.choices?.[q.question] ?? (q.multiSelect ? splitLabels(text, q.options.map((o) => o.label)) : [text]);
-        answer[req.fields[i]!.key] = req.fields[i]!.type === "multiselect" ? labels : (labels[0] ?? text);
-      });
-      return call((c) => c.session.form.reply({ sessionID: req.sessionID, formID: id, answer }));
+      const a = this.formAnswer(req, r);
+      // A value OpenCode would refuse is not sent: the question comes back with the reason.
+      if ("error" in a) {
+        this.notice(`form_invalid:${ascending("msg")}`, `${a.error}. Answer again.`);
+        return void setTimeout(() => this.reqs.has(id) || this.askForm(req.form), 0);
+      }
+      return call((c) => c.session.form.reply({ sessionID: req.sessionID, formID: id, answer: a.answer }));
     }
     if (r.kind !== "cancel" || r.message !== ANSWERED) call((c) => c.session.form.cancel({ sessionID: req.sessionID, formID: id }));
   }
@@ -1131,8 +1354,35 @@ class OpenCode2Session implements EngineSession {
     this.toIdle();
     return true;
   };
-  stopShell = async () => false;
-  shellOutput = async () => undefined;
+  /** The shell a card of the Shells list stands for: a background call of the model, or a bash mode command moved to the background (its part id is the shell id). */
+  private shellFor = (id: string) => this.mapper.shellOf(id) ?? (this.backgrounded.has(id) ? id : undefined);
+  /** Kill: OpenCode removes the shell (its end then shows on the card). False for an unknown or ended shell. */
+  stopShell = async (id: string) => {
+    const sh = this.shellFor(id);
+    if (!sh || this.mapper.shellEnd(sh)) return false;
+    const client = await this.server.client();
+    await client.shell.remove({ id: sh, location: { directory: this.cwd } });
+    return true;
+  };
+  /** Output tails shown in the Shells list: the last read while the shell ran, for a killed one (OpenCode forgets its output). */
+  private readonly shellTails = new Map<string, string>();
+  /** The tail of a background shell's output: read from OpenCode while it runs, the end notice's text after. */
+  shellOutput = async (id: string) => {
+    const sh = this.shellFor(id);
+    if (!sh) return undefined;
+    const end = this.mapper.shellEnd(sh);
+    let out = end?.output ?? (end ? this.shellTails.get(sh) : undefined);
+    let truncated = false;
+    if (out === undefined && end) return undefined;
+    if (out === undefined) {
+      const client = await this.server.client();
+      const r = await client.shell.output({ id: sh, location: { directory: this.cwd } });
+      out = r.data.output;
+      truncated = r.data.truncated;
+      this.shellTails.set(sh, out);
+    }
+    return out.length > SHELL_TAIL ? { output: out.slice(-SHELL_TAIL), truncated: true } : { output: out, truncated };
+  };
   sync = async () => {};
   close = async () => {
     clearInterval(this.shellRun?.timer);
@@ -1172,7 +1422,33 @@ class OpenCode2EngineImpl implements Engine {
     readonly record: (id: string) => void = () => {},
     /** The daemon's `/opencode-mcp` route: the URL and bearer tokens of a session's MCP servers. */
     readonly mcp?: OpenCodeMcpRoute,
+    /** The Inline visualizations setting. */
+    readonly visualizeOn?: () => boolean,
   ) {}
+
+  /** OpenCode's snapshot store (same layout as OpenCode 1): the data folder; `projectID` of the session row and the project's `canonical` folder as the worktree (cached; a failed read is not). */
+  readonly snapshots: SnapshotSource = (() => {
+    const projects = new Map<string, Promise<{ projectID: string; worktree: string }>>();
+    return {
+      data: () => this.server.dataDir(),
+      project: (cwd, sessionId) => {
+        const key = `${sessionId}\0${cwd}`;
+        let hit = projects.get(key);
+        if (!hit) {
+          hit = (async () => {
+            const client = await this.server.client();
+            const row = await client.session.get({ sessionID: sessionId });
+            const project = (await client.project.list()).find((p) => p.id === row.projectID);
+            if (!project?.canonical) throw new Error("no project folder");
+            return { projectID: row.projectID, worktree: project.canonical };
+          })();
+          projects.set(key, hit);
+          hit.catch(() => projects.delete(key));
+        }
+        return hit.then((v) => v, () => undefined);
+      },
+    };
+  })();
 
   permissionModes = (o: { allowBypass?: boolean; supportsAuto?: boolean }) => permissionModesFor({ ...o, modes: OPENCODE_PERMISSION_MODES });
 
@@ -1189,6 +1465,8 @@ class OpenCode2EngineImpl implements Engine {
         event: (dir, payload) => {
           // OpenCode loaded or changed a folder's agents or commands (its first load included): read them again.
           if (payload.type === "agent.updated" || payload.type === "command.updated") return this.listsChanged(dir);
+          // A shell's end names no session: the session whose call started it shows it.
+          if (payload.type === "shell.exited") return this.sessions.forEach((o) => o.shellExited(payload.properties));
           // A form names its session inside the form.
           const sid: unknown = payload.properties.sessionID ?? payload.properties.form?.sessionID;
           if (typeof sid !== "string") return;
@@ -1246,28 +1524,81 @@ class OpenCode2EngineImpl implements Engine {
     for (const map of [this.agentLists, this.commandLists, this.defaults]) for (const k of [...map.keys()]) if (!dir || k === dir) map.delete(k);
     for (const s of this.sessions.values()) if (!dir || s.cwd === dir) (void s.refreshAgents(), void s.emitCommands());
   }
-  private agentLists = new Map<string, { at: number; list: Promise<Agent2[]> }>();
+  /** Forgets the cached agents and default agent of `cwd`: the next read asks OpenCode (a config change made them stale before OpenCode's own event). */
+  forgetAgents(cwd: string) {
+    this.agentLists.delete(cwd);
+    this.defaults.delete(cwd);
+  }
   /**
-   * `GET /api/agent` of a folder (project agents differ per folder), cached 60 s and until OpenCode says they changed. A folder OpenCode has not loaded yet lists
+   * Reloads OpenCode's locations so a changed config file is read (`POST /api/location/reload`: 2.3.0 never re-reads a file by itself). The reload rebuilds every loaded
+   * location and ends running tools and asks, so it runs only when no session is running anywhere: false = not done (busy, or the server did not answer), the caller keeps
+   * the change pending (folder-reload.ts). The lists of the folders are read again; the daemon's MCP servers the reload drops are attached again by the next prompt.
+   */
+  async reloadLocations(cwds: string[] = []): Promise<boolean> {
+    try {
+      const client = await this.server.client();
+      if (Object.keys((await client.session.active()) ?? {}).length) return false;
+      await client.location.reload();
+      // 2.3.0 answers empty lists for 1-3 s after a reload: the dialogs are told only once the folders list again (at most RELOAD_SETTLE_MS).
+      const until = Date.now() + RELOAD_SETTLE_MS;
+      for (const cwd of cwds) {
+        const location = { location: { directory: cwd } };
+        while (Date.now() < until) {
+          const [a, p] = await Promise.all([client.agent.list(location), client.plugin.list(location)]);
+          if ((a.data as unknown[]).length && (p.data as unknown[]).length) break;
+          await new Promise((r) => setTimeout(r, AGENT_POLL_MS));
+        }
+      }
+    } catch {
+      return false;
+    }
+    this.modelLists.clear();
+    this.listsChanged(undefined);
+    return true;
+  }
+  private agentLists = new Map<string, { at: number; ttl: number; list: Promise<Agent2[]> }>();
+  /**
+   * `GET /api/agent` of a folder (project agents differ per folder), cached 60 s (a cold folder's first list 5 s) and until OpenCode says they changed. A folder OpenCode has not loaded yet lists
    * no agent (2.3.0): read again until it lists some. A failure drops the entry, so the next call (session open, the chooser's retry) asks again.
    */
   agents(cwd: string): Promise<Agent2[]> {
     const hit = this.agentLists.get(cwd);
-    if (hit && Date.now() - hit.at < 60_000) return hit.list;
-    const list = (async () => {
+    if (hit && Date.now() - hit.at < hit.ttl) return hit.list;
+    const entry = { at: Date.now(), ttl: AGENTS_MS } as { at: number; ttl: number; list: Promise<Agent2[]> };
+    const list = (entry.list = (async () => {
       const c = await this.server.client();
       for (let i = 0; ; i++) {
         const l = (await c.agent.list({ location: { directory: cwd } })).data as unknown as Agent2[];
-        // Without an event stream no `agent.updated` says the folder's own agents came (2.3.0 lists them ~0.2 s after its built-ins): read once more a moment later.
-        if (l.length && !this.unsubscribe) await new Promise((r) => setTimeout(r, SETTLE_MS));
-        if (l.length) return !this.unsubscribe ? ((await c.agent.list({ location: { directory: cwd } })).data as unknown as Agent2[]) : l;
+        // A folder that was cold lists its built-ins first (2.3.0 lists its own agents ~0.2 s later); without an event stream no `agent.updated` says they came.
+        if (l.length) {
+          entry.at = Date.now();
+          const cold = i > 0 && !this.unsubscribe;
+          entry.ttl = cold ? COLD_AGENTS_MS : AGENTS_MS;
+          if (cold) this.rereadAgents(cwd, entry);
+          return l;
+        }
         if (i >= AGENT_POLLS) throw new Error("OpenCode lists no agent for this folder");
         await new Promise((r) => setTimeout(r, AGENT_POLL_MS));
       }
-    })();
-    this.agentLists.set(cwd, { at: Date.now(), list });
+    })());
+    this.agentLists.set(cwd, entry);
     list.catch(() => this.agentLists.get(cwd)?.list === list && this.agentLists.delete(cwd));
     return list;
+  }
+  /** A cold folder's first list has its built-ins only (no event stream says the rest came): one read ~SETTLE_MS later replaces the cache and is pushed to the folder's sessions; the caller did not wait. */
+  private rereadAgents(cwd: string, entry: { at: number; ttl: number; list: Promise<Agent2[]> }) {
+    setTimeout(async () => {
+      if (this.agentLists.get(cwd) !== entry) return;
+      try {
+        const l = (await (await this.server.client()).agent.list({ location: { directory: cwd } })).data as unknown as Agent2[];
+        if (!l.length || this.agentLists.get(cwd) !== entry) return;
+        this.agentLists.set(cwd, { at: Date.now(), ttl: AGENTS_MS, list: Promise.resolve(l) });
+        this.defaults.delete(cwd); // the default agent may be one of the own agents the first list lacked
+        for (const s of this.sessions.values()) if (s.cwd === cwd) void s.refreshAgents();
+      } catch {
+        // The cached first list stays until its short TTL ends.
+      }
+    }, SETTLE_MS).unref();
   }
   private defaults = new Map<string, { at: number; name: Promise<string> }>();
   /** The last known default agent per folder: the synchronous reads (session info) use it until the first `defaultAgent` answers. */
@@ -1307,6 +1638,10 @@ class OpenCode2EngineImpl implements Engine {
    * Read after the agents: a folder OpenCode has not loaded yet lists only the built-in commands.
    */
   commands(cwd: string): Promise<SlashCommand[]> {
+    return this.serverCommands(cwd).then((l) => withVisualize(l, !!this.visualizeOn?.()));
+  }
+  /** `commands` without the daemon's `/visualize` (it follows the setting per call, this list is cached). */
+  serverCommands(cwd: string): Promise<SlashCommand[]> {
     const hit = this.commandLists.get(cwd);
     if (hit && Date.now() - hit.at < 60_000) return hit.list;
     const list = (async () => {
@@ -1369,4 +1704,4 @@ class OpenCode2EngineImpl implements Engine {
 }
 
 export type OpenCode2Engine = OpenCode2EngineImpl;
-export const createOpenCode2Engine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; record?: (id: string) => void; mcp?: OpenCodeMcpRoute } = {}): OpenCode2Engine => new OpenCode2EngineImpl(server, o.onTitle, o.record, o.mcp);
+export const createOpenCode2Engine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; record?: (id: string) => void; mcp?: OpenCodeMcpRoute; visualizeOn?: () => boolean } = {}): OpenCode2Engine => new OpenCode2EngineImpl(server, o.onTitle, o.record, o.mcp, o.visualizeOn);

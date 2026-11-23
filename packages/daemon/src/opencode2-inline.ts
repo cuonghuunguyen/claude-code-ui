@@ -36,6 +36,25 @@ const glob = (pattern: string) => new RegExp(`^${pattern.split("*").map((p) => p
 
 export type InlineCap = "turns" | "tokens";
 
+/** How a run ended as OpenCode stored it. */
+export type StoredEnd = { status: "done" | "error" | "stopped"; error?: string };
+/**
+ * The end of a run whose end event was lost, from its stored messages newest first: the newest `idle` row's outcome (2.3.0 stores one at each execution's end);
+ * a failure's text is the row's error, else the error of an assistant message of that execution. No row: done.
+ */
+export function storedEnd(newestFirst: readonly Json[]): StoredEnd {
+  const at = newestFirst.findIndex((m) => m.type === "idle");
+  const idle = newestFirst[at];
+  if (!idle || idle.outcome === "succeeded") return { status: "done" };
+  if (idle.outcome === "interrupted") return { status: "stopped" };
+  let error = idle.error;
+  for (const m of newestFirst.slice(at + 1)) {
+    if (error || m.type === "idle") break;
+    if (m.type === "assistant" && m.error) error = m.error;
+  }
+  return { status: "error", error: failureText(error) };
+}
+
 /** Reads the events of one child session. */
 export class InlineCollector2 {
   private readonly texts = new Map<string, string>();

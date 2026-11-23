@@ -1,0 +1,9 @@
+[
+  { "event": "session.execution.started", "data": { "sessionID": "$SESSION" } },
+  { "event": "session.step.started", "data": { "sessionID": "$SESSION", "agent": "build", "model": { "id": "m", "providerID": "fake" }, "assistantMessageID": "$A1", "snapshot": "$SNAP" } },
+  { "event": "session.tool.input.started", "data": { "sessionID": "$SESSION", "assistantMessageID": "$A1", "id": "call_ed", "name": "shell" } },
+  { "event": "session.tool.called", "data": { "sessionID": "$SESSION", "assistantMessageID": "$A1", "id": "call_ed", "input": { "command": "echo after > a.txt" }, "executed": false } },
+  { "event": "session.tool.success", "data": { "sessionID": "$SESSION", "assistantMessageID": "$A1", "id": "call_ed", "content": [{ "type": "text", "text": "(no output)" }], "metadata": { "status": "completed", "exit": 0 }, "executed": false } },
+  { "event": "session.step.ended", "data": { "sessionID": "$SESSION", "assistantMessageID": "$A1", "finish": "tool-calls", "tokens": { "input": 1, "output": 1, "reasoning": 0, "cache": { "read": 0, "write": 0 } }, "cost": 0, "snapshot": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "files": ["a.txt", "new.txt", "sub/c.txt"] } },
+  { "event": "session.execution.succeeded", "data": { "sessionID": "$SESSION" } }
+]

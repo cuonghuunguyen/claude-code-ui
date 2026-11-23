@@ -28,6 +28,9 @@ export type OpenCode2Message = {
   /** `compaction`: why it ran and the summary it wrote. */
   reason?: string;
   summary?: string;
+  /** `synthetic`: the notice of a background shell's end (`metadata.source` `shell`). */
+  metadata?: Json;
+  time?: Json;
 };
 /** A bash mode command of OpenCode 2 (`ShellInfo`, `session.shell.*`). */
 export type Shell2 = { id: string; command: string; status: string; exit?: number | string };
@@ -43,6 +46,15 @@ const compactionParts = (id: string, reason: string | undefined, summary: string
   { type: "compaction", id, trigger: reason === "auto" ? "auto" : "manual", ...(summary && { summary }) },
   ...(error ? [{ type: "notice" as const, id: `error:${id}`, level: "warning" as const, text: failureText(error) }] : []),
 ];
+
+/** How a background shell of the model ended: the card's status, the exit code and the output OpenCode's end notice carried (none for a killed one). */
+type ShellEnd = { status: "done" | "error" | "stopped"; exit?: number; output?: string; at?: number };
+/** Ends of foreign shells (another session's) one mapper keeps. */
+const SHELL_ENDS_KEPT = 100;
+/** The id of the shell a background call started, from the call's result text. */
+const SHELL_ID = /shell ID: (sh_\w+)/;
+/** The output inside a shell end notice (`<shell id=… state=…>\noutput\n</shell>`). */
+const noticeOutput = (text: string) => /^<shell[^>]*>\n([\s\S]*)\n<\/shell>\s*$/.exec(text)?.[1] ?? "";
 
 const STATUS: Record<string, ToolStatus> = { completed: "done", error: "error", streaming: "pending", running: "running" };
 
@@ -73,9 +85,52 @@ export class OpenCode2Mapper {
   private compacting: { id: string; reason?: string } | undefined;
   /** Message ids of prompts this daemon sent: their echo and a re-read add nothing (user_text was emitted at once; a re-emit would look like a new message). */
   readonly own = new Set<string>();
+  /** Prompts of ours a revert cut: the next read that lists one again (a redo or clear) shows it once, then it is ours again. */
+  private readonly forgotten = new Set<string>();
   /** A revert cut at `id`: the prompts sent here from it on are hidden, a later read (redo) must show them again. Ids ascend with time (`opencode-id.ts`). */
   forgetFrom(id: string) {
-    for (const o of this.own) if (o >= id) this.own.delete(o);
+    for (const o of this.own) if (o >= id) (this.own.delete(o), this.forgotten.add(o));
+  }
+
+  /** Background shells of the model (`shell` call with `background: true`): call id -> shell id, and how each shell ended. */
+  private readonly shellOfCall = new Map<string, string>();
+  private readonly shellEnds = new Map<string, ShellEnd>();
+  /** The shell id of background call `callId`. */
+  shellOf = (callId: string) => this.shellOfCall.get(callId);
+  shellEnd = (shellId: string) => this.shellEnds.get(shellId);
+  /** `[call id, shell id]` of the background calls whose shell has not ended. */
+  openShells = () => [...this.shellOfCall].filter(([callId, sh]) => !this.shellEnds.has(sh) && this.calls.has(callId));
+  /** `shell.exited` (killed, or finished with `exit`): the call's card shows how it ended. Another session's shell changes nothing. */
+  shellExited(shellId: string, status: string | undefined, exit: number | undefined): Part[] {
+    this.shellEnds.set(shellId, { ...this.shellEnds.get(shellId), status: status === "exited" ? (exit ? "error" : "done") : "stopped", ...(exit !== undefined && { exit }), at: Date.now() });
+    this.pruneShellEnds();
+    return this.shellCard(shellId);
+  }
+  /** `shell.exited` reaches every session: the ends of shells no call of this session started (and none claimed yet) are kept up to SHELL_ENDS_KEPT, oldest dropped first. */
+  private pruneShellEnds() {
+    const own = new Set(this.shellOfCall.values());
+    const foreign = [...this.shellEnds.keys()].filter((id) => !own.has(id));
+    for (const id of foreign.slice(0, Math.max(0, foreign.length - SHELL_ENDS_KEPT))) this.shellEnds.delete(id);
+  }
+  /** The end notice of a shell (live inbox item or stored message): its output. The shell's own end (`shell.exited`) decides the status; a notice alone (a shell gone while the daemon was away) does. */
+  private shellNotice(m: Json, at: number | undefined): Part[] {
+    const id = m?.shellID;
+    if (typeof id !== "string") return [];
+    const prev = this.shellEnds.get(id);
+    const done = m.state === "completed";
+    const exit = typeof m.exit === "number" ? m.exit : undefined;
+    this.shellEnds.set(id, { status: done ? (exit ? "error" : "done") : "stopped", ...(exit !== undefined && { exit }), ...(at && { at }), ...prev, ...(done && m.output !== undefined && { output: m.output }) });
+    return this.shellCard(id);
+  }
+  /** The card of the call that started shell `shellId`, in its ended state. */
+  private shellCard(shellId: string): Part[] {
+    const callId = [...this.shellOfCall].find(([, sh]) => sh === shellId)?.[0];
+    const call = callId ? this.calls.get(callId) : undefined;
+    const end = this.shellEnds.get(shellId);
+    if (!call || call.type !== "tool_call" || !end) return [];
+    const next = { ...call, status: end.status, ...(end.at && { endedAt: end.at }), ...(end.exit !== undefined && { exitCode: end.exit }) };
+    this.calls.set(call.id, next);
+    return [next];
   }
 
   /** The OpenCode name and input of each call (the card has the mapped ones): later events of a call carry only its id. */
@@ -122,6 +177,8 @@ export class OpenCode2Mapper {
 
   /** Stored messages in order (nothing streams: an unfinished part shows as it was stored). */
   history(messages: readonly OpenCode2Message[]): Part[] {
+    // The end notices of background shells come after the calls: read first, so each call shows its shell's end.
+    for (const m of messages) if (m.type === "synthetic" && m.metadata?.source === "shell") this.shellNotice({ ...m.metadata, output: noticeOutput(m.text ?? "") }, m.time?.created);
     return messages.flatMap((m) => {
       if (m.type === "user") return this.user(m);
       if (m.type === "shell" && m.shellID) return [bashPart({ id: m.shellID, command: m.command ?? "", status: m.status ?? "exited", exit: m.exit }, m.output?.output ?? "")];
@@ -140,9 +197,10 @@ export class OpenCode2Mapper {
     });
   }
 
-  /** A stored user message; one sent here only after a cut forgot it (its bubble was taken away: a read after the clear brings it back). */
+  /** A stored user message; one sent here only once after a cut forgot it (its bubble was taken away: the first read after the clear brings it back). */
   private user(m: OpenCode2Message): Part[] {
     if (this.own.has(m.id)) return [];
+    if (this.forgotten.delete(m.id)) this.own.add(m.id);
     const images = (m.files ?? []).filter((f) => f.mime?.startsWith("image/") && f.data).map((f) => `data:${f.mime};base64,${f.data}`);
     return m.text || images.length ? [{ type: "user_text", id: m.id, text: m.text ?? "", images }] : [];
   }
@@ -150,6 +208,8 @@ export class OpenCode2Mapper {
   /** A prompt of this turn that came from elsewhere (OpenCode's own UI): `session.inbox.enqueued`. */
   inbox(data: Json): Part[] {
     const item = data.item as Json | undefined;
+    // A background shell's end notice starts OpenCode's next execution: no bubble, the call's card ends.
+    if (item?.type === "synthetic" && item.payload?.metadata?.source === "shell") return this.shellNotice({ ...item.payload.metadata, output: noticeOutput(String(item.payload.text ?? "")) }, Date.now());
     if (item?.type !== "user" || this.own.has(data.inboxID)) return [];
     return [{ type: "user_text", id: data.inboxID, text: String(item.payload?.text ?? ""), images: [] }];
   }
@@ -175,8 +235,21 @@ export class OpenCode2Mapper {
       return [sub];
     }
     const { tool, input: mapped } = mapTool2(name, parsed);
-    const exit = state.metadata?.exit;
-    const call = { type: "tool_call" as const, id: callId, toolUseId: callId, tool, input: mapped, status: st, ...times, ...(typeof exit === "number" && { exitCode: exit }) };
+    let exit = state.metadata?.exit;
+    // A background shell runs on after its call returned: the card runs until the shell's end (`shell.exited`, its notice), the call's own end is only "moved to the background".
+    const background = name === "shell" && parsed.background === true;
+    let ended: ShellEnd | undefined;
+    if (background) {
+      const sh = this.shellOfCall.get(callId) ?? SHELL_ID.exec(outputOf(state.content))?.[1];
+      if (sh) this.shellOfCall.set(callId, sh);
+      ended = sh ? this.shellEnds.get(sh) : undefined;
+      if (sh && st === "done") st = ended?.status ?? "running";
+      if (ended) exit = ended.exit ?? exit;
+    }
+    const stamps: { startedAt?: number; endedAt?: number } = { ...times };
+    if (background && (st === "running" || st === "pending")) delete stamps.endedAt;
+    else if (ended?.at) stamps.endedAt = ended.at;
+    const call = { type: "tool_call" as const, id: callId, toolUseId: callId, tool, input: mapped, status: st, ...stamps, ...(background && { shell: "background" as const }), ...(typeof exit === "number" && { exitCode: exit }) };
     this.calls.set(callId, call);
     const out: Part[] = [call];
     if (status === "completed" || status === "error") {
@@ -213,6 +286,11 @@ export class OpenCode2Mapper {
       }
       case "session.tool.input.started":
         return this.tool(d.id, d.name, "streaming", undefined, {}, { created: Date.now() });
+      case "session.tool.progress": {
+        const shellID = d.metadata?.shellID;
+        if (typeof shellID === "string" && this.raw.get(d.id)?.name === "shell") this.shellOfCall.set(d.id, shellID);
+        return [];
+      }
       case "session.tool.called": {
         const name = this.raw.get(d.id)?.name;
         return name ? this.tool(d.id, name, "running", d.input, {}, { created: Date.now(), ran: Date.now() }) : [];

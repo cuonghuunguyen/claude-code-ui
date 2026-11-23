@@ -42,12 +42,16 @@ export const actionError = (a: McpAction | "remove" | "callback" | "add") => t(`
 
 const canAuth = (s: McpServerInfo) => ["sse", "http", "claudeai-proxy"].includes(s.config?.type ?? "");
 
-/** Buttons for the server's status; `waiting`: an OAuth flow of it waits for the browser (the waiting block replaces its actions). */
-export function actionsFor(s: McpServerInfo, waiting = false): McpAction[] {
-  const auth: McpAction[] = canAuth(s) ? ["authenticate"] : [];
+/** Why an Engine that cannot sign a server in shows no Sign in button (its `mcpAuth` gap), for a server that would offer one. */
+export const authGap = (s: McpServerInfo, caps?: ConfigCapabilities) => (caps?.gaps.mcpAuth && canAuth(s) && ["needs-auth", "failed", "connected"].includes(s.status) ? caps.gaps.mcpAuth : undefined);
+
+/** Buttons for the server's status; `waiting`: an OAuth flow of it waits for the browser (the waiting block replaces its actions). An Engine with the `mcpAuth` gap has no sign-in or clear-authentication. */
+export function actionsFor(s: McpServerInfo, waiting = false, caps?: ConfigCapabilities): McpAction[] {
+  const noAuth = !!caps?.gaps.mcpAuth;
+  const auth: McpAction[] = canAuth(s) && !noAuth ? ["authenticate"] : [];
   switch (s.status) {
     case "connected":
-      return ["reconnect", ...(s.config?.type === "sse" || s.config?.type === "http" ? (["clearAuth"] as const) : []), "disable"];
+      return ["reconnect", ...(!noAuth && (s.config?.type === "sse" || s.config?.type === "http") ? (["clearAuth"] as const) : []), "disable"];
     case "needs-auth":
       return waiting ? [] : [...auth, "disable"];
     case "failed":

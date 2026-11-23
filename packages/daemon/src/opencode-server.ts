@@ -38,6 +38,8 @@ const REQUEST_TIMEOUT_MS = 3_000;
 /** Crash loop guard: this many exits, each within FAST_MS of its start, stop restarts for GUARD_MS. */
 const FAST_EXITS = 3;
 const FAST_MS = 30_000;
+/** What OpenCode 1 prints when `opencode.db` was created by OpenCode 2. */
+const DB_V2 = /Database is not empty and has no session table/;
 const GUARD_MS = 5 * 60_000;
 /** Every fetch to the server goes through here: a new connection each time (`connection: close`), so a dead server only fails the connect, which proves the
  * request never reached it (see request()). A pooled connection of a dead server can still look open (Windows: the pid is gone before its sockets close) and
@@ -164,6 +166,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   /** Bumped by `reset()` (the path changed): a `--version` of the previous binary that ends later is run again on the current one, its result is never kept. */
   let gen = 0;
   let dataDir: Promise<string | undefined> | undefined;
+  const upListeners = new Set<() => void>();
   let clientOf: { up: Up; client: import("@opencode/client").OpenCodeClient } | undefined;
   // The child is SERVE_WATCHER (tailscale.ts): it runs `opencode serve` in its own process group and kills that group when its stdin closes,
   // so the serve ends with the daemon even when the daemon is killed (the pipe closes). Closing stdin is the way to stop it.
@@ -214,6 +217,12 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
         : new OpenCodeError("opencode_failed", "OpenCode is version 1 now, but this session needs an OpenCode 2 binary. Set Settings › OpenCode › path to one, then restart claude-ui.", 1);;
     refusals.add(err);
     return err;
+  };
+
+  /** OpenCode 1 refuses an `opencode.db` that OpenCode 2 created first (ADR 0015): name the cause and the way out instead of the raw exit. */
+  const dbOfVersion2 = async () => {
+    const dir = await (dataDir ??= dataOf(argv, env).then((d) => d, () => ((dataDir = undefined), undefined)));
+    return new OpenCodeError("opencode_failed", `OpenCode 1 cannot open OpenCode's database: OpenCode 2 created it first (${dir ? `${dir}/opencode.db` : "in OpenCode's data folder"}). Set Settings › OpenCode › path back to the OpenCode 2 binary, or move that file away to start OpenCode 1 with an empty history.`, 1);
   };
 
   async function start(want: 1 | 2): Promise<Up> {
@@ -271,6 +280,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
       up = { url: url.replace(/\/$/, ""), auth, version, major };
       shareWithE2e(up);
       lastError = undefined;
+      for (const cb of upListeners) queueMicrotask(cb);
       return up;
     } catch (err) {
       // A process that died shows its last output: give its exit event a moment.
@@ -279,6 +289,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
       stopRequested = true;
       killSync();
       child = undefined;
+      if (major === 1 && DB_V2.test(stderr)) throw await dbOfVersion2();
       throw err instanceof OpenCodeError ? err : failed(`${err instanceof Error ? err.message : String(err)}. Last output: ${tail()}`);
     } finally {
       clearTimeout(timer);
@@ -427,6 +438,8 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     /** The path setting changed: stop, and forget crashes (the new binary gets a fresh start). */
     reset: () => ((gen += 1), (fastExits = []), (lastError = undefined), (lastMajor = undefined), (dataDir = undefined), stop()),
     running: () => !!up && !!child,
+    /** `cb` runs after each start that came up (the server is usable then). Returns the way to stop listening. */
+    onUp: (cb: () => void) => (upListeners.add(cb), () => void upListeners.delete(cb)),
     /** Major version of the running server, else of the last successful `check()`; undefined until one of them happened. */
     major: (): 1 | 2 | undefined => (up && child ? up.major : lastMajor),
     /** The `@opencode/client` of the running version 2 server (started when it is down), built once per server process. The package is bundled into the published daemon (about +92 KB); it is initialised on first use only, so a Claude-only or OpenCode 1 user pays no runtime cost. */

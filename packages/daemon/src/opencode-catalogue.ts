@@ -3,12 +3,13 @@ import { existsSync } from "node:fs";
 import { EFFORTS, type ClientMessage, type ModelInfo, type PermissionMode, type SessionListItem } from "@claude-ui/protocol";
 import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx, type SavedSession, type Settings } from "./engine-catalogue.ts";
 import { brokenState, createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels, primaryAgents, ProviderStateBroken, type ForkLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
+import { createFolderReloads } from "./folder-reload.ts";
 import { forkAt } from "./opencode-fork.ts";
 import { createOpenCodeMcpConfig } from "./opencode-config-mcp.ts";
 import { createOpenCodeSkillsConfig } from "./opencode-config-skills.ts";
 import { createOpenCodePluginsConfig } from "./opencode-config-plugins.ts";
 import { checkLogin, listProviders, loginError } from "./opencode-providers.ts";
-import { createOpenCodeServer, OpenCodeError, type OpenCodeServer } from "./opencode-server.ts";
+import { createOpenCodeServer, OpenCodeError, OpenCodeHttpError, type OpenCodeServer } from "./opencode-server.ts";
 import { mapLimit } from "./session-scan.ts";
 import { Session, type SessionOpts, type SessionSettings } from "./session.ts";
 
@@ -50,6 +51,8 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     onFork: (id, forkOf) => ctx.saveSettings(() => settings.set(id, { forkOf })),
     forksOf,
   });
+  /** A config change saved while a session of its folder ran: the folder is reloaded when they are idle, then the dialogs are told (docs/spec.md "Config dialogs"). A stopped server reads the files when it starts. */
+  const reloads = createFolderReloads({ reload: async (cwd) => !openCode.running() || openCodeEngine.repairFolder(cwd), changed: (kind, cwd) => ctx.broadcast({ type: "config.changed", kind, cwd }) });
   const ownsId = (id: string) => OPENCODE_ID.test(id);
   const sessionOpts = (initial: Partial<SessionSettings>) => ({ ...ctx.sessionOpts(initial), engine: openCodeEngine });
 
@@ -280,9 +283,9 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
   return {
     engine: openCodeEngine,
     config: {
-      mcp: createOpenCodeMcpConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), hidden: (name) => openCodeEngine.attached.has(name), waitMs: o.server?.mcpWaitMs }),
-      skills: createOpenCodeSkillsConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), waitMs: o.server?.mcpWaitMs }),
-      plugins: createOpenCodePluginsConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), waitMs: o.server?.mcpWaitMs }),
+      mcp: createOpenCodeMcpConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), reload: (cwd) => reloads.request(cwd, ["mcp"]), hidden: (name) => openCodeEngine.attached.has(name), waitMs: o.server?.mcpWaitMs }),
+      skills: createOpenCodeSkillsConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), reload: (cwd) => reloads.request(cwd, ["skills"]), waitMs: o.server?.mcpWaitMs }),
+      plugins: createOpenCodePluginsConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), reload: (cwd) => reloads.request(cwd, ["plugins"]), waitMs: o.server?.mcpWaitMs }),
     },
     listScope: "folders",
     ownsId,
@@ -308,7 +311,18 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     restore: (id) => restoreOpenCode(id),
     locate: async (id, live) => {
       // The folder it was listed, created or opened in; its store is OpenCode's.
-      const cwd = live?.cwd ?? openCodeMeta.get(id)?.cwd;
+      let cwd = live?.cwd ?? openCodeMeta.get(id)?.cwd;
+      if (!cwd) {
+        // One not seen in this run (an Aside left by a stopped daemon, GH-944): OpenCode answers without a folder. Undefined only when it does not have it,
+        // so a failed read never drops what claude-ui keeps of a session that still exists.
+        const row = await openCode.request<OpenCodeSessionRow>(`/session/${id}`, { timeoutMs: 0 }).catch((err) => {
+          if (err instanceof OpenCodeHttpError && err.status === 404) return undefined;
+          const e = openCodeFail(err);
+          throw new EngineError(e.code, e.message);
+        });
+        cwd = row?.directory && ctx.allowed(row.directory);
+        if (cwd) openCodeMeta.set(id, { cwd, title: row!.title ?? "New session" });
+      }
       return cwd && ctx.allowed(cwd) ? { cwd, transcript: false } : undefined;
     },
     title: async (s) => openCodeMeta.get(s.id)?.title ?? "New session",
@@ -343,12 +357,12 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     agents: async (cwd) => (await openCodeEngine.primaryFirst(cwd)).map(({ name, description }) => ({ name, ...(description && { description }) })),
     models: (cwd) => openCodeModelsRepaired(cwd),
     // A model refresh held back by a running OpenCode session no longer waits for it.
-    settled: () => void flushProviders(),
+    settled: () => (void flushProviders(), reloads.settled()),
     settingsChanged: (before: Settings, next: Settings) => {
       if (next.opencode.path === before.opencode.path) return;
       void restartOpenCode().then(() => ctx.broadcast({ type: "opencode.providersChanged" }));
     },
     requests,
-    close: () => openCode.close(),
+    close: () => (reloads.close(), openCode.close()),
   };
 }

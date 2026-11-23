@@ -13,11 +13,11 @@ import type { OpenCodeServer } from "./opencode-server.ts";
 
 /** The longest a list waits for OpenCode before it answers from the config files. */
 const WAIT_MS = 3000;
-const REMOVE_GAP = OPENCODE_CAPABILITIES.config!.gaps.pluginRemoveScope!;
+export const REMOVE_GAP = OPENCODE_CAPABILITIES.config!.gaps.pluginRemoveScope!;
 
 const fail = (code: string, message: string) => new EngineError(code, message);
 /** A list entry is the spec string or `[spec, options]`. */
-const specOf = (entry: unknown): string | undefined => (typeof entry === "string" ? entry : Array.isArray(entry) && typeof entry[0] === "string" ? entry[0] : undefined);
+export const specOf = (entry: unknown): string | undefined => (typeof entry === "string" ? entry : Array.isArray(entry) && typeof entry[0] === "string" ? entry[0] : undefined);
 const specs = (list: unknown): string[] => (Array.isArray(list) ? list.flatMap((e) => specOf(e) ?? []) : []);
 
 const globalDir = () => join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "opencode");
@@ -38,7 +38,7 @@ function globalSpecs(): string[] {
 }
 
 /** A `file://` plugin inside a `plugin` or `plugins` folder of the project or of the global OpenCode folder: found by OpenCode, not listed in a file. */
-function inPluginFolder(spec: string, cwd: string): boolean {
+export function inPluginFolder(spec: string, cwd: string): boolean {
   if (!spec.startsWith("file://")) return false;
   let file: string;
   try {
@@ -59,7 +59,7 @@ const RELATIVE = /^\.\.?\//;
  * What the user typed as a spec: an npm name or a `file://` URL as it is; an absolute path as the `file://` URL OpenCode takes; a relative path (from the project folder)
  * relative to the file it is saved in (OpenCode resolves an entry against the folder of its config file, so `.opencode/opencode.json` needs another prefix), staying portable.
  */
-function normalize(typed: string, cwd: string): string {
+export function normalize(typed: string, cwd: string): string {
   if (RELATIVE.test(typed)) {
     const rel = relative(dirname(writeTarget(cwd)), resolve(cwd, typed)).split(sep).join("/");
     return rel.startsWith("..") ? rel : `./${rel}`;
@@ -68,11 +68,11 @@ function normalize(typed: string, cwd: string): string {
   return typed;
 }
 /** The identity of a list entry: OpenCode reports a relative path as the absolute `file://` URL of the file next to the config file that lists it. */
-const canon = (spec: string, base: string) => (RELATIVE.test(spec) ? pathToFileURL(resolve(base, spec)).href : spec);
+export const canon = (spec: string, base: string) => (RELATIVE.test(spec) ? pathToFileURL(resolve(base, spec)).href : spec);
 
 const WRITTEN: PluginWriteResult = { reload: { reloaded: 0, failed: [], errorCount: 0 } };
 
-export function createOpenCodePluginsConfig(o: { server: OpenCodeServer; repair(cwd: string): Promise<boolean>; waitMs?: number }): EngineConfig["plugins"] {
+export function createOpenCodePluginsConfig(o: { server: OpenCodeServer; repair(cwd: string): Promise<boolean>; /** As the skills config's `reload`. */ reload?(cwd: string): Promise<boolean>; waitMs?: number }): EngineConfig["plugins"] {
   const waitMs = o.waitMs ?? WAIT_MS;
   /** `GET /config` of a folder in flight: concurrent lists share it (it is never aborted: a cut-off read of a folder still loading can break the folder). */
   const reads = new Map<string, Promise<string[] | undefined>>();
@@ -115,14 +115,14 @@ export function createOpenCodePluginsConfig(o: { server: OpenCodeServer; repair(
     const entry = normalize(spec, cwd);
     if ((await known(cwd)).includes(canon(entry, dirname(writeTarget(cwd))))) throw fail("already_exists", `${entry} is already in the plugin list.`);
     editProjectList(cwd, ["plugin"], { append: entry });
-    return { ...WRITTEN, ...((await o.repair(cwd)) ? {} : { applied: false }) };
+    return { ...WRITTEN, ...((await (o.reload ?? o.repair)(cwd)) ? {} : { applied: false }) };
   }
 
   async function uninstall(cwd: string, id: string, scope: string | undefined): Promise<PluginWriteResult> {
     if (scope !== undefined && scope !== "project") throw fail("invalid_input", REMOVE_GAP);
     const done = editProjectList(cwd, ["plugin"], { drop: (item, file) => canon(specOf(item) ?? "", dirname(file)) === id || specOf(item) === id });
     if (!done.length) throw fail("invalid_input", REMOVE_GAP);
-    return { ...WRITTEN, ...((await o.repair(cwd)) ? {} : { applied: false }) };
+    return { ...WRITTEN, ...((await (o.reload ?? o.repair)(cwd)) ? {} : { applied: false }) };
   }
 
   return async (msg, cwd) => {

@@ -1,4 +1,4 @@
-// The MCP servers dialog on OpenCode 1 (GH-864 slice 1): reads and actions through the fake `opencode`, saved changes in the project's opencode.json(c).
+// The MCP servers dialog on OpenCode 1 (GH-864 slice 1) and OpenCode 2 (GH-864, the fake OpenCode 2 reads the project's config files as 2.3.0 does): reads and actions through the fake `opencode`, saved changes in the project's opencode.json(c).
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,8 @@ import { fakeQuery } from "./fake-query.ts";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const BIN = fileURLToPath(new URL("./fixtures/opencode/fake-opencode-bin.mjs", import.meta.url));
+const BIN2 = fileURLToPath(new URL("./fixtures/opencode2/fake-opencode2-bin.mjs", import.meta.url));
+const TEXT_TURN = fileURLToPath(new URL("./fixtures/opencode/turn-text.json", import.meta.url));
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
 const until = async (cond: () => boolean, ms = 8000) => {
   for (let i = 0; i < ms / 25 && !cond(); i++) await new Promise((r) => setTimeout(r, 25));
@@ -35,15 +37,15 @@ const FILE = `{
 }
 `;
 
-async function boot(o: { config?: object; file?: string; fileName?: string; env?: Record<string, string>; mcpWaitMs?: number; orchestration?: boolean } = {}) {
+async function boot(o: { config?: object; file?: string; fileName?: string; env?: Record<string, string>; mcpWaitMs?: number; orchestration?: boolean; /** The fake OpenCode 2 binary. */ v2?: boolean; /** More of the fake's data file (OpenCode 2: `skills`). */ data?: object } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "occ-")));
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
   if (o.file !== undefined) writeFileSync(join(project, o.fileName ?? "opencode.jsonc"), o.file);
   const logFile = join(root, "fake.log");
   const dataFile = join(root, "data.json");
-  writeFileSync(dataFile, JSON.stringify({ sessions: [], messages: {}, ...(o.config && { config: o.config }) }));
-  const env: Record<string, string> = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_DATA: dataFile, FAKE_OPENCODE_SCRIPT: "", XDG_CONFIG_HOME: join(root, "xdg"), ...o.env };
+  writeFileSync(dataFile, JSON.stringify({ sessions: [], messages: {}, ...(o.config && { config: o.config }), ...o.data }));
+  const env: Record<string, string> = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_DATA: dataFile, FAKE_OPENCODE_SCRIPT: "", XDG_CONFIG_HOME: join(root, "xdg"), ...(o.v2 && { FAKE_OPENCODE2_DATA: dataFile, FAKE_OPENCODE2_SCRIPT: "", FAKE_OPENCODE2_PROJECT_CONFIG: "1" }), ...o.env };
   const appSettings = createSettings();
   appSettings.set({ terminalAccess: { enabled: false }, inlineTask: { enabled: false }, fork: { enabled: false }, ...(o.orchestration && { orchestration: { enabled: true, workerCap: 20 } }) } as never);
   const http = createDaemon({
@@ -62,7 +64,7 @@ async function boot(o: { config?: object; file?: string; fileName?: string; env?
     projectsDir: join(root, "claude", "projects"),
     uploadSweepMs: 0,
     modelListWaitMs: 0,
-    opencode: { command: [process.execPath, BIN], env: () => env, listWaitMs: 500, ...(o.mcpWaitMs !== undefined && { mcpWaitMs: o.mcpWaitMs }) },
+    opencode: { command: [process.execPath, o.v2 ? BIN2 : BIN], env: () => env, listWaitMs: 500, ...(o.mcpWaitMs !== undefined && { mcpWaitMs: o.mcpWaitMs }) },
   });
   await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
   const port = (http.address() as AddressInfo).port;
@@ -95,7 +97,7 @@ async function boot(o: { config?: object; file?: string; fileName?: string; env?
   const plugins = (msg: object) => ok({ cwd: project, engine: "opencode", ...msg });
   const serverPort = () => log().find((l) => l.type === "start")!.port as number;
   const names = (r: { servers: { name: string }[] }) => r.servers.map((s) => s.name).sort();
-  return { root, project, ok, request, requests, log, mcp, plugins, port: serverPort, names, file: (f = "opencode.jsonc") => readFileSync(join(project, f), "utf8") };
+  return { root, project, ok, request, requests, inbox, log, mcp, plugins, port: serverPort, names, file: (f = "opencode.jsonc") => readFileSync(join(project, f), "utf8") };
 }
 
 describe("OpenCode MCP servers dialog", { timeout: TEST_MS }, () => {
@@ -215,11 +217,113 @@ describe("OpenCode MCP servers dialog", { timeout: TEST_MS }, () => {
     await d.mcp({ type: "mcp.add", name: "tool", scope: "project", config: { transport: "http", url: "http://127.0.0.1:1/mcp", headers: [] } });
     expect(JSON.parse(d.file("opencode.json")).mcp.tool).toEqual({ type: "remote", url: "http://127.0.0.1:1/mcp" });
   });
+});
 
-  it("config requests with an OpenCode 2 binary answer opencode_v2_unsupported", async () => {
-    const d = await boot({ file: FILE, env: { FAKE_OPENCODE_VERSION: "2.3.0" } });
-    const r = await d.request({ type: "mcp.list", cwd: d.project, engine: "opencode" });
-    expect(r).toMatchObject({ type: "error", code: "opencode_v2_unsupported" });
+const V2_FILE = `{
+  "mcp": { "servers": {
+    "echo": { "type": "local", "command": ["node", "echo.mjs"] },
+    "off": { "type": "local", "command": ["node", "off.mjs"], "disabled": true }
+  } },
+  "permissions": [{ "action": "shell", "resource": "*", "effect": "ask" }]
+}
+`;
+const USER_FILE = `{ "mcp": { "globalsrv": { "type": "remote", "url": "http://127.0.0.1:1/global" } } }\n`;
+const jsonOf = (text: string) => JSON.parse(text.replace(/^\s*\/\/.*$/gm, ""));
+
+describe("OpenCode 2 MCP servers dialog", { timeout: TEST_MS }, () => {
+  const bootV2 = async (file: string, fileName = "opencode.json") => {
+    const d = await boot({ v2: true, file, fileName });
+    mkdirSync(join(d.root, "xdg", "opencode"), { recursive: true });
+    writeFileSync(join(d.root, "xdg", "opencode", "opencode.json"), USER_FILE);
+    return d;
+  };
+
+  it("mcp.list reads the servers of both config shapes with status and scope, the user's servers as user scope, and no server of the daemon", async () => {
+    const d = await bootV2(`{ "mcp": { "echo": { "type": "local", "command": ["node", "echo.mjs"] }, "broken": { "type": "local", "command": ["/nonexistent-bin"] }, "oauthy": { "type": "remote", "url": "http://127.0.0.1:1/oauth" }, "off": { "type": "local", "command": ["node", "x"], "enabled": false } } }`);
+    const r = await d.mcp({ type: "mcp.list" });
+    expect(d.names(r)).toEqual(["broken", "echo", "globalsrv", "oauthy", "off"]);
+    const by = Object.fromEntries(r.servers.map((s: any) => [s.name, s]));
+    expect(by.echo).toMatchObject({ status: "connected", scope: "project", config: { type: "stdio", command: "node" } });
+    expect(by.broken).toMatchObject({ status: "failed", error: "spawn /nonexistent-bin ENOENT" });
+    expect(by.off.status).toBe("disabled");
+    expect(by.oauthy).toMatchObject({ status: "needs-auth", config: { type: "http", url: "http://127.0.0.1:1/oauth" } });
+    expect(by.globalsrv).toMatchObject({ status: "connected", scope: "user" });
+    expect(d.requests("GET", "/api/mcp")[0]!.query!["location[directory]"]).toBe(d.project);
+  });
+
+  it("mcp.list leaves out the daemon's own servers in OpenCode", async () => {
+    const d = await boot({ v2: true, file: V2_FILE, fileName: "opencode.json", orchestration: true });
+    await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" });
+    await until(() => d.requests("PUT", /^\/api\/experimental\/mcp\/orchestration-/).length > 0);
+    expect(d.names(await d.mcp({ type: "mcp.list" }))).toEqual(["echo", "off"]);
+  });
+
+  it.each([
+    ["an OpenCode 1 file", `{\n  // keep this comment\n  "mcp": { "echo": { "type": "local", "command": ["node", "echo.mjs"] } }\n}\n`, "opencode.jsonc", (t: any) => t.mcp.echo.enabled],
+    ["an OpenCode 2 file", V2_FILE, "opencode.json", (t: any) => !t.mcp.servers.echo.disabled],
+  ])("mcp.toggle in %s writes the switch into the file and connects or disconnects at once", async (_n, file, name, enabledIn) => {
+    const d = await bootV2(file, name);
+    const off = await d.mcp({ type: "mcp.toggle", name: "echo", enabled: false });
+    expect(d.requests("POST", "/api/experimental/mcp/echo/disconnect")).toHaveLength(1);
+    expect(off.servers.find((s: any) => s.name === "echo").status).toBe("disabled");
+    const text = d.file(name);
+    if (name === "opencode.jsonc") expect(text).toContain("keep this comment");
+    expect(enabledIn(jsonOf(text))).toBe(false);
+    await d.mcp({ type: "mcp.toggle", name: "echo", enabled: true });
+    expect(d.requests("POST", "/api/experimental/mcp/echo/connect")).toHaveLength(1);
+    expect(enabledIn(jsonOf(d.file(name)))).toBe(true);
+    expect(d.requests("POST", "/api/location/reload")).toHaveLength(0);
+  });
+
+  it("mcp.toggle of a server of the user's config only switches it at runtime: OpenCode 2 drops a file entry that holds only the switch", async () => {
+    const d = await bootV2(V2_FILE);
+    const r = await d.mcp({ type: "mcp.toggle", name: "globalsrv", enabled: false });
+    expect(r.servers.find((s: any) => s.name === "globalsrv").status).toBe("disabled");
+    expect(d.requests("POST", "/api/experimental/mcp/globalsrv/disconnect")).toHaveLength(1);
+    expect(d.file("opencode.json")).toBe(V2_FILE);
+  });
+
+  it.each([
+    ["an OpenCode 1 file", `{ "mcp": { "echo": { "type": "local", "command": ["node", "echo.mjs"] } } }`, (t: any) => t.mcp],
+    ["an OpenCode 2 file", V2_FILE, (t: any) => t.mcp.servers],
+    ["no file", undefined, (t: any) => t.mcp],
+  ])("mcp.add and mcp.remove in %s edit the project file with its own keys and use the runtime MCP routes, with no folder reload", async (_n, file, servers) => {
+    const d = await bootV2(file ?? "{}", "opencode.json");
+    await d.mcp({ type: "mcp.list" }); // the dialog lists first: OpenCode has loaded the folder before the file changes
+    const added = await d.mcp({ type: "mcp.add", name: "tool", scope: "project", config: { transport: "stdio", command: "node", args: ["t.mjs"], env: ["K=v"] } });
+    expect(servers(jsonOf(d.file("opencode.json"))).tool).toEqual({ type: "local", command: ["node", "t.mjs"], environment: { K: "v" } });
+    expect(d.requests("PUT", "/api/experimental/mcp/tool")[0]!.body.config).toEqual({ type: "local", command: ["node", "t.mjs"], environment: { K: "v" } });
+    // The first list after the add already has the server's type and command (the dialog's Authenticate reason needs the type), though OpenCode's documents were not read again.
+    expect(added.servers.find((s: any) => s.name === "tool")).toMatchObject({ status: "connected", scope: "project", config: { type: "stdio", command: "node" } });
+    const dup = await d.request({ type: "mcp.add", cwd: d.project, engine: "opencode", name: "tool", scope: "project", config: { transport: "http", url: "http://127.0.0.1:1/m", headers: [] } });
+    expect(dup).toMatchObject({ type: "error", code: "already_exists" });
+    const removed = await d.mcp({ type: "mcp.remove", name: "tool", scope: "project" });
+    expect(servers(jsonOf(d.file("opencode.json"))).tool).toBeUndefined();
+    expect(d.requests("DELETE", "/api/experimental/mcp/tool")).toHaveLength(1);
+    expect(d.names(removed)).not.toContain("tool");
+    expect(removed.applied).toBeUndefined();
+    expect(d.requests("POST", "/api/location/reload")).toHaveLength(0);
+  });
+
+  it("mcp.remove of a server of the user's config is refused with the reason", async () => {
+    const d = await bootV2(V2_FILE);
+    const r = await d.request({ type: "mcp.remove", cwd: d.project, engine: "opencode", name: "globalsrv", scope: "project" });
+    expect(r).toMatchObject({ type: "error", code: "invalid_input" });
+    expect(d.file("opencode.json")).toBe(V2_FILE);
+  });
+
+  it("sign-in actions answer with the reason OpenCode 2 has no route for them, and its capabilities carry the mcpAuth gap", async () => {
+    const d = await bootV2(V2_FILE);
+    for (const msg of [{ type: "mcp.authenticate", name: "echo" }, { type: "mcp.clearAuth", name: "echo" }, { type: "mcp.oauthCallback", name: "echo", callbackUrl: "http://127.0.0.1/x?code=1" }])
+      expect(await d.request({ cwd: d.project, engine: "opencode", ...msg })).toMatchObject({ type: "error", code: "unsupported", message: expect.stringContaining("integrations") });
+    const created = await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" });
+    expect(created.session.capabilities.config.gaps.mcpAuth).toContain("integrations");
+  });
+
+  it("mcp.reconnect disconnects and connects the server again", async () => {
+    const d = await bootV2(V2_FILE);
+    await d.mcp({ type: "mcp.reconnect", name: "echo" });
+    expect(d.log().filter((l) => /\/mcp\/echo\/(dis)?connect$/.test(l.path ?? "")).map((l) => l.path)).toEqual(["/api/experimental/mcp/echo/disconnect", "/api/experimental/mcp/echo/connect"]);
   });
 });
 
@@ -458,11 +562,191 @@ describe("OpenCode Plugins dialog", { timeout: TEST_MS }, () => {
     await d.plugins({ type: "plugins.install", pluginId: "first", scope: "project" });
     expect(JSON.parse(d.file("opencode.json")).plugin).toEqual(["first"]);
   });
+});
 
-  it("plugins requests without engine reach Claude and with an OpenCode 2 binary answer opencode_v2_unsupported", async () => {
-    const d = await boot({ file: PLUGIN_FILE, fileName: "opencode.json", env: { FAKE_OPENCODE_VERSION: "2.3.0" } });
-    expect(await d.request({ type: "plugins.list", cwd: d.project, engine: "opencode" })).toMatchObject({ type: "error", code: "opencode_v2_unsupported" });
-    const claude = await d.request({ type: "plugins.list", cwd: d.project });
-    expect(JSON.stringify(claude)).not.toContain("listed-one");
+describe("OpenCode 2 config dialogs routing", { timeout: TEST_MS }, () => {
+  it("a plugins request without engine reaches Claude, not OpenCode 2", async () => {
+    const d = await boot({ v2: true, file: `{ "plugins": ["listed-one"] }`, fileName: "opencode.json" });
+    expect(JSON.stringify(await d.request({ type: "plugins.list", cwd: d.project }))).not.toContain("listed-one");
+  });
+});
+
+const HOLD = fileURLToPath(new URL("./fixtures/opencode2/turn-hold.json", import.meta.url));
+
+describe("OpenCode 2 skills dialog", { timeout: TEST_MS }, () => {
+  const SKILLS = `{ "permissions": [{ "action": "skill", "resource": "team-*", "effect": "ask" }, { "action": "skill", "resource": "legacy", "effect": "deny" }] }`;
+  async function bootSkills(file: string | null = SKILLS, fileName = "opencode.json", env: Record<string, string> = {}) {
+    const root0 = realpathSync(mkdtempSync(join(tmpdir(), "occ-skills-")));
+    const saved = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+    process.env.HOME = join(root0, "home");
+    process.env.XDG_CONFIG_HOME = join(root0, "xdg");
+    cleanups.push(() => Object.entries(saved).forEach(([k, v]) => (v === undefined ? delete process.env[k] : (process.env[k] = v))));
+    const d = await boot({ v2: true, ...(file !== null && { file }), fileName, env, data: { skills: [{ id: "skl_builtin", name: "builtin", description: "Built in", path: "skill://builtin/SKILL.md", content: "" }, { id: "skl_mine", name: "mine", path: join(root0, "xdg", "opencode", "skills", "mine", "SKILL.md"), content: "" }, { id: "skl_shared", name: "shared", path: join(root0, "home", ".claude", "skills", "shared", "SKILL.md"), content: "" }] } });
+    for (const n of ["review", "legacy", "team-docs"]) {
+      mkdirSync(join(d.project, ".opencode/skills", n), { recursive: true });
+      writeFileSync(join(d.project, ".opencode/skills", n, "SKILL.md"), `---\nname: ${n}\n---\n`);
+    }
+    const skills = () => d.ok({ type: "skills.list", cwd: d.project, engine: "opencode" });
+    await skills(); // the dialog lists first: OpenCode has loaded the folder before the file changes
+    const set = (name: string, state: string) => d.ok({ type: "skills.setState", cwd: d.project, engine: "opencode", name, state });
+    const states = (r: { skills: { name: string; state: string }[] }) => Object.fromEntries(r.skills.map((s) => [s.name, s.state]));
+    return { ...d, skills, set, states };
+  }
+
+  it("skills.list gives each skill's source and the state of the last rule matching it in the default agent's rules; no rule means ask", async () => {
+    const d = await bootSkills();
+    const r = await d.skills();
+    expect(d.states(r)).toEqual({ builtin: "on", mine: "on", shared: "on", review: "on", legacy: "off", "team-docs": "ask" });
+    expect(Object.fromEntries(r.skills.map((s: any) => [s.name, s.source]))).toEqual({ builtin: "built-in", mine: "user", shared: "external", review: "project", legacy: "project", "team-docs": "project" });
+    expect(r.skills.find((s: any) => s.name === "builtin")).toMatchObject({ description: "Built in", displayName: "builtin", advertised: true });
+  });
+
+  it.each([
+    ["an OpenCode 2 file", SKILLS, "opencode.json", (t: any) => t.permissions.filter((x: any) => x.resource === "review")],
+    ["an OpenCode 1 file", `// mine\n{ "permission": { "skill": { "legacy": "deny" } } }`, "opencode.jsonc", (t: any) => t.permission.skill.review],
+    ["no file", null, "opencode.json", (t: any) => t.permission.skill.review],
+  ])("skills.setState in %s writes the rule in the file's own keys, reloads the folder once and shows the new state", async (_n, file, name, found) => {
+    const d = await bootSkills(file, name);
+    const r = await d.set("review", "off");
+    expect(r.confirmed).toBe(true);
+    expect(d.states(r).review).toBe("off");
+    const t = jsonOf(d.file(name));
+    expect(found(t)).toEqual(name === "opencode.json" && file ? [{ action: "skill", resource: "review", effect: "deny" }] : "deny");
+    expect(d.requests("POST", "/api/location/reload")).toHaveLength(1);
+    // Back to On: the exact-name rule is replaced, not stacked.
+    const on = await d.set("review", "on");
+    expect(d.states(on).review).toBe("on");
+    const again = jsonOf(d.file(name));
+    expect(JSON.stringify(again).match(/"review"/g)).toHaveLength(1);
+    // The other rules stay.
+    expect(d.states(await d.skills()).legacy).toBe(file === SKILLS || file?.includes("legacy") ? "off" : "on");
+  });
+
+  it("skills.setState of an unknown skill is refused and nothing is written", async () => {
+    const d = await bootSkills();
+    expect(await d.request({ type: "skills.setState", cwd: d.project, engine: "opencode", name: "nope", state: "off" })).toMatchObject({ type: "error", code: "bad_request" });
+    expect(d.file("opencode.json")).toBe(SKILLS);
+    expect(d.requests("POST", "/api/location/reload")).toHaveLength(0);
+  });
+});
+
+const PLUGINS2 = `{ "plugins": ["listed-one", { "package": "with-opts", "options": { "k": 1 } }, "broken-pkg"] }`;
+
+describe("OpenCode 2 Plugins dialog", { timeout: TEST_MS }, () => {
+  async function bootPlugins(file = PLUGINS2, name = "opencode.json") {
+    const d = await boot({ v2: true, file, fileName: name });
+    await d.plugins({ type: "plugins.list" }); // OpenCode has loaded the folder before the file changes
+    return d;
+  }
+
+  it("plugins.list shows the packages OpenCode loaded without its built-in ones, a plugin that failed to load as not enabled with its error, and the scope", async () => {
+    const d = await bootPlugins();
+    mkdirSync(join(d.project, ".opencode", "plugins"), { recursive: true });
+    const r = await d.plugins({ type: "plugins.list" });
+    const by = Object.fromEntries(r.installed.map((p: any) => [p.id, p]));
+    expect(Object.keys(by).sort()).toEqual(["broken-pkg", "listed-one", "with-opts"]);
+    expect(by["listed-one"]).toMatchObject({ scope: "project", enabled: true, version: "1.0.0", updatable: false });
+    expect(by["broken-pkg"]).toMatchObject({ scope: "project", enabled: false, description: "Failed to load: Plugin failed to load" });
+    expect(r.available).toEqual([]);
+  });
+
+  it.each([
+    ["an OpenCode 2 file", PLUGINS2, "opencode.json", (t: any) => t.plugins],
+    ["an OpenCode 1 file", `// mine\n{ "plugin": ["listed-one"] }`, "opencode.jsonc", (t: any) => t.plugin],
+  ])("plugins.install and uninstall in %s edit the plugin list with the file's own key and reload the folder", async (_n, file, name, list) => {
+    const d = await bootPlugins(file, name);
+    const added = await d.plugins({ type: "plugins.install", pluginId: "later-pkg", scope: "project" });
+    expect(added.applied).toBeUndefined();
+    expect(list(jsonOf(d.file(name)))).toContain("later-pkg");
+    expect(d.requests("POST", "/api/location/reload")).toHaveLength(1);
+    expect((await d.plugins({ type: "plugins.list" })).installed.map((p: any) => p.id)).toContain("later-pkg");
+    expect(await d.request({ type: "plugins.install", cwd: d.project, engine: "opencode", pluginId: "later-pkg", scope: "project" })).toMatchObject({ type: "error", code: "already_exists" });
+    await d.plugins({ type: "plugins.uninstall", pluginId: "later-pkg", scope: "project" });
+    expect(list(jsonOf(d.file(name)))).not.toContain("later-pkg");
+    expect(list(jsonOf(d.file(name)))).toContain("listed-one");
+    expect((await d.plugins({ type: "plugins.list" })).installed.map((p: any) => p.id)).not.toContain("later-pkg");
+  });
+
+  it("a plugin installed with a wrong name shows its load error after the reload", async () => {
+    const d = await bootPlugins();
+    await d.plugins({ type: "plugins.install", pluginId: "broken-new", scope: "project" });
+    expect((await d.plugins({ type: "plugins.list" })).installed.find((p: any) => p.id === "broken-new")).toMatchObject({ enabled: false, description: expect.stringContaining("Plugin failed to load") });
+  });
+
+  it("uninstall of a plugin that is not listed in the project is refused with the reason, and a switch or an update is not offered", async () => {
+    const d = await bootPlugins();
+    expect(await d.request({ type: "plugins.uninstall", cwd: d.project, engine: "opencode", pluginId: "elsewhere" })).toMatchObject({ type: "error", code: "invalid_input", message: expect.stringContaining("project") });
+    expect(await d.request({ type: "plugins.update", cwd: d.project, engine: "opencode", pluginId: "listed-one", scope: "project" })).toMatchObject({ type: "error", code: "unsupported" });
+    const created = await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" });
+    const gaps = created.session.capabilities.config.gaps;
+    expect(gaps.pluginStatus).toBeUndefined();
+    expect(gaps.pluginUpdate).toContain("OpenCode 2");
+    expect(gaps.pluginSwitch).toBeDefined();
+  });
+});
+
+describe("OpenCode config saved while a session of the folder is busy", { timeout: TEST_MS }, () => {
+  const COMBINED = `{
+  "mcp": { "echo": { "type": "local", "command": ["node", "echo.mjs"] } },
+  "plugin": ["listed-one"],
+  "permission": { "skill": { "legacy": "allow" } }
+}
+`;
+  it.each([
+    ["a skill state", "skills", { type: "skills.setState", name: "review", state: "off" }, (r: any) => r.confirmed],
+    ["an MCP server removal", "mcp", { type: "mcp.remove", name: "echo", scope: "project" }, (r: any) => r.applied !== false],
+    ["a plugin install", "plugins", { type: "plugins.install", pluginId: "later", scope: "project" }, (r: any) => r.applied !== false],
+  ])("%s is applied when the folder's sessions are idle: the folder is reloaded then and config.changed is sent", async (_name, kind, msg, applied) => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "occ-home-")));
+    const saved = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+    process.env.HOME = join(root, "home");
+    process.env.XDG_CONFIG_HOME = join(root, "xdg");
+    cleanups.push(() => Object.entries(saved).forEach(([k, v]) => (v === undefined ? delete process.env[k] : (process.env[k] = v))));
+    const d = await boot({ file: COMBINED, fileName: "opencode.jsonc", env: { FAKE_OPENCODE_CONFIG_CACHE: "1", FAKE_OPENCODE_SCRIPT: TEXT_TURN } });
+    mkdirSync(join(d.project, ".opencode/skills/review"), { recursive: true });
+    writeFileSync(join(d.project, ".opencode/skills/review/SKILL.md"), "---\nname: review\n---\n");
+    const id: string = (await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" })).session.id;
+    const status = (body: object) => fetch(`http://127.0.0.1:${d.port()}/__status`, { method: "POST", body: JSON.stringify({ sessionId: id, ...body }) });
+    await status({ status: { type: "busy" } });
+    const r = await d.ok({ cwd: d.project, engine: "opencode", ...msg });
+    expect(applied(r)).toBe(false);
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+    // The turn ends: the session is idle and the folder is reloaded without another change of the user.
+    await status({});
+    await d.ok({ type: "session.prompt", sessionId: id, text: "hi" });
+    await until(() => d.requests("POST", "/instance/dispose").length === 1);
+    await until(() => d.inbox.some((m) => m.type === "config.changed" && m.kind === kind && m.cwd === d.project));
+  });
+});
+
+describe("OpenCode 2 config saved while a session is running", { timeout: TEST_MS }, () => {
+  it.each([
+    ["a skill state", "skills", { type: "skills.setState", name: "review", state: "off" }, (r: any) => r.confirmed],
+    ["a plugin install", "plugins", { type: "plugins.install", pluginId: "later", scope: "project" }, (r: any) => r.applied !== false],
+  ])("%s is saved, not applied, until no session runs: the locations are reloaded then and config.changed is sent", async (_n, kind, msg, applied) => {
+    const root0 = realpathSync(mkdtempSync(join(tmpdir(), "occ-busy-")));
+    const saved = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+    process.env.HOME = join(root0, "home");
+    process.env.XDG_CONFIG_HOME = join(root0, "xdg");
+    cleanups.push(() => Object.entries(saved).forEach(([k, v]) => (v === undefined ? delete process.env[k] : (process.env[k] = v))));
+    const d = await boot({ v2: true, file: `{ "plugins": ["listed-one"] }`, fileName: "opencode.json", env: { FAKE_OPENCODE2_SCRIPT: HOLD, FAKE_OPENCODE2_RELOAD_EMPTY_MS: "900" } });
+    mkdirSync(join(d.project, ".opencode/skills/review"), { recursive: true });
+    writeFileSync(join(d.project, ".opencode/skills/review/SKILL.md"), "---\nname: review\n---\n");
+    await d.ok({ type: "skills.list", cwd: d.project, engine: "opencode" });
+    const id: string = (await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" })).session.id;
+    await d.ok({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+    await d.ok({ type: "session.prompt", sessionId: id, text: "work" });
+    await until(() => JSON.stringify(d.inbox).includes('"working"'));
+    const r = await d.ok({ cwd: d.project, engine: "opencode", ...msg });
+    expect(applied(r)).toBe(false);
+    // The pending state shows meanwhile.
+    if (kind === "skills") expect((await d.ok({ type: "skills.list", cwd: d.project, engine: "opencode" })).skills.find((s: any) => s.name === "review").state).toBe("off");
+    expect(d.requests("POST", "/api/location/reload")).toHaveLength(0);
+    await d.ok({ type: "session.interrupt", sessionId: id });
+    await until(() => d.requests("POST", "/api/location/reload").length === 1);
+    const reloaded = Date.now();
+    await until(() => d.inbox.some((m) => m.type === "config.changed" && m.kind === kind && m.cwd === d.project));
+    // OpenCode lists nothing for 900 ms after a reload: config.changed is sent once the folder lists again, so a dialog's read at once is full.
+    expect(Date.now() - reloaded).toBeGreaterThanOrEqual(700);
   });
 });

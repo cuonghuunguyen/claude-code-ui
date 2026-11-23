@@ -158,6 +158,17 @@ it("prompts: a select drives a `when` text; shown values go out as inputs", asyn
   expect(calls.at(-1)).toMatchObject({ inputs: { deploymentType: "enterprise", enterpriseUrl: "x.ghe.com" } });
 });
 
+it("a provider with no login method claude-ui can run (OpenCode 2) opens its reason and Back, no Connect button, and sends nothing", async () => {
+  const reason = "Connect CLI in OpenCode's own app.";
+  const { calls } = await render(list([P("cli", { methods: [], unavailable: reason })]));
+  await click(row("cli"));
+  expect(q("settings-opencode-unavailable")!.textContent).toBe(reason);
+  expect(q("settings-opencode-login-submit")).toBeNull();
+  await click([...el.querySelectorAll("button")].find((b) => b.textContent === "Back")!);
+  expect(q("settings-opencode-connect-search")).not.toBeNull();
+  expect(calls.map((c) => c.type)).toEqual(["opencode.providers"]);
+});
+
 it("the method radio group picks the form", async () => {
   await render(list());
   await click(row("fake"));

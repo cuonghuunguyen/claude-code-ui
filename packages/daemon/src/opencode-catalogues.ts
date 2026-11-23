@@ -1,7 +1,7 @@
 // The one OpenCode Engine catalogue (ADR 0015): one `opencode serve` process shared by both adapters, and a switch by the major version of the installed binary.
 import { EngineError, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx } from "./engine-catalogue.ts";
 import { createOpenCodeAdapters } from "./opencode-adapters.ts";
-import { createOpenCodeCatalogue, openCodeWanted, type OpenCodeCatalogueOpts } from "./opencode-catalogue.ts";
+import { createOpenCodeCatalogue, OPENCODE_ID, openCodeWanted, type OpenCodeCatalogueOpts } from "./opencode-catalogue.ts";
 import { createOpenCode2Catalogue } from "./opencode2-catalogue.ts";
 import { createOpenCodeServer } from "./opencode-server.ts";
 
@@ -19,6 +19,7 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
   const v2 = createOpenCode2Catalogue(ctx, {
     server: srv,
     mcp: o.mcp,
+    mcpWaitMs: o.server?.mcpWaitMs,
     listWaitMs: o.server?.listWaitMs,
     record: (id) => {
       try {
@@ -85,7 +86,7 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
         // The answer goes on as the adapter's own list would have gone on: OpenCode 1 starts its server and pushes `sessions.changed` when it answered.
         void ran
           .then(async () => {
-            if (srv.major() !== undefined) await pick().list(lctx);
+            if (srv.major() !== undefined && (await pick().list(lctx)).items.length) ctx.broadcast({ type: "sessions.changed" });
           })
           .catch(() => {});
         return { items: [], keep: () => true };
@@ -96,26 +97,24 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
   const requests: Record<string, EngineRequest> = {};
   for (const [type, handler] of Object.entries(v1.requests ?? {}))
     requests[type] = async (msg, reply, fail) => {
-      if (type === "opencode.restart") forget();
+      if (type === "opencode.restart") {
+        // An OpenCode 2 OAuth login waiting for the browser would be lost (OpenCode 1's own waits are checked by its handler).
+        if (v2.loginBusy()) return fail("opencode_busy", "OpenCode is busy: a login waits. Restart it when that is done.");
+        forget();
+      }
       if (SHARED_REQUESTS.has(type) || (await known()) === v1) return handler!(msg, reply, fail);
-      return fail("opencode_v2_unsupported", "OpenCode 2 does not support provider login in claude-ui yet.");
+      // Provider login of OpenCode 2 (GH-879): its own handlers over the integrations.
+      const v2Handler = v2.requests?.[type as keyof typeof v2.requests];
+      if (v2Handler) return v2Handler(msg, reply, fail);
+      return fail("opencode_v2_unsupported", "OpenCode 2 does not support this request in claude-ui yet.");
     };
   return {
     engine: v1.engine,
-    // The config dialogs of OpenCode 2 wait for its adapter (GH-863): until then the request is answered, not routed to version 1.
+    // The config dialogs follow the binary's major version: OpenCode 2 has its own (GH-864).
     config: {
-      mcp: async (msg, cwd, c) => {
-        if ((await known()) !== v1) throw new EngineError("opencode_v2_unsupported", "OpenCode 2 does not support the MCP servers dialog in claude-ui yet.");
-        return v1.config!.mcp(msg, cwd, c);
-      },
-      skills: async (msg, cwd) => {
-        if ((await known()) !== v1) throw new EngineError("opencode_v2_unsupported", "OpenCode 2 does not support the skills dialog in claude-ui yet.");
-        return v1.config!.skills(msg, cwd);
-      },
-      plugins: async (msg, cwd) => {
-        if ((await known()) !== v1) throw new EngineError("opencode_v2_unsupported", "OpenCode 2 does not support the Plugins dialog in claude-ui yet.");
-        return v1.config!.plugins(msg, cwd);
-      },
+      mcp: async (msg, cwd, c) => (await known()) === v1 ? v1.config!.mcp(msg, cwd, c) : v2.config!.mcp(msg, cwd, c),
+      skills: async (msg, cwd) => ((await known()) === v1 ? v1.config!.skills(msg, cwd) : v2.config!.skills(msg, cwd)),
+      plugins: async (msg, cwd) => ((await known()) === v1 ? v1.config!.plugins(msg, cwd) : v2.config!.plugins(msg, cwd)),
     },
     listScope: v1.listScope,
     ownsId: v1.ownsId,
@@ -160,13 +159,20 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
     commands: async (cwd) => (await known()).commands(cwd),
     agents: async (cwd) => (await known()).agents(cwd),
     models: async (cwd) => (await known()).models(cwd),
-    settled: () => v1.settled?.(),
+    // A leftover Aside is looked up in OpenCode: while the server is down that waits for its start (GH-945).
+    deferCleanup: (id) => OPENCODE_ID.test(id) && !srv.running(),
+    onServerUp: (cb) => void srv.onUp(cb),
+    settled: () => (v1.settled?.(), v2.settled?.()),
     forget: (id) => v1.forget?.(id),
     settingsChanged: (before, after) => {
-      if (after.opencode.path !== before.opencode.path) forget();
-      v1.settingsChanged?.(before, after);
+      if (after.opencode.path === before.opencode.path) return v1.settingsChanged?.(before, after);
+      const wasRunning = srv.running();
+      v1.settingsChanged?.(before, after); // resets the server and its remembered version synchronously
+      forget();
+      // The sidebar list and Settings show the old binary's sessions and version until the new binary was asked: ask now, then tell the clients.
+      if (wasRunning || openCodeWanted(after.sessions.engine, new Map(ctx.settings.entries()))) void check().finally(() => ctx.broadcast({ type: "sessions.changed" }));
     },
     requests,
-    close: () => v1.close(),
+    close: async () => (await v2.close?.(), v1.close()),
   };
 }

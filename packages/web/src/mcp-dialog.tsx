@@ -12,6 +12,7 @@ import {
   actionError,
   actionLabel,
   actionsFor,
+  authGap,
   buildAdd,
   canRemove,
   errorLine,
@@ -127,7 +128,12 @@ export function McpDialog({
     void load();
   }, [open, cwd, sessionId]);
   useEffect(() => void (open && setSelected(initialServer)), [initialServer]);
-  useEffect(() => void (open && changed && load()), [changed]);
+  // The folder was reloaded (config.changed): the saved-for-later text no longer holds.
+  useEffect(() => {
+    if (!open || !changed) return;
+    setSuccess((s) => (s === t("session.mcpDialog.savedLater") ? undefined : s));
+    void load();
+  }, [changed]);
   const pending = servers.some((s) => s.status === "pending");
   useEffect(() => {
     if (!open || (!waiting && !pending)) return;
@@ -345,7 +351,7 @@ export function McpDialog({
             <StatusBadge status={current.status} />
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {actionsFor(current, waiting === current.name).map((a) => (
+            {actionsFor(current, waiting === current.name, config).map((a) => (
               <Button
                 key={a}
                 variant={a === "clearAuth" ? "destructive" : a === "authenticate" || a === "enable" ? "default" : "secondary"}
@@ -398,6 +404,7 @@ export function McpDialog({
               )}
             </div>
           )}
+          {authGap(current, config) && <p className="text-muted-foreground text-sm" data-testid="mcp-auth-gap">{authGap(current, config)}</p>}
           {current.status === "connected" && config?.gaps.mcpTools && !current.tools?.length && <p className="text-muted-foreground text-sm" data-testid="mcp-tools-gap">{config.gaps.mcpTools}</p>}
           {current.status === "connected" && !!current.tools?.length && (
             <button type="button" className="text-muted-foreground text-sm hover:text-foreground max-md:min-h-11" onClick={() => setShowTools((v) => !v)} aria-expanded={showTools} data-testid="mcp-tools-toggle">

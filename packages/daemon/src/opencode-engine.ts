@@ -66,7 +66,7 @@ const MCP_BROKEN_BUSY = "OpenCode's MCP servers for this folder failed to load; 
 const sameKeys = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every((k) => b.has(k));
 export { mcpName, type McpServerKey };
 /** The message of a request refused in Don't ask mode: the model reads it as the user's feedback. */
-const DONT_ASK = "Don't ask mode: this call is not pre-approved";
+export const DONT_ASK = "Don't ask mode: this call is not pre-approved";
 
 /**
  * The rules a permission mode appends to a session (OpenCode evaluates last match wins; rules cannot be removed through the API, so a mode
@@ -212,7 +212,7 @@ export const LOCAL_COMMANDS: SlashCommand[] = [
 const LOCAL_NAMES = LOCAL_COMMANDS.map((c) => c.name);
 /** `/visualize [what]`: the daemon's own command, listed while the setting is on and OpenCode has no `visualize` of its own (docs/spec.md "Inline visualizations"). */
 const VISUALIZE_COMMAND: SlashCommand = { name: "visualize", description: "Draw the answer as an inline visualization", argumentHint: "[what to draw]" };
-const withVisualize = (list: SlashCommand[], on: boolean) => (on && !list.some((c) => c.name === "visualize") ? [...list.slice(0, LOCAL_COMMANDS.length), VISUALIZE_COMMAND, ...list.slice(LOCAL_COMMANDS.length)] : list);
+export const withVisualize = (list: SlashCommand[], on: boolean) => (on && !list.some((c) => c.name === "visualize") ? [...list.slice(0, LOCAL_COMMANDS.length), VISUALIZE_COMMAND, ...list.slice(LOCAL_COMMANDS.length)] : list);
 const dataUrlMime = (url: string) => /^data:([^;,]+)/.exec(url)?.[1] ?? "image/png";
 
 class OpenCodeSession implements EngineSession {

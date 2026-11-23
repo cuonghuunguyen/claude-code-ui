@@ -1631,20 +1631,36 @@ export function createDaemon(opts: {
    * longer listens: thrown away (docs/spec.md "Aside"). foreignOnly: only links of other ports (own-port links race with aside.open).
    */
   let cleaningAsides = false;
-  async function cleanupAsides({ foreignOnly = false } = {}) {
+  /** Leftover Aside links whose Engine's server is down: looking at them would start it, so they wait for its start (`deferCleanup`, GH-945). */
+  const deferredAsides = new Set<string>();
+  let deferredWaiting = false;
+  async function cleanupAsides({ foreignOnly = false, deferred = false } = {}) {
     // No port of its own (a --side daemon): it cannot tell its links from the hub's, whose live Asides it would delete.
     const port = (http.address() as AddressInfo | null)?.port;
-    if (cleaningAsides || port === undefined) return;
+    if (port === undefined) return;
+    if (cleaningAsides) {
+      if (deferred) deferredWaiting = true;
+      return;
+    }
     cleaningAsides = true;
     try {
       for (const [id] of [...settings.entries()]) {
+        if (deferred && !deferredAsides.has(id)) continue;
         const l = settings.get(id);
-        if (!l?.ownerId || sessions.has(id)) continue;
+        if (!l?.ownerId || sessions.has(id)) {
+          deferredAsides.delete(id);
+          continue;
+        }
         const foreign = l.port !== undefined && l.port !== port;
         if (foreignOnly && !foreign) continue;
         // Probed right before the delete, on the link as it is now: a daemon may have started on that port since the pass began.
         if (foreign && (await portListening(l.port!))) continue;
         if (settings.get(id)?.port !== l.port || sessions.has(id)) continue;
+        if (!deferred && catalogues.ownerOf(id)?.deferCleanup?.(id)) {
+          deferredAsides.add(id);
+          continue;
+        }
+        deferredAsides.delete(id);
         try {
           const err = await deleteSessionById(id, true);
           if (err?.code === "unknown_session") saveSettings(() => settings.delete([id]));
@@ -1655,8 +1671,10 @@ export function createDaemon(opts: {
       }
     } finally {
       cleaningAsides = false;
+      if (deferredWaiting) ((deferredWaiting = false), void cleanupAsides({ deferred: true }));
     }
   }
+  for (const c of catalogues.all) c.onServerUp?.(() => deferredAsides.size && void cleanupAsides({ deferred: true }));
 
   const digest = (t: string) => createHash("sha256").update(t).digest();
   const expected = digest(opts.token);

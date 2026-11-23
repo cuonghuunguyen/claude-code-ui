@@ -133,7 +133,12 @@ export function PluginsDialog({
     setConfirmRemove(undefined);
     void load();
   }, [open, cwd, sessionId]);
-  useEffect(() => void (open && changed && load()), [changed]);
+  // The folder was reloaded (config.changed): the saved-for-later text no longer holds.
+  useEffect(() => {
+    if (!open || !changed) return;
+    setNotice((n) => (n === t("session.pluginsDialog.savedLater") ? undefined : n));
+    void load();
+  }, [changed]);
 
   const clear = () => (setError(undefined), setNotice(undefined));
   const afterReload = (reload?: ReloadResult) => reload?.failed.length && setFailedReload(reload.failed);

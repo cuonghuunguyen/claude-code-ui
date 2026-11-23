@@ -47,10 +47,13 @@ async function render(handlers: Record<string, Handler> = {}, commands = COMMAND
   document.body.append(prompt);
   const runs: unknown[] = [];
   let setOpen!: (o: boolean) => void;
+  let setChanged!: (n: number) => void;
   function Host() {
     const [open, set] = useState(true);
+    const [changed, setN] = useState(0);
     setOpen = set;
-    return <SkillsDialog open={open} cwd="/p" sessionId="s1" commands={commands} request={request as never} onRun={(r) => runs.push(r)} onClose={() => set(false)} {...props} />;
+    setChanged = setN;
+    return <SkillsDialog open={open} cwd="/p" sessionId="s1" commands={commands} request={request as never} onRun={(r) => runs.push(r)} onClose={() => set(false)} changed={changed} {...props} />;
   }
   root = createRoot(el);
   await act(async () => root!.render(<Host />));
@@ -64,7 +67,7 @@ async function render(handlers: Record<string, Handler> = {}, commands = COMMAND
       e.dispatchEvent(new Event("input", { bubbles: true }));
     });
   const state = (label: string) => document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
-  return { q, all, text, click, type, state, calls, runs, setOpen };
+  return { q, all, text, click, type, state, calls, runs, setOpen, setChanged: (n: number) => act(async () => setChanged(n)) };
 }
 
 // The first dialog render loads Base UI cold.
@@ -194,7 +197,12 @@ it("with OpenCode flags the state button cycles On, Ask, Off and no token count 
   await d.click(d.state("/probe: On"));
   expect(d.calls.at(-1)).toEqual({ type: "skills.setState", cwd: "/p", sessionId: "s1", engine: "opencode", name: "probe", state: "ask", handles: {} });
   // A folder with a busy session was not reloaded: the notice says when it applies, not Claude's "old state" text.
-  expect(d.text()).toContain("Saved in opencode.json. OpenCode uses it after it reloads this folder");
+  expect(d.text()).toContain("Saved in opencode.json. OpenCode uses it when the sessions of this folder are idle.");
+  // The folder was reloaded when its sessions were idle (config.changed): the note goes and the rows are read again.
+  const reads = d.calls.filter((c) => c.type === "skills.list").length;
+  await d.setChanged(1);
+  expect(d.text()).not.toContain("Saved in opencode.json");
+  expect(d.calls.filter((c) => c.type === "skills.list")).toHaveLength(reads + 1);
   // Off is followed by On again.
   await d.click(d.state("/denied: Off"));
   expect(d.calls.at(-1)).toMatchObject({ name: "denied", state: "on" });

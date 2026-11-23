@@ -15,7 +15,7 @@ const BUILD = [{ action: "*", resource: "*", effect: "allow" }, { action: "read"
 const tokens = { input: 100, output: 10, reasoning: 0, cache: { read: 5, write: 1 } };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; stored?: Json[]; model?: string; /** The build agent's rules (default BUILD). */ agentRules?: Json[] } = {}) {
+function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; stored?: Json[]; model?: string; /** The build agent's rules (default BUILD). */ agentRules?: Json[]; /** The permission requests OpenCode lists. */ pending?: Json[]; /** The sessions OpenCode runs. */ active?: Json } = {}) {
   const calls: { name: string; input: Json }[] = [];
   const handlers = new Set<{ event: (dir: string | undefined, p: { type: string; properties: Json }) => void; resync: () => void }>();
   const emit = (type: string, d: Json) => handlers.forEach((h) => h.event("/p", { type, properties: d }));
@@ -33,11 +33,11 @@ function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; sto
       interrupt: rec("session.interrupt", () => ({ interrupted: true })),
       remove: rec("session.remove"),
       update: rec("session.update"),
-      active: rec("session.active", () => ({})),
+      active: rec("session.active", () => o.active ?? {}),
       get: rec("session.get", () => ({ id: "ses_parent", permissions: [] })),
     },
     form: { list: rec("form.list", () => ({ data: [] })) },
-    permission: { reply: rec("permission.reply"), request: { list: rec("permission.request.list", () => ({ data: [] })) } },
+    permission: { reply: rec("permission.reply"), request: { list: rec("permission.request.list", () => ({ data: o.pending ?? [] })) } },
     experimental: { session: { instructions: { entry: { put: rec("instructions.put") } } } },
     message: { list: rec("message.list", () => ({ data: o.stored ?? [], cursor: {} })) },
   };
@@ -195,15 +195,43 @@ describe("OpenCode 2 inline task", () => {
     expect(await model({ parent: "default" })).toBeUndefined();
   });
 
-  it("a run interrupted in OpenCode itself ends as stopped; a run whose end was lost with a stream drop ends at the reconnect with its stored answer", async () => {
+  it("a run interrupted in OpenCode itself ends as stopped; a run whose end was lost with a stream drop ends at the reconnect as OpenCode stored it: its answer, its error or stopped", async () => {
     const elsewhere = rig({ script: (c) => (c("session.execution.started"), c("session.execution.interrupted", { reason: "shutdown" })) });
     expect(await elsewhere.run.inlineTask(spec(), hooks())).toMatchObject({ status: "stopped" });
 
-    const lost = rig({ stored: [{ id: "msg_a1", type: "assistant", content: [{ type: "text", text: "stored answer" }] }], script: (c) => c("session.execution.started") });
-    const running = lost.run.inlineTask(spec(), hooks());
-    for (let i = 0; i < 40 && !lost.called("session.prompt").length; i++) await sleep(25);
+    const lostEnd = async (stored: Json[]) => {
+      const lost = rig({ stored, script: (c) => c("session.execution.started") });
+      const running = lost.run.inlineTask(spec(), hooks());
+      for (let i = 0; i < 40 && !lost.called("session.prompt").length; i++) await sleep(25);
+      await sleep(0);
+      lost.reconnect();
+      return running;
+    };
+    const answer = { id: "msg_a1", type: "assistant", content: [{ type: "text", text: "stored answer" }] };
+    expect(await lostEnd([answer])).toMatchObject({ status: "done", text: "stored answer" });
+    expect(await lostEnd([answer, { id: "msg_i1", type: "idle", outcome: "succeeded" }])).toMatchObject({ status: "done", text: "stored answer" });
+    // The newest end row counts (stored newest first, as read).
+    expect(await lostEnd([{ id: "msg_i2", type: "idle", outcome: "failed" }, { id: "msg_a2", type: "assistant", content: [], error: { type: "provider", message: "rate limited\nstack" } }, { id: "msg_i1", type: "idle", outcome: "succeeded" }])).toMatchObject({ status: "error", error: "rate limited" });
+    expect(await lostEnd([{ id: "msg_i1", type: "idle", outcome: "interrupted" }])).toMatchObject({ status: "stopped" });
+  });
+
+  it("an ask of the run first seen at a reconnect (its event lost) keeps the run's call data: tool and input, and its denied card under the inline call", async () => {
+    const ask = { id: "per_1", sessionID: "ses_child", action: "shell", resources: ["rm x"], source: { type: "tool", messageID: "msg_a1", id: "c1" } };
+    let child!: (type: string, d?: Json) => void;
+    const pending: Json[] = [];
+    const r = rig({ pending, active: { ses_child: { type: "running" } }, script: (c) => ((child = c), c("session.execution.started"), c("session.tool.input.started", { assistantMessageID: "msg_a1", id: "c1", name: "shell" }), c("session.tool.called", { assistantMessageID: "msg_a1", id: "c1", input: { command: "rm x", description: "remove x" } })) });
+    r.callRunning();
+    const done = r.run.inlineTask(spec({ tools: ["Bash"] }), hooks());
+    for (let i = 0; i < 40 && !r.called("session.prompt").length; i++) await sleep(25);
     await sleep(0);
-    lost.reconnect();
-    expect(await running).toMatchObject({ status: "done", text: "stored answer" });
+    pending.push(ask);
+    r.reconnect();
+    for (let i = 0; i < 40 && !r.asks.length; i++) await sleep(25);
+    expect(r.asks[0]!.part).toMatchObject({ type: "permission_request", id: "per_1", tool: "Bash", input: { command: "rm x", description: "remove x" } });
+    r.asks[0]!.reply({ kind: "deny", message: "no" });
+    await sleep(0);
+    expect(r.emitted.filter((p) => p.id === "c1").at(-1)).toMatchObject({ type: "tool_call", status: "denied", parentId: "call_1" });
+    child("session.execution.succeeded");
+    expect(await done).toMatchObject({ status: "done" });
   });
 });

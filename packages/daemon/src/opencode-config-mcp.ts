@@ -14,7 +14,7 @@ import type { OpenCodeServer } from "./opencode-server.ts";
 export const MCP_WAIT_MS = 3000;
 /** The longest `mcp.authenticate` waits for OpenCode on the local flow: it answers when the sign-in redirect arrived, which the dialog polls for. */
 const AUTH_WAIT_MS = 1500;
-const NAME = /^[a-zA-Z0-9_-]+$/;
+export const NAME = /^[a-zA-Z0-9_-]+$/;
 
 type McpConfig = { type?: string; command?: string[]; url?: string; enabled?: boolean };
 type Status = Record<string, { status: string; error?: string }>;
@@ -38,10 +38,10 @@ function globalNames(): Set<string> {
   return names;
 }
 
-const mapStatus = (s: string) => (s === "needs_auth" || s === "needs_client_registration" ? "needs-auth" : s);
+export const mapStatus = (s: string) => (s === "needs_auth" || s === "needs_client_registration" ? "needs-auth" : s);
 
 /** Header lines "Name: value" and env lines "KEY=value" of the add form as the objects OpenCode takes. */
-const pairs = (lines: string[], sep: string) =>
+export const pairs = (lines: string[], sep: string) =>
   Object.fromEntries(
     lines.flatMap((l) => {
       const at = l.indexOf(sep);
@@ -49,7 +49,7 @@ const pairs = (lines: string[], sep: string) =>
     }),
   );
 
-export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd: string): Promise<boolean>; hidden(name: string): boolean; waitMs?: number }): EngineConfig["mcp"] {
+export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd: string): Promise<boolean>; /** As the skills config's `reload`. */ reload?(cwd: string): Promise<boolean>; hidden(name: string): boolean; waitMs?: number }): EngineConfig["mcp"] {
   const { server } = o;
   const waitMs = o.waitMs ?? MCP_WAIT_MS;
   /** `GET /mcp` of a folder in flight: concurrent reads share it (the request is never aborted, so they would pile up on a slow OpenCode). */
@@ -166,7 +166,7 @@ export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd:
           editProjectFile(cwd, ["mcp", msg.name], undefined);
           removed.set(cwd, (removed.get(cwd) ?? new Set()).add(msg.name));
           await raced(call(cwd, mcpPath(msg.name, "/disconnect")).catch(() => {}));
-          return await after(cwd, await o.repair(cwd));
+          return await after(cwd, await (o.reload ?? o.repair)(cwd));
         }
         case "mcp.authenticate": {
           if (ctx.local) {
@@ -194,7 +194,7 @@ export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd:
         }
         case "mcp.clearAuth": {
           await raced(call(cwd, mcpPath(msg.name, "/auth"), "DELETE"));
-          return await after(cwd, await o.repair(cwd));
+          return await after(cwd, await (o.reload ?? o.repair)(cwd));
         }
       }
     } catch (e) {

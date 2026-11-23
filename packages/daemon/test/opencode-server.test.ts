@@ -35,7 +35,7 @@ const until = async (cond: () => boolean, ms = 10_000) => {
 const cleanups: (() => void)[] = [];
 afterEach(() => cleanups.splice(0).forEach((c) => c()));
 
-async function boot(o: { engine?: "claude" | "opencode"; path?: string; env?: Record<string, string>; sessionsJson?: object; opencode?: object; bin?: string } = {}) {
+async function boot(o: { engine?: "claude" | "opencode"; path?: string; env?: Record<string, string>; sessionsJson?: object; opencode?: object; bin?: string; /** Rows added to the fake's sessions: `(project) => rows`. */ extraSessions?: (project: string) => object[] } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "oc-")));
   const project = join(root, "project");
   const other = join(root, "other");
@@ -45,7 +45,7 @@ async function boot(o: { engine?: "claude" | "opencode"; path?: string; env?: Re
   const row = (id: string, directory: string, title: string, updated: number, extra = {}) => ({ id, slug: id, projectID: "global", directory, title, version: "1.18.34", time: { created: 1, updated }, ...extra });
   writeFileSync(
     join(root, "data.json"),
-    JSON.stringify({ sessions: [row("ses_hist", project, "Listed files", 5000), row("ses_child", project, "subagent", 9000, { parentID: "ses_hist" }), row("ses_other", other, "Elsewhere", 7000)], messages: { ses_hist: history } }),
+    JSON.stringify({ sessions: [row("ses_hist", project, "Listed files", 5000), row("ses_child", project, "subagent", 9000, { parentID: "ses_hist" }), row("ses_other", other, "Elsewhere", 7000), ...(o.extraSessions?.(project) ?? [])], messages: { ses_hist: history } }),
   );
   if (o.sessionsJson) writeFileSync(join(root, "sessions.json"), JSON.stringify(o.sessionsJson));
   const env: Record<string, string> = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_DATA: join(root, "data.json"), ...o.env };
@@ -221,6 +221,26 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     expect(fourth).toMatchObject({ type: "error", code: "opencode_failed" });
     expect((fourth as any).message).toContain("crashed on purpose");
     expect(d.starts()).toHaveLength(3);
+  });
+
+  it("a version 1 binary that finds a database OpenCode 2 created says so and how to recover", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE_DB_V2: "1", FAKE_OPENCODE_DATA_DIR: "/fake/data" } });
+    const r = await d.request({ type: "session.create", cwd: d.project, engine: "opencode" });
+    expect(r).toMatchObject({ type: "error", code: "opencode_failed" });
+    expect((r as any).message).toContain("OpenCode 2 created it first (/fake/data/opencode.db)");
+    expect((r as any).message).toContain("OpenCode 2 binary");
+  });
+
+  it("an Aside left open by a stopped daemon is deleted in OpenCode 1 at the next start, with its link", async () => {
+    const d = await boot({
+      engine: "opencode",
+      sessionsJson: { ses_fork: { ownerId: "ses_hist", readOnly: true }, ses_hist: {} },
+      extraSessions: (project) => [{ id: "ses_fork", slug: "ses_fork", projectID: "global", directory: project, title: "what is two", version: "1.18.34", time: { created: 1, updated: 6000 } }],
+    });
+    // The cleanup waits for the server (GH-945): the first list starts it.
+    await d.ok({ type: "session.list" });
+    await until(() => d.log().some((l) => l.type === "request" && l.method === "DELETE" && l.path === "/session/ses_fork"));
+    await until(() => !("ses_fork" in JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8"))));
   });
 
   it("closing the daemon ends the OpenCode process", async () => {

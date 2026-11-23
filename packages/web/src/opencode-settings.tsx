@@ -15,7 +15,7 @@ export function OpenCodeSection({ opencode, saving, save, request, onProviders }
   const [status, setStatus] = useState<OpenCodeStatus>();
   const [failed, setFailed] = useState<string>();
   const check = () => request<OpenCodeStatus>({ type: "opencode.status" }).then((s) => (setStatus(s), setFailed(undefined)), (e: Error) => setFailed(e.message));
-  useEffect(() => void check(), []);
+  useEffect(() => void check(), [opencode.path]); // also after a save from another client or tab
   const [restarting, setRestarting] = useState(false);
   // The daemon broadcasts opencode.providersChanged after the restart: the model lists reload from there.
   const restart = () => (setRestarting(true), request({ type: "opencode.restart" }).then(check, (e: Error) => setFailed(e.message)).finally(() => setRestarting(false)));

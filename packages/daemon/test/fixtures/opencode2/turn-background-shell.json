@@ -1,0 +1,11 @@
+[
+  { "event": "session.execution.started", "data": { "sessionID": "$SESSION" } },
+  { "event": "session.step.started", "data": { "sessionID": "$SESSION", "agent": "build", "model": { "id": "m", "providerID": "fake" }, "assistantMessageID": "$A1" } },
+  { "event": "session.tool.input.started", "data": { "sessionID": "$SESSION", "assistantMessageID": "$A1", "id": "call_bg", "name": "shell" } },
+  { "event": "session.tool.called", "data": { "sessionID": "$SESSION", "assistantMessageID": "$A1", "id": "call_bg", "input": { "command": "npm run dev", "description": "dev server", "background": true }, "executed": false } },
+  { "shell": { "id": "$SHELL1", "command": "npm run dev", "output": "listening on 3000\n" } },
+  { "event": "session.tool.progress", "data": { "sessionID": "$SESSION", "assistantMessageID": "$A1", "id": "call_bg", "metadata": { "shellID": "$SHELL1" } } },
+  { "event": "session.tool.success", "data": { "sessionID": "$SESSION", "assistantMessageID": "$A1", "id": "call_bg", "content": [{ "type": "text", "text": "Command moved to the background (shell ID: $SHELL1).\nPID: 1" }], "metadata": { "status": "completed", "truncated": false }, "executed": false } },
+  { "event": "session.step.ended", "data": { "sessionID": "$SESSION", "assistantMessageID": "$A1", "finish": "tool-calls", "tokens": { "input": 1, "output": 1, "reasoning": 0, "cache": { "read": 0, "write": 0 } }, "cost": 0, "files": [] } },
+  { "event": "session.execution.succeeded", "data": { "sessionID": "$SESSION" } }
+]
