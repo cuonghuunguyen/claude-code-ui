@@ -223,6 +223,14 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     expect(d.starts()).toHaveLength(3);
   });
 
+  it("a version 1 binary that finds a database OpenCode 2 created says so and how to recover", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE_DB_V2: "1", FAKE_OPENCODE_DATA_DIR: "/fake/data" } });
+    const r = await d.request({ type: "session.create", cwd: d.project, engine: "opencode" });
+    expect(r).toMatchObject({ type: "error", code: "opencode_failed" });
+    expect((r as any).message).toContain("OpenCode 2 created it first (/fake/data/opencode.db)");
+    expect((r as any).message).toContain("OpenCode 2 binary");
+  });
+
   it("closing the daemon ends the OpenCode process", async () => {
     const d = await boot();
     await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" });

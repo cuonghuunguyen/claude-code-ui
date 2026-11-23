@@ -38,6 +38,8 @@ const REQUEST_TIMEOUT_MS = 3_000;
 /** Crash loop guard: this many exits, each within FAST_MS of its start, stop restarts for GUARD_MS. */
 const FAST_EXITS = 3;
 const FAST_MS = 30_000;
+/** What OpenCode 1 prints when `opencode.db` was created by OpenCode 2. */
+const DB_V2 = /Database is not empty and has no session table/;
 const GUARD_MS = 5 * 60_000;
 /** Every fetch to the server goes through here: a new connection each time (`connection: close`), so a dead server only fails the connect, which proves the
  * request never reached it (see request()). A pooled connection of a dead server can still look open (Windows: the pid is gone before its sockets close) and
@@ -216,6 +218,12 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     return err;
   };
 
+  /** OpenCode 1 refuses an `opencode.db` that OpenCode 2 created first (ADR 0015): name the cause and the way out instead of the raw exit. */
+  const dbOfVersion2 = async () => {
+    const dir = await (dataDir ??= dataOf(argv, env).then((d) => d, () => ((dataDir = undefined), undefined)));
+    return new OpenCodeError("opencode_failed", `OpenCode 1 cannot open OpenCode's database: OpenCode 2 created it first (${dir ? `${dir}/opencode.db` : "in OpenCode's data folder"}). Set Settings › OpenCode › path back to the OpenCode 2 binary, or move that file away to start OpenCode 1 with an empty history.`, 1);
+  };
+
   async function start(want: 1 | 2): Promise<Up> {
     const exits = fastExits.filter((t) => now() - t < GUARD_MS);
     if (exits.length >= FAST_EXITS) throw failed(`it exited ${exits.length} times right after starting. Last output: ${tail()}`);
@@ -279,6 +287,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
       stopRequested = true;
       killSync();
       child = undefined;
+      if (major === 1 && DB_V2.test(stderr)) throw await dbOfVersion2();
       throw err instanceof OpenCodeError ? err : failed(`${err instanceof Error ? err.message : String(err)}. Last output: ${tail()}`);
     } finally {
       clearTimeout(timer);
