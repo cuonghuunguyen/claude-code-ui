@@ -166,6 +166,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   /** Bumped by `reset()` (the path changed): a `--version` of the previous binary that ends later is run again on the current one, its result is never kept. */
   let gen = 0;
   let dataDir: Promise<string | undefined> | undefined;
+  const upListeners = new Set<() => void>();
   let clientOf: { up: Up; client: import("@opencode/client").OpenCodeClient } | undefined;
   // The child is SERVE_WATCHER (tailscale.ts): it runs `opencode serve` in its own process group and kills that group when its stdin closes,
   // so the serve ends with the daemon even when the daemon is killed (the pipe closes). Closing stdin is the way to stop it.
@@ -279,6 +280,7 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
       up = { url: url.replace(/\/$/, ""), auth, version, major };
       shareWithE2e(up);
       lastError = undefined;
+      for (const cb of upListeners) queueMicrotask(cb);
       return up;
     } catch (err) {
       // A process that died shows its last output: give its exit event a moment.
@@ -436,6 +438,8 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     /** The path setting changed: stop, and forget crashes (the new binary gets a fresh start). */
     reset: () => ((gen += 1), (fastExits = []), (lastError = undefined), (lastMajor = undefined), (dataDir = undefined), stop()),
     running: () => !!up && !!child,
+    /** `cb` runs after each start that came up (the server is usable then). Returns the way to stop listening. */
+    onUp: (cb: () => void) => (upListeners.add(cb), () => void upListeners.delete(cb)),
     /** Major version of the running server, else of the last successful `check()`; undefined until one of them happened. */
     major: (): 1 | 2 | undefined => (up && child ? up.major : lastMajor),
     /** The `@opencode/client` of the running version 2 server (started when it is down), built once per server process. The package is bundled into the published daemon (about +92 KB); it is initialised on first use only, so a Claude-only or OpenCode 1 user pays no runtime cost. */

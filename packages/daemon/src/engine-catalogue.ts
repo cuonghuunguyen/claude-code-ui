@@ -84,6 +84,10 @@ export interface EngineCatalogue {
   settled?(): void;
   /** The session left the daemon without a delete (its stored data was deleted outside). */
   forget?(id: string): void;
+  /** The Aside link of `id` is left alone at startup for now: looking at it would start the Engine's server (lazy cleanup; `onServerUp` runs it later). */
+  deferCleanup?(id: string): boolean;
+  /** `cb` runs each time the Engine's server came up. */
+  onServerUp?(cb: () => void): void;
   /** The app settings changed (`settings.set`). */
   settingsChanged?(before: Settings, after: Settings): void;
   /** Requests only this Engine answers (its provider login, its server restart). */

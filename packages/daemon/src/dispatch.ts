@@ -2,6 +2,7 @@
 // `areas.ts` builds the areas of one connection; `createDispatch` merges their handlers into one lookup table.
 import type { ClientMessage, ServerMessage } from "@claude-ui/protocol";
 import type { Conn } from "./server.ts";
+import { EngineError } from "./engine-catalogue.ts";
 
 export type ClientType = ClientMessage["type"];
 /** The message of one type. */
@@ -53,12 +54,19 @@ export function createDispatch(areas: readonly AnyArea[]) {
     /** Runs the handler of `msg.type`; its reply or error goes to `out`. A Map lookup: `constructor` or `__proto__` is an unknown type. */
     async dispatch(msg: ClientMessage, out: (m: ServerMessage) => void): Promise<void> {
       const h = table.get(msg.type) as Handler<ClientType> | undefined;
+      let answered = false;
       const r: Respond = {
-        reply: (result) => out({ type: "reply", reqId: msg.reqId, result }),
-        fail: (code, message, size) => out({ type: "error", reqId: msg.reqId, code, message, size }),
+        reply: (result) => ((answered = true), out({ type: "reply", reqId: msg.reqId, result })),
+        fail: (code, message, size) => ((answered = true), out({ type: "error", reqId: msg.reqId, code, message, size })),
       };
       if (!h) return r.fail("unknown_type", `unknown message type ${(msg as { type?: string }).type}`);
-      await h(msg as never, r);
+      try {
+        await h(msg as never, r);
+      } catch (err) {
+        // An Engine's failure the user must see (OpenCode down, a refused path) keeps its code and message; any other throw is the caller's internal error.
+        if (err instanceof EngineError && !answered) return r.fail(err.code, err.message);
+        throw err;
+      }
     },
     close() {
       for (const a of areas) a.close?.();

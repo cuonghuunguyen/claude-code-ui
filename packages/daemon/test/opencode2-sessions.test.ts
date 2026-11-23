@@ -695,9 +695,21 @@ describe("OpenCode 2 sessions: rename, archive, delete and Aside", { timeout: TE
       adapters: { ses_own: 2, ses_fork: 2 },
       projectDirInData: true,
     });
+    // The leftover link alone does not start OpenCode 2 at boot (the daemon may never be used for OpenCode).
+    await sleep(600);
+    expect(d.log().some((l) => l.type === "start")).toBe(false);
+    expect(link(d, "ses_fork")).toBeDefined();
+    // The first list starts the server; the cleanup follows at once.
+    await d.ok({ type: "session.list" });
     await until(() => d.requests("DELETE", "/api/session/ses_fork").length === 1);
     await until(() => !d.recorded().ses_fork && !link(d, "ses_fork"));
     expect(d.recorded()).toEqual({ ses_own: 2 });
+  });
+
+  it("a rename of a session OpenCode 2 cannot be asked about answers OpenCode's error code, not request failed", async () => {
+    const d = await boot({ sessionsJson: { ses_old: { model: "default", permissionMode: "default", effort: "default" } }, env: { FAKE_OPENCODE2_FAIL: JSON.stringify({ ses_old: 5 }) } });
+    const r = await d.request({ type: "session.rename", sessionId: "ses_old", title: "x" });
+    expect(r).toMatchObject({ type: "error", code: "opencode_failed" });
   });
 
   it("a failure after the fork deletes the fork and its record", async () => {

@@ -1,7 +1,7 @@
 // The one OpenCode Engine catalogue (ADR 0015): one `opencode serve` process shared by both adapters, and a switch by the major version of the installed binary.
 import { EngineError, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx } from "./engine-catalogue.ts";
 import { createOpenCodeAdapters } from "./opencode-adapters.ts";
-import { createOpenCodeCatalogue, openCodeWanted, type OpenCodeCatalogueOpts } from "./opencode-catalogue.ts";
+import { createOpenCodeCatalogue, OPENCODE_ID, openCodeWanted, type OpenCodeCatalogueOpts } from "./opencode-catalogue.ts";
 import { createOpenCode2Catalogue } from "./opencode2-catalogue.ts";
 import { createOpenCodeServer } from "./opencode-server.ts";
 
@@ -160,6 +160,9 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
     commands: async (cwd) => (await known()).commands(cwd),
     agents: async (cwd) => (await known()).agents(cwd),
     models: async (cwd) => (await known()).models(cwd),
+    // A leftover Aside is looked up in OpenCode: while the server is down that waits for its start (GH-945).
+    deferCleanup: (id) => OPENCODE_ID.test(id) && !srv.running(),
+    onServerUp: (cb) => void srv.onUp(cb),
     settled: () => v1.settled?.(),
     forget: (id) => v1.forget?.(id),
     settingsChanged: (before, after) => {
