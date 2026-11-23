@@ -1174,14 +1174,15 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
   it("the chooser lists OpenCode's primary agents once the folder loaded, the config's default first; a chosen agent is switched in OpenCode with its denials in the rules; plan mode is the plan agent", async () => {
     // 2.3.0 lists no agent before the folder loaded; the config's `default_agent` comes from its documents.
     const agents = [plan2, build2, { id: "general", mode: "subagent", hidden: false, permissions: [] }, { id: "title", mode: "primary", hidden: true, permissions: [] }, { id: "mine", mode: "all", hidden: false, permissions: [] }];
-    const d = await boot({ env: { FAKE_OPENCODE2_COLD_AGENTS: "2", FAKE_OPENCODE2_PARTIAL_AGENTS: "1" }, data: { agents, config: [{ type: "document", path: "/x/opencode.json", info: { default_agent: "build" } }] } });
+    const d = await boot({ env: { FAKE_OPENCODE2_COLD_AGENTS: "2", FAKE_OPENCODE2_PARTIAL_AGENTS: "1" }, data: { agents, config: [{ type: "document", path: "/x/opencode.json", info: { default_agent: "mine" } }] } });
     await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
     // The chooser read the folder before OpenCode listed its own agents (2.3.0 lists the built-ins first; its `agent.updated` came before any event stream).
     expect(names((await d.ok({ type: "session.agents", cwd: d.project, engine: "opencode" })).agents)).toEqual(["build", "plan"]);
+    await sleep(900); // the background re-read of the cold folder: its own default agent shows
     const s = await d.open();
-    await until(() => names(s.find("agents")?.agents).join() === "build,plan,mine");
+    await until(() => names(s.find("agents")?.agents).join() === "mine,plan,build");
     await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "default" });
-    expect(d.requests("PATCH", `/api/session/${s.id}`).at(-1)!.body.permissions).toEqual([...modeRules("default"), ...BUILD, ...MCP]);
+    expect(d.requests("PATCH", `/api/session/${s.id}`).at(-1)!.body.permissions).toEqual([...modeRules("default"), ...MCP]);
     await expect(d.ok({ type: "session.setAgent", sessionId: s.id, agent: "general" })).rejects.toThrow(/unknown agent general/);
     await d.ok({ type: "session.setAgent", sessionId: s.id, agent: "plan" });
     expect(d.requests("POST", `/api/session/${s.id}/agent`).map((r) => r.body)).toEqual([{ agent: "plan" }]);
@@ -1198,13 +1199,13 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
     expect((await d.ok({ type: "session.list" })).sessions.find((x: { id: string }) => x.id === s.id)).toMatchObject({ agent: "plan", permissionMode: "default" });
   });
 
-  it("the chooser of a new session, before any session runs, shows the folder's own agents that OpenCode lists after its built-ins at its next read within 5 s", async () => {
+  it("the chooser of a new session, before any session runs, shows the folder's own agents that OpenCode lists after its built-ins soon after the first list, with no wait of the first read", async () => {
     const d = await boot({ env: { FAKE_OPENCODE2_COLD_AGENTS: "1", FAKE_OPENCODE2_PARTIAL_AGENTS: "1" }, data: { agents: [plan2, build2, { id: "mine", mode: "primary", hidden: false, permissions: [] }] } });
     await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
     const chooser = async () => names((await d.ok({ type: "session.agents", cwd: d.project, engine: "opencode" })).agents);
-    // A cold folder: the first list OpenCode gives has its built-ins only.
+    // A cold folder: the first list OpenCode gives has its built-ins only; one background read soon after adds the own agents.
     expect(await chooser()).toEqual(["build", "plan"]);
-    await sleep(5100);
+    await sleep(900);
     expect(await chooser()).toEqual(["build", "plan", "mine"]);
   });
 

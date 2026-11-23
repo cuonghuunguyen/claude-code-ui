@@ -1570,7 +1570,13 @@ class OpenCode2EngineImpl implements Engine {
       for (let i = 0; ; i++) {
         const l = (await c.agent.list({ location: { directory: cwd } })).data as unknown as Agent2[];
         // A folder that was cold lists its built-ins first (2.3.0 lists its own agents ~0.2 s later); without an event stream no `agent.updated` says they came.
-        if (l.length) return ((entry.at = Date.now()), (entry.ttl = i > 0 && !this.unsubscribe ? COLD_AGENTS_MS : AGENTS_MS), l);
+        if (l.length) {
+          entry.at = Date.now();
+          const cold = i > 0 && !this.unsubscribe;
+          entry.ttl = cold ? COLD_AGENTS_MS : AGENTS_MS;
+          if (cold) this.rereadAgents(cwd, entry);
+          return l;
+        }
         if (i >= AGENT_POLLS) throw new Error("OpenCode lists no agent for this folder");
         await new Promise((r) => setTimeout(r, AGENT_POLL_MS));
       }
@@ -1578,6 +1584,21 @@ class OpenCode2EngineImpl implements Engine {
     this.agentLists.set(cwd, entry);
     list.catch(() => this.agentLists.get(cwd)?.list === list && this.agentLists.delete(cwd));
     return list;
+  }
+  /** A cold folder's first list has its built-ins only (no event stream says the rest came): one read ~SETTLE_MS later replaces the cache and is pushed to the folder's sessions; the caller did not wait. */
+  private rereadAgents(cwd: string, entry: { at: number; ttl: number; list: Promise<Agent2[]> }) {
+    setTimeout(async () => {
+      if (this.agentLists.get(cwd) !== entry) return;
+      try {
+        const l = (await (await this.server.client()).agent.list({ location: { directory: cwd } })).data as unknown as Agent2[];
+        if (!l.length || this.agentLists.get(cwd) !== entry) return;
+        this.agentLists.set(cwd, { at: Date.now(), ttl: AGENTS_MS, list: Promise.resolve(l) });
+        this.defaults.delete(cwd); // the default agent may be one of the own agents the first list lacked
+        for (const s of this.sessions.values()) if (s.cwd === cwd) void s.refreshAgents();
+      } catch {
+        // The cached first list stays until its short TTL ends.
+      }
+    }, SETTLE_MS).unref();
   }
   private defaults = new Map<string, { at: number; name: Promise<string> }>();
   /** The last known default agent per folder: the synchronous reads (session info) use it until the first `defaultAgent` answers. */
