@@ -96,6 +96,10 @@ _Avoid_: workspace, folder (folder = any directory in the folder browser)
 Values that apply to one Project only: its Label, commit message instruction, skill overrides and overrides of some global settings (Engine, new-Session model, effort and Permission mode, Claude account, inline task model, local history, Jira URL, email, ticket filter and branch template). An unset value inherits the global setting; overrides apply when a Session is created or a request is made. The Jira token is not an override: it is kept per Jira site (scheme, host, port) and shared by the global settings and every Project on that site. Keyed by Side and cwd. Its Worktrees use the Project's values; a Project on a Side keeps them on that Side (the Claude account stays on the Hub). Private to the machine and never committed; kept when the Project is removed. Browser view state (selected repository, selected terminal) is not Project settings.
 _Avoid_: workspace settings, repo settings, local settings (Claude Code's settings.local.json is a different thing)
 
+**Repository**:
+The Projects whose main checkouts have the same `origin` (normalized: host and path, no scheme, user, port or `.git`), on any Side. The sidebar shows one group per Repository. A Project without `origin` is its own Repository. Not the git repository selector of the Graph tab, which picks among a Project's own and Nested repositories.
+_Avoid_: repo group, remote
+
 **Worktree**:
 A linked git worktree of a project's repository, identified by its directory. The repository's own checkout is the main worktree. Its sessions show under the project without adding it.
 _Avoid_: workspace, sandbox

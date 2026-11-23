@@ -975,9 +975,15 @@ async function branchesIn(cwd: string, o: ListBranchesOptions): Promise<Worktree
   return { branches: [...rows.values()], defaultBase: await defaultBaseName(main, o.claudeDir), ...(fetched && { fetched }), ...(fetchError && { fetchError }) };
 }
 
-/** The repository key of `cwd`'s `origin` (`<host>/<path>`, see `remoteRepoOf`); undefined without an origin or with an unreadable URL. One read-only git call. */
+/**
+ * The repository key of `cwd`'s `origin` (`<host>/<path>`, see `remoteRepoOf`); undefined without an origin or with an unreadable URL.
+ * One read-only git call. Rejects when git could not answer (timeout, spawn error): only exit code 1 means "no such key".
+ */
 export async function originKeyOf(cwd: string): Promise<string | undefined> {
-  const url = await git(cwd, "config", "--get", "remote.origin.url").catch(() => "");
+  const url = await git(cwd, "config", "--get", "remote.origin.url").catch((e: { code?: unknown }) => {
+    if (e?.code === 1) return "";
+    throw e;
+  });
   const r = url ? remoteRepoOf(url) : undefined;
   return r && `${r.host}/${r.path}`;
 }

@@ -325,6 +325,8 @@ export function App() {
   const [docker, setDocker] = useState<ListResult["docker"]>();
   const [ssh, setSsh] = useState<ListResult["ssh"]>();
   const [cwdSides, setCwdSides] = useState<Record<string, string>>({});
+  // Repository key of each project with an origin (session.list `origins`): projects of one repository merge in the sidebar.
+  const [origins, setOrigins] = useState<Record<string, string>>({});
   const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({});
   const labels = useLabels();
   const sideOf = useMemo(() => sideLookup(sides, cwdSides, labels.sides), [sides, cwdSides, labels.sides]);
@@ -362,7 +364,7 @@ export function App() {
   // Settings dialog; `settingsChanged`: another client changed the settings (the open dialog reloads).
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Project settings dialog (GH-894): the Project it acts on, kept after closing so the dialog stays mounted for its close and focus return.
-  const [projectSettings, setProjectSettings] = useState<{ open: boolean; cwd: string }>();
+  const [projectSettings, setProjectSettings] = useState<{ open: boolean; cwd: string; side?: string }>();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [shortcutsEdit, setShortcutsEdit] = useState<string>();
   // Shortcut labels and the shortcuts themselves follow the user's bindings.
@@ -710,6 +712,9 @@ export function App() {
   const [deleting, setDeleting] = useState<string>();
   // Project cwd whose Remove waits for the confirmation.
   const [removing, setRemoving] = useState<string>();
+  // A merged group's Remove: every project of the repository (the confirmation names the count).
+  const [removingAll, setRemovingAll] = useState<string[]>();
+  const lastRemovingAll = useRef<string[]>(undefined);
   const [closingGroup, setClosingGroup] = useState<{ ids: string[]; name: string }>();
   const lastClosingGroup = useRef({ ids: [] as string[], name: "" });
   if (closingGroup) lastClosingGroup.current = closingGroup;
@@ -839,7 +844,7 @@ export function App() {
    * the cached list does none of that (and does not reach `follows.listReplied`) (it may be of before a project was removed).
    */
   function applyList(reply: ListResult, sessions: ListResult["sessions"], gen?: number) {
-    const { projects, recentProjects = [], permissionModes, engines: listedEngines, sideEngines: listedSideEngines, sides, docker, ssh, cwdSides = {}, worktrees = {} } = reply;
+    const { projects, recentProjects = [], permissionModes, engines: listedEngines, sideEngines: listedSideEngines, sides, docker, ssh, cwdSides = {}, origins: listedOrigins = {}, worktrees = {} } = reply;
     if (gen !== undefined) {
       newerThanCache.current = true;
       // A project removed here or by another client: its session tabs close (they would show a session no longer listed).
@@ -864,6 +869,7 @@ export function App() {
     setDocker(docker);
     setSsh(ssh);
     setCwdSides(cwdSides);
+    setOrigins(listedOrigins);
     setWorktrees(worktrees);
     if (gen !== undefined) setListLoaded(true);
     else setListCached(true);
@@ -1787,15 +1793,16 @@ export function App() {
   }
 
   /** Removes the project from the list (files and transcripts stay) and closes its session tabs; with it the other added projects of its repository (one sidebar group). */
-  async function removeProject(cwd: string) {
+  async function removeProject(cwd: string, all?: string[]) {
     setError(undefined);
-    const gone = projects.filter((p) => repoOf(p, worktrees) === repoOf(cwd, worktrees));
+    const roots = all?.length ? all : [cwd];
+    const gone = projects.filter((p) => roots.some((r) => repoOf(p, worktrees) === repoOf(r, worktrees)));
     try {
-      for (const p of gone.length ? gone : [cwd]) await client.current!.request({ type: "project.remove", cwd: p });
+      for (const p of gone.length ? gone : roots) await client.current!.request({ type: "project.remove", cwd: p });
       // Gone at once; the list refresh below scans every transcript and can take seconds.
-      setProjects((p) => p.filter((x) => !gone.includes(x) && x !== cwd));
-      closeTabs(new Set(list.filter(inProject(cwd)).map((s) => s.id)));
-      if (draftCwd === cwd) setDraftCwd(undefined);
+      setProjects((p) => p.filter((x) => !gone.includes(x) && !roots.includes(x)));
+      closeTabs(new Set(list.filter((s) => roots.some((r) => inProject(r)(s))).map((s) => s.id)));
+      if (draftCwd && roots.includes(draftCwd)) setDraftCwd(undefined);
       await refreshList();
     } catch (e) {
       setError((e as Error).message);
@@ -3885,7 +3892,7 @@ export function App() {
         <OnFirstOpen open={projectSettings.open} fallback={<DialogFallback size="settings" />}><ProjectSettingsDialog
           open={projectSettings.open}
           cwd={projectSettings.cwd}
-          name={projectName(projectSettings.cwd)}
+          name={projectSettings.side ? `${projectName(projectSettings.cwd)} · ${projectSettings.side}` : projectName(projectSettings.cwd)}
           side={sideOfCwd(cwdSides, projectSettings.cwd)}
           engines={projectEngines(enginesOf(projectSettings.cwd))}
           modelsOf={(engine) => modelsOf(engine, projectSettings.cwd)}
@@ -3925,18 +3932,20 @@ export function App() {
       />
       <ConfirmDialog
         open={removing !== undefined}
-        title={tr("app.main.removeProject")}
-        description={tr("app.main.removeProjectBody", { name: projectName(lastRemoving.current) })}
+        title={(lastRemovingAll.current?.length ?? 0) > 1 ? tr("app.main.removeRepoTitle", { name: projectName(lastRemoving.current), count: lastRemovingAll.current!.length }) : tr("app.main.removeProject")}
+        description={(lastRemovingAll.current?.length ?? 0) > 1 ? tr("app.main.removeRepoBody", { name: projectName(lastRemoving.current), count: lastRemovingAll.current!.length }) : tr("app.main.removeProjectBody", { name: projectName(lastRemoving.current) })}
         confirm={tr("app.main.remove")}
         onConfirm={() => {
           // The row below (else above) is taken now: once project.remove answers, the removed row may be gone.
           const cwds = [...document.querySelectorAll<HTMLElement>('[data-testid="session-group"]')].map((r) => r.dataset.cwd);
           const at = cwds.indexOf(removing);
           removed.current = { next: cwds[at + 1] ?? cwds[at - 1] };
+          const all = removingAll;
           setRemoving(undefined);
-          void removeProject(removing!);
+          setRemovingAll(undefined);
+          void removeProject(removing!, all);
         }}
-        onCancel={() => setRemoving(undefined)}
+        onCancel={() => (setRemoving(undefined), setRemovingAll(undefined))}
         // The removed row's button is gone: the next project row, else the previous one, else the prompt box or Open project.
         finalFocus={() => {
           const target = removed.current;
@@ -4068,20 +4077,22 @@ export function App() {
               list={list}
               projects={projects}
               worktrees={worktrees}
+              origins={origins}
+              sideOrder={sides?.map((x) => x.id)}
               state={listState}
               titleLoading={(s) => titleLoading(s.title, prompted.has(s.id))}
               unread={unread}
               activeId={currentId}
               onOpen={open}
               onNew={newSession}
-              onRemove={setRemoving}
+              onRemove={(cwd, all) => ((lastRemovingAll.current = all), setRemoving(cwd), setRemovingAll(all))}
               onNewWorktree={(cwd, quick) => (setDrawer(false), quick ? void newWorktree(cwd) : setCreatingWt(cwd))}
               onRemoveWorktree={askRemoveWorktree}
               onWarmWorktree={warmWorktree}
               removing={(path) => removingPaths.has(path)}
               onCleanUp={(scope) => (setDrawer(false), setCleanup(scope))}
               onEditProject={(cwd) => (setDrawer(false), setLabeling(cwd))}
-              onProjectSettings={(cwd) => (setDrawer(false), setProjectSettings({ open: true, cwd }))}
+              onProjectSettings={(cwd, side) => (setDrawer(false), setProjectSettings({ open: true, cwd, side }))}
               onOpenProject={() => (setDrawer(false), setOpeningProject(true))}
               renaming={renaming?.in === "list" ? renaming.id : undefined}
               renamingFromMenu={renaming?.menu}

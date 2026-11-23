@@ -532,6 +532,13 @@ function SidebarSection() {
       </div>
       <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
         <div className="min-w-0 flex-1">
+          <span id="settings-sidebar-merge-label" className="block text-sm">{t("settings.sidebar.merge")}</span>
+          <span id="settings-sidebar-merge-hint" className="block text-muted-foreground text-xs">{t("settings.sidebar.mergeHint")}</span>
+        </div>
+        <Switch on={view.merge} label={t("settings.sidebar.merge")} held={false} onToggle={(merge) => saveSidebarView({ ...loadSidebarView(), merge })} title={t("settings.sidebar.merge")} describedBy="settings-sidebar-merge-hint" testId="settings-sidebar-merge" />
+      </div>
+      <div className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
+        <div className="min-w-0 flex-1">
           <span id="settings-sidebar-layout-label" className="block text-sm">{t("settings.sidebar.groupBy")}</span>
           <span id="settings-sidebar-layout-hint" className="block text-muted-foreground text-xs">{t("settings.sidebar.groupByHint")}</span>
         </div>

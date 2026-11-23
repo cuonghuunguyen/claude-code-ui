@@ -140,6 +140,8 @@ export default {
   "settings.sidebar.groupByHint": "Worktree groups a project's sessions by worktree. Project lists them directly under the project, with each session's state as text. Kept in this browser.",
   "settings.sidebar.worktree": "Worktree",
   "settings.sidebar.project": "Project",
+  "settings.sidebar.merge": "Merge sides of one repository",
+  "settings.sidebar.mergeHint": "One group for a repository that is added on several sides (this machine, WSL, Docker, SSH) or cloned twice, with a row per side and worktree. Matched by the origin remote. Kept in this browser.",
   "settings.tabs.title": "Tabs",
   "settings.tabs.grouping": "Tab grouping",
   "settings.tabs.groupingHint": "How the tab bar groups open tabs. Kept in this browser.",

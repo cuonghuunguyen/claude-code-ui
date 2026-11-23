@@ -48,7 +48,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function render(props: { copy?: boolean; sideState?: ContextType<typeof SideState>; reveal?: number; activeId?: string | null; list?: SessionListItem[]; renaming?: string; projects?: string[]; worktrees?: Record<string, Worktree[]>; side?: (cwd: string) => { label: string; short: string } | undefined; openTabs?: Set<string>; state?: (s: SessionListItem) => SessionState; cleanUp?: boolean; removing?: (path: string) => boolean } = {}) {
+async function render(props: { copy?: boolean; sideState?: ContextType<typeof SideState>; reveal?: number; activeId?: string | null; list?: SessionListItem[]; renaming?: string; projects?: string[]; worktrees?: Record<string, Worktree[]>; side?: (cwd: string) => { label: string; short: string } | undefined; origins?: Record<string, string>; sideOrder?: string[]; settings?: boolean; openTabs?: Set<string>; state?: (s: SessionListItem) => SessionState; cleanUp?: boolean; removing?: (path: string) => boolean } = {}) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
@@ -65,6 +65,7 @@ async function render(props: { copy?: boolean; sideState?: ContextType<typeof Si
   const onArchiveIdle = vi.fn();
   const onCleanUp = vi.fn();
   const onCopy = vi.fn();
+  const onProjectSettings = vi.fn();
   const ui = (reveal = props.reveal) => (
       <SideLabel value={props.side ?? (() => undefined)}>
       <SideState value={props.sideState ?? { of: () => undefined, act: () => {} }}>
@@ -72,6 +73,9 @@ async function render(props: { copy?: boolean; sideState?: ContextType<typeof Si
         list={props.list ?? LIST}
         projects={props.projects ?? ["/home/u/web", "/home/u/api"]}
         worktrees={props.worktrees}
+        origins={props.origins}
+        sideOrder={props.sideOrder}
+        onProjectSettings={props.settings ? onProjectSettings : undefined}
         state={props.state ?? ((s) => s.state)}
         openTabs={props.openTabs}
         onWorkers={onWorkers}
@@ -109,7 +113,7 @@ async function render(props: { copy?: boolean; sideState?: ContextType<typeof Si
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
   };
-  return { el, rerender, groups, rows, toggle, search, onOpen, onNew, onRemove, onNewWorktree, onRemoveWorktree, onWarmWorktree, onOpenProject, onAction, onRenamed, onWorkers, onArchiveIdle, onCleanUp, onCopy };
+  return { el, rerender, groups, rows, toggle, search, onOpen, onNew, onRemove, onNewWorktree, onRemoveWorktree, onWarmWorktree, onOpenProject, onAction, onRenamed, onWorkers, onArchiveIdle, onCleanUp, onCopy, onProjectSettings };
 }
 
 it("one group per working directory with the project name as header and the full path only as tooltip", async () => {
@@ -676,6 +680,166 @@ describe("workers", () => {
     const { el } = await render({ list: [{ ...coord, cwd: "/home/u/orca/web/fix" }, wk("w1", "w1", "/home/u/api", "idle")], projects: ["/home/u/web", "/home/u/api"], worktrees: { "/home/u/web": wts } });
     expect(el.querySelector("[data-worker]")!.className).toContain("pl-17");
     expect(el.querySelector<HTMLElement>('[data-session-id="c"]')!.className).toContain("pl-12");
+  });
+});
+
+describe("one repository on several Sides is one group (GH-591)", () => {
+  const KEY = "example.com/acme/app";
+  const mac = "/Users/me/app";
+  const wsl = "/home/me/app";
+  const ssh = "/srv/app";
+  const worktrees: Record<string, Worktree[]> = {
+    [mac]: [{ path: mac, branch: "main", main: true }, { path: `${mac}/.claude/worktrees/feat`, branch: "feat/x", main: false }],
+    [wsl]: [{ path: wsl, branch: "main", main: true }],
+    [ssh]: [{ path: ssh, branch: "release", main: true }],
+  };
+  const sideIds: Record<string, string> = { [wsl]: "wsl:Ubuntu", [ssh]: "ssh:dev" };
+  const titles: Record<string, { label: string; short: string }> = { [mac]: { label: "macOS", short: "Mac" }, [wsl]: { label: "WSL: Ubuntu", short: "WSL" }, [ssh]: { label: "SSH: dev", short: "SSH" } };
+  const side = (cwd: string) => titles[cwd];
+  const info = (state = "ready") => ({
+    of: (cwd: string) => ({ id: sideIds[cwd] ?? "local", label: titles[cwd]?.label ?? "macOS", state: cwd === ssh ? state : "ready" }) as never,
+    act: vi.fn(),
+  });
+  const list = [item("m", mac, "Fix search", 5), item("f", `${mac}/.claude/worktrees/feat`, "Feature work", 8), item("w", wsl, "Linux run", 10), item("s", ssh, "Release", 20)];
+  const props = { list, projects: [mac, wsl, ssh], worktrees, origins: { [mac]: KEY, [wsl]: KEY, [ssh]: KEY }, sideOrder: ["local", "wsl:Ubuntu", "ssh:dev"], side, sideState: info(), settings: true, activeId: null as null };
+  const wtRows = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>('[data-testid="worktree-row"]')];
+  const label = (r: HTMLElement) => r.querySelector('[data-testid="worktree-toggle"]')!.textContent;
+
+  it("one group named after the primary with an N sides chip, and one row per Side and worktree that names its Side", async () => {
+    const { groups, toggle, el } = await render(props);
+    expect(groups().map((g) => g.dataset.cwd)).toEqual([mac]);
+    expect(el.querySelector('[data-testid="sides-chip"]')!.textContent).toBe("3 sides");
+    expect(toggle(mac).getAttribute("aria-label")).toBe("app (3 sides)");
+    expect(el.querySelector('[data-testid="side-badge"]')).toBeNull();
+    expect(wtRows(el).map(label)).toEqual(["macOS · main", "macOS · feat/x", "WSL: Ubuntu · main", "SSH: dev · release"]);
+    // The kind (local / worktree) stays in the accessible name.
+    expect(wtRows(el).map((r) => r.querySelector('[data-testid="worktree-toggle"]')!.getAttribute("aria-label"))).toEqual(["macOS · local : main", "macOS · worktree : feat/x", "WSL: Ubuntu · local : main", "SSH: dev · local : release"]);
+    expect(wtRows(el).map((r) => r.querySelectorAll('[data-testid="session-item"]').length)).toEqual([1, 1, 1, 1]);
+  });
+
+  it("a row is a button with aria-expanded; the group header collapses every row", async () => {
+    const { el, toggle } = await render(props);
+    const first = wtRows(el)[0]!.querySelector<HTMLElement>('[data-testid="worktree-toggle"]')!;
+    expect(first.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => first.click());
+    expect(first.getAttribute("aria-expanded")).toBe("false");
+    expect(JSON.parse(localStorage.getItem("claude-ui.collapsed")!)).toEqual([`worktree:${mac}`]);
+    await act(async () => toggle(mac).click());
+    expect(wtRows(el)).toEqual([]);
+    expect(JSON.parse(localStorage.getItem("claude-ui.collapsed")!)).toContain(`repo:${KEY}`);
+  });
+
+  it("a Side that is not ready keeps its row; its status line and Retry sit under that row, not under the header", async () => {
+    const sideState = info("error");
+    (sideState.of as (c: string) => unknown) = (cwd: string) => ({ id: sideIds[cwd] ?? "local", label: titles[cwd]!.label, state: cwd === ssh ? "error" : "ready", ...(cwd === ssh && { message: "SSH: dev stopped. Retry to start it again." }) });
+    const { el, onNew } = await render({ ...props, sideState: sideState as never });
+    const status = el.querySelectorAll('[data-testid="sidebar-side-status"]');
+    expect(status).toHaveLength(1);
+    const row = wtRows(el).find((r) => label(r) === "SSH: dev · release")!;
+    expect(row.contains(status[0]!)).toBe(true);
+    expect(el.querySelector("h3")!.contains(status[0]!)).toBe(false);
+    expect(status[0]!.textContent).toContain("SSH: dev stopped");
+    await act(async () => (status[0]!.querySelector('[data-testid="sidebar-side-action"]') as HTMLElement).click());
+    expect(sideState.act).toHaveBeenCalledWith("ssh:dev", undefined);
+    expect(onNew).not.toHaveBeenCalled();
+  });
+
+  it("a collapsed merged group still shows the status line and Retry of a Side that is not ready, under its header", async () => {
+    const sideState = { act: vi.fn(), of: (cwd: string) => ({ id: sideIds[cwd] ?? "local", label: titles[cwd]!.label, state: cwd === ssh ? "error" : "ready", ...(cwd === ssh && { message: "SSH: dev stopped. Retry to start it again." }) }) as never };
+    localStorage.setItem("claude-ui.collapsed", JSON.stringify([`repo:${KEY}`]));
+    const { el } = await render({ ...props, sideState });
+    expect(wtRows(el)).toEqual([]);
+    expect(el.querySelectorAll('[data-testid="sidebar-side-status"]')).toHaveLength(1);
+    expect(el.querySelectorAll('[data-testid="sidebar-side-action"]')).toHaveLength(1);
+  });
+
+  it("workers keep today's indent below a merged row (no new level)", async () => {
+    const withWorker = [...list, { ...item("c", mac, "Coordinator", 1), }, { ...item("w1", mac, "Impl", 2), coordinatorId: "c", workerName: "impl" }];
+    openWorkers("coordinator:c");
+    const { el } = await render({ ...props, list: withWorker });
+    const w = el.querySelector<HTMLElement>('[data-session-id="w1"]')!;
+    expect(w.className).toContain("pl-17");
+  });
+
+  it("the header's Remove and Project settings: Remove covers every project, settings is the primary's", async () => {
+    const { el, onRemove, onProjectSettings } = await render(props);
+    await act(async () => el.querySelector<HTMLElement>('[data-testid="project-remove"]')!.click());
+    expect(onRemove).toHaveBeenCalledWith(mac, [mac, wsl, ssh]);
+    expect(onProjectSettings).not.toHaveBeenCalled();
+  });
+
+  it("the options menu offers merging with several Sides, toggles it, keeps the choice, and shows today's groups when off", async () => {
+    // The newest match: a popup of an earlier test's render may still be in the document.
+    const gq = (id: string) => [...document.querySelectorAll<HTMLElement>(`[data-testid="${id}"]`)].at(-1)!;
+    const r = await render(props);
+    await act(async () => gq("sidebar-options").click());
+    await vi.waitFor(() => expect(gq("sidebar-opt-merge")).not.toBeNull());
+    expect(gq("sidebar-opt-merge").getAttribute("aria-checked")).toBe("true");
+    await act(async () => gq("sidebar-opt-merge").click());
+    expect(loadSidebarView().merge).toBe(false);
+    await closeMenu();
+    expect(r.groups().map((g) => g.dataset.cwd)).toEqual([mac, wsl, ssh]);
+    root!.unmount();
+    const again = await render(props);
+    expect(again.groups()).toHaveLength(3);
+  });
+
+  it("without several Sides or a shared origin the menu has no merge item", async () => {
+    const r = await render({ ...props, sideOrder: ["local"], origins: { [mac]: KEY, [wsl]: "example.com/acme/other" } });
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="sidebar-options"]')!.click());
+    expect(document.querySelector('[data-testid="sidebar-opt-merge"]')).toBeNull();
+    await closeMenu();
+    expect(r.groups()).toHaveLength(3);
+  });
+
+  it("two clones on one Side: no chip, today's row labels with the folder of the second clone", async () => {
+    const second = "/Users/me/app-2";
+    const wt = { ...worktrees, [second]: [{ path: second, branch: "main", main: true }] };
+    const { el, groups } = await render({ ...props, list: [item("m", mac, "A", 5), item("n", second, "B", 6)], projects: [mac, second], worktrees: wt, origins: { [mac]: KEY, [second]: KEY }, side: () => undefined, sideState: { of: () => undefined, act: vi.fn() } });
+    expect(groups()).toHaveLength(1);
+    expect(el.querySelector('[data-testid="sides-chip"]')).toBeNull();
+    expect(wtRows(el).map(label)).toEqual(["local : main", "local : main · app-2", "worktree : feat/x"]);
+  });
+
+  it("below md the row shows the short Side label and the branch tail; the full label is the accessible name and tooltip", async () => {
+    const mm = window.matchMedia;
+    window.matchMedia = ((q: string) => ({ matches: q.includes("48rem"), media: q, addEventListener() {}, removeEventListener() {} })) as never;
+    try {
+      const { el } = await render(props);
+      const toggles = wtRows(el).map((r) => r.querySelector<HTMLElement>('[data-testid="worktree-toggle"]')!);
+      expect(toggles.map((b) => b.textContent)).toEqual(["Mac · main", "Mac · x", "WSL · main", "SSH · release"]);
+      expect(toggles[1]!.getAttribute("aria-label")).toBe("macOS · worktree : feat/x");
+      expect(toggles[1]!.title).toContain("macOS · worktree : feat/x");
+      expect(el.querySelector('[data-testid="sides-chip"]')!.textContent).toBe("3 sides");
+    } finally {
+      window.matchMedia = mm;
+    }
+  });
+
+  it("Group by: Project with merging lists every session flat, with its branch and Side", async () => {
+    saveSidebarView({ ...loadSidebarView(), layout: "classic" });
+    const { el, rows } = await render(props);
+    expect(wtRows(el)).toEqual([]);
+    expect(rows().map((r) => r.dataset.sessionId)).toEqual(["m", "f", "w", "s"]);
+    const suffix = (id: string) => el.querySelector(`[data-session-id="${id}"]`)!.textContent!;
+    expect(suffix("f")).toContain("feat/x");
+    expect(suffix("w")).toContain("WSL");
+    expect(suffix("s")).toContain("SSH");
+    expect(suffix("m")).not.toContain("Mac");
+  });
+
+  // Last: it leaves a menu popup behind, which keeps the next test from opening another menu.
+  it("the main row of a project has its own menu: Project settings for that Side and Remove from list for that project only", async () => {
+    const { el, onProjectSettings, onRemove } = await render(props);
+    const row = wtRows(el).find((r) => label(r) === "WSL: Ubuntu · main")!;
+    await act(async () => row.querySelector<HTMLElement>('[data-testid="worktree-menu"]')!.click());
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="worktree-menu-project-settings"]')).not.toBeNull());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="worktree-menu-project-settings"]')!.click());
+    expect(onProjectSettings).toHaveBeenCalledWith(wsl, "WSL: Ubuntu");
+    await act(async () => row.querySelector<HTMLElement>('[data-testid="worktree-menu"]')!.click());
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="worktree-menu-remove"]')).not.toBeNull());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="worktree-menu-remove"]')!.click());
+    expect(onRemove).toHaveBeenCalledWith(wsl);
   });
 });
 

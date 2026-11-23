@@ -1,16 +1,17 @@
 // Sidebar session list (docs/spec.md "Layout"): one collapsible group per known project (per repository), its worktrees as collapsible rows; search by title, project name or branch.
 import { EngineTag } from "./engine-tag.tsx";
 import { SideBadge, SideLabel, SideState, SideStatusLine } from "./sides.tsx";
+import { LabelIcon } from "./label-icon.tsx";
 import { Fragment, memo, use, useEffect, useRef, useState, type UIEvent } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
 import { Menu } from "@base-ui/react/menu";
 import { ArchiveIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, CircleAlertIcon, EllipsisVerticalIcon, LocateFixedIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, LoaderCircleIcon, LockIcon, SearchIcon, SquarePenIcon, Trash2Icon, UsersIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { SessionListItem, SessionState, Worktree } from "@claude-ui/protocol";
+import { LOCAL_SIDE, type SessionListItem, type SessionState, type Worktree } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
 import type { CleanupScope } from "./cleanup.ts";
-import { displayTitle, activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, limitSessions, isWorkerKey, loadCollapsed, loadExpandedWorkers, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveExpandedWorkers, saveSidebarView, nestWorkers, classicGroup, projectIs, parseSessionQuery, sortGroups, stateName, timeAgo, workerKey, worktreeName, type SessionGroup, type SidebarView, type WorktreeRow } from "./sessions.ts";
+import { displayTitle, activeOnly, activeWorkers, byDay, collapseKeys, groupByCwd, groupKey, limitSessions, isWorkerKey, loadCollapsed, loadExpandedWorkers, loadSidebarView, VIEW_EVENT, MORE, removableWorktree, revealKeys, rowKey, SHOWN, saveCollapsed, saveExpandedWorkers, saveSidebarView, nestWorkers, classicGroup, projectIs, parseSessionQuery, sortGroups, stateName, timeAgo, workerKey, worktreeName, type MergeContext, type SessionGroup, type SidebarView, type WorktreeRow } from "./sessions.ts";
 import { ringLocate, useShakeToLocate } from "./locate.ts";
 import { useNow } from "./plan-meter.tsx";
 import { useLabels } from "./labels.ts";
@@ -48,7 +49,7 @@ function emptySearch(query: string, archived: boolean, projects: string[]) {
 }
 
 /** IntelliJ-style options of the sidebar (kebab in the Projects header): behavior, what shows, grouping, project order; below md also Expand all / Collapse all. */
-function SidebarOptions({ view, onView, archived, onArchived, onExpand, onCollapse, treeHint, narrow }: { view: SidebarView; onView: (v: Partial<SidebarView>) => void; archived: boolean; onArchived: (on: boolean) => void; onExpand: () => void; onCollapse: () => void; treeHint: string; narrow: boolean }) {
+function SidebarOptions({ view, onView, canMerge, archived, onArchived, onExpand, onCollapse, treeHint, narrow }: { view: SidebarView; canMerge: boolean; onView: (v: Partial<SidebarView>) => void; archived: boolean; onArchived: (on: boolean) => void; onExpand: () => void; onCollapse: () => void; treeHint: string; narrow: boolean }) {
   const t = useT();
   const check = (label: string, on: boolean, set: (on: boolean) => void, testId: string) => (
     <Menu.CheckboxItem className={CHECK_ITEM} checked={on} onCheckedChange={set} data-testid={testId}>
@@ -97,6 +98,7 @@ function SidebarOptions({ view, onView, archived, onArchived, onExpand, onCollap
                   </Menu.RadioItem>
                 ))}
               </Menu.RadioGroup>
+              {canMerge && check(t("sidebar.mergeSides"), view.merge, (merge) => onView({ merge }), "sidebar-opt-merge")}
             </Menu.Group>
             <Menu.Separator className="my-1 h-px bg-border" />
             <Menu.Group>
@@ -121,6 +123,8 @@ export function SessionList({
   list,
   projects,
   worktrees,
+  origins,
+  sideOrder,
   state,
   titleLoading,
   unread,
@@ -152,6 +156,9 @@ export function SessionList({
   projects: string[];
   /** Git worktrees of each project (session.list); a repository with linked ones shows a row per worktree. */
   worktrees?: Record<string, Worktree[]>;
+  /** Repository key of each project with an origin (session.list `origins`) and the Side ids in the daemon's order: the projects of one repository merge into one group. */
+  origins?: Record<string, string>;
+  sideOrder?: string[];
   /** Live state of a session, falling back to its list state. */
   state: (s: SessionListItem) => SessionState;
   /** Title still a placeholder after a prompt (GH-133): the row shows a skeleton. */
@@ -161,8 +168,8 @@ export function SessionList({
   onOpen: (id: string) => void;
   /** New session in this project or worktree, without a directory picker. */
   onNew: (cwd: string) => void;
-  /** Removes the project from the list; files stay. */
-  onRemove: (cwd: string) => void;
+  /** Removes the project from the list; files stay. `all`: every project of a merged group (the group header's Remove). */
+  onRemove: (cwd: string, all?: string[]) => void;
   /** New worktree in the project's repository: the Create worktree modal; `quick`: Shift+click or menu "New worktree", at once with a generated name. */
   onNewWorktree?: (cwd: string, quick: boolean) => void;
   /** Remove a linked worktree inside the roots that is not locked (the app confirms first). */
@@ -176,7 +183,8 @@ export function SessionList({
   /** "Change name and icon…" of a project (GH-515). */
   onEditProject?: (cwd: string) => void;
   /** Opens the Project settings dialog of a project. */
-  onProjectSettings?: (cwd: string) => void;
+  /** `side`: the Side title of the project, in a merged group, for the dialog title. */
+  onProjectSettings?: (cwd: string, side?: string) => void;
   onOpenProject: () => void;
   /** Session whose row shows the title editor. */
   renaming?: string;
@@ -272,7 +280,10 @@ export function SessionList({
   const cleanable = !!onCleanUp;
   const top = nested.top;
   const keepActive = (s: SessionListItem) => s.id === activeId || state(s) === "running" || state(s) === "needs_input";
-  const shown = sortGroups(groupByCwd(top, query, projects, archived, worktrees, nested.workers), view.sort);
+  const merge: MergeContext | undefined = view.merge && origins ? { origins, sideOf: (cwd) => sideInfo(cwd)?.id ?? LOCAL_SIDE, sideOrder: sideOrder ?? [], worktrees: worktrees ?? {}, sideLabel: (cwd) => sideOf(cwd)?.label } : undefined;
+  // The menu item shows when merging can matter: several Sides, or two projects of one repository.
+  const canMerge = (sideOrder?.length ?? 0) > 1 || (origins ? new Set(Object.values(origins)).size < Object.keys(origins).length : false);
+  const shown = sortGroups(groupByCwd(top, query, projects, archived, worktrees, nested.workers, merge), view.sort);
   // Only active sessions: a coordinator lists just its workers that qualify too.
   const searching = !!query.trim();
   // Search still finds every session, and the archived view lists archived ones only.
@@ -285,21 +296,28 @@ export function SessionList({
   const branches = new Map<string, string>();
   const groups = classic
     ? kept.map((g) => {
-        const c = classicGroup(g);
+        const c = classicGroup(g, (cwd) => sideOf(cwd)?.short);
         c.branch.forEach((b, id) => branches.set(id, b));
         return c.group;
       })
     : kept;
-  // One side status line per side, under its first listed project.
-  const firstCwds = new Set<string>();
+  // One side status line per side: under its first listed project; in a merged group under the first row of that Side (in the flat
+  // layout under the header: it has no rows).
+  const statusAt = new Map<string, string[]>();
+  const statusRows = new Set<string>();
   const seenSides = new Set<string>();
-  for (const g of groups) {
-    const sid = sideInfo(g.cwd)?.id;
-    if (sid && !seenSides.has(sid)) (seenSides.add(sid), firstCwds.add(g.cwd));
+  for (const g of kept) {
+    for (const [path, cwd] of g.repo ? g.worktrees.map((r) => [r.path, r.project ?? r.path] as const) : [[g.cwd, g.cwd] as const]) {
+      const sid = sideInfo(cwd)?.id;
+      if (!sid || seenSides.has(sid)) continue;
+      seenSides.add(sid);
+      if (g.repo && !classic) statusRows.add(path);
+      else statusAt.set(groupKey(g), [...(statusAt.get(groupKey(g)) ?? []), cwd]);
+    }
   }
   // Menu targets come from the unfiltered, unsearched groups: search and Only active never shrink what an action covers.
   let unfiltered: SessionGroup[] | undefined;
-  const baseGroup = (cwd: string) => (unfiltered ??= groupByCwd(nested.top, "", projects, archived, worktrees, nested.workers)).find((g) => g.cwd === cwd);
+  const baseGroup = (cwd: string) => (unfiltered ??= groupByCwd(nested.top, "", projects, archived, worktrees, nested.workers, merge)).find((g) => g.cwd === cwd);
   const idle = (sessions: SessionListItem[], days: number) => idleTargets(sessions, nested.workers, { days, now: Date.now(), activeId, state });
   const menuBase = (sessions: () => SessionListItem[], where: string, prefix: string) => ({
     prefix,
@@ -317,19 +335,27 @@ export function SessionList({
       copyPath: onCopy && (() => (count("copyPath"), onCopy(g.cwd, "path"))),
       newWorktree: onNewWorktree && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) ? (quick) => onNewWorktree(g.cwd, quick) : undefined,
       rename: onEditProject && (() => onEditProject(g.cwd)),
-      projectSettings: onProjectSettings && (() => onProjectSettings(g.cwd)),
+      projectSettings: onProjectSettings && (() => onProjectSettings(g.cwd, g.repo ? sideOf(g.cwd)?.label : undefined)),
       cleanUp: onCleanUp && (() => onCleanUp({ kind: "project", cwd: g.cwd })),
-      tail: { id: `${prefix}remove`, label: t("sidebar.menu.removeFromList"), onSelect: () => onRemove(g.cwd) },
+      tail: { id: `${prefix}remove`, label: t("sidebar.menu.removeFromList"), onSelect: () => (g.repo ? onRemove(g.cwd, g.members) : onRemove(g.cwd)) },
     });
   const isBusy = (r: WorktreeRow) => !!(r.removing || removing?.(r.path));
-  /** Menu of a worktree row. */
-  const rowMenu = (g: SessionGroup, r: WorktreeRow, label: string, prefix: string) => () =>
-    groupEntries({
+  /** Menu of a worktree row; the main row of a project in a merged group also acts for that project (its Project settings, Remove from list). */
+  const rowMenu = (g: SessionGroup, r: WorktreeRow, label: string, prefix: string) => () => {
+    const project = r.project ?? g.cwd;
+    const member = !!g.repo && r.main;
+    return groupEntries({
       ...menuBase(() => (baseGroup(g.cwd)?.worktrees.find((x) => x.path === r.path) ?? r).sessions, label, prefix),
       newSession: r.outsideRoots || isBusy(r) ? undefined : () => onNew(r.path),
       copyPath: onCopy && (() => (count("copyPath"), onCopy(r.path, "path"))),
-      tail: onRemoveWorktree && !isBusy(r) && removableWorktree(worktrees?.[g.cwd] ?? [], r) ? { id: `${prefix}remove`, label: t("sidebar.menu.deleteWorktree"), onSelect: () => onRemoveWorktree(g.cwd, r.path) } : undefined,
+      projectSettings: member && onProjectSettings ? () => onProjectSettings(project, sideOf(project)?.label) : undefined,
+      tail: member
+        ? { id: `${prefix}remove`, label: t("sidebar.menu.removeFromList"), onSelect: () => onRemove(project) }
+        : onRemoveWorktree && !isBusy(r) && removableWorktree(worktrees?.[project] ?? [], r)
+          ? { id: `${prefix}remove`, label: t("sidebar.menu.deleteWorktree"), onSelect: () => onRemoveWorktree(project, r.path) }
+          : undefined,
     });
+  };
   const activeSession = list.find((s) => s.id === activeId);
   // Select active session: open what hides the row (clearing a search or switching to the row's archived view first), then scroll to it; `focus`: move the focus to it.
   const [reveal, setReveal] = useState<{ id: string; focus: boolean }>();
@@ -337,7 +363,7 @@ export function SessionList({
     if (!activeSession) return undefined;
     const a = activeSession.archived;
     const nv = nestWorkers(list, a);
-    return revealKeys(activeSession.id, groupByCwd(nv.top, "", projects, a, worktrees, nv.workers), nv.workers, a);
+    return revealKeys(activeSession.id, groupByCwd(nv.top, "", projects, a, worktrees, nv.workers, merge), nv.workers, a);
   })();
   const revealActive = (focus: boolean) => {
     const keys = activeKeys;
@@ -532,7 +558,7 @@ export function SessionList({
                 </IconButton>
               </>
             )}
-            <SidebarOptions view={view} onView={setView} archived={archived} onArchived={setArchived} onExpand={expandAll} onCollapse={collapseAll} treeHint={treeHint} narrow={narrow} />
+            <SidebarOptions view={view} onView={setView} canMerge={canMerge} archived={archived} onArchived={setArchived} onExpand={expandAll} onCollapse={collapseAll} treeHint={treeHint} narrow={narrow} />
           </>
         )}
       </div>
@@ -600,23 +626,29 @@ export function SessionList({
           </p>
         )}
         {groups.map((g) => {
-          const open = isOpen(g.cwd);
-          const firstOfSide = firstCwds.has(g.cwd);
+          const open = isOpen(groupKey(g));
+          const sidesLabel = g.repo && g.sides!.length > 1 ? t("sidebar.sidesCount", { count: g.sides!.length }) : undefined;
           return (
-            <section key={g.cwd} data-testid="session-group" data-cwd={g.cwd}>
+            <section key={groupKey(g)} data-testid="session-group" data-cwd={g.cwd}>
               <RowContextMenu testId="group-menu" entries={groupMenu(g, "group-menu-")}>
               <h3 className="group/project relative">
                 <button
                   className="flex h-7 w-full items-center gap-2 rounded-md pr-20 pl-1.5 text-left max-md:pr-26 pointer-coarse:pr-38 max-md:pointer-coarse:pr-26 text-muted-foreground text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11"
                   aria-expanded={open}
-                  aria-label={sideOf(g.cwd) ? `${projectName(g.cwd)} (${sideOf(g.cwd)!.label})` : undefined}
-                  onClick={() => toggle(g.cwd)}
+                  aria-label={sidesLabel ? t("sidebar.mergedName", { name: projectName(g.cwd), sides: sidesLabel }) : sideOf(g.cwd) ? `${projectName(g.cwd)} (${sideOf(g.cwd)!.label})` : undefined}
+                  onClick={() => toggle(groupKey(g))}
                   title={g.cwd}
                   data-testid="group-toggle" data-part="group-toggle"
                 >
                   <ProjectAvatar cwd={g.cwd} />
                   <span className="min-w-0 truncate font-medium">{projectName(g.cwd)}</span>
-                  <SideBadge cwd={g.cwd} short />
+                  {sidesLabel ? (
+                    <span className="inline-flex h-4 shrink-0 select-none items-center whitespace-nowrap rounded-xs border-[0.5px] bg-muted px-1 font-[530] text-[11px] text-muted-foreground leading-none tabular-nums" data-testid="sides-chip">
+                      {sidesLabel}
+                    </span>
+                  ) : (
+                    <SideBadge cwd={g.cwd} short />
+                  )}
                   {filtering && !!g.idle && <span className="shrink-0 font-normal text-faint text-xs" data-testid="idle-count">{t("sidebar.idleCount", { count: g.idle })}</span>}
                   <ChevronRightIcon className={cn("ml-auto size-4 shrink-0 text-faint transition-transform motion-reduce:transition-none", open && "rotate-90")} aria-hidden />
                 </button>
@@ -633,14 +665,15 @@ export function SessionList({
                   {narrow ? (
                     <RowMenu label={projectName(g.cwd)} testId="project-menu" entries={groupMenu(g, "project-menu-")} />
                   ) : (
-                    <IconButton label={t("sidebar.removeNamedFromList", { name: projectName(g.cwd) })} onClick={() => onRemove(g.cwd)} testId="project-remove" className="size-6">
+                    <IconButton label={t("sidebar.removeNamedFromList", { name: projectName(g.cwd) })} onClick={() => (g.repo ? onRemove(g.cwd, g.members) : onRemove(g.cwd))} testId="project-remove" className="size-6">
                       <XIcon />
                     </IconButton>
                   )}
                 </span>
               </h3>
               </RowContextMenu>
-              {firstOfSide && <SideStatusLine cwd={g.cwd} />}
+              {/* A collapsed merged group renders no rows: the lines meant for its rows show under the header then. */}
+              {[...(statusAt.get(groupKey(g)) ?? []), ...(open ? [] : g.worktrees.filter((r) => statusRows.has(r.path)).map((r) => r.project ?? r.path))].map((cwd) => <SideStatusLine key={cwd} cwd={cwd} />)}
               {open && !g.sessions.length && !g.worktrees.length && <p className="py-1 pl-7 text-muted-foreground text-sm">{emptyText}</p>}
               {open && days(g.sessions, 0, g.cwd, projectName(g.cwd))}
               {open &&
@@ -648,11 +681,16 @@ export function SessionList({
                   const rowOpen = isOpen(rowKey(r.path));
                   const kind = t(r.main ? "sidebar.kindLocal" : "sidebar.kindWorktree");
                   const branch = r.branch ?? lastSegment(r.path);
+                  // The project the row belongs to; in a merged group with several Sides the row names its Side first (title or short label), the kind moves to the tooltip.
+                  const project = r.project ?? g.cwd;
+                  const rowSide = g.repo && g.sides!.length > 1 ? sideOf(project) : undefined;
+                  const clone = g.repo && r.clone ? ` · ${r.clone}` : "";
                   // Below md: only what follows the last "/" (the ticket part of "user/GH-1-fix"); the full name is the aria label and tooltip.
                   // Two rows of the project with the same tail (alice/fix, bob/fix) keep the full branch; counted on all its rows, not just the searched ones.
-                  const sameTail = (worktrees?.[g.cwd] ?? g.worktrees).filter((w) => lastSegment(w.branch ?? lastSegment(w.path)) === lastSegment(branch)).length > 1;
+                  const sameTail = (g.repo ? g.worktrees.filter((w) => w.side === r.side) : (worktrees?.[g.cwd] ?? g.worktrees)).filter((w) => lastSegment(w.branch ?? lastSegment(w.path)) === lastSegment(branch)).length > 1;
                   const shortBranch = sameTail ? branch : lastSegment(branch);
-                  const label = `${kind} : ${branch}`;
+                  const label = `${rowSide ? `${rowSide.label} · ` : ""}${kind} : ${branch}${clone}`;
+                  const text = narrow ? `${rowSide ? `${rowSide.short} · ` : ""}${shortBranch}${clone}` : rowSide ? `${rowSide.label} · ${branch}${clone}` : label;
                   const busy = isBusy(r);
                   return (
                     <div key={r.path} data-testid="worktree-row" data-path={r.path}>
@@ -663,12 +701,13 @@ export function SessionList({
                           className="flex h-7 w-full items-center gap-2 rounded-md pr-14 pl-6 text-left text-muted-foreground text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11 max-md:pr-26 pointer-coarse:pr-26"
                           aria-expanded={rowOpen}
                           onClick={() => toggle(rowKey(r.path))}
-                          aria-label={narrow ? `${label}${r.outsideRoots ? ` ${t("sidebar.outsideRoots")}` : ""}` : undefined}
-                          title={`${narrow ? `${label}\n` : ""}${r.outsideRoots ? t("sidebar.outsideRootsTitle", { path: r.path }) : r.path}`}
+                          aria-label={narrow || rowSide ? `${label}${r.outsideRoots ? ` ${t("sidebar.outsideRoots")}` : ""}` : undefined}
+                          title={`${narrow || rowSide ? `${label}\n` : ""}${r.outsideRoots ? t("sidebar.outsideRootsTitle", { path: r.path }) : r.path}`}
                           data-testid="worktree-toggle"
                         >
                           {busy ? <LoaderCircleIcon className="size-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden /> : <GitBranchIcon className="size-4 shrink-0 text-faint" aria-hidden />}
-                          <span className="min-w-0 truncate font-medium">{narrow ? shortBranch : label}</span>
+                          {rowSide?.icon && <LabelIcon icon={rowSide.icon} className="inline-grid size-4 shrink-0 text-[11px]" />}
+                          <span className="min-w-0 truncate font-medium">{text}</span>
                           {busy && (
                             <span className="shrink-0 text-xs" data-testid="worktree-removing">
                               {t("sidebar.removing")}
@@ -689,12 +728,12 @@ export function SessionList({
                             <IconButton label={t("sidebar.newSessionIn", { name: label })} onClick={() => onNew(r.path)} disabled={busy} testId="worktree-new-session" className="size-6">
                               <SquarePenIcon />
                             </IconButton>
-                            {narrow ? (
+                            {narrow || (g.repo && r.main) ? (
                               <RowMenu label={label} testId="worktree-menu" disabled={busy} entries={rowMenu(g, r, label, "worktree-menu-")} />
                             ) : (
                               onRemoveWorktree &&
-                              removableWorktree(worktrees?.[g.cwd] ?? [], r) && (
-                                <IconButton label={t("sidebar.removeNamed", { name: label })} onClick={() => onRemoveWorktree(g.cwd, r.path)} disabled={busy} onWarm={onWarmWorktree && (() => onWarmWorktree(g.cwd, r.path))} testId="worktree-remove" className="size-6">
+                              removableWorktree(worktrees?.[project] ?? [], r) && (
+                                <IconButton label={t("sidebar.removeNamed", { name: label })} onClick={() => onRemoveWorktree(project, r.path)} disabled={busy} onWarm={onWarmWorktree && (() => onWarmWorktree(project, r.path))} testId="worktree-remove" className="size-6">
                                   <Trash2Icon />
                                 </IconButton>
                               )
@@ -703,6 +742,7 @@ export function SessionList({
                         )}
                       </div>
                       </RowContextMenu>
+                      {statusRows.has(r.path) && <SideStatusLine cwd={project} inset />}
                       {rowOpen && !r.sessions.length && <p className="py-1 pl-12 text-muted-foreground text-sm">{emptyText}</p>}
                       {rowOpen && days(r.sessions, 1, rowKey(r.path), label)}
                     </div>

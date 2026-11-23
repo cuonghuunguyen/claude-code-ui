@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { setLocalePref } from "./i18n.ts";
 import type { SessionListItem } from "@claude-ui/protocol";
-import { activeOnly, isWorkerKey, loadExpandedWorkers, saveExpandedWorkers, collapseKeys, loadSidebarView, revealKeys, saveSidebarView, sortGroups, byDay, groupByCwd, inProject, nestWorkers, parseSessionQuery, patchSession, resumeSearchText, projectOf, removableWorktree, externalWorktree, keepsBranch, removeWorktreeText, repoOf, timeAgo, worktreeName, displayTitle, projectIs } from "./sessions.ts";
+import { activeOnly, classicGroup, groupKey, isWorkerKey, loadExpandedWorkers, saveExpandedWorkers, collapseKeys, loadSidebarView, revealKeys, saveSidebarView, sortGroups, byDay, groupByCwd, inProject, nestWorkers, parseSessionQuery, patchSession, resumeSearchText, projectOf, removableWorktree, externalWorktree, keepsBranch, removeWorktreeText, repoOf, timeAgo, worktreeName, displayTitle, projectIs, type MergeContext } from "./sessions.ts";
 import { setLabels } from "./labels.ts";
 
 const item = (id: string, cwd: string, lastActivity: number, title = id, archived = false): SessionListItem => ({
@@ -339,7 +339,7 @@ describe("sidebar actions (GH-152)", () => {
 
   describe("sidebar view settings", () => {
     afterEach(() => localStorage.clear());
-    const def = { alwaysSelect: false, dayHeaders: true, layout: "default", onlyActive: false, sort: "recent" };
+    const def = { alwaysSelect: false, dayHeaders: true, layout: "default", merge: true, onlyActive: false, sort: "recent" };
     it("defaults when missing, corrupt or of the wrong type", () => {
       expect(loadSidebarView()).toEqual(def);
       localStorage.setItem("claude-ui.sidebarView", "{nope");
@@ -349,11 +349,140 @@ describe("sidebar actions (GH-152)", () => {
       localStorage.setItem("claude-ui.sidebarView", JSON.stringify({ sort: "name" }));
       expect(loadSidebarView().layout).toBe("default");
     });
+    it("a view saved before merging existed merges; an explicit off stays off", () => {
+      localStorage.setItem("claude-ui.sidebarView", JSON.stringify({ sort: "name", layout: "classic" }));
+      expect(loadSidebarView().merge).toBe(true);
+      localStorage.setItem("claude-ui.sidebarView", JSON.stringify({ merge: false }));
+      expect(loadSidebarView().merge).toBe(false);
+    });
     it("round-trips", () => {
-      const v = { alwaysSelect: true, dayHeaders: false, layout: "classic" as const, onlyActive: true, sort: "name" as const };
+      const v = { alwaysSelect: true, dayHeaders: false, layout: "classic" as const, merge: false, onlyActive: true, sort: "name" as const };
       saveSidebarView(v);
       expect(loadSidebarView()).toEqual(v);
     });
+  });
+});
+
+describe("merging the projects of one repository (mergeRepositories)", () => {
+  const KEY = "example.com/acme/app";
+  const mainWts = [
+    { path: "/Users/me/app", branch: "main", main: true },
+    { path: "/Users/me/app/.claude/worktrees/feat", branch: "feat", main: false },
+  ];
+  const worktrees = {
+    "/Users/me/app": mainWts,
+    "/Users/me/app-2": [{ path: "/Users/me/app-2", branch: "main", main: true }],
+    "/home/me/app": [{ path: "/home/me/app", branch: "main", main: true }],
+    "/srv/app": [{ path: "/srv/app", branch: "release", main: true }],
+    "/p/other": [{ path: "/p/other", branch: "main", main: true }],
+  };
+  const sideIds: Record<string, string> = { "/home/me/app": "wsl:Ubuntu", "/srv/app": "ssh:dev" };
+  const labels: Record<string, string> = { "wsl:Ubuntu": "WSL: Ubuntu", "ssh:dev": "SSH: dev" };
+  const ctx: MergeContext = {
+    origins: { "/Users/me/app": KEY, "/Users/me/app-2": KEY, "/home/me/app": KEY, "/srv/app": KEY },
+    sideOf: (cwd) => sideIds[cwd] ?? "local",
+    sideOrder: ["local", "wsl:Ubuntu", "ssh:dev"],
+    worktrees,
+    sideLabel: (cwd) => (sideIds[cwd] ? labels[sideIds[cwd]!] : "macOS"),
+  };
+  // The first listed project of the repository is the WSL one: the merged group takes its place, the primary is still the local clone.
+  const projects = ["/p/other", "/home/me/app", "/Users/me/app-2", "/srv/app", "/Users/me/app"];
+  const list = [
+    item("m", "/Users/me/app", 50, "Fix search"),
+    item("f", "/Users/me/app/.claude/worktrees/feat", 40, "Feature work"),
+    item("c2", "/Users/me/app-2", 30, "Second clone"),
+    item("w", "/home/me/app", 20, "Linux run"),
+    item("s", "/srv/app", 10, "Release"),
+    item("o", "/p/other", 5, "Other"),
+  ];
+  const group = (query = "", archived = false, c: MergeContext | null = ctx) => groupByCwd(list, query, projects, archived, worktrees, undefined, c ?? undefined);
+  const rows = (g: ReturnType<typeof group>[number]) => g.worktrees.map((r) => [r.side, r.branch, r.clone, r.project, r.sessions.map((s) => s.id)]);
+
+  it("one group at the place of its first project, named after the primary (local, shortest path); rows this machine first, then Sides in order, main checkouts before linked worktrees", () => {
+    const groups = group();
+    expect(groups.map((g) => g.cwd)).toEqual(["/p/other", "/Users/me/app"]);
+    const g = groups[1]!;
+    expect(g).toMatchObject({ repo: KEY, sides: ["local", "wsl:Ubuntu", "ssh:dev"], sessions: [] });
+    expect([...g.members].sort()).toEqual(["/Users/me/app", "/Users/me/app-2", "/home/me/app", "/srv/app"].sort());
+    expect(rows(g)).toEqual([
+      ["local", "main", undefined, "/Users/me/app", ["m"]],
+      ["local", "main", "app-2", "/Users/me/app-2", ["c2"]],
+      ["local", "feat", undefined, "/Users/me/app", ["f"]],
+      ["wsl:Ubuntu", "main", undefined, "/home/me/app", ["w"]],
+      ["ssh:dev", "release", undefined, "/srv/app", ["s"]],
+    ]);
+    expect(groupKey(g)).toBe(`repo:${KEY}`);
+  });
+
+  it("a project without origin, an origin held by one project, and an older Side without origins stay as they are", () => {
+    const only = group("", false, { ...ctx, origins: { "/Users/me/app": KEY, "/p/other": "example.com/acme/other" } });
+    expect(only.map((g) => [g.cwd, g.repo])).toEqual([["/p/other", undefined], ["/home/me/app", undefined], ["/Users/me/app-2", undefined], ["/srv/app", undefined], ["/Users/me/app", undefined]]);
+    expect(only.find((g) => g.cwd === "/Users/me/app")!.worktrees.map((r) => r.side)).toEqual([undefined, undefined]);
+    // The three other projects have no key (an older Side sends no origins): they do not merge with the one that has.
+    const older = group("", false, { ...ctx, origins: { "/Users/me/app": KEY, "/Users/me/app-2": KEY } });
+    expect(older.map((g) => g.cwd)).toEqual(["/p/other", "/home/me/app", "/Users/me/app", "/srv/app"]);
+    expect(older[2]!.members.sort()).toEqual(["/Users/me/app", "/Users/me/app-2"]);
+  });
+
+  it("without a merge context the groups are today's: one per project, none merged", () => {
+    expect(group("", false, null).map((g) => g.cwd)).toEqual(["/p/other", "/home/me/app", "/Users/me/app-2", "/srv/app", "/Users/me/app"]);
+  });
+
+  it("no known projects: nothing merges (merging needs the project list)", () => {
+    expect(groupByCwd(list, "", undefined, false, worktrees, undefined, ctx).every((g) => !g.repo)).toBe(true);
+  });
+
+  it("with no local clone the primary is on the first Side in order", () => {
+    const g = groupByCwd(list.filter((s) => s.cwd !== "/Users/me/app" && !s.cwd.startsWith("/Users/me")), "", ["/srv/app", "/home/me/app"], false, worktrees, undefined, ctx)[0]!;
+    expect([g.cwd, g.sides]).toEqual(["/home/me/app", ["wsl:Ubuntu", "ssh:dev"]]);
+  });
+
+  it("@project=<name> of any project keeps the whole merged group; another name drops it", () => {
+    expect(group("@project=app-2").map((g) => [g.cwd, g.worktrees.length])).toEqual([["/Users/me/app", 5]]);
+    expect(group("@project=other").map((g) => g.cwd)).toEqual(["/p/other"]);
+  });
+
+  it("a text keeps the matching sessions' rows; the Side's label also finds that Side's row, in a repository with several projects", () => {
+    expect(group("release").map((g) => rows(g))).toEqual([[["ssh:dev", "release", undefined, "/srv/app", ["s"]]]]);
+    expect(group("wsl").map((g) => rows(g))).toEqual([[["wsl:Ubuntu", "main", undefined, "/home/me/app", ["w"]]]]);
+    // A Side's label means nothing for a repository held by one project.
+    expect(group("wsl", false, { ...ctx, origins: { "/home/me/app": KEY } }).map((g) => g.cwd)).toEqual([]);
+  });
+
+  it("archived shows only the rows with archived sessions", () => {
+    const archived = [...list, item("old", "/srv/app", 1, "old", true)];
+    const g = groupByCwd(archived, "", projects, true, worktrees, undefined, ctx);
+    expect(g.map((x) => rows(x))).toEqual([[["ssh:dev", "release", undefined, "/srv/app", ["old"]]]]);
+  });
+
+  it("sort by name uses the primary's name; collapse and reveal keys use the repository key and the rows' keys", () => {
+    const groups = group();
+    expect(sortGroups(groups, "name").map((g) => g.cwd)).toEqual(["/Users/me/app", "/p/other"]);
+    expect(collapseKeys(groups, new Map(), false)).toEqual([
+      "/p/other",
+      `repo:${KEY}`,
+      "worktree:/Users/me/app",
+      "worktree:/Users/me/app-2",
+      "worktree:/Users/me/app/.claude/worktrees/feat",
+      "worktree:/home/me/app",
+      "worktree:/srv/app",
+    ]);
+    expect(revealKeys("s", groups, new Map(), false)).toEqual([`repo:${KEY}`, "worktree:/srv/app"]);
+    expect(revealKeys("o", groups, new Map(), false)).toEqual(["/p/other"]);
+  });
+
+  it("Only active keeps the rows with an active session and counts the idle ones of the merged group", () => {
+    const { groups: kept, idleTotal } = activeOnly(group(), new Map(), (x) => x.id === "w");
+    expect(kept.map((g) => rows(g))).toEqual([[["wsl:Ubuntu", "main", undefined, "/home/me/app", ["w"]]]]);
+    expect(idleTotal).toBe(5);
+  });
+
+  it("classic: the flat list names the branch of a linked worktree, and the Side (short label) and clone folder of a session not on this machine's first clone", () => {
+    const c = classicGroup(group()[1]!, (cwd) => (cwd === "/srv/app" ? "SSH" : cwd === "/home/me/app" ? "WSL" : "Mac"));
+    expect(c.group.sessions.map((x) => x.id)).toEqual(["m", "f", "c2", "w", "s"]);
+    expect([...c.branch]).toEqual([["c2", "app-2"], ["f", "feat"], ["w", "WSL"], ["s", "SSH"]]);
+    // Today's rule without merging: the branch of linked rows only.
+    expect([...classicGroup(group("", false, null).find((g) => g.cwd === "/Users/me/app")!).branch]).toEqual([["f", "feat"]]);
   });
 });
 

@@ -2222,6 +2222,40 @@ describe("daemon", () => {
     }
   });
 
+  it("session.list reports the origin of a project that is a linked worktree of a bare repository (no main worktree listed)", async () => {
+    const { root, repo, git, projects, d, c } = await repoDaemon("origins-bare-");
+    try {
+      const bare = join(root, "repo.git");
+      const wt = join(root, "wt");
+      execFileSync("git", ["clone", "-q", "--bare", repo, bare], { stdio: "ignore" });
+      git(bare, "remote", "set-url", "origin", "git@example.com:acme/bare.git");
+      git(bare, "worktree", "add", "-q", "-b", "side", wt);
+      projects.open(wt);
+      const r = ((await c.request({ type: "session.list" })) as { result: { origins?: Record<string, string> } }).result;
+      expect(r.origins?.[wt]).toBe("example.com/acme/bare");
+    } finally {
+      d.close();
+    }
+  });
+
+  it("session.list reads the origin again after a failed git call: a timeout is not cached as 'no origin'", async () => {
+    const { repo, git, d, c } = await repoDaemon("origins-retry-");
+    try {
+      git(repo, "remote", "add", "origin", "git@example.com:acme/retry.git");
+      let failed = 0;
+      setGitRunner((o) => {
+        if (o.args.includes("remote.origin.url") && !failed++) return Promise.reject(Object.assign(new Error("timed out"), { killed: true, stderr: "", stdout: Buffer.alloc(0) }));
+        return threadRunner(o);
+      });
+      const origins = async () => ((await c.request({ type: "session.list" })) as { result: { origins?: Record<string, string> } }).result.origins ?? {};
+      expect(await origins()).toEqual({});
+      expect(await origins()).toEqual({ [repo]: "example.com/acme/retry" });
+    } finally {
+      setGitRunner(undefined);
+      d.close();
+    }
+  });
+
   it("session.list shows a worktree added or removed from a terminal, and a branch checkout, on the very next list", async () => {
     const listed: unknown[] = [];
     const { root, repo, git, d, list } = await repoDaemon("wtstamp-", listed);
