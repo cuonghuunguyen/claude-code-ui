@@ -1,8 +1,10 @@
 // OpenCode 2 sessions over the daemon's WebSocket: a real daemon, the fake OpenCode 2 binary (fixtures/opencode2) and scripted turns cut from a recording of a real OpenCode 2.3.0.
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
@@ -1029,6 +1031,41 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     expect(status("c_done")).toBe("done");
     expect(await d.ok({ type: "session.shellOutput", sessionId: "ses_own", toolUseId: "c_run" })).toEqual({ output: "still going\n", truncated: false });
     expect(await d.ok({ type: "session.shellOutput", sessionId: "ses_own", toolUseId: "c_done" })).toEqual({ output: "all good", truncated: false });
+  });
+
+  it("an agent edit keeps the content before its step in Local history: the step's start snapshot read from OpenCode's store, files relative to the project folder", async () => {
+    const data = realpathSync(mkdtempSync(join(tmpdir(), "oc2-data-")));
+    const before = { "a.txt": "before\n", "sub/c.txt": "sub before\n" };
+    // A tree hash depends on the files only: the step's start snapshot is known before the daemon boots.
+    const store = (dir: string, worktree: string) => {
+      const git = (...a: string[]) => execFileSync("git", ["--git-dir", dir, "--work-tree", worktree, ...a], { encoding: "utf8" }).trim();
+      mkdirSync(dir, { recursive: true });
+      git("init", "-q");
+      for (const [f, c] of Object.entries(before)) (mkdirSync(dirname(join(worktree, f)), { recursive: true }), writeFileSync(join(worktree, f), c));
+      git("add", "-A");
+      return git("write-tree");
+    };
+    const scratch = mkdtempSync(join(tmpdir(), "oc2-tree-"));
+    const tree = store(join(scratch, "git"), join(scratch, "wt"));
+    const d = await boot({ script: ["edit"], env: { FAKE_OPENCODE_DATA_DIR: data, FAKE_OPENCODE2_SNAPSHOT: tree } });
+    // The store as OpenCode 2 lays it out: <data>/snapshot/<projectID>/<sha1 of the project folder>.
+    expect(store(join(data, "snapshot", "global", createHash("sha1").update(d.project).digest("hex")), d.project)).toBe(tree);
+    // The agent's step then changed a.txt and sub/c.txt and created new.txt.
+    writeFileSync(join(d.project, "a.txt"), "after\n");
+    writeFileSync(join(d.project, "sub", "c.txt"), "sub after\n");
+    writeFileSync(join(d.project, "new.txt"), "new\n");
+    const s = await d.open();
+    await s.prompt("edit");
+    await until(() => s.parts().some((p) => p.type === "turn_result"));
+    const entries = async (file: string) => (await d.ok({ type: "history.list", path: join(d.project, file) })).entries as { id: string; reason: string }[];
+    for (let i = 0; i < 100 && !(await entries("a.txt")).length; i++) await sleep(50);
+    const [a] = await entries("a.txt");
+    expect(a).toMatchObject({ reason: "agent" });
+    expect((await d.ok({ type: "history.read", path: join(d.project, "a.txt"), id: a!.id })).content).toBe("before\n");
+    const [c] = await entries("sub/c.txt");
+    expect((await d.ok({ type: "history.read", path: join(d.project, "sub/c.txt"), id: c!.id })).content).toBe("sub before\n");
+    // A file the step created has no content before.
+    expect(await entries("new.txt")).toEqual([]);
   });
 
   it("Stop before OpenCode named the shell kills the command once it is named", async () => {

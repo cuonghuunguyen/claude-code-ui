@@ -30,7 +30,9 @@ export async function contentBefore(src: SnapshotSource, cwd: string, sessionId:
     // Store missing or the tree unknown: the one case worth a log line. A file without a blob below is an ordinary answer.
     await read(["cat-file", "-e", `${part.hash}^{tree}`]);
     const out: [string, string][] = [];
-    for (const file of part.files) {
+    for (const name of part.files) {
+      // OpenCode 1 reports absolute paths, OpenCode 2 paths relative to the project folder.
+      const file = isAbsolute(name) ? name : join(project.worktree, name);
       const rel = relative(project.worktree, file);
       if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) continue;
       const spec = `${part.hash}:${rel.split(sep).join("/")}`;

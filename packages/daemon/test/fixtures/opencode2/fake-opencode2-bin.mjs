@@ -43,6 +43,8 @@
 // session in `metadata.sessionID`); `data.shells` [{id, command, sessionID}] are running at start. GET /api/shell lists the running ones of the folder; DELETE /api/shell/:id kills one (the synthetic inbox item
 // `state: error`, `shell.exited` killed, `shell.deleted`; its output is gone: 404 as 2.3.0); POST /__shell_exit {id, exit, output} ends one as a command that finished (`shell.exited`, then the synthetic
 // inbox item `state: completed` with the output).
+// Local history (GH-885): `debug paths` prints FAKE_OPENCODE_DATA_DIR as the data folder; GET /api/project lists a project per `projectID` of the sessions (`canonical` = the folder of the first);
+// the turn variable `$SNAP` is FAKE_OPENCODE2_SNAPSHOT (a tree hash of the test's snapshot store, the `snapshot` of a `step.started`).
 // FAKE_OPENCODE_LOG: JSON lines of `start`, `request` (method, path, authed, body of a write) and `version`.
 import { createServer } from "node:http";
 import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
@@ -55,6 +57,11 @@ const version = process.env.FAKE_OPENCODE_VERSION ?? "2.3.0";
 if (args.includes("--version")) {
   log({ type: "version" });
   console.log(`opencode v${version}`);
+  process.exit(0);
+}
+// `debug paths`: FAKE_OPENCODE_DATA_DIR is the `data` folder (none: the line is left out).
+if (args[0] === "debug" && args[1] === "paths") {
+  console.log(`home        /fake/home\n${process.env.FAKE_OPENCODE_DATA_DIR ? `data        ${process.env.FAKE_OPENCODE_DATA_DIR}\n` : ""}cache       /fake/cache`);
   process.exit(0);
 }
 if (args[0] !== "serve") (console.error(`fake opencode2: unknown command ${args[0]}`), process.exit(2));
@@ -202,7 +209,7 @@ function agentShell(sid, spec, dir) {
 }
 async function runTurn(sid, userId, steps) {
   const dir = sessions.get(sid).directory;
-  const vars = { $SESSION: sid, $USER: userId, $DIR: dir, ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`$A${n}`, id("msg")])), $PERM: id("per"), $FORM: id("frm"), $CALL: id("call"), $SHELL1: id("sh"), $SHELL2: id("sh"), $ORCH: `orchestration-${sid.slice(-10)}`, $CUI: `claude-ui-${sid.slice(-10)}` };
+  const vars = { $SESSION: sid, $USER: userId, $DIR: dir, ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`$A${n}`, id("msg")])), $PERM: id("per"), $FORM: id("frm"), $CALL: id("call"), $SNAP: process.env.FAKE_OPENCODE2_SNAPSHOT, $SHELL1: id("sh"), $SHELL2: id("sh"), $ORCH: `orchestration-${sid.slice(-10)}`, $CUI: `claude-ui-${sid.slice(-10)}` };
   let reply;
   let formDone;
   let interrupt;
@@ -466,6 +473,7 @@ const server = createServer((req, res) => {
       if (m[2] && req.method === "DELETE") return (entries.delete(m[2]), res.writeHead(204), res.end());
     }
     if (p === "/api/form") return json(res, 200, { location: { directory: dir }, data: [...forms.values()].map((f) => f.form).filter((f) => sessions.get(f.sessionID)?.directory === dir || !dir) });
+    if (p === "/api/project") return json(res, 200, [...new Set([...sessions.values()].map((x) => x.projectID))].map((pid) => ({ id: pid, canonical: [...sessions.values()].find((x) => x.projectID === pid).directory, vcs: "git", time: { created: 1, updated: 1 }, sandboxes: [] })));
     if (p === "/api/shell" && req.method === "GET") return json(res, 200, { location: { directory: dir }, data: [...shells.values()].filter((x) => x.info && x.info.cwd === dir).map((x) => x.info) });
     if ((m = /^\/api\/shell\/([^/]+)(\/output)?$/.exec(p))) {
       if (m[2]) return shellOut.has(m[1]) ? json(res, 200, { location: { directory: dir }, data: { output: shellOut.get(m[1]), cursor: 0, size: 0, truncated: false } }) : json(res, 404, { message: "shell not found" });

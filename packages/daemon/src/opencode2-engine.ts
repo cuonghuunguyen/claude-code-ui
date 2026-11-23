@@ -15,6 +15,7 @@ import { INLINE_SYSTEM, clip } from "./opencode-inline.ts";
 import { DONT_ASK, LOCAL_COMMANDS, OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels, withVisualize, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { findCall, mcpKeys, mcpName, mcpTimeoutMs, showDaemonCard, WORKER_START, type McpServerKey } from "./opencode-shared.ts";
 import { INLINE_META, InlineCollector2, inlineRules, storedEnd, type StoredEnd } from "./opencode2-inline.ts";
+import { contentBefore, type PatchPart, type SnapshotSource } from "./opencode-snapshot.ts";
 import { visualizeSystem } from "./visualize.ts";
 import { OpenCode2Mapper, bashPart, failureText, mapTool2, type Failure, type OpenCode2Message, type Shell2 } from "./opencode2-parts.ts";
 import type { OpenCodeServer } from "./opencode-server.ts";
@@ -336,6 +337,27 @@ class OpenCode2Session implements EngineSession {
       .catch(() => undefined);
     if (!running) return;
     for (const [, sh] of open) if (!running.has(sh)) this.shellExited({ id: sh, status: "killed" });
+  }
+  /** The tree before each running step (`session.step.started` `snapshot`), by assistant message id. `session.step.ended` carries the tree after it. */
+  private readonly stepTrees = new Map<string, string>();
+  private stepStart(sessionID: string, d: Json) {
+    if (typeof d.snapshot !== "string" || !this.opts.onFileEdit) return;
+    if (this.stepTrees.size >= 200) this.stepTrees.clear();
+    this.stepTrees.set(`${sessionID}:${d.assistantMessageID}`, d.snapshot);
+  }
+  /**
+   * A step of the agent (this session's, or an inline run's) changed files: the content they had before the step goes to Local history (opencode-snapshot.ts).
+   * `files` are relative to the project folder. Async, never blocks the event pump.
+   */
+  private stepPatch(sessionID: string, d: Json) {
+    const key = `${sessionID}:${d.assistantMessageID}`;
+    const hash = this.stepTrees.get(key);
+    this.stepTrees.delete(key);
+    const onEdit = this.opts.onFileEdit;
+    const files: unknown = d.files;
+    if (!onEdit || !hash || !Array.isArray(files) || !files.length) return;
+    const part: PatchPart = { id: key, hash, files: files.filter((f): f is string => typeof f === "string") };
+    void contentBefore(this.engine.snapshots, this.cwd, sessionID, part).then((list) => list.forEach(([path, before]) => onEdit(path, before)), () => {});
   }
   /** `shell.exited` of any shell: the card of the call that started it ends. */
   shellExited(d: Json) {
@@ -898,10 +920,12 @@ class OpenCode2Session implements EngineSession {
         return this.session.currentState() === "idle" ? undefined : this.interrupted();
       case "session.step.started":
         this.clear = undefined;
+        this.stepStart(this.id, d);
         this.turnAssistant = d.assistantMessageID;
         this.stepModel = d.model;
         return this.setRetry(undefined);
       case "session.step.ended":
+        this.stepPatch(this.id, d);
         this.mapper.step(d.assistantMessageID, d.tokens, d.cost);
         if (d.tokens && this.stepModel) this.usage = { tokens: d.tokens, providerID: this.stepModel.providerID, id: this.stepModel.id };
         return;
@@ -1132,6 +1156,8 @@ class OpenCode2Session implements EngineSession {
     const run = this.inlineRuns.get(childId);
     if (!run) return;
     run.notify(type, d);
+    if (type === "session.step.started") this.stepStart(childId, d);
+    else if (type === "session.step.ended") this.stepPatch(childId, d);
     if (type === "permission.asked") return this.askPermission(d, run.mapper, run.callId);
     if (type === "permission.replied") return this.session.pendingRequest(d.requestID) ? this.session.cancel(d.requestID, ANSWERED) : undefined;
     if (run.callId) for (const part of run.mapper.event(type, d)) this.session.emit({ ...part, parentId: run.callId });
@@ -1392,6 +1418,30 @@ class OpenCode2EngineImpl implements Engine {
     /** The Inline visualizations setting. */
     readonly visualizeOn?: () => boolean,
   ) {}
+
+  /** OpenCode's snapshot store (same layout as OpenCode 1): the data folder; `projectID` of the session row and the project's `canonical` folder as the worktree (cached; a failed read is not). */
+  readonly snapshots: SnapshotSource = (() => {
+    const projects = new Map<string, Promise<{ projectID: string; worktree: string }>>();
+    return {
+      data: () => this.server.dataDir(),
+      project: (cwd, sessionId) => {
+        const key = `${sessionId}\0${cwd}`;
+        let hit = projects.get(key);
+        if (!hit) {
+          hit = (async () => {
+            const client = await this.server.client();
+            const row = await client.session.get({ sessionID: sessionId });
+            const project = (await client.project.list()).find((p) => p.id === row.projectID);
+            if (!project?.canonical) throw new Error("no project folder");
+            return { projectID: row.projectID, worktree: project.canonical };
+          })();
+          projects.set(key, hit);
+          hit.catch(() => projects.delete(key));
+        }
+        return hit.then((v) => v, () => undefined);
+      },
+    };
+  })();
 
   permissionModes = (o: { allowBypass?: boolean; supportsAuto?: boolean }) => permissionModesFor({ ...o, modes: OPENCODE_PERMISSION_MODES });
 
