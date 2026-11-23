@@ -1235,6 +1235,19 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
     expect(t.parts().filter((p) => p.type === "user_text").map((p) => (p as { text: string }).text)).toEqual(["/nosuch x"]);
   });
 
+  it("a plain prompt typed while an early /name waits for OpenCode's command list is sent after the command", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_COMMAND_LIST_MS: "800" } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    const s = await d.open();
+    await s.prompt("/hello world");
+    await s.prompt("then this");
+    await until(() => d.requests("POST", `/api/session/${s.id}/prompt`).length === 1);
+    const sent = d.log().filter((l) => l.type === "request" && l.method === "POST" && new RegExp(`/api/session/${s.id}/(command|prompt)$`).test(l.path));
+    expect(sent.map((l) => l.path.split("/").at(-1))).toEqual(["command", "prompt"]);
+    await until(() => s.parts().filter((p) => p.type === "turn_result").length === 2);
+    expect(s.parts().filter((p) => p.type === "user_text").map((p) => (p as { text: string }).text)).toEqual(["Run hello: world", "then this"]);
+  });
+
   it("a command shows running until OpenCode answers: one that starts no turn ends at once; Stop while OpenCode takes one interrupts its turn", async () => {
     const d = await boot({ env: { FAKE_OPENCODE2_COMMAND_MS: "600" }, script: ["hold"], data: { commands: ["noturn", "hello"].map((name) => ({ name })) } });
     await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });

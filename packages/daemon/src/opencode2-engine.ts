@@ -596,7 +596,15 @@ class OpenCode2Session implements EngineSession {
     this.modelDirty = false;
   }
 
+  /** An early `/name` waits for OpenCode's command list and its request: a prompt typed meanwhile waits for it (OpenCode gets them in the typed order). */
+  private commandGate: Promise<void> | undefined;
+
   prompt(text: string, images: string[] = []): string | undefined {
+    if (this.commandGate) {
+      this.localRun = undefined;
+      void this.commandGate.then(() => this.prompt(text, images));
+      return undefined;
+    }
     const local = !images.length && /^\/(compact|undo|redo)$/.exec(text.trim())?.[1];
     if (local) {
       // Only /undo is awaited by its reply (the undone prompt goes back to the box); /compact and /redo run on their own.
@@ -608,13 +616,14 @@ class OpenCode2Session implements EngineSession {
     const cmd = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
     const idle = () => this.session.currentState() === "idle";
     // Like a local command it has no message of ours (no draft; the web drops its pending bubble): the prompt OpenCode makes of it shows.
-    if (cmd && this.commandNames.has(cmd[1]!) && idle()) return void ((this.localRun = undefined), this.runCommand(cmd[1]!, cmd[2] ?? "", images));
+    if (cmd && this.commandNames.has(cmd[1]!) && idle()) return void ((this.localRun = undefined), void this.runCommand(cmd[1]!, cmd[2] ?? "", images));
     // Typed before OpenCode listed its commands: wait for the list (at most 5 s), then run it as a command, or send it as a prompt (shown then).
     if (cmd && !this.commandsLoaded && idle()) {
       this.localRun = undefined;
-      void Promise.race([this.commandsReady, new Promise((r) => setTimeout(r, COMMANDS_WAIT_MS))]).then(() =>
-        this.commandNames.has(cmd[1]!) && idle() ? this.runCommand(cmd[1]!, cmd[2] ?? "", images) : this.sendPlain(text, images),
-      );
+      const gate: Promise<void> = Promise.race([this.commandsReady, new Promise((r) => setTimeout(r, COMMANDS_WAIT_MS))])
+        .then(() => (this.commandNames.has(cmd[1]!) && idle() ? this.runCommand(cmd[1]!, cmd[2] ?? "", images) : void this.sendPlain(text, images)))
+        .finally(() => this.commandGate === gate && (this.commandGate = undefined));
+      this.commandGate = gate;
       return undefined;
     }
     return this.sendPlain(text, images);
@@ -752,7 +761,7 @@ class OpenCode2Session implements EngineSession {
    * An OpenCode command (`POST …/command`): OpenCode expands it into the prompt it stores (shown by its `session.inbox.enqueued`) and runs the turn, whose
    * `session.execution.started` starts it here; a command that runs no turn (`/goal pause`) starts none. A failure (an unknown argument) is a notice.
    */
-  private runCommand(name: string, args: string, images: string[]) {
+  private runCommand(name: string, args: string, images: string[]): Promise<void> {
     const stops = this.stops;
     // Running from the start (Stop works, no second command goes): a Stop while it is prepared ends it here, as a prompt's.
     this.beginTurn();
@@ -760,7 +769,7 @@ class OpenCode2Session implements EngineSession {
     this.session.setState("running");
     const key = this.turnKey;
     const waiting = () => this.turnKey === key && !this.turnExecuted && this.session.currentState() !== "idle";
-    void (async () => {
+    return (async () => {
       const client = await this.server.client();
       if (!(await this.prepare(client, () => this.stops === stops))) return;
       this.posted();
