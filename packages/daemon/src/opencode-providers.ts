@@ -7,16 +7,20 @@ const POPULAR = ["opencode", "opencode-go", "anthropic", "openai", "google", "gi
 const API: OpenCodeAuthMethod = { type: "api", label: "API key" };
 export const MAX_KEY = 4096;
 
-/** The merge of `GET /provider` and `GET /provider/auth`, slim (no models), connected first, popular next, then by name. */
-export function mergeProviders(raw: { all: RawProvider[]; connected: string[] }, auth: Record<string, OpenCodeAuthMethod[]>): OpenCodeProvider[] {
+/** Connected first, popular next, then by name (the order of OpenCode's own provider list). */
+export function sortProviders(list: OpenCodeProvider[]): OpenCodeProvider[] {
   const rank = (p: OpenCodeProvider) => (POPULAR.includes(p.id) ? POPULAR.indexOf(p.id) : POPULAR.length);
-  return raw.all
+  return list.sort((a, b) => Number(b.connected) - Number(a.connected) || rank(a) - rank(b) || a.name.localeCompare(b.name));
+}
+
+/** The merge of `GET /provider` and `GET /provider/auth`, slim (no models), in `sortProviders` order. */
+export function mergeProviders(raw: { all: RawProvider[]; connected: string[] }, auth: Record<string, OpenCodeAuthMethod[]>): OpenCodeProvider[] {
+  return sortProviders(raw.all
     .map((p): OpenCodeProvider => {
       // OpenCode web: `opencode` counts as connected only when a model costs money; its free models work without a login.
       const free = p.id === "opencode" && !Object.values(p.models ?? {}).some((m) => (m.cost?.input ?? 0) > 0);
       return { id: p.id, name: p.name ?? p.id, connected: raw.connected.includes(p.id) && !free, ...(p.source && { source: p.source }), methods: auth[p.id]?.length ? auth[p.id]! : [API] };
-    })
-    .sort((a, b) => Number(b.connected) - Number(a.connected) || rank(a) - rank(b) || a.name.localeCompare(b.name));
+    }));
 }
 
 /** The first `GET /provider` of a run fetches models.dev (21 s measured, 7 MB); later ones answer in well under a second. */

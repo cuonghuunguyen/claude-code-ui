@@ -13,6 +13,7 @@ import { createDaemon } from "../src/server.ts";
 import { fakeQuery } from "./fake-query.ts";
 
 const BIN = fileURLToPath(new URL("./fixtures/opencode/fake-opencode-bin.mjs", import.meta.url));
+const BIN2 = fileURLToPath(new URL("./fixtures/opencode2/fake-opencode2-bin.mjs", import.meta.url));
 const turn = (name: string) => fileURLToPath(new URL(`./fixtures/opencode/turn-${name}.json`, import.meta.url));
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
 const KEY = "sk-test-secret-0123456789";
@@ -23,14 +24,14 @@ const until = async (cond: () => boolean, ms = 5000) => {
 const cleanups: (() => void)[] = [];
 afterEach(() => (cleanups.splice(0).forEach((c) => c()), vi.restoreAllMocks()));
 
-async function boot(o: { script?: string[]; data?: object; root?: string } = {}) {
+async function boot(o: { script?: string[]; data?: object; root?: string; /** The fake OpenCode 2 binary. */ v2?: boolean; env?: Record<string, string> } = {}) {
   const root = o.root ?? realpathSync(mkdtempSync(join(tmpdir(), "ocl-")));
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
   const logFile = join(root, "fake.log");
   const dataFile = join(root, "data.json");
   writeFileSync(dataFile, JSON.stringify({ sessions: [], messages: {}, ...o.data }));
-  const env = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_DATA: dataFile, FAKE_OPENCODE_SCRIPT: (o.script ?? []).map(turn).join(",") };
+  const env = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_DATA: dataFile, FAKE_OPENCODE_SCRIPT: (o.script ?? []).map(turn).join(","), ...o.env };
   const http = createDaemon({
     webRoot: root,
     roots: [root],
@@ -46,7 +47,7 @@ async function boot(o: { script?: string[]; data?: object; root?: string } = {})
     claudeDir: join(root, "claude"),
     projectsDir: join(root, "claude", "projects"),
     uploadSweepMs: 0,
-    opencode: { command: [process.execPath, BIN], env: () => env },
+    opencode: { command: [process.execPath, o.v2 ? BIN2 : BIN], env: () => env },
   });
   await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
   const port = (http.address() as AddressInfo).port;
@@ -277,5 +278,92 @@ describe("OpenCode provider login", { timeout: 30_000 }, () => {
     expect(out).not.toContain(KEY);
     expect(out).not.toContain("SECRET-CODE-77");
     expect(d.inbox.some((m) => JSON.stringify(m).includes(KEY) && m.type === "error")).toBe(false);
+  });
+});
+
+describe("OpenCode 2 provider login", { timeout: 30_000 }, () => {
+  const boot2 = (env: Record<string, string> = {}) => boot({ v2: true, env });
+  const integration = (id: string) => new RegExp(`^/api/integration/${id}/connect`);
+
+  it("lists OpenCode 2 integrations: connected first, popular next; key and OAuth methods with their form fields; a provider with no method claude-ui can run says why", async () => {
+    const d = await boot2({ FAKE_OPENCODE2_COLD_INTEGRATIONS: "1" });
+    const r = await d.ok({ type: "opencode.providers" });
+    expect(r.providers.map((p: any) => p.id)).toEqual(["envprov", "anthropic", "cliprov", "fakeprov", "groq"]);
+    const by = (id: string) => r.providers.find((p: any) => p.id === id);
+    expect(by("envprov")).toMatchObject({ connected: true, source: "env" });
+    expect(by("groq")).toEqual({ id: "groq", name: "Groq", connected: false, methods: [{ type: "api", label: "API key" }] });
+    expect(by("fakeprov").methods).toEqual([
+      { type: "oauth", label: "Fake browser login" },
+      { type: "oauth", label: "Fake code login", prompts: [{ type: "text", key: "team", message: "Team", placeholder: "acme" }] },
+      { type: "api", label: "API key", prompts: [{ type: "select", key: "region", message: "Region", options: [{ label: "US", value: "us" }, { label: "EU", value: "eu", hint: "Europe" }] }, { type: "text", key: "host", message: "Host", when: { key: "region", op: "eq", value: "eu" } }] },
+    ]);
+    expect(by("cliprov")).toMatchObject({ connected: false, methods: [], unavailable: "Connect CLI Provider in OpenCode's own app, or set CLIPROV_TOKEN in the environment OpenCode starts in." });
+    // The integrations of a folder OpenCode has not loaded yet list none at first: read again.
+    expect(d.calls("GET", "/api/integration").length).toBeGreaterThan(1);
+  });
+
+  it("an API key login stores the key with the form answer, the provider shows connected at once and clients reload the models; the key reaches no log", async () => {
+    const spies = [vi.spyOn(console, "log"), vi.spyOn(console, "error"), vi.spyOn(console, "warn"), vi.spyOn(console, "info")];
+    const d = await boot2();
+    const r = await d.ok({ type: "opencode.login", provider: "fakeprov", method: 2, key: KEY, inputs: { region: "eu", host: "h" } });
+    expect(d.calls("POST", integration("fakeprov"))[0]!.body).toEqual({ key: KEY, answer: { region: "eu", host: "h" } });
+    expect(r.providers.find((p: any) => p.id === "fakeprov")).toMatchObject({ connected: true, source: "api" });
+    await until(() => d.inbox.some((m) => m.type === "opencode.providersChanged"));
+    for (const [msg, text] of [[{ provider: "groq", method: 0, key: "sk with space" }, "key: An API key has no spaces"], [{ provider: "fakeprov", method: 0, key: KEY }, "method: Unknown login method"], [{ provider: "cliprov", method: 0, key: KEY }, "method: Unknown login method"]] as const)
+      expect(await d.send({ type: "opencode.login", ...msg })).toMatchObject({ type: "error", code: "invalid_input", message: text });
+    expect(d.calls("POST", integration("groq"))).toHaveLength(0);
+    expect(JSON.stringify(spies.flatMap((s) => s.mock.calls))).not.toContain(KEY);
+  });
+
+  it("OAuth auto: login returns the page, loginFinish waits until OpenCode says the attempt completed; a failed attempt says so", async () => {
+    const d = await boot2();
+    expect(await d.ok({ type: "opencode.login", provider: "fakeprov", method: 0 })).toEqual({ url: "https://example.com/fake-login?provider=fakeprov", mode: "auto", instructions: "Code: ABCD-1234" });
+    expect(d.calls("POST", "/api/integration/fakeprov/connect/oauth")[0]!.body).toEqual({ methodID: "browser" });
+    const finish = d.send({ type: "opencode.loginFinish", provider: "fakeprov", method: 0 });
+    await until(() => d.calls("GET", /^\/api\/integration\/fakeprov\/connect\/oauth\/con_/).length >= 1);
+    await d.fake("/__oauth", { result: "success" });
+    const r = (await finish) as any;
+    expect(r.result.providers.find((p: any) => p.id === "fakeprov")).toMatchObject({ connected: true, source: "custom" });
+    await d.ok({ type: "opencode.logout", provider: "fakeprov" });
+    await d.ok({ type: "opencode.login", provider: "fakeprov", method: 0 });
+    const failed = d.send({ type: "opencode.loginFinish", provider: "fakeprov", method: 0 });
+    await until(() => d.calls("GET", /^\/api\/integration\/fakeprov\/connect\/oauth\/con_/).length >= 2);
+    await d.fake("/__oauth", { result: "failed" });
+    expect(await failed).toMatchObject({ type: "error", code: "login_failed", message: "The browser login failed" });
+  });
+
+  it("Cancel cancels the OAuth attempt in OpenCode and ends the wait with `cancelled`; a new login of the provider cancels the old attempt", async () => {
+    const d = await boot2();
+    await d.ok({ type: "opencode.login", provider: "fakeprov", method: 0 });
+    const finish = d.send({ type: "opencode.loginFinish", provider: "fakeprov", method: 0 });
+    await until(() => d.calls("GET", /^\/api\/integration\/fakeprov\/connect\/oauth\/con_/).length >= 1);
+    expect(await d.ok({ type: "opencode.loginCancel", provider: "fakeprov" })).toEqual({});
+    expect(await finish).toMatchObject({ type: "error", code: "cancelled" });
+    expect(d.calls("DELETE", /^\/api\/integration\/fakeprov\/connect\/oauth\/con_/)).toHaveLength(1);
+    await d.ok({ type: "opencode.login", provider: "fakeprov", method: 0 });
+    await d.ok({ type: "opencode.login", provider: "fakeprov", method: 0 });
+    expect(d.calls("DELETE", /^\/api\/integration\/fakeprov\/connect\/oauth\/con_/)).toHaveLength(2);
+  });
+
+  it("OAuth code: a rejected form answer and a wrong code fail and can be retried; the right code connects", async () => {
+    const d = await boot2();
+    expect(await d.send({ type: "opencode.login", provider: "fakeprov", method: 1, inputs: { team: "bad" } })).toMatchObject({ type: "error", code: "login_failed", message: "Team is not valid" });
+    expect((await d.ok({ type: "opencode.login", provider: "fakeprov", method: 1, inputs: { team: "acme" } })).mode).toBe("code");
+    expect(d.calls("POST", "/api/integration/fakeprov/connect/oauth").at(-1)!.body).toEqual({ methodID: "code", answer: { team: "acme" } });
+    expect(await d.send({ type: "opencode.loginFinish", provider: "fakeprov", method: 1 })).toMatchObject({ type: "error", message: "code: Enter the code" });
+    expect(await d.send({ type: "opencode.loginFinish", provider: "fakeprov", method: 1, code: "wrong" })).toMatchObject({ type: "error", code: "login_failed", message: "code: The code is not valid" });
+    const r = await d.ok({ type: "opencode.loginFinish", provider: "fakeprov", method: 1, code: "good" });
+    expect(connected(r)).toContain("fakeprov");
+  });
+
+  it("logout removes every credential of the provider; one connected only by the environment or unknown is refused", async () => {
+    const d = await boot2();
+    await d.ok({ type: "opencode.login", provider: "groq", method: 0, key: KEY });
+    await d.ok({ type: "opencode.login", provider: "groq", method: 0, key: `${KEY}2` });
+    const r = await d.ok({ type: "opencode.logout", provider: "groq" });
+    expect(d.calls("DELETE", /^\/api\/credential\/cred_/)).toHaveLength(2);
+    expect(connected(r)).not.toContain("groq");
+    expect(await d.send({ type: "opencode.logout", provider: "envprov" })).toMatchObject({ type: "error", code: "invalid_input" });
+    expect(await d.send({ type: "opencode.logout", provider: "nope" })).toMatchObject({ type: "error", code: "invalid_input", message: "provider: Unknown provider" });
   });
 });

@@ -667,8 +667,8 @@ export type SetModelResult = { session: SessionInfo };
 export type OpenCodeStatus = { state: "running" | "stopped" | "missing" | "old" | "failed"; version?: string; major?: 1 | 2; path?: string; message?: string };
 export type OpenCodeAuthPrompt = { type: "text"; key: string; message: string; placeholder?: string; when?: { key: string; op: "eq" | "neq"; value: string } } | { type: "select"; key: string; message: string; options: { label: string; value: string; hint?: string }[]; when?: { key: string; op: "eq" | "neq"; value: string } };
 export type OpenCodeAuthMethod = { type: "api" | "oauth"; label: string; prompts?: OpenCodeAuthPrompt[] };
-/** `source`: where the connection comes from; only `api` and `custom` (OAuth, plugin) can be logged out. */
-export type OpenCodeProvider = { id: string; name: string; connected: boolean; source?: "env" | "config" | "custom" | "api"; methods: OpenCodeAuthMethod[] };
+/** `source`: where the connection comes from; only `api` and `custom` (OAuth, plugin) can be logged out. `unavailable`: why `methods` is empty (OpenCode 2: a login only OpenCode's own app can run). */
+export type OpenCodeProvider = { id: string; name: string; connected: boolean; source?: "env" | "config" | "custom" | "api"; methods: OpenCodeAuthMethod[]; unavailable?: string };
 /** opencode.providers, and the login and logout requests that end with a changed list. */
 export type OpenCodeProvidersResult = { providers: OpenCodeProvider[] };
 /** opencode.login with an OAuth method: open `url`; `auto` = OpenCode finishes by itself, `code` = the user pastes a code. */

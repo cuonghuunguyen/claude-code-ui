@@ -1,6 +1,7 @@
 // The OpenCode 2 adapter's catalogue (ADR 0015): creates, lists and restores sessions of the daemon's OpenCode 2 server through `@opencode/client`.
 // Create, list, restore, models, rename, archive, delete, the Aside fork, agents and the slash commands (the daemon's and OpenCode's).
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { EFFORTS, type PermissionMode, type SessionListItem } from "@claude-ui/protocol";
 import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineConfig, type ListCtx, type SavedSession } from "./engine-catalogue.ts";
 import { OPENCODE_MODES, type OpenCodeMcpRoute } from "./opencode-engine.ts";
@@ -8,6 +9,7 @@ import { openCodeWanted } from "./opencode-catalogue.ts";
 import { OpenCodeError, type OpenCodeServer } from "./opencode-server.ts";
 import { createOpenCode2Engine, loadOpenCode2History, OPENCODE2_CAPABILITIES } from "./opencode2-engine.ts";
 import { createOpenCode2McpConfig, createOpenCode2PluginsConfig, createOpenCode2SkillsConfig } from "./opencode2-config.ts";
+import { createOpenCode2Login } from "./opencode2-providers.ts";
 import { INLINE_META } from "./opencode2-inline.ts";
 import { createFolderReloads } from "./folder-reload.ts";
 import { mapLimit } from "./session-scan.ts";
@@ -20,7 +22,7 @@ const PAGE = 100;
 const MAX_PAGES = 10;
 
 export type OpenCode2CatalogueOpts = { server: OpenCodeServer; /** The longest a config dialog read waits for OpenCode (default 3 s). */ mcpWaitMs?: number; /** How long `session.list` waits for OpenCode (default 3 s). */ listWaitMs?: number; /** Writes the adapter record of a session (ADR 0015); throws when it cannot be saved. */ record?: (id: string) => void; /** The daemon's `/opencode-mcp` route (the session's MCP servers). */ mcp?: OpenCodeMcpRoute };
-export type OpenCode2Catalogue = Omit<EngineCatalogue, "listScope" | "ownsId" | "requests" | "settingsChanged" | "forget">;
+export type OpenCode2Catalogue = Omit<EngineCatalogue, "listScope" | "ownsId" | "settingsChanged" | "forget"> & { /** An OAuth login waits (a server restart would lose it). */ loginBusy(): boolean };
 
 export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2CatalogueOpts): OpenCode2Catalogue {
   const { appSettings, settings } = ctx;
@@ -45,6 +47,13 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     skills: createOpenCode2SkillsConfig({ server, engine, reload: (cwd, kind) => reloads.request(cwd, [kind]), waitMs: o.mcpWaitMs }),
     plugins: createOpenCode2PluginsConfig({ server, reload: (cwd, kind) => reloads.request(cwd, [kind]), waitMs: o.mcpWaitMs }),
   };
+  // Provider login (GH-879): integrations are listed per folder; the folder of an open session, else the last one listed, else the home folder.
+  const login = createOpenCode2Login({
+    server,
+    folder: () => [...ctx.liveSessions()].find((s) => meta.has(s.id))?.cwd ?? [...meta.values()].at(-1)?.cwd ?? homedir(),
+    // OpenCode 2 reads credentials per request (checked on 2.3.0): no reload, the model lists are read again.
+    changed: () => (engine.dropLimits(), ctx.broadcast({ type: "opencode.providersChanged" })),
+  });
   const sessionOpts = (initial: Partial<SessionSettings>) => ({ ...ctx.sessionOpts(initial), engine });
   const failure = (err: unknown) => (err instanceof OpenCodeError ? new EngineError(err.code, err.message) : new EngineError("opencode_failed", (err as Error).message));
   const notFound = async () => (await import("@opencode/client")).isSessionNotFoundError;
@@ -214,6 +223,8 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
   return {
     engine,
     config,
+    requests: login.requests,
+    loginBusy: login.busy,
     settled: () => reloads.settled(),
     close: async () => reloads.close(),
     // Listed, created or opened here: not a UUID (the transcript scan's shape), so it is not found by one.

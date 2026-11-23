@@ -14,7 +14,7 @@ type Fail = { field?: string; text: string };
 
 const input = "h-8 w-full rounded-md border bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:h-11";
 const shown = (p: OpenCodeAuthPrompt, v: Record<string, string>) => !p.when || ((v[p.when.key] ?? "") === p.when.value) === (p.when.op === "eq");
-const initial = (m: OpenCodeAuthMethod) => Object.fromEntries((m.prompts ?? []).flatMap((p) => (p.type === "select" && p.options[0] ? [[p.key, p.options[0].value]] : [])));
+const initial = (m: OpenCodeAuthMethod | undefined) => Object.fromEntries((m?.prompts ?? []).flatMap((p) => (p.type === "select" && p.options[0] ? [[p.key, p.options[0].value]] : [])));
 /** An error text `field: message` names the field it belongs to. */
 const split = (e: Error, fields: string[]): Fail => {
   const m = /^([\w-]+): (.*)$/s.exec(e.message);
@@ -67,7 +67,7 @@ export function OpenCodeProviders({ status, request, onProviders, onLoaded }: { 
   const fields = ["key", "code", ...(m?.prompts ?? []).map((p) => p.key)];
 
   const open = (p: OpenCodeProvider) => {
-    setFormId(p.id), setMethod(0), setValues(initial(p.methods[0]!)), setKey(""), setCode(""), setPhase({ kind: "idle" }), setFail(undefined), setNote(undefined);
+    setFormId(p.id), setMethod(0), setValues(initial(p.methods[0])), setKey(""), setCode(""), setPhase({ kind: "idle" }), setFail(undefined), setNote(undefined);
   };
   const pick = (i: number) => (setMethod(i), setValues(initial(provider!.methods[i]!)), setKey(""), setFail(undefined));
   const close = () => (attempt.current++, setFormId(undefined), setKey(""), setCode(""), setPhase({ kind: "idle" }), setFail(undefined));
@@ -213,6 +213,18 @@ export function OpenCodeProviders({ status, request, onProviders, onLoaded }: { 
             {!rows.length && <p className="px-2 py-2 text-muted-foreground text-sm">{t("settings.opencode.providers.noMatch")}</p>}
           </div>
         </>
+      )}
+      {provider && !m && (
+        <div className="flex flex-col gap-2" data-testid="settings-opencode-connect-form">
+          <div className="flex flex-wrap items-center gap-2">
+            <h5 ref={heading} tabIndex={-1} className="min-w-0 flex-1 font-medium text-sm outline-none">{t("settings.opencode.providers.connectTo", { name: provider.name })}</h5>
+            <Button type="button" variant="ghost" size="sm" onClick={() => (close(), setTimeout(() => search.current?.focus()))} className="max-md:h-11">
+              {t("settings.opencode.providers.back")}
+            </Button>
+          </div>
+          {/* OpenCode 2: no login method claude-ui can run; the daemon says where to connect it. */}
+          <p className="select-text text-muted-foreground text-sm" data-testid="settings-opencode-unavailable">{provider.unavailable}</p>
+        </div>
       )}
       {provider && m && (
         <form

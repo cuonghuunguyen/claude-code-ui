@@ -35,6 +35,10 @@
 //     or cancelled ("cancelled": the call fails aborted and the turn ends interrupted); `$ANSWER` is the answer
 // FAKE_OPENCODE2_MODEL_DELAY / _PROMPT_DELAY / _MESSAGE_DELAY: ms the model routes / the prompt route / the message read wait. FAKE_OPENCODE2_SWALLOW_STOP: an interrupt sends no end events. POST /__drop ends the event streams; POST /__forget/<id> drops a session; POST /__stage/<id>/<message id> and /__clear/<id> revert as OpenCode's own app.
 // POST …/synthetic {text}: stored as a `synthetic` message, no turn. Instruction entries: PUT/DELETE …/instructions/entries/:key and GET …/entries.
+// Provider login (GH-879, as 2.3.0): GET /api/integration (per folder; FAKE_OPENCODE2_COLD_INTEGRATIONS: the first n reads list none, a folder not loaded yet), POST /api/integration/:id/connect/key
+// {key, answer?} (a credential), POST …/connect/oauth {methodID, answer?} -> an attempt (`browser`: auto, ended by POST /__oauth {result: "success"|"failed"}; `code`: mode code, an answer
+// `team: bad` answers 400), GET/DELETE …/connect/oauth/:attempt, POST …/connect/oauth/:attempt/complete {code} (`good` connects, else 400); GET /api/credential, DELETE /api/credential/:id.
+// `envprov` is connected by an environment variable.
 // FAKE_OPENCODE_LOG: JSON lines of `start`, `request` (method, path, authed, body of a write) and `version`.
 import { createServer } from "node:http";
 import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
@@ -108,6 +112,31 @@ let nextTurn = 0;
 /** MCP servers by `<directory>\0<name>`: their config. */
 const mcps = new Map();
 let mcpFail = false;
+const integrations = [
+  { id: "groq", name: "Groq", methods: [{ type: "key" }, { type: "env", names: ["GROQ_API_KEY"] }] },
+  { id: "envprov", name: "Env Provider", methods: [{ type: "key" }, { type: "env", names: ["ENVPROV_API_KEY"] }] },
+  { id: "anthropic", name: "Anthropic", methods: [{ type: "key" }, { type: "env", names: ["ANTHROPIC_API_KEY"] }] },
+  {
+    id: "fakeprov",
+    name: "Fake Provider",
+    methods: [
+      { id: "browser", type: "oauth", label: "Fake browser login" },
+      { id: "code", type: "oauth", label: "Fake code login", form: [{ key: "team", title: "Team", required: true, type: "string", placeholder: "acme" }] },
+      { id: "cli", type: "command", label: "Fake CLI", command: ["fake", "login"] },
+      { type: "key", label: "API key", form: [{ key: "region", title: "Region", type: "string", options: [{ value: "us", label: "US" }, { value: "eu", label: "EU", description: "Europe" }] }, { key: "host", title: "Host", type: "string", when: [{ key: "region", op: "eq", value: "eu" }] }, { key: "server", hidden: true, type: "string", default: "https://example.com" }] },
+    ],
+  },
+  { id: "cliprov", name: "CLI Provider", methods: [{ id: "cli", type: "command", label: "Log in with the CLI", command: ["cli", "login"] }, { id: "count", type: "oauth", label: "Counted login", form: [{ key: "n", title: "N", type: "number" }] }, { type: "env", names: ["CLIPROV_TOKEN"] }] },
+];
+/** Credentials by id: `{id, integrationID, method}`. OAuth attempts by id: `{integrationID, methodID, mode, status}`. */
+const credentials = new Map();
+const attempts = new Map();
+let integrationReads = 0;
+const connectionsOf = (i) => [...[...credentials.values()].filter((c) => c.integrationID === i.id).map((c) => ({ type: "credential", id: c.id, label: i.name, method: c.method })), ...(i.id === "envprov" ? [{ type: "env", name: "ENVPROV_API_KEY" }] : [])];
+const credit = (integrationID, method) => {
+  const c = { id: id("cred"), integrationID, method };
+  credentials.set(c.id, c);
+};
 
 const projectMode = process.env.FAKE_OPENCODE2_PROJECT_CONFIG === "1";
 /** Folder -> what the config files said when it was loaded (a reload reads them again). */
@@ -333,6 +362,11 @@ const server = createServer((req, res) => {
       emit("command.updated", {}, where);
       return json(res, 200, {});
     }
+    // POST /__oauth {result}: the browser ended every pending auto OAuth attempt.
+    if (url.pathname === "/__oauth") {
+      for (const a of attempts.values()) if (a.mode === "auto" && a.status === "pending") (a.status = body.result === "success" ? "complete" : "failed"), a.status === "complete" && credit(a.integrationID, "oauth");
+      return json(res, 200, {});
+    }
     if (url.pathname === "/__mcp_drop") return (mcps.clear(), json(res, 200, {}));
     if (url.pathname === "/__mcp_fail") return ((mcpFail = true), json(res, 200, {}));
     if (url.pathname.startsWith("/__clear/")) {
@@ -408,6 +442,34 @@ const server = createServer((req, res) => {
       if (m[2]) return shellOut.has(m[1]) ? json(res, 200, { location: { directory: dir }, data: { output: shellOut.get(m[1]), cursor: 0, size: 0, truncated: false } }) : json(res, 404, { message: "shell not found" });
       if (req.method === "DELETE") return (shells.get(m[1])?.kill(), res.writeHead(204), res.end());
     }
+    if (p === "/api/integration") {
+      const cold = ++integrationReads <= Number(process.env.FAKE_OPENCODE2_COLD_INTEGRATIONS ?? 0);
+      return json(res, 200, { location: { directory: dir }, data: cold || !dir ? [] : integrations.map((i) => ({ ...i, connections: connectionsOf(i) })) });
+    }
+    if ((m = /^\/api\/integration\/([^/]+)\/connect\/(key|oauth)(?:\/([^/]+))?(\/complete)?$/.exec(p))) {
+      const [, iid, kind, aid, complete] = m;
+      if (!integrations.some((i) => i.id === iid)) return json(res, 404, { _tag: "IntegrationNotFoundError", integrationID: iid, message: `Integration not found: ${iid}` });
+      if (kind === "key") return (credit(iid, "key"), res.writeHead(204), res.end());
+      if (!aid) {
+        if (body.answer?.team === "bad") return json(res, 400, { _tag: "InvalidRequestError", message: "Team is not valid" });
+        const a = { attemptID: id("con"), integrationID: iid, methodID: body.methodID, mode: body.methodID === "code" ? "code" : "auto", status: "pending" };
+        attempts.set(a.attemptID, a);
+        const time = { created: Date.now(), expires: Date.now() + 600_000 };
+        return json(res, 200, { location: { directory: dir }, data: { attemptID: a.attemptID, url: `https://example.com/fake-login?provider=${iid}`, instructions: a.mode === "code" ? "Paste the code" : "Code: ABCD-1234", mode: a.mode, time } });
+      }
+      const a = attempts.get(aid);
+      const missing = () => json(res, 404, { _tag: "IntegrationAttemptNotFoundError", message: `OAuth attempt not found: ${aid}` });
+      if (req.method === "DELETE") return (attempts.delete(aid), res.writeHead(204), res.end());
+      if (!a) return missing();
+      if (complete) {
+        if (body?.code !== "good") return json(res, 400, { _tag: "InvalidRequestError", message: "The code is not valid" });
+        attempts.delete(aid);
+        return (credit(iid, "oauth"), res.writeHead(204), res.end());
+      }
+      return json(res, 200, { location: { directory: dir }, data: { status: a.status, ...(a.status === "failed" && { message: "The browser login failed" }), time: { created: 0, expires: 1 } } });
+    }
+    if (p === "/api/credential") return json(res, 200, { data: [...credentials.values()].map((c) => ({ id: c.id, integrationID: c.integrationID, label: c.integrationID, active: true, value: { type: c.method, key: "x" } })) });
+    if ((m = /^\/api\/credential\/([^/]+)$/.exec(p)) && req.method === "DELETE") return (credentials.delete(m[1]), res.writeHead(204), res.end());
     if (p === "/api/permission/request") return json(res, 200, { location: { directory: dir }, data: [...asked.values()].filter((a) => sessions.get(a.sessionID)?.directory === dir || !dir).map(({ turn, ...a }) => a) });
     if (p === "/api/session/active" && req.method === "GET") return json(res, 200, { data: Object.fromEntries([...running.keys()].map((k) => [k, { type: "running" }])) });
     if (p === "/api/session" && req.method === "POST") {

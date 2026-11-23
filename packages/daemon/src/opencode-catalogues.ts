@@ -97,9 +97,16 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
   const requests: Record<string, EngineRequest> = {};
   for (const [type, handler] of Object.entries(v1.requests ?? {}))
     requests[type] = async (msg, reply, fail) => {
-      if (type === "opencode.restart") forget();
+      if (type === "opencode.restart") {
+        // An OpenCode 2 OAuth login waiting for the browser would be lost (OpenCode 1's own waits are checked by its handler).
+        if (v2.loginBusy()) return fail("opencode_busy", "OpenCode is busy: a login waits. Restart it when that is done.");
+        forget();
+      }
       if (SHARED_REQUESTS.has(type) || (await known()) === v1) return handler!(msg, reply, fail);
-      return fail("opencode_v2_unsupported", "OpenCode 2 does not support provider login in claude-ui yet.");
+      // Provider login of OpenCode 2 (GH-879): its own handlers over the integrations.
+      const v2Handler = v2.requests?.[type as keyof typeof v2.requests];
+      if (v2Handler) return v2Handler(msg, reply, fail);
+      return fail("opencode_v2_unsupported", "OpenCode 2 does not support this request in claude-ui yet.");
     };
   return {
     engine: v1.engine,
