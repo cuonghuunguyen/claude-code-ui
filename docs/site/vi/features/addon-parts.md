@@ -19,6 +19,10 @@ Addon giao diện tạo kiểu cho claude-ui bằng CSS. Để tìm phần tử 
 - Phần đánh dấu **reserved** đã có tên nhưng ứng dụng chưa hiển thị.
 - Danh sách cũng nằm trong `packages/protocol/src/addon-parts.ts` (`PARTS`, `PART_NAMES`, `PartName`, `PARTS_VERSION`).
 
+## Trình duyệt hỗ trợ {#browser}
+
+CSS của giao diện (`themes[].css`) cần CSS nesting: Chrome 120, Safari 17.2 (iOS 17.2) hoặc Firefox 117 trở lên. Bảng màu và `vars` của giao diện vẫn chạy trên trình duyệt cũ hơn, nhưng các quy tắc trong tệp CSS bị bỏ ở đó, nên giao diện chỉ hiện màu.
+
 ## Cascade {#cascade}
 
 Tệp CSS của addon (`css` trong `addon.json`) được tải trong một lớp cascade riêng, `addon.<name>`, sau các style của chính ứng dụng. Thứ tự: `theme, base, components, utilities, host, addon`.

@@ -19,6 +19,10 @@ A theme addon styles claude-ui with CSS. To find the element to style, select a 
 - Parts marked **reserved** are named already, but the app does not render them yet.
 - The list is also in `packages/protocol/src/addon-parts.ts` (`PARTS`, `PART_NAMES`, `PartName`, `PARTS_VERSION`).
 
+## Browser support {#browser}
+
+Theme CSS (`themes[].css`) needs CSS nesting: Chrome 120, Safari 17.2 (iOS 17.2) or Firefox 117, or newer. The palette and `vars` of a theme work in older browsers too, but the rules of its CSS file are dropped there, so the theme shows its colours only.
+
 ## Cascade {#cascade}
 
 The CSS file of an addon (`css` in `addon.json`) is loaded in its own cascade layer, `addon.<name>`, after the styles of the app itself. Order: `theme, base, components, utilities, host, addon`.
