@@ -212,7 +212,7 @@ export const LOCAL_COMMANDS: SlashCommand[] = [
 const LOCAL_NAMES = LOCAL_COMMANDS.map((c) => c.name);
 /** `/visualize [what]`: the daemon's own command, listed while the setting is on and OpenCode has no `visualize` of its own (docs/spec.md "Inline visualizations"). */
 const VISUALIZE_COMMAND: SlashCommand = { name: "visualize", description: "Draw the answer as an inline visualization", argumentHint: "[what to draw]" };
-const withVisualize = (list: SlashCommand[], on: boolean) => (on && !list.some((c) => c.name === "visualize") ? [...list.slice(0, LOCAL_COMMANDS.length), VISUALIZE_COMMAND, ...list.slice(LOCAL_COMMANDS.length)] : list);
+export const withVisualize = (list: SlashCommand[], on: boolean) => (on && !list.some((c) => c.name === "visualize") ? [...list.slice(0, LOCAL_COMMANDS.length), VISUALIZE_COMMAND, ...list.slice(LOCAL_COMMANDS.length)] : list);
 const dataUrlMime = (url: string) => /^data:([^;,]+)/.exec(url)?.[1] ?? "image/png";
 
 class OpenCodeSession implements EngineSession {

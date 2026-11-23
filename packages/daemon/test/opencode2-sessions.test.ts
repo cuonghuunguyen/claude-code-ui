@@ -14,6 +14,7 @@ import { createSettings } from "../src/settings.ts";
 import { createDaemon } from "../src/server.ts";
 import { createOpenCode2Engine, mcpRules, modeOfRules, modeRules, rulesOf, OPENCODE2_CAPABILITIES } from "../src/opencode2-engine.ts";
 import { mcpName } from "../src/opencode-shared.ts";
+import { visualizePluginDir, visualizeSystem } from "../src/visualize.ts";
 import { fakeQuery } from "./fake-query.ts";
 
 const BIN2 = fileURLToPath(new URL("./fixtures/opencode2/fake-opencode2-bin.mjs", import.meta.url));
@@ -1074,7 +1075,7 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
     const s = await d.open();
     await until(() => names(s.find("commands")?.commands).includes("hello"));
     await d.fake(`/__lists?dir=${encodeURIComponent(link)}`);
-    await until(() => names(s.find("commands")?.commands).join() === "compact,undo,redo,deploy");
+    await until(() => names(s.find("commands")?.commands).join() === "compact,undo,redo,visualize,deploy");
   });
 
   it("a /name typed before OpenCode's command list loaded runs the command once the list came; an unknown one goes as a prompt", async () => {
@@ -1132,7 +1133,7 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
     const d = await boot({ data: { commands: ["init", "review", "hello", "fail"].map((name) => ({ name })), commands2: [{ name: "deploy", description: "Deploy it" }] } });
     await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
     const s = await d.open();
-    const menu = ["compact", "undo", "redo", "init", "review", "hello", "fail"];
+    const menu = ["compact", "undo", "redo", "visualize", "init", "review", "hello", "fail"];
     await until(() => names(s.find("commands")?.commands).join() === menu.join());
     expect(names((await d.ok({ type: "session.commands", cwd: d.project, engine: "opencode" })).commands)).toEqual(menu);
     await s.prompt("first");
@@ -1151,7 +1152,36 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
     await until(() => !!s.find("notice", (n) => /^\/fail failed: .*Usage: \/fail <what>/.test(n.text)) && s.states().at(-1) === "idle");
     expect(s.parts().filter((p) => p.type === "turn_result")).toHaveLength(results);
     await d.fake("/__lists");
-    await until(() => names(s.find("commands")?.commands).join() === "compact,undo,redo,deploy");
+    await until(() => names(s.find("commands")?.commands).join() === "compact,undo,redo,visualize,deploy");
+  });
+
+  it("with visualizations on, the menu offers /visualize and each prompt carries the claude-ui-visualize instruction entry; off removes it; /visualize what shows the typed text and adds the hidden directive", async () => {
+    const d = await boot({ data: { commands: [{ name: "init" }] } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    const s = await d.open();
+    const menu = (on: boolean) => ["compact", "undo", "redo", ...(on ? ["visualize"] : []), "init"];
+    await until(() => names(s.find("commands")?.commands).join() === menu(true).join());
+    const entry = () => d.log().filter((l) => l.type === "request" && l.path === `/api/experimental/session/${s.id}/instructions/entries/claude-ui-visualize`);
+    const results = () => s.parts().filter((p) => p.type === "turn_result").length;
+    await s.prompt("one");
+    await until(() => results() === 1);
+    // Put once, not again for the next prompt while its text is the same.
+    await s.prompt("/visualize draw x");
+    await until(() => results() === 2);
+    expect(entry().map((r) => r.method)).toEqual(["PUT"]);
+    expect(entry()[0]!.body.value).toBe(visualizeSystem(visualizePluginDir(), "opencode"));
+    // The typed text is the prompt (never a server command); the directive is a hidden message right before it.
+    expect(d.requests("POST", `/api/session/${s.id}/command`)).toHaveLength(0);
+    expect(d.requests("POST", `/api/session/${s.id}/prompt`).map((r) => r.body.text)).toEqual(["one", "/visualize draw x"]);
+    expect(d.requests("POST", `/api/session/${s.id}/synthetic`).map((r) => r.body)).toEqual([{ text: "Answer this with a visualize fence: draw x", delivery: "steer", resume: false }]);
+    expect(s.parts().filter((p) => p.type === "user_text").map((p) => (p as { text: string }).text)).toEqual(["one", "/visualize draw x"]);
+    // Off: the entry is removed with the next prompt, the menu drops /visualize, and /visualize is a plain prompt.
+    await d.ok({ type: "settings.set", patch: { chat: { visualize: false } } });
+    expect(names((await d.ok({ type: "session.commands", cwd: d.project, engine: "opencode" })).commands)).toEqual(menu(false));
+    await s.prompt("/visualize off");
+    await until(() => results() === 3);
+    expect(entry().map((r) => r.method)).toEqual(["PUT", "DELETE"]);
+    expect(d.requests("POST", `/api/session/${s.id}/synthetic`)).toHaveLength(1);
   });
 });
 

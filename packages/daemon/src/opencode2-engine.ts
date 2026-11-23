@@ -12,9 +12,10 @@ import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 import { INLINE_TIMEOUT_MS, type ForkResult, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
 import { ascending } from "./opencode-id.ts";
 import { INLINE_SYSTEM, clip } from "./opencode-inline.ts";
-import { DONT_ASK, LOCAL_COMMANDS, OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels, type OpenCodeMcpRoute } from "./opencode-engine.ts";
+import { DONT_ASK, LOCAL_COMMANDS, OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels, withVisualize, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { findCall, mcpKeys, mcpName, mcpTimeoutMs, showDaemonCard, WORKER_START, type McpServerKey } from "./opencode-shared.ts";
 import { INLINE_META, InlineCollector2, inlineRules, storedEnd, type StoredEnd } from "./opencode2-inline.ts";
+import { visualizeSystem } from "./visualize.ts";
 import { OpenCode2Mapper, bashPart, failureText, mapTool2, type Failure, type OpenCode2Message, type Shell2 } from "./opencode2-parts.ts";
 import type { OpenCodeServer } from "./opencode-server.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
@@ -89,6 +90,8 @@ const COLD_AGENTS_MS = 5_000;
 const COMMANDS_WAIT_MS = 5_000;
 /** The instruction entry that carries an inline task's system text. */
 const INLINE_ENTRY = "claude-ui-inline";
+/** The instruction entry that carries the visualize skill's text while the setting is on (docs/spec.md "Inline visualizations"). */
+const VISUALIZE_ENTRY = "claude-ui-visualize";
 
 type Json = Record<string, any>;
 /** A model of `GET /api/model` and its default. */
@@ -376,11 +379,12 @@ class OpenCode2Session implements EngineSession {
 
   /** The `commands` part: the daemon's commands, then OpenCode's (built-ins, project and user commands). */
   emitCommands = async () => {
-    const list = await this.engine.commands(this.cwd).catch(() => undefined);
-    if (!list) return;
-    this.commandNames = new Set(list.map((c) => c.name).filter((n) => !LOCAL_NAMES.includes(n)));
+    const raw = await this.engine.serverCommands(this.cwd).catch(() => undefined);
+    if (!raw) return;
+    // /visualize is the daemon's: never a server command (unless OpenCode lists one of that name).
+    this.commandNames = new Set(raw.map((c) => c.name).filter((n) => !LOCAL_NAMES.includes(n)));
     this.commandsLoaded = true;
-    this.session.emit({ type: "commands", id: "commands", commands: list });
+    this.session.emit({ type: "commands", id: "commands", commands: withVisualize(raw, !!this.engine.visualizeOn?.()) });
   };
   /** The `agents` part, the default agent first; `failed: true` when OpenCode did not answer (the web offers a retry, which calls this again). */
   refreshAgents = async () => {
@@ -578,7 +582,7 @@ class OpenCode2Session implements EngineSession {
       // A Stop while this prompt waited for the stopped turn drops it (as a prompt being prepared).
       if (this.stops !== stops) return;
       if (!steer || afterStop) (this.beginTurn(), (this.turnPosted = false), this.session.setState("running"));
-      void this.send(messageID, text, images).catch((err) => {
+      void this.send(messageID, text, images, this.visualizeDirective(text)).catch((err) => {
         this.notice(`prompt_failed:${messageID}`, `Could not send the prompt to OpenCode: ${(err as Error).message}`);
         if (!steer || afterStop) this.toIdle();
       });
@@ -687,6 +691,7 @@ class OpenCode2Session implements EngineSession {
     await this.switchAgent(client, agent);
     if (!live()) return false;
     await this.applyModel(client);
+    await this.syncVisualize(client);
     return live();
   }
 
@@ -726,7 +731,30 @@ class OpenCode2Session implements EngineSession {
     });
   }
 
-  private async send(messageID: string, text: string, images: string[]) {
+  /** The hidden directive of `/visualize [what]` while the setting is on and OpenCode has no `visualize` command of its own; the typed text stays the prompt. */
+  private visualizeDirective(text: string): string | undefined {
+    if (!visualizeSystem(this.opts.visualizePlugin?.(), "opencode") || this.commandNames.has("visualize")) return undefined;
+    const viz = /^\/visualize(?:\s+([\s\S]*))?$/.exec(text.trim());
+    if (!viz) return undefined;
+    return viz[1]?.trim() ? `Answer this with a visualize fence: ${viz[1].trim()}` : "Draw your last answer, or the current topic, as a visualize fence.";
+  }
+
+  /** The visualize text as an instruction entry of the session: put when it changed since the last put, removed once when the setting went off (a run that did not put it lists the entries to know an earlier run's). */
+  private visualized: string | null | undefined;
+  private async syncVisualize(client: OpenCodeClient) {
+    const system = visualizeSystem(this.opts.visualizePlugin?.(), "opencode") ?? null;
+    if (system === this.visualized) return;
+    try {
+      if (system !== null) await client.experimental.session.instructions.entry.put({ sessionID: this.id, key: VISUALIZE_ENTRY, value: system });
+      else if (this.visualized || (await client.experimental.session.instructions.entry.list({ sessionID: this.id })).some((e) => e.key === VISUALIZE_ENTRY)) await client.experimental.session.instructions.entry.remove({ sessionID: this.id, key: VISUALIZE_ENTRY });
+      this.visualized = system;
+    } catch (err) {
+      // A failed sync is tried again at the next prompt; the prompt itself goes on.
+      console.error("OpenCode 2 visualize instruction failed:", (err as Error).message);
+    }
+  }
+
+  private async send(messageID: string, text: string, images: string[], directive?: string) {
     const stops = this.stops;
     // A Stop while the prompt is prepared ends the wait: nothing was posted, interrupt() ended the turn.
     const live = () => this.stops === stops;
@@ -734,6 +762,8 @@ class OpenCode2Session implements EngineSession {
     if (!(await this.prepare(client, live))) return;
     this.turnPosted = true;
     const files = images.map((uri) => ({ uri, source: { type: "inline" as const }, name: "image" }));
+    // A hidden message for the model right before the prompt: `resume: false` starts no turn of its own, the prompt's turn reads it.
+    if (directive) await client.session.synthetic({ sessionID: this.id, text: directive, delivery: "steer", resume: false });
     this.posts++;
     const post = client.session.prompt({ sessionID: this.id, id: messageID, text, ...(files.length && { files }) });
     this.posting.add(post);
@@ -1251,6 +1281,8 @@ class OpenCode2EngineImpl implements Engine {
     readonly record: (id: string) => void = () => {},
     /** The daemon's `/opencode-mcp` route: the URL and bearer tokens of a session's MCP servers. */
     readonly mcp?: OpenCodeMcpRoute,
+    /** The Inline visualizations setting. */
+    readonly visualizeOn?: () => boolean,
   ) {}
 
   permissionModes = (o: { allowBypass?: boolean; supportsAuto?: boolean }) => permissionModesFor({ ...o, modes: OPENCODE_PERMISSION_MODES });
@@ -1386,6 +1418,10 @@ class OpenCode2EngineImpl implements Engine {
    * Read after the agents: a folder OpenCode has not loaded yet lists only the built-in commands.
    */
   commands(cwd: string): Promise<SlashCommand[]> {
+    return this.serverCommands(cwd).then((l) => withVisualize(l, !!this.visualizeOn?.()));
+  }
+  /** `commands` without the daemon's `/visualize` (it follows the setting per call, this list is cached). */
+  serverCommands(cwd: string): Promise<SlashCommand[]> {
     const hit = this.commandLists.get(cwd);
     if (hit && Date.now() - hit.at < 60_000) return hit.list;
     const list = (async () => {
@@ -1448,4 +1484,4 @@ class OpenCode2EngineImpl implements Engine {
 }
 
 export type OpenCode2Engine = OpenCode2EngineImpl;
-export const createOpenCode2Engine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; record?: (id: string) => void; mcp?: OpenCodeMcpRoute } = {}): OpenCode2Engine => new OpenCode2EngineImpl(server, o.onTitle, o.record, o.mcp);
+export const createOpenCode2Engine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; record?: (id: string) => void; mcp?: OpenCodeMcpRoute; visualizeOn?: () => boolean } = {}): OpenCode2Engine => new OpenCode2EngineImpl(server, o.onTitle, o.record, o.mcp, o.visualizeOn);

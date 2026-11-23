@@ -29,6 +29,7 @@
 //   {form: {fields, title?, sessionID?}}  asks a question form (of `sessionID`, default the turn's) (`form.created`, metadata kind question, tool `$A1`/`$CALL`); {wait: "form"} holds until it is answered ("replied")
 //     or cancelled ("cancelled": the call fails aborted and the turn ends interrupted); `$ANSWER` is the answer
 // FAKE_OPENCODE2_MODEL_DELAY / _PROMPT_DELAY / _MESSAGE_DELAY: ms the model routes / the prompt route / the message read wait. FAKE_OPENCODE2_SWALLOW_STOP: an interrupt sends no end events. POST /__drop ends the event streams; POST /__forget/<id> drops a session; POST /__stage/<id>/<message id> and /__clear/<id> revert as OpenCode's own app.
+// POST …/synthetic {text}: stored as a `synthetic` message, no turn. Instruction entries: PUT/DELETE …/instructions/entries/:key and GET …/entries.
 // FAKE_OPENCODE_LOG: JSON lines of `start`, `request` (method, path, authed, body of a write) and `version`.
 import { createServer } from "node:http";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -88,6 +89,8 @@ const emit = (type, d, directory) => {
 /** The running turn per session: `{interrupt(), reply(decision)}`. */
 const failed = {};
 const running = new Map();
+/** The instruction entries of each session. */
+const instructions = new Map();
 /** Open permission requests by id. */
 const asked = new Map();
 /** Open forms by id: `{form, turn}`. */
@@ -334,7 +337,13 @@ const server = createServer((req, res) => {
     // FAKE_OPENCODE2_COMMAND_LIST_MS: ms the command list waits (a folder OpenCode is still loading).
     if (p === "/api/command") return void setTimeout(() => json(res, 200, { location: { directory: dir }, data: commands }), Number(process.env.FAKE_OPENCODE2_COMMAND_LIST_MS ?? 0));
     if (p === "/api/config") return json(res, 200, data.config ?? []);
-    if ((m = /^\/api\/experimental\/session\/([^/]+)\/instructions\/entries\/([^/]+)$/.exec(p)) && req.method === "PUT") return (res.writeHead(204), res.end());
+    // Instruction entries of a session: PUT {value}, DELETE and GET (the list) of …/instructions/entries[/:key].
+    if ((m = /^\/api\/experimental\/session\/([^/]+)\/instructions\/entries(?:\/([^/]+))?$/.exec(p))) {
+      const entries = (instructions.get(m[1]) ?? instructions.set(m[1], new Map()).get(m[1]));
+      if (!m[2] && req.method === "GET") return json(res, 200, { data: [...entries].map(([key, value]) => ({ key, value })) });
+      if (m[2] && req.method === "PUT") return (entries.set(m[2], body.value), res.writeHead(204), res.end());
+      if (m[2] && req.method === "DELETE") return (entries.delete(m[2]), res.writeHead(204), res.end());
+    }
     if (p === "/api/form") return json(res, 200, { location: { directory: dir }, data: [...forms.values()].map((f) => f.form).filter((f) => sessions.get(f.sessionID)?.directory === dir || !dir) });
     if ((m = /^\/api\/shell\/([^/]+)(\/output)?$/.exec(p))) {
       if (m[2]) return shellOut.has(m[1]) ? json(res, 200, { location: { directory: dir }, data: { output: shellOut.get(m[1]), cursor: 0, size: 0, truncated: false } }) : json(res, 404, { message: "shell not found" });
@@ -386,6 +395,12 @@ const server = createServer((req, res) => {
         sessions.set(fid, f);
         messages.set(fid, (cut < 0 ? list : list.slice(0, cut)).map((x) => ({ ...x, id: id("msg") })));
         return json(res, 200, { data: f });
+      }
+      // A hidden message for the model (`resume: false` starts no turn); stored as OpenCode 2.3.0 does (type synthetic).
+      if (sub === "synthetic") {
+        const msg = { id: body.id ?? id("msg"), time: { created: Date.now() }, text: body.text, type: "synthetic" };
+        messages.get(s.id).push(msg);
+        return json(res, 200, { data: { id: msg.id, sessionID: s.id, time: msg.time, type: "synthetic", payload: { text: body.text }, delivery: body.delivery ?? "steer" } });
       }
       if (sub === "model") return (s.model = body.model, res.writeHead(204), res.end());
       if (sub === "agent") {
