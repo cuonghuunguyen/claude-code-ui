@@ -404,6 +404,8 @@ class OpenCode2Session implements EngineSession {
     for (const [id, r] of posted) {
       if (id in active) continue;
       const newest = await client.message.list({ sessionID: id, order: "desc", limit: 5 }).then((p) => p.data as unknown as Json[], () => []);
+      // OpenCode lists a session as active only some time after its prompt request answered: no end row and no assistant message yet = the run is still starting.
+      if (!newest.some((m) => m.type === "idle" || m.type === "assistant")) continue;
       r.settle(storedEnd(newest));
     }
   }
