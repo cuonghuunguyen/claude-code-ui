@@ -845,7 +845,17 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     expect(s.parts().filter((p) => p.type === "user_text" && /^\/(undo|redo)/.test((p as { text: string }).text))).toEqual([]);
   });
 
-  it("a prompt sent here is not sent again by a reconnect; undone and redone, it comes back with its user message", async () => {
+  /** The stream drops and the daemon read the session again after it reconnected. */
+  const reconnect = async (d: Awaited<ReturnType<typeof boot>>) => {
+    const reads = d.requests("GET", "/api/form").length;
+    await d.fake("/__drop");
+    await until(() => d.requests("GET", "/api/form").length > reads);
+    await sleep(300);
+  };
+  /** How often user message `id` was sent to the client. */
+  const sent = (s: ReturnType<Awaited<ReturnType<typeof boot>>["view"]>, id: string) => s.parts().filter((p) => p.type === "user_text" && p.id === id).length;
+
+  it("a prompt sent here is not sent again by a reconnect; undone and redone, it comes back with its user message once, and later reconnects do not send it again", async () => {
     const { d, s } = await opened();
     const id: string = (await s.prompt("four")).messageId ?? lastOf(s.parts(), (p) => p.type === "user_text" && (p as { text: string }).text === "four")!.id;
     await until(() => s.parts().some((p) => p.type === "turn_result"));
@@ -862,6 +872,11 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     await s.prompt("/redo");
     await until(() => d.requests("DELETE", "/api/session/ses_own/revert").length === 1);
     await until(() => s.parts().slice(before).some((p) => p.id === id && p.type === "user_text"));
+    await sleep(300);
+    expect(sent(s, id)).toBe(2);
+    await reconnect(d);
+    await reconnect(d);
+    expect(sent(s, id)).toBe(2);
   });
 
   it("a revert staged, moved or cleared in OpenCode's own app cuts the timeline or brings the messages back", async () => {
@@ -879,6 +894,49 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     await sleep(500);
     expect(s.parts().some((p) => p.type === "turn_result")).toBe(false);
     expect(s.states()).not.toContain("running");
+  });
+
+  it("a prompt sent here, cut and cleared in OpenCode's own app (the cut seen live or only by the read after a reconnect), comes back once", async () => {
+    const { d, s } = await opened();
+    for (const missed of [false, true]) {
+      const text = missed ? "five" : "four";
+      const id: string = (await s.prompt(text)).messageId ?? lastOf(s.parts(), (p) => p.type === "user_text" && (p as { text: string }).text === text)!.id;
+      await until(() => s.states().at(-1) === "idle" && s.parts().filter((p) => p.type === "turn_result").length === (missed ? 2 : 1));
+      const rewinds = s.parts().filter((p) => p.type === "rewind").length;
+      if (missed) {
+        // The stage happens while the stream is down: only the read after the reconnect sees it.
+        const reads = d.requests("GET", "/api/form").length;
+        await d.fake("/__drop");
+        await d.fake(`/__stage/ses_own/${id}`);
+        await until(() => d.requests("GET", "/api/form").length > reads);
+      } else await d.fake(`/__stage/ses_own/${id}`);
+      await until(() => s.parts().filter((p) => p.type === "rewind").length > rewinds);
+      await d.fake("/__clear/ses_own");
+      await until(() => sent(s, id) === 2);
+      await reconnect(d);
+      expect(sent(s, id)).toBe(2);
+    }
+  });
+
+  it("the empty execution after a clear is no turn even when it starts late, and a prompt sent right after a redo ends at its own turn's end", async () => {
+    const { d, s } = await opened({}, { env: { FAKE_OPENCODE2_CLEAR_DELAY_MS: "2500" } });
+    await s.prompt("/undo");
+    await s.prompt("/redo");
+    await until(() => d.requests("DELETE", "/api/session/ses_own/revert").length === 1);
+    await sleep(3000);
+    expect(s.states()).not.toContain("running");
+    expect(s.parts().some((p) => p.type === "turn_result")).toBe(false);
+    // Redone and prompted at once: the clear's empty execution runs first, then the prompt's turn.
+    await s.prompt("/undo");
+    await s.prompt("/redo");
+    await until(() => d.requests("DELETE", "/api/session/ses_own/revert").length === 2);
+    await s.prompt("four");
+    await until(() => s.parts().some((p) => p.type === "turn_result"), 10_000);
+    const result = s.parts().findIndex((p) => p.type === "turn_result");
+    expect(s.parts().slice(0, result).some((p) => p.type === "assistant_text" && (p as { text: string }).text === "pong")).toBe(true);
+    await sleep(300);
+    expect(s.parts().filter((p) => p.type === "turn_result")).toHaveLength(1);
+    expect(s.states().at(-1)).toBe("idle");
   });
 
   it("/compact runs OpenCode's compaction as a turn: a compaction part with the summary, then the turn result; nothing to compact shows OpenCode's reason", async () => {

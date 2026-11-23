@@ -159,8 +159,6 @@ const POSTING_WAIT_MS = 3000;
 const ANSWERED = "Answered in OpenCode";
 /** How often a running bash mode command's output is read (OpenCode 2 sends no output events). */
 const SHELL_POLL_MS = 500;
-/** How long after a revert clear its empty execution (OpenCode 2.3.0 sends `execution.started`/`succeeded` after `session.revert.cleared`) is expected. */
-const CLEAR_EXECUTION_MS = 2000;
 /** A user message that shows in the timeline (text or an image). */
 const shownUser = (m: OpenCode2Message) => m.type === "user" && (!!m.text || !!m.files?.some((f) => f.mime?.startsWith("image/") && f.data));
 type Req = { kind: "permission"; callId?: string; sessionID: string; /** The mapper of the call: an inline run's own. */ mapper: OpenCode2Mapper; /** An inline run's call: its denied card shows under it. */ parentId?: string } | { kind: "question"; sessionID: string; questions: Question[]; fields: { key: string; type: string }[] };
@@ -191,13 +189,20 @@ class OpenCode2Session implements EngineSession {
   private readonly unshown = new Set<string>();
   /** The message OpenCode's staged revert cuts the conversation at, undefined when none (a prompt commits it: OpenCode removes the cut messages then). */
   private revertAt: string | undefined;
-  /** When a revert clear was seen: the empty execution that follows it is no turn (its start is skipped once, and a resync in that time starts no turn). */
-  private clearedAt = 0;
-  private clearSkipped = false;
-  private inClearWindow = () => Date.now() - this.clearedAt < CLEAR_EXECUTION_MS;
+  /**
+   * A revert clear was asked or seen and no step ran since. OpenCode 2.3.0 follows a clear with an empty execution (`execution.started`/`succeeded`, no step),
+   * which is no turn: `run` = its start was skipped (its end is skipped too); `prompted` = a prompt or command of ours was posted since (its turn's start is
+   * not skipped); `prompt` = that prompt's message id and `delivered` = OpenCode delivered it (`session.inbox.delivered`): an execution end before that is the
+   * clear's. The first step ends it. A resync while it is set starts no turn (OpenCode lists the session active during the empty execution).
+   */
+  private clear: { run: boolean; prompted: boolean; prompt?: string; delivered: boolean } | undefined;
   private markClear() {
-    this.clearedAt = Date.now();
-    this.clearSkipped = false;
+    this.clear = { run: false, prompted: false, delivered: false };
+  }
+  /** A prompt (`id`) or command of ours goes to OpenCode: it commits a staged revert, and the clear's empty execution is not its turn. */
+  private posted(id?: string) {
+    this.revertAt = undefined;
+    if (this.clear) Object.assign(this.clear, { prompted: true, prompt: id, delivered: false });
   }
   /** The bash mode command running as this session's turn: OpenCode's shell id once `session.shell.started` named it, Stop pressed before that, the output read so far. */
   /** Shell ids of our commands moved to the background: their request still ends them (`shell: background` kept). */
@@ -347,9 +352,10 @@ class OpenCode2Session implements EngineSession {
         this.requests(h);
         const state = this.session.currentState();
         // OpenCode lists the session as active during a clear's empty execution: that is no turn.
-        if (h.busy && state === "idle" && !this.inClearWindow()) (this.beginTurn(), this.openTurnEnd(), this.session.setState("running"));
+        if (h.busy && state === "idle" && !this.clear) (this.beginTurn(), this.openTurnEnd(), this.session.setState("running"));
         // A prompt that is still being prepared is not in OpenCode yet: only a turn that reached it can have ended there. A bash mode command is no OpenCode turn.
-        else if (!h.busy && state === "running" && !this.shellRun && this.turnPosted && this.posting.size === 0 && this.posts === posts) this.turnStop < this.stops ? this.endStopped() : this.finish();
+        // A prompt behind a clear's empty execution may not run yet.
+        else if (!h.busy && state === "running" && !this.shellRun && !this.clear && this.turnPosted && this.posting.size === 0 && this.posts === posts) this.turnStop < this.stops ? this.endStopped() : this.finish();
       })
       .catch(() => {})
       .finally(() => (this.resyncing = undefined)));
@@ -531,12 +537,11 @@ class OpenCode2Session implements EngineSession {
     const cmd = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
     // Like a local command it has no message of ours (no draft; the web drops its pending bubble): the prompt OpenCode makes of it shows.
     if (cmd && this.commandNames.has(cmd[1]!) && this.session.currentState() === "idle") return void ((this.localRun = undefined), this.runCommand(cmd[1]!, cmd[2] ?? "", images));
-    // OpenCode commits a staged revert at the next prompt: the cut messages are gone.
-    this.revertAt = undefined;
-    this.clearedAt = 0;
     // Stop was pressed and the stopped turn still runs: a joining prompt would be lost with it, so it starts the next turn when this one has ended.
     const afterStop = this.turnStop < this.stops && this.session.currentState() !== "idle";
     const messageID = ascending("msg");
+    // OpenCode commits a staged revert at the next prompt: the cut messages are gone.
+    this.posted(messageID);
     this.mapper.own.add(messageID);
     this.session.emit({ type: "user_text", id: messageID, text, images });
     const steer = this.session.currentState() !== "idle";
@@ -666,8 +671,7 @@ class OpenCode2Session implements EngineSession {
     void (async () => {
       const client = await this.server.client();
       if (!(await this.prepare(client, () => this.stops === stops))) return;
-      this.revertAt = undefined;
-      this.clearedAt = 0;
+      this.posted();
       const files = images.map((uri) => ({ uri, source: { type: "inline" as const }, name: "image" }));
       this.posts++;
       await client.session.command({ sessionID: this.id, name, text: args, ...(files.length && { files }) });
@@ -716,6 +720,7 @@ class OpenCode2Session implements EngineSession {
   /** The turn ended (execution succeeded or failed, or the Stop's end): its result, then idle. */
   private finish() {
     if (this.session.currentState() === "idle") return;
+    this.clear = undefined;
     const { usage, cost } = this.mapper.turn();
     if (!this.aborted) this.session.emit({ type: "turn_result", id: `turn:${ascending("msg")}`, durationMs: Date.now() - this.turnAt, ...(cost > 0 && { costUsd: cost }), usage, isError: this.failed });
     this.toIdle();
@@ -764,18 +769,27 @@ class OpenCode2Session implements EngineSession {
     switch (type) {
       case "session.execution.started":
         // OpenCode 2.3.0 follows a revert clear with an empty execution: no turn.
-        if (this.inClearWindow() && !this.clearSkipped) return void (this.clearSkipped = true);
+        if (this.clear && !this.clear.prompted) return void (this.clear.run = true);
         if (this.session.currentState() === "idle") (this.beginTurn(), this.session.setState("running"));
         return;
       case "session.execution.succeeded":
+        // The clear's empty execution ended: its start was skipped, or a prompt of ours waits behind it (not delivered yet).
+        if (this.clear && (this.clear.run || (this.clear.prompted && !this.clear.delivered))) return void (this.clear = undefined);
         return this.finish();
+      case "session.inbox.delivered":
+        // Our prompt reached a run: that run is its turn.
+        if (this.clear?.prompt && d.inboxID === this.clear.prompt) Object.assign(this.clear, { delivered: true, run: false });
+        return;
       case "session.execution.failed":
+        if (this.clear?.run) return void (this.clear = undefined);
         this.failed = true;
         this.showError(d.error);
         return this.finish();
       case "session.execution.interrupted":
+        if (this.clear?.run) return void (this.clear = undefined);
         return this.session.currentState() === "idle" ? undefined : this.interrupted();
       case "session.step.started":
+        this.clear = undefined;
         this.turnAssistant = d.assistantMessageID;
         this.stepModel = d.model;
         return this.setRetry(undefined);

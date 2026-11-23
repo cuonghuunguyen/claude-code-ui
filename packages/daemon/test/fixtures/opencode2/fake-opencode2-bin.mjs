@@ -5,7 +5,7 @@
 // POST /api/session, /api/session/:id/prompt, /api/session/:id/model, /api/session/:id/interrupt, /api/session/:id/permission/:rid/reply, /api/session/:id/fork;
 // PATCH /api/session/:id (permissions, title, archived); DELETE /api/session/:id.
 // Revert (as 2.3.0): POST …/revert/stage {messageID, files?} (stored messages stay listed; `session.revert` marks the cut), POST …/revert/commit, DELETE …/revert
-// (clear: `session.revert.cleared`, then an empty `execution.started`/`succeeded`, as 2.3.0 sends; FAKE_OPENCODE2_CLEAR_ACTIVE_MS: the session active that long meanwhile), a prompt while staged commits first. GET …/diff?from=&to= sums the
+// (clear: `session.revert.cleared`, then an empty `execution.started`/`succeeded`, as 2.3.0 sends; FAKE_OPENCODE2_CLEAR_ACTIVE_MS: the session active that long meanwhile; FAKE_OPENCODE2_CLEAR_DELAY_MS: it starts that late, a prompt posted meanwhile runs after it), a prompt while staged commits first. A prompt's turn sends `session.inbox.delivered` after its `execution.started`. GET …/diff?from=&to= sums the
 // fake `diff` lists ([{file, additions, deletions}]) of the user messages from `from` up to `to` (excluded; default the next user message).
 // POST …/compact: a compaction turn (`summary` stored; a session without messages fails "Nothing to compact yet"). POST …/shell {id, command}: answers when the
 // command ends (FAKE_OPENCODE2_SHELL_START_MS delays `session.shell.started`); output `out:<command>`, `exit <n>` in the command = that exit code, `sleep` in it runs until DELETE /api/shell/:sh (killed). GET /api/shell/:sh/output.
@@ -142,6 +142,8 @@ async function runTurn(sid, userId, steps) {
       const d = fill(step.data, vars);
       if (step.event === "permission.asked") asked.set(d.id, { sessionID: sid, ...d, turn });
       emit(step.event, d, step.event.startsWith("session.execution.") || step.event === "session.usage.updated" ? undefined : dir);
+      // 2.3.0 delivers the prompt (its message id) right after the execution started.
+      if (step.event === "session.execution.started" && userId) emit("session.inbox.delivered", { sessionID: sid, inboxID: userId }, dir);
     }
   }
   log({ type: "turn", end: turn.stopped ? "interrupted" : "done" });
@@ -158,13 +160,25 @@ function takePrompt(s, body, res, command = false) {
   const file = scripts[nextTurn++];
   const steps = file ? JSON.parse(readFileSync(file, "utf8")) : pongTurn;
   emit("session.inbox.enqueued", { inboxID: userId, sessionID: s.id, item: { type: "user", payload: { text: body.text }, delivery: "steer" } }, s.directory);
-  void runTurn(s.id, userId, steps);
+  // A clear's empty execution that has not run yet runs first (one execution at a time).
+  void (s.clearing ?? Promise.resolve()).then(() => runTurn(s.id, userId, steps));
   if (command) return (res.writeHead(204), res.end());
   json(res, 200, { data: { id: userId, sessionID: s.id, time: user.time, type: "user", payload: { text: body.text } } });
 }
 
-/** The empty execution 2.3.0 runs after a revert clear. FAKE_OPENCODE2_CLEAR_ACTIVE_MS: it runs that long, the session listed as active meanwhile. */
+/**
+ * The empty execution 2.3.0 runs after a revert clear. FAKE_OPENCODE2_CLEAR_ACTIVE_MS: it runs that long, the session listed as active meanwhile.
+ * FAKE_OPENCODE2_CLEAR_DELAY_MS: it starts that late; a prompt posted meanwhile runs after it.
+ */
 function clearExecution(s) {
+  const delay = Number(process.env.FAKE_OPENCODE2_CLEAR_DELAY_MS ?? 0);
+  if (delay) {
+    const done = (s.clearing = new Promise((r) => setTimeout(() => (emptyExecution(s), r()), delay)));
+    return void done.then(() => s.clearing === done && delete s.clearing);
+  }
+  emptyExecution(s);
+}
+function emptyExecution(s) {
   emit("session.execution.started", { sessionID: s.id });
   const ms = Number(process.env.FAKE_OPENCODE2_CLEAR_ACTIVE_MS ?? 0);
   if (!ms) return emit("session.execution.succeeded", { sessionID: s.id });

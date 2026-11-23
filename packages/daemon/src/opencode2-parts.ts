@@ -73,9 +73,11 @@ export class OpenCode2Mapper {
   private compacting: { id: string; reason?: string } | undefined;
   /** Message ids of prompts this daemon sent: their echo and a re-read add nothing (user_text was emitted at once; a re-emit would look like a new message). */
   readonly own = new Set<string>();
+  /** Prompts of ours a revert cut: the next read that lists one again (a redo or clear) shows it once, then it is ours again. */
+  private readonly forgotten = new Set<string>();
   /** A revert cut at `id`: the prompts sent here from it on are hidden, a later read (redo) must show them again. Ids ascend with time (`opencode-id.ts`). */
   forgetFrom(id: string) {
-    for (const o of this.own) if (o >= id) this.own.delete(o);
+    for (const o of this.own) if (o >= id) (this.own.delete(o), this.forgotten.add(o));
   }
 
   /** The OpenCode name and input of each call (the card has the mapped ones): later events of a call carry only its id. */
@@ -140,9 +142,10 @@ export class OpenCode2Mapper {
     });
   }
 
-  /** A stored user message; one sent here only after a cut forgot it (its bubble was taken away: a read after the clear brings it back). */
+  /** A stored user message; one sent here only once after a cut forgot it (its bubble was taken away: the first read after the clear brings it back). */
   private user(m: OpenCode2Message): Part[] {
     if (this.own.has(m.id)) return [];
+    if (this.forgotten.delete(m.id)) this.own.add(m.id);
     const images = (m.files ?? []).filter((f) => f.mime?.startsWith("image/") && f.data).map((f) => `data:${f.mime};base64,${f.data}`);
     return m.text || images.length ? [{ type: "user_text", id: m.id, text: m.text ?? "", images }] : [];
   }
