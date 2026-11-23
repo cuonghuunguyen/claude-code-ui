@@ -29,6 +29,31 @@ Tệp CSS của addon (`css` trong `addon.json`) được tải trong một lớ
 - Thuộc tính `style` nội tuyến của phần tử vẫn thắng lớp. Hãy thêm `!important` trong quy tắc của bạn để ghi đè.
 - Lớp riêng trong tệp của bạn vẫn dùng bình thường, ví dụ `@layer base, effects;`; chúng nằm trong `addon.<name>`.
 
+## Vòng đời {#lifecycle}
+
+Các thuộc tính cho biết phiên đang mở đang làm gì, để giao diện phản ứng theo. Ứng dụng đặt chúng từ trạng thái phiên, cho mọi engine (Claude Code và OpenCode).
+
+| Thuộc tính | Trên | Giá trị |
+|---|---|---|
+| `data-phase` | `session-area` và `<html>`, theo phiên đang mở | `thinking` (một lượt đang chạy, kể cả OpenCode thử lại), `waiting` (cần bạn duyệt quyền hoặc trả lời câu hỏi), `idle`. Trang Focus và tab mới: `idle`. |
+| `data-just-finished` | `session-area` | Có trong 1200 ms sau khi phiên đang mở chuyển từ `thinking` sang `idle`. Mất khi lượt mới bắt đầu. Không đặt sau `waiting`, và không đặt khi bạn chuyển sang phiên khác. |
+| `data-focus-opened` | `focus-page` | Có trong 1200 ms sau khi trang Focus mở. |
+| `data-motion` | `<html>` | `on` hoặc `off`. `off` khi hệ thống yêu cầu giảm chuyển động (cập nhật trực tiếp). |
+| `data-page-hidden` | `<html>` | Có khi tab trình duyệt bị ẩn. Lúc đó ứng dụng tạm dừng mọi CSS animation, kể cả của bạn (`animation-play-state: paused !important` trong lớp `host`, thắng `!important` của bạn). |
+
+```css
+[data-part="session-area"][data-just-finished] { animation: flash 1.2s ease-out; }
+:root[data-motion="off"] * { animation: none !important; }
+```
+
+Thời gian giữ 1200 ms là chủ ý: animation CSS dừng khi bộ chọn của nó không còn khớp, nên một khung hình là quá ngắn.
+
+Ngân sách hiệu năng cho animation:
+
+- Chỉ animate `transform` và `opacity`. Không animate `filter`, `box-shadow`, `backdrop-filter` trên bề mặt lớn.
+- Ít animation vô hạn (tối đa 3 cái cùng lúc). Ưu tiên một animation cho cả trang hơn là một cái cho mỗi hàng.
+- Tôn trọng `data-motion="off"`: giao diện có chuyển động cần một bản tĩnh.
+
 ## Các phần {#parts}
 
 | Phần | Phần tử | Thuộc tính trạng thái | Từ |
@@ -40,7 +65,7 @@ Tệp CSS của addon (`css` trong `addon.json`) được tải trong một lớ
 | `group-toggle` | Tiêu đề nhóm dự án trong danh sách phiên | | 1.5 |
 | `day-header` | Tiêu đề ngày trong danh sách phiên | | 1.5 |
 | `work-area` | Cột chứa vùng phiên và bảng dưới | | 1.5 |
-| `session-area` | Phiên đang mở: tiêu đề, dòng thời gian, ô nhập | | 1.5 |
+| `session-area` | Phiên đang mở: tiêu đề, dòng thời gian, ô nhập | `data-phase`: `thinking`, `waiting`, `idle`; `data-just-finished` (xem [Vòng đời](#lifecycle)) | 1.5 |
 | `session-header` | Tiêu đề của phiên đang mở | | 1.5 |
 | `tab` | Một tab trong dải tab | `data-state`: `new`, `running`, `needs_input`, `unread`, `idle`; `data-active` trên tab đang mở | 1.5 |
 | `focus-tab` | Tab Focus | | 1.5 |
@@ -64,7 +89,7 @@ Tệp CSS của addon (`css` trong `addon.json`) được tải trong một lớ
 | `context-meter` | Đồng hồ mức dùng ngữ cảnh | | 1.5 |
 | `context-bar` | Thanh trong cửa sổ mức dùng ngữ cảnh | | 1.5 |
 | `status-bar` | Dòng trạng thái dưới ô nhập | | 1.5 |
-| `focus-page` | Trang Focus | | 1.5 |
+| `focus-page` | Trang Focus | `data-focus-opened` (xem [Vòng đời](#lifecycle)) | 1.5 |
 | `focus-row` | Một dòng của danh sách Focus | | 1.5 |
 | `focus-queue` | Cột hàng đợi của trang Focus | | 1.5 |
 | `toast-region` | Vùng chứa các thông báo nổi | | 1.5 |
@@ -95,3 +120,4 @@ Bộ chọn dùng `^=`, `$=`, `*=` hoặc `|=` trên `data-part` không được
 ## Nhật ký thay đổi {#changelog}
 
 - Phiên bản phần 1: các phần ở trên.
+- Thuộc tính vòng đời `data-phase`, `data-just-finished`, `data-focus-opened`, `data-motion`, `data-page-hidden` (không đổi danh sách phần).

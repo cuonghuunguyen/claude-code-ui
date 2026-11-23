@@ -29,6 +29,31 @@ The CSS file of an addon (`css` in `addon.json`) is loaded in its own cascade la
 - An inline `style` attribute of an element still wins over a layer. Add `!important` in your rule to override it. A few app elements use Tailwind `!important` utilities (for example `px-0!`); they beat your `!important` too.
 - Your own layers inside the file work as usual, for example `@layer base, effects;`; they sit inside `addon.<name>`.
 
+## Lifecycle {#lifecycle}
+
+Attributes that say what the open session is doing, so a theme can react. The app sets them from the session state, for every engine (Claude Code and OpenCode).
+
+| Attribute | On | Value |
+|---|---|---|
+| `data-phase` | `session-area` and `<html>`, for the open session | `thinking` (a turn runs, an OpenCode retry too), `waiting` (a permission or a question needs you), `idle`. On the Focus page and a new tab: `idle`. |
+| `data-just-finished` | `session-area` | Present for 1200 ms after the open session went from `thinking` to `idle`. Gone when a new turn starts. Not set after `waiting`, and not when you switch to another session. |
+| `data-focus-opened` | `focus-page` | Present for 1200 ms after the Focus page opens. |
+| `data-motion` | `<html>` | `on` or `off`. `off` while the system asks for reduced motion (live). |
+| `data-page-hidden` | `<html>` | Present while the browser tab is hidden. The app pauses every CSS animation then, yours included (`animation-play-state: paused !important` in the `host` layer, which beats your `!important`). |
+
+```css
+[data-part="session-area"][data-just-finished] { animation: flash 1.2s ease-out; }
+:root[data-motion="off"] * { animation: none !important; }
+```
+
+The 1200 ms hold is on purpose: a CSS animation stops when its selector stops matching, so one frame is too short.
+
+Performance budget for animations:
+
+- Animate `transform` and `opacity` only. Do not animate `filter`, `box-shadow` or `backdrop-filter` on large surfaces.
+- Few infinite animations (3 or less at the same time). Prefer one on the whole page to one per row.
+- Respect `data-motion="off"`: a theme with motion needs a still version.
+
 ## Parts {#parts}
 
 | Part | Element | State attributes | Since |
@@ -40,7 +65,7 @@ The CSS file of an addon (`css` in `addon.json`) is loaded in its own cascade la
 | `group-toggle` | Project group header in the session list | | 1.5 |
 | `day-header` | Day heading in the session list | | 1.5 |
 | `work-area` | Column that holds the session area and the bottom panel | | 1.5 |
-| `session-area` | The open session: header, timeline, prompt box | | 1.5 |
+| `session-area` | The open session: header, timeline, prompt box | `data-phase`: `thinking`, `waiting`, `idle`; `data-just-finished` (see [Lifecycle](#lifecycle)) | 1.5 |
 | `session-header` | Header of the open session | | 1.5 |
 | `tab` | One tab in the tab strip | `data-state`: `new`, `running`, `needs_input`, `unread`, `idle`; `data-active` on the open tab | 1.5 |
 | `focus-tab` | The Focus tab | | 1.5 |
@@ -64,7 +89,7 @@ The CSS file of an addon (`css` in `addon.json`) is loaded in its own cascade la
 | `context-meter` | Context usage meter | | 1.5 |
 | `context-bar` | Bar inside the context usage popup | | 1.5 |
 | `status-bar` | Status line under the prompt box | | 1.5 |
-| `focus-page` | The Focus page | | 1.5 |
+| `focus-page` | The Focus page | `data-focus-opened` (see [Lifecycle](#lifecycle)) | 1.5 |
 | `focus-row` | One row of the Focus list | | 1.5 |
 | `focus-queue` | Queue column of the Focus page | | 1.5 |
 | `toast-region` | Area that holds the toasts | | 1.5 |
@@ -95,3 +120,4 @@ A selector with `^=`, `$=`, `*=` or `|=` on `data-part` is not checked.
 ## Changelog {#changelog}
 
 - Parts version 1: the parts above.
+- Lifecycle attributes `data-phase`, `data-just-finished`, `data-focus-opened`, `data-motion`, `data-page-hidden` (not a part change).
