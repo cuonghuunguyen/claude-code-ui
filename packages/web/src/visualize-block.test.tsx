@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MessageResponse } from "./components/ai-elements/message.tsx";
+import { CwdContext } from "./tool-card.tsx";
 import { ANSWER_MAX, VisualizeAnswerContext, VisualizeBlock, VisualizeContext, VisualizeFence, VisualizeReadContext } from "./visualize-block.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -41,11 +42,14 @@ it("an incomplete fence is a placeholder: no frame, no highlighted code", async 
 it("a fence holding only an .html path draws the file's content read through the context", async () => {
   const read = vi.fn(async () => "<p>from file</p>");
   const el = await mount(
-    <VisualizeReadContext value={read}>
-      <VisualizeFence code={"/tmp/s/visualize/chart.html\n"} isIncomplete={false} language="visualize" />
-    </VisualizeReadContext>,
+    <CwdContext value="/home/u/proj">
+      <VisualizeReadContext value={read}>
+        <VisualizeFence code={"/tmp/s/visualize/chart.html\n"} isIncomplete={false} language="visualize" />
+      </VisualizeReadContext>
+    </CwdContext>,
   );
-  expect(read).toHaveBeenCalledWith("/tmp/s/visualize/chart.html");
+  // The session cwd goes along: it picks the side holding the uploads folder (WSL with SSH or Docker also running).
+  expect(read).toHaveBeenCalledWith("/tmp/s/visualize/chart.html", "/home/u/proj");
   const f = frameOf(el);
   const post = vi.fn();
   Object.defineProperty(f, "contentWindow", { value: { postMessage: post } });

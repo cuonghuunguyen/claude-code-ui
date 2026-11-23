@@ -13,7 +13,7 @@ export const FileLinkContext = createContext<((path: string, line?: number) => v
 export const FileBaseContext = createContext<{ base: string; root: string } | undefined>(undefined);
 
 /** Gives the URL of an image file (an `fs.media` answer): the markdown preview provides it; without one a relative image shows its alt text. */
-export const FileImageContext = createContext<((path: string) => Promise<string>) | undefined>(undefined);
+export const FileImageContext = createContext<((path: string, cwd: string) => Promise<string>) | undefined>(undefined);
 
 /** A relative (or absolute) target as a path inside `root`, "." and ".." resolved; undefined when it leaves `root`. */
 export function resolveIn(target: string, base: string, root: string): string | undefined {
@@ -113,13 +113,14 @@ function fileLinks() {
 function LoadedImage({ path, alt }: { path: string; alt?: string }) {
   const t = useT();
   const load = use(FileImageContext);
+  const cwd = use(CwdContext);
   const [url, setUrl] = useState<string>();
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     let live = true;
-    load?.(path).then((u) => live && setUrl(u), () => live && setFailed(true));
+    load?.(path, cwd).then((u) => live && setUrl(u), () => live && setFailed(true));
     return () => void (live = false);
-  }, [path, load]);
+  }, [path, load, cwd]);
   if (!url || failed) return <span className="text-muted-foreground">{alt || (failed ? t("files.image.unavailable") : "")}</span>;
   return <img src={url} alt={alt} loading="lazy" className="h-auto max-w-full rounded" onError={() => setFailed(true)} />;
 }

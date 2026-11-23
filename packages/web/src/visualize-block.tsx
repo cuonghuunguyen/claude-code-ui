@@ -8,12 +8,13 @@ import { clampHeight } from "./addons.ts";
 import { downloadText } from "./download.ts";
 import { useT } from "./i18n.ts";
 import { useNear } from "./lib/use-near.ts";
+import { CwdContext } from "./tool-card.tsx";
 import { useColorTheme, useDark } from "./theme.ts";
 
 /** Settings › Chat › Inline visualizations: off (or an older daemon without the setting) shows the fence as code. */
 export const VisualizeContext = createContext(false);
-/** Reads a visualization file's text (fs.read); undefined outside the app. */
-export const VisualizeReadContext = createContext<((path: string) => Promise<string>) | undefined>(undefined);
+/** Reads a visualization file's text (fs.read) from the side of the session `cwd`; undefined outside the app. */
+export const VisualizeReadContext = createContext<((path: string, cwd: string) => Promise<string>) | undefined>(undefined);
 /** A fence that is only an absolute .html path: the skill wrote the HTML with the Write tool, so the reply streams no HTML. */
 /** Set inside a question card: a frame there may post `answer {text}` to fill the Other field (never submits). */
 export const VisualizeAnswerContext = createContext<((text: string) => void) | undefined>(undefined);
@@ -63,17 +64,18 @@ export function VisualizeFence({ code, isIncomplete }: { code: string; isIncompl
 function VisualizeFile({ path }: { path: string }) {
   const t = useT();
   const read = use(VisualizeReadContext);
+  const cwd = use(CwdContext);
   const [html, setHtml] = useState<string | { error: string }>();
   useEffect(() => {
     let live = true;
     setHtml(undefined);
     if (!read) return void setHtml({ error: "no reader" });
-    read(path).then(
+    read(path, cwd).then(
       (c) => live && setHtml(c),
       (e: unknown) => live && setHtml({ error: e instanceof Error ? e.message : String(e) }),
     );
     return () => void (live = false);
-  }, [read, path]);
+  }, [read, path, cwd]);
   if (typeof html === "string") return <VisualizeBlock code={html} name={fileName(path)} />;
   return (
     <div data-testid={html ? "visualize-error" : "visualize-pending"} className="text-muted-foreground text-xs">

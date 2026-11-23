@@ -333,6 +333,10 @@ export function App() {
   const sideOf = useMemo(() => sideLookup(sides, cwdSides, labels.sides), [sides, cwdSides, labels.sides]);
   const sideOfRef = useRef(sideOf);
   sideOfRef.current = sideOf;
+  const cwdSidesRef = useRef(cwdSides);
+  cwdSidesRef.current = cwdSides;
+  /** `{side}` of a session cwd for a path-routed request; nothing when the cwd's side is unknown (the path picks it). Stable, so loaders keep their identity. */
+  const sideArg = useCallback((cwd: string): { side?: string } => (Object.hasOwn(cwdSidesRef.current, cwd) ? { side: cwdSidesRef.current[cwd]! } : {}), []);
   // GH-458: the status line of a project whose side is not ready; Retry / Update start it again (the state comes back as sessions.changed).
   const sideState = useMemo(
     () => ({ of: (cwd: string) => sides?.find((x) => x.id === sideOf.sideOf(cwd)), act: (side: string, setup?: "needed" | "updateRemote") => void client.current?.request(setup === "updateRemote" ? { type: "side.updateRemote", side } : { type: "side.start", side, ...(setup && { setup }) }).catch(() => {}) }),
@@ -572,7 +576,8 @@ export function App() {
   const chromeOn = settingsView?.chromeOn;
   /** GH-690: Settings › Chat › Inline visualizations; a daemon without the setting counts as off. */
   const visualizeOn = settingsView?.visualizeOn ?? false;
-  const visualizeRead = useCallback((path: string) => (client.current?.request<FsReadResult>({ type: "fs.read", path }) ?? Promise.reject(new Error("not connected"))).then((r) => r.content), []);
+  // The session's side reads the file: an uploads path is no project cwd, so the path alone picks a side only when one side runs.
+  const visualizeRead = useCallback((path: string, cwd: string) => (client.current?.request<FsReadResult>({ type: "fs.read", path, ...sideArg(cwd) }) ?? Promise.reject(new Error("not connected"))).then((r) => r.content), [sideArg]);
   /** Claude account (GH-615): the setting, the saved token accounts (no tokens) and whether Default is a token of the daemon's environment. */
   const claudeAccount = settingsView?.claudeAccount ?? "";
   const claudeAccounts = settingsView?.claudeAccounts ?? [];
@@ -2762,7 +2767,7 @@ export function App() {
     return uploadWithRetry(async (o) => (await client.current!.request<UploadResult>({ type: "fs.upload", name: file.name, data, ...o, ...(uploadCwd && { cwd: uploadCwd }) })).path, owner, rotate);
   };
   // Stable: a chat image reloads when its loader changes.
-  const fileImage = useCallback((path: string) => client.current!.request<FsMediaResult>({ type: "fs.media", path }).then((m) => m.url), []);
+  const fileImage = useCallback((path: string, cwd: string) => client.current!.request<FsMediaResult>({ type: "fs.media", path, ...sideArg(cwd) }).then((m) => m.url), [sideArg]);
   // Offline, a request would wait for the reconnect with no feedback; a reply that never comes times out.
   const search = (cwd: string) => (query: string) =>
     status === "connected"
@@ -5472,7 +5477,7 @@ export function SessionPane({
   /** Loads a payload a snapshot or page left out (session.media). */
   onMedia?: MediaLoader;
   /** Loads a file a reply's markdown image names (fs.media; the path picks the side). */
-  onFileImage?: (path: string) => Promise<string>;
+  onFileImage?: (path: string, cwd: string) => Promise<string>;
   /** Asks for the preview URL of an Artifact publish part (artifact.preview). */
   onArtifactPreview?: ArtifactPreviewLoader;
   /** Open in tab of an Artifact card: opens the artifact tab of the part (GH-400). */
