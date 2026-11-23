@@ -25,6 +25,40 @@ const contrast = (a: number[], b: number[]) => {
   return (hi! + 0.05) / (lo! + 0.05);
 };
 
+/** The style rules of a stylesheet, in groups (`@layer`, `@media`, `@supports`, `@container`) too; comments dropped; other at-rules skipped. */
+function styleRules(text: string): { selector: string; body: string }[] {
+  const src = text.replace(/\/\*[^]*?\*\//g, "");
+  const out: { selector: string; body: string }[] = [];
+  const walk = (from: number, to: number) => {
+    let start = from;
+    for (let i = from; i < to; i++) {
+      const c = src[i];
+      if (c === ";") start = i + 1;
+      else if (c === "{") {
+        let depth = 1;
+        let k = i + 1;
+        while (k < to && depth > 0) (src[k] === "{" ? depth++ : src[k] === "}" && depth--, k++);
+        const prelude = src.slice(start, i).trim();
+        if (prelude.startsWith("@")) {
+          if (/^@(layer|media|supports|container)\b/.test(prelude)) walk(i + 1, k - 1);
+        } else out.push({ selector: prelude.replace(/\s+/g, " "), body: src.slice(i + 1, k - 1) });
+        i = k - 1;
+        start = k;
+      }
+    }
+  };
+  walk(0, src.length);
+  return out;
+}
+const LIBRARY = /\.cm-|\.xterm/;
+/** `selector: declaration` for each declaration of the rule without `!important`. */
+const missingImportant = (r: { selector: string; body: string }) =>
+  r.body
+    .split(";")
+    .map((d) => d.trim().replace(/\s+/g, " "))
+    .filter((d) => d && !d.includes("!important"))
+    .map((d) => `${r.selector}: ${d}`);
+
 const SURFACES = ["background", "card", "popover", "muted", "secondary"];
 const SYNTAX = ["comment", "punctuation", "parameter", "keyword", "type", "function", "variable", "builtin", "string", "number", "constant", "operator", "decorator", "tag", "attribute", "regexp", "escape", "critical"];
 const TEXT = ["foreground", "muted-foreground", "destructive", "success", "warning", "info"];
@@ -170,9 +204,23 @@ describe("index.css cascade layers", () => {
     expect(css).toMatch(/@layer host \{\n[^]*?:root\[data-page-hidden\] \*, :root\[data-page-hidden\] \*::before, :root\[data-page-hidden\] \*::after \{ animation-play-state: paused !important; \}/);
   });
 
-  it("a host rule on CodeMirror (.cm-*) is !important: its theme is injected unlayered and beats every layer", () => {
-    const rules = [...css.matchAll(/^[^\s@/][^{\n]*\.cm-[^{]*\{([^}]*)\}/gm)];
+  it("a host rule on CodeMirror (.cm-*) or xterm (.xterm*) is !important: their styles are unlayered and beat every layer", () => {
+    const rules = styleRules(css).filter((r) => LIBRARY.test(r.selector));
     expect(rules.length).toBeGreaterThan(0);
-    for (const r of rules) for (const d of r[1]!.split(";").filter((x) => x.trim() && !x.includes("/*"))) expect(d, d).toContain("!important");
+    expect(rules.flatMap(missingImportant)).toEqual([]);
+  });
+
+  it("the guard sees multi-line rules, rules inside @media and @layer, and .xterm rules", () => {
+    const sample = `@layer host {
+      .cm-a,
+      .cm-b {
+        color: red;
+        background: blue !important;
+      }
+      @media (width > 1px) { .x .xterm-rows { color: red } .ok .cm-c { color: red !important } }
+      /* .cm-d { color: red } */
+      .plain { color: red }
+    }`;
+    expect(styleRules(sample).filter((r) => LIBRARY.test(r.selector)).flatMap(missingImportant)).toEqual([".cm-a, .cm-b: color: red", ".x .xterm-rows: color: red"]);
   });
 });

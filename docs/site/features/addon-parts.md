@@ -29,7 +29,7 @@ The CSS file of an addon (`css` in `addon.json`) is loaded in its own cascade la
 
 - Your rules win over the app's rules without `!important` and without a long selector. Do not add `!important` to win over the app.
 - Exception, libraries: the styles of CodeMirror (`.cm-*`, the file editor), the terminal (`.xterm*`), KaTeX (`.katex*`) and the code highlighter are not in a layer, so they beat your rules whatever the selector. Add `!important` to override them.
-- Exception: a declaration with `!important` inside the app's built-in Neon theme beats yours, and only while Neon is the picked theme.
+- Exception: a declaration with `!important` inside the app's built-in Neon theme (including its editor, terminal and code-highlighter declarations) beats yours, and only while Neon is the picked theme.
 - An inline `style` attribute of an element still wins over a layer. Add `!important` in your rule to override it. A few app elements use Tailwind `!important` utilities (for example `px-0!`); they beat your `!important` too.
 - Your own layers inside the file work as usual, for example `@layer base, effects;`; they sit inside `addon.<name>`.
 

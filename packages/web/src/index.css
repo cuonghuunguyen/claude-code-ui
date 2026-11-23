@@ -913,7 +913,7 @@ html:root[data-theme="neon"]:not(.dark) {
 :root[data-theme="neon"] [data-testid="bottom-panel"] { border-color: var(--nx-edge); }
 :root[data-theme="neon"] :is(.cm-editor .cm-gutters) { border-right: 1px solid var(--nx-edge) !important; background: color-mix(in srgb, var(--background) 40%, transparent) !important; } /* !important: the CodeMirror theme is injected unlayered and beats any layer */
 :root[data-theme="neon"] .cm-editor .cm-cursor { border-left-color: var(--nx-hi) !important; }
-:root[data-theme="neon"] .xterm { padding-left: 2px; }
+:root[data-theme="neon"] .xterm { padding-left: 2px !important; }
 :root[data-theme="neon"] [data-part="context-meter"] svg { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--nx-glow) 70%, transparent)); }
 
 /* ---------- Terminal, diffs, visualization frame. ---------- */

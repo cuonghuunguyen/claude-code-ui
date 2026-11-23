@@ -29,8 +29,8 @@ Tệp CSS của addon (`css` trong `addon.json`) được tải trong một lớ
 
 - Quy tắc của bạn thắng quy tắc của ứng dụng mà không cần `!important` hay bộ chọn dài. Đừng thêm `!important` chỉ để thắng ứng dụng.
 - Ngoại lệ, thư viện: style của CodeMirror (`.cm-*`, trình soạn tệp), terminal (`.xterm*`), KaTeX (`.katex*`) và bộ tô màu mã không nằm trong lớp nào, nên thắng quy tắc của bạn bất kể bộ chọn. Hãy thêm `!important` để ghi đè.
-- Ngoại lệ: khai báo có `!important` trong giao diện Neon tích hợp thắng quy tắc của bạn, và chỉ khi Neon đang được chọn.
-- Thuộc tính `style` nội tuyến của phần tử vẫn thắng lớp. Hãy thêm `!important` trong quy tắc của bạn để ghi đè.
+- Ngoại lệ: khai báo có `!important` trong giao diện Neon tích hợp (kể cả các khai báo cho trình soạn, terminal và bộ tô màu mã của nó) thắng quy tắc của bạn, và chỉ khi Neon đang được chọn.
+- Thuộc tính `style` nội tuyến của phần tử vẫn thắng lớp. Hãy thêm `!important` trong quy tắc của bạn để ghi đè. Một vài phần tử của ứng dụng dùng tiện ích Tailwind `!important` (ví dụ `px-0!`); chúng cũng thắng `!important` của bạn.
 - Lớp riêng trong tệp của bạn vẫn dùng bình thường, ví dụ `@layer base, effects;`; chúng nằm trong `addon.<name>`.
 
 ## Vòng đời {#lifecycle}
