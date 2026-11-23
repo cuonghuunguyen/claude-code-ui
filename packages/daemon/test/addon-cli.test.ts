@@ -39,8 +39,12 @@ it("addon dev installs a local folder in Dev mode and enables it when it needs n
   const first = await run(["addon", "dev", d]);
   expect(first).toMatchObject({ code: 0 });
   expect(first.out).toContain("dev-theme: watching the folder");
+  // The URL of the preview page, without the token (the browser is paired already).
+  expect(first.out).toContain(`preview: http://127.0.0.1:${port}/#/addon-preview`);
+  expect(first.out).not.toContain("token");
   expect(await list()).toMatchObject([{ name: "dev-theme", state: "enabled", dev: true }]);
   expect((await run(["addon", "dev", d, "--json"])).out).toContain('"state": "enabled"');
+  expect((await run(["addon", "dev", d, "--json"])).out).toContain(`"preview": "http://127.0.0.1:${port}/#/addon-preview"`);
   expect((await list()).length).toBe(1);
 });
 

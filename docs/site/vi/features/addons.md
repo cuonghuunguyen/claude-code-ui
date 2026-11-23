@@ -196,6 +196,12 @@ Khi không dùng được bản gốc (không có giao diện đó, addon của 
 
 Bộ vẽ `fence` vẽ khối mã của một ngôn ngữ trong câu trả lời và tin nhắn của bạn, trước các bộ vẽ có sẵn (cả sơ đồ Mermaid). Bộ vẽ `tool` vẽ kết quả của một công cụ. Mỗi bản vẽ có nút **Hiện bản gốc** để xem cách hiển thị có sẵn. Khung chỉ được tạo khi khối ở gần màn hình. Nếu hai addon vẽ cùng một thứ, hộp thoại Addon có bộ chọn; chưa chọn thì addon đứng đầu theo tên thắng.
 
+## Viết và kiểm tra addon {#authoring}
+
+Chạy `claude-ui addon dev <thư mục>` một lần: lệnh cài thư mục ở chế độ Dev (daemon theo dõi thư mục) và bật addon nếu nó không khai báo quyền. Lệnh in số cảnh báo lint và một dòng `preview: http://127.0.0.1:<port>/#/addon-preview`. Mỗi lần sửa tệp trong thư mục, manifest, lint và CSS được nạp lại mà không cần tải lại trang.
+
+Mở **trang xem trước** (URL đó, hoặc **Mở xem trước** ở dòng addon trong Cài đặt › Addon). Trang hiện mọi [part](addon-parts) ở mọi trạng thái, bằng component thật của ứng dụng và dữ liệu mẫu: phiên đang chạy, chờ cấp quyền hoặc chờ câu trả lời, vừa xong, rảnh hoặc lỗi; thẻ công cụ ở cả sáu trạng thái; trạng thái tab, dòng thanh bên và nút gửi; ba mức dùng gói; trang Focus; toast và bảng lệnh. Chọn theme và **Sáng**, **Tối** hoặc **Theo hệ thống** ở đầu trang, sửa CSS và xem trang đổi. **Chạy lại hiệu ứng** chạy lại hai trạng thái 1,2 giây `data-just-finished` và `data-focus-opened`. Graph, thay đổi, nội dung commit và terminal cần daemon: trang hiện bản tĩnh thay thế, cùng tên part và thuộc tính. Cảnh báo lint của addon nằm ở mục **Kiểm tra** trong Cài đặt › Addon.
+
 ## Addon ví dụ {#example}
 
 `examples/addons/example/` trong kho dùng SDK và minh họa mọi tính năng: giao diện màu, `theme.css`, một pane đếm số phần của phiên và có nút cho từng lời gọi cầu nối, một băng với số lượt và công cụ cuối, `/example:cmd`, và bộ vẽ cho khối ```` ```example ````. Hãy cài nó như thư mục cục bộ.

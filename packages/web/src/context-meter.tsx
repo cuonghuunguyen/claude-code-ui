@@ -41,6 +41,18 @@ export function Ring({ percent, progress = "stroke-ring-progress" }: { percent: 
 /** A sum that misses some turns' cost is a lower bound: "≥ $0.12". */
 const costText = (t: Totals) => (t.cost === undefined ? "—" : `${t.costPartial ? "≥ " : ""}${usd.format(t.cost)}`);
 
+/** The stacked bar of the breakdown popup. Exported for the addon preview page (the popup itself is a portal that needs a trigger). */
+export function ContextBar({ usage: { categories, maxTokens } }: { usage: ContextUsage }) {
+  return (
+    <div data-testid="context-bar" data-part="context-bar" className="mt-3 flex h-2 overflow-hidden rounded-full bg-secondary" aria-hidden>
+      {/* Buffer and free space fill the rest of the window; they are not in totalTokens. */}
+      {categories.map((c) =>
+        c.kind !== "used" ? null : <span key={c.name} title={c.name} style={{ width: share(c.tokens, maxTokens), background: colorOf(c) }} />,
+      )}
+    </div>
+  );
+}
+
 /** The breakdown popup; a Popover.Root child (context meter, status bar). */
 /** `stats`: the session's token totals, shown like OpenCode's Context tab stats; none before the first turn result. */
 export function ContextPopup({ usage, side, stats }: { usage: ContextUsage; side: "top" | "bottom"; stats?: Totals }) {
@@ -74,12 +86,7 @@ export function ContextPopup({ usage, side, stats }: { usage: ContextUsage; side
             ))}
           </div>
         )}
-        <div data-testid="context-bar" data-part="context-bar" className="mt-3 flex h-2 overflow-hidden rounded-full bg-secondary" aria-hidden>
-          {/* Buffer and free space fill the rest of the window; they are not in totalTokens. */}
-          {categories.map((c) =>
-            c.kind !== "used" ? null : <span key={c.name} title={c.name} style={{ width: share(c.tokens, maxTokens), background: colorOf(c) }} />,
-          )}
-        </div>
+        <ContextBar usage={usage} />
         <ul className="mt-3 flex flex-col gap-1.5">
           {categories.map((c) => (
             <li key={c.name} className="flex items-center gap-2 text-[12px]">

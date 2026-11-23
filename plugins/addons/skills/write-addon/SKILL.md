@@ -175,5 +175,11 @@ Rules:
    (and reload the page for view scripts). A row in **Error** names what failed; a refused call
    shows a toast and is listed under the addon's row.
 
+5. Dev loop and preview (needs the user's claude-ui running): `claude-ui addon dev <folder>` installs the
+   folder in Dev mode, enables it when it has no capabilities and prints
+   `preview: http://127.0.0.1:<port>/#/addon-preview`. That page shows every part in every state (running,
+   error, permission, Focus, tool card statuses), light and dark, with a theme and mode picker; CSS edits
+   reload live. The addon's lint warnings (Checks) are in Settings › Addons. Fix every warning.
+
 Report to the user: the folder, what each part does, the capabilities it asks for and why, and
 the type-check result.

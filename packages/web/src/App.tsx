@@ -98,6 +98,7 @@ import { AddonBands, AddonFrame, type AddonHandle } from "./addon-frame.tsx";
 import { addonThemes } from "./themes.ts";
 import { Backdrop } from "./backdrop.tsx";
 import { SlotsProvider, useThinkingPhrase } from "./slots.tsx";
+import { isPreviewHash } from "./addon-preview-route.ts";
 import { saveGroup as saveSettingsGroup } from "./settings-group.ts";
 import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
@@ -232,6 +233,7 @@ const ShellsDialog = lazy(() => import("./shells-dialog.tsx").then((x) => ({ def
 const ProjectSettingsDialog = lazy(() => import("./project-settings-dialog.tsx").then((x) => ({ default: x.ProjectSettingsDialog })));
 const SettingsDialog = lazy(() => import("./settings-dialog.tsx").then((x) => ({ default: x.SettingsDialog })));
 const PluginsDialog = lazy(() => import("./plugins-dialog.tsx").then((x) => ({ default: x.PluginsDialog })));
+const AddonPreview = lazy(() => import("./addon-preview.tsx").then((x) => ({ default: x.AddonPreview })));
 const AddonsDialog = lazy(() => import("./addons-dialog.tsx").then((x) => ({ default: x.AddonsDialog })));
 const CleanupDialog = lazy(() => import("./cleanup-dialog.tsx").then((x) => ({ default: x.CleanupDialog })));
 const CreateWorktreeDialog = lazy(() => import("./create-worktree-dialog.tsx").then((x) => ({ default: x.CreateWorktreeDialog })));
@@ -476,6 +478,14 @@ export function App() {
   // Open project lists the sides as of now: a container started since the last list joins.
   useEffect(() => void (openingProject && refreshList()), [openingProject]);
   const [theme, setTheme] = useState<ThemePref>(loadPref);
+  // The addon preview page (`#/addon-preview`, addon-preview.tsx) replaces the workspace while the hash is its own.
+  const [previewHash, setPreviewHash] = useState(() => isPreviewHash(location.hash));
+  useEffect(() => {
+    const on = () => setPreviewHash(isPreviewHash(location.hash));
+    window.addEventListener("hashchange", on);
+    window.addEventListener("popstate", on);
+    return () => (window.removeEventListener("hashchange", on), window.removeEventListener("popstate", on));
+  }, []);
   const [error, setError] = useState<string>();
   const [toast, setToastState] = useState<{ key: number; message: string; action?: { label: string; onClick: () => void } }>();
   const toastKey = useRef(0);
@@ -3791,6 +3801,11 @@ export function App() {
     <AvatarColors value={colors}>
     <SideLabel value={sideOf.badge}>
     <SideState value={sideState}>
+    {previewHash && status !== "unauthorized" ? (
+      <Suspense fallback={null}>
+        <AddonPreview onBack={() => (history.replaceState(null, "", location.pathname + location.search), setPreviewHash(false))} />
+      </Suspense>
+    ) : (
     <div className="flex h-dvh flex-col bg-background text-foreground">
       <Backdrop />
       <header className="flex h-9 shrink-0 items-center gap-1.5 px-2 max-md:h-11 max-md:gap-2 md:pr-3 md:pl-4" data-testid="titlebar" data-part="titlebar">
@@ -4773,6 +4788,7 @@ export function App() {
         />
       </ToastRegion>
     </div>
+    )}
     </SideState>
     </SideLabel>
     </AvatarColors>

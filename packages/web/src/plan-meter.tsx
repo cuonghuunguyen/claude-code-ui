@@ -87,6 +87,26 @@ export const GLOBAL_ROW = "\0global";
 const rowClass = "flex h-8 items-center gap-2 rounded-md px-2 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 pointer-coarse:h-11";
 const linkClass = "h-8 rounded-md px-2 text-muted-foreground text-xs underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 pointer-coarse:h-11";
 
+/** One window of the plan popup: label, percent, bar and reset time. Exported for the addon preview page (the popup itself is a portal that needs a trigger). */
+export function PlanWindowRow({ w, now }: { w: PlanWindow; now: number }) {
+  const t = useT();
+  const l = windowLevel(w);
+  return (
+    <li data-testid="plan-window" data-part="plan-window" data-level={l} className="flex flex-col gap-1 text-xs">
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1 truncate">{w.label}</span>
+        {/* The server can grade a low percent as warning: not color only. */}
+        {l !== "ok" && <TriangleAlertIcon role="img" aria-label={l === "limit" ? t("app.plan.limitIcon") : t("app.plan.warningIcon")} className={`size-3 shrink-0 ${TEXT[l]}`} />}
+        <span className={`tabular-nums ${TEXT[l]}`}>{`${w.percent}%`}</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-secondary" aria-hidden>
+        <div className={`h-full rounded-full ${FILL[l]}`} style={{ width: `${Math.min(w.percent, 100)}%` }} />
+      </div>
+      {w.resetsAt && <span className="text-muted-foreground tabular-nums">{resetText(w.resetsAt, now)}</span>}
+    </li>
+  );
+}
+
 /** Every window with its reset time; a Popover.Root child (titlebar meter, status bar). */
 export function PlanPopup({ usage, side, switcher, project }: { usage: PlanUsage; side: "top" | "bottom"; switcher?: PlanAccounts; project?: PlanProject }) {
   const t = useT();
@@ -129,23 +149,9 @@ export function PlanPopup({ usage, side, switcher, project }: { usage: PlanUsage
           </p>
         )}
         {usage.windows.length > 0 && <ul className="mt-3 flex flex-col gap-3">
-          {usage.windows.map((w) => {
-            const l = windowLevel(w);
-            return (
-              <li key={`${w.kind}:${w.label}`} data-testid="plan-window" data-part="plan-window" data-level={l} className="flex flex-col gap-1 text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate">{w.label}</span>
-                  {/* The server can grade a low percent as warning: not color only. */}
-                  {l !== "ok" && <TriangleAlertIcon role="img" aria-label={l === "limit" ? t("app.plan.limitIcon") : t("app.plan.warningIcon")} className={`size-3 shrink-0 ${TEXT[l]}`} />}
-                  <span className={`tabular-nums ${TEXT[l]}`}>{`${w.percent}%`}</span>
-                </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-secondary" aria-hidden>
-                  <div className={`h-full rounded-full ${FILL[l]}`} style={{ width: `${Math.min(w.percent, 100)}%` }} />
-                </div>
-                {w.resetsAt && <span className="text-muted-foreground tabular-nums">{resetText(w.resetsAt, now)}</span>}
-              </li>
-            );
-          })}
+          {usage.windows.map((w) => (
+            <PlanWindowRow key={`${w.kind}:${w.label}`} w={w} now={now} />
+          ))}
         </ul>}
         {canSwitch && (
           <div data-testid="plan-accounts" className="mt-3 border-t pt-2">

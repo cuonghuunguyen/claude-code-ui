@@ -112,8 +112,10 @@ export async function runClient(cli: Client, io: ClientIo): Promise<number> {
         info = await call<AddonInfo>({ type: "addons.setDev", name: info.name, dev: true });
         if (info.state === "disabled") info = await call<AddonInfo>({ type: "addons.setEnabled", name: info.name, enabled: true });
         const next = info.state === "needs_approval" ? "approve its capabilities in Settings › Addons to start watching" : info.state === "enabled" ? "watching the folder, edits reload" : `state ${info.state}`;
-        if (cli.json) json({ name: info.name, state: info.state, dev: true, path, ...(info.lint && { lint: info.lint }) });
-        else out(`${info.name}: ${next}${info.lint?.length ? `\nlint: ${info.lint.length} warning(s), see Settings › Addons` : ""}`);
+        // The kitchen-sink page of the web app (every part in every state, light and dark); no token: the browser is paired already.
+        const preview = `${url}#/addon-preview`;
+        if (cli.json) json({ name: info.name, state: info.state, dev: true, path, preview, ...(info.lint && { lint: info.lint }) });
+        else out(`${info.name}: ${next}${info.lint?.length ? `\nlint: ${info.lint.length} warning(s), see Settings › Addons` : ""}\npreview: ${preview}`);
         return 0;
       }
       case "open": {

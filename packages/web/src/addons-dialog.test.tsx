@@ -209,6 +209,15 @@ it("the switch enables and disables; uninstall asks first", async () => {
   expect(d.calls).toContainEqual({ type: "addons.uninstall", name: "example" });
 });
 
+it("an enabled addon has an Open preview button that goes to the preview page and closes the dialog; a disabled one has none", async () => {
+  const d = await render({ addons: [addon("example"), addon("off", { state: "disabled" })], picks: {} });
+  expect(d.all("addons-preview")).toHaveLength(1);
+  await d.click(d.q("addons-preview"));
+  expect(location.hash).toBe("#/addon-preview");
+  expect(d.q("addons-dialog")).toBeNull();
+  location.hash = "";
+});
+
 it("dev mode: the switch is for local folders only; an addon.json error shows beside the last good manifest", async () => {
   const local = { ...addon("mine"), source: { kind: "local" as const, path: "/x/mine" }, dev: true, rev: 5, error: "addon.json: bad JSON" };
   const d = await render({ addons: [local, addon("example")], picks: {} });

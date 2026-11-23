@@ -196,6 +196,12 @@ When the base cannot be used (no such theme, its addon is not installed or not e
 
 A `fence` renderer draws the code blocks of one language in assistant answers and in your own messages, before the built-in renderers (also the Mermaid diagram). A `tool` renderer draws the result of one tool. Each drawing has a **Show raw** button for the built-in view. The frame is created only when the block is near the screen. If two addons draw the same thing, the Addons dialog has a picker; until you pick, the first by name wins.
 
+## Write and check an addon {#authoring}
+
+Run `claude-ui addon dev <folder>` once: it installs the folder in Dev mode (the daemon watches it) and enables it when it declares no capabilities. It prints the lint warning count and a line `preview: http://127.0.0.1:<port>/#/addon-preview`. Every edit of a file in the folder reloads the manifest, the lint and the CSS without a page reload.
+
+Open the **preview page** (that URL, or **Open preview** on the addon's row in Settings › Addons). It shows every [part](addon-parts) in every state with the app's own components and sample data: a session that runs, waits for a permission or a question, just finished, is idle or in error; a tool card in each of its six statuses; the tab, sidebar row and send button states; the three plan usage levels; the Focus page; the toast and the command palette. Pick your theme and **Light**, **Dark** or **System** at the top of the page, edit your CSS and watch the page change. **Replay animations** restarts the 1.2 second `data-just-finished` and `data-focus-opened` states. The graph, changes, commit message and terminal need a daemon: the page shows static stand-ins with the same part names and attributes. Lint warnings of the addon are under **Checks** in Settings › Addons.
+
 ## The example addon {#example}
 
 `examples/addons/example/` in the repository uses the SDK and shows every feature: a theme, `theme.css`, a pane that counts the parts of the session and has a button for each bridge call, a band with the number of turns and the last tool, `/example:cmd`, and a renderer for ```` ```example ```` blocks. Install it as a local folder.
