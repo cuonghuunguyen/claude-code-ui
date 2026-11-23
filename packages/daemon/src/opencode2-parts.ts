@@ -49,6 +49,8 @@ const compactionParts = (id: string, reason: string | undefined, summary: string
 
 /** How a background shell of the model ended: the card's status, the exit code and the output OpenCode's end notice carried (none for a killed one). */
 type ShellEnd = { status: "done" | "error" | "stopped"; exit?: number; output?: string; at?: number };
+/** Ends of foreign shells (another session's) one mapper keeps. */
+const SHELL_ENDS_KEPT = 100;
 /** The id of the shell a background call started, from the call's result text. */
 const SHELL_ID = /shell ID: (sh_\w+)/;
 /** The output inside a shell end notice (`<shell id=… state=…>\noutput\n</shell>`). */
@@ -101,7 +103,14 @@ export class OpenCode2Mapper {
   /** `shell.exited` (killed, or finished with `exit`): the call's card shows how it ended. Another session's shell changes nothing. */
   shellExited(shellId: string, status: string | undefined, exit: number | undefined): Part[] {
     this.shellEnds.set(shellId, { ...this.shellEnds.get(shellId), status: status === "exited" ? (exit ? "error" : "done") : "stopped", ...(exit !== undefined && { exit }), at: Date.now() });
+    this.pruneShellEnds();
     return this.shellCard(shellId);
+  }
+  /** `shell.exited` reaches every session: the ends of shells no call of this session started (and none claimed yet) are kept up to SHELL_ENDS_KEPT, oldest dropped first. */
+  private pruneShellEnds() {
+    const own = new Set(this.shellOfCall.values());
+    const foreign = [...this.shellEnds.keys()].filter((id) => !own.has(id));
+    for (const id of foreign.slice(0, Math.max(0, foreign.length - SHELL_ENDS_KEPT))) this.shellEnds.delete(id);
   }
   /** The end notice of a shell (live inbox item or stored message): its output. The shell's own end (`shell.exited`) decides the status; a notice alone (a shell gone while the daemon was away) does. */
   private shellNotice(m: Json, at: number | undefined): Part[] {
