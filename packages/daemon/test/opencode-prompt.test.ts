@@ -243,7 +243,7 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     await allowAlways(d, s);
     expect(lastEdit(d, s.id)).toMatchObject({ action: "allow" });
     await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "plan" });
-    // The block the switch wrote, not the last one: the rest of the recorded turn has user messages of agent build, and OpenCode's stream may deliver one after the switch, which the session follows with a block of its own.
+    // The block the switch wrote (marker agent:plan).
     const plan = d.requests("PATCH", `/session/${s.id}`).map((r) => r.body.permission as { permission: string; pattern: string; action: string }[]).find((p) => p.some((r) => r.pattern === "agent:plan"))!;
     expect(plan.filter((r) => r.permission === "edit" && r.pattern === "*").at(-1)).toMatchObject({ action: "deny" });
     // docs denies edits: the saved rule is followed by that denial again.
@@ -459,17 +459,23 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     expect(flat(d.requests("POST", "/session")[0]!.body.permission)).toEqual(["claude-ui:mode:config:allow", "claude-ui:agent:build:allow", "claude-ui-*:*:deny", "orchestration-*:*:deny", "claude-ui:always:allow"]);
     expect((await d.ok({ type: "session.subscribe", sessionId: s.id, sinceSeq: 0 })).session).toMatchObject({ permissionMode: "config", permissionModes: ["config", "default", "acceptEdits", "dontAsk"] });
     for (const mode of ["auto", "bypassPermissions"]) expect(await d.request({ type: "session.setPermissionMode", sessionId: s.id, mode })).toMatchObject({ type: "error" });
+    const switchedAt = Date.now();
     const reply = await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "plan" });
     expect(reply.session).toMatchObject({ permissionMode: "config", agent: "plan" });
     expect(flat(d.requests("PATCH", `/session/${s.id}`).at(-1)!.body.permission)).toEqual(["claude-ui:mode:config:allow", "claude-ui:agent:plan:allow", "edit:*:deny", "edit:.opencode/plans/*.md:allow", "edit:*:deny", "edit:.opencode/plans/*.md:allow", "claude-ui-*:*:deny", "orchestration-*:*:deny", "claude-ui:always:allow"]);
     await s.prompt("plan it");
     await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
     expect(d.requests("POST", `/session/${s.id}/prompt_async`)[0]!.body.agent).toBe("plan");
-    // plan_exit "Yes": OpenCode writes a user message of the build agent.
     const patches = d.requests("PATCH", `/session/${s.id}`).length;
-    const buildMessage = (id: string) => ({ type: "message.updated", properties: { sessionID: s.id, info: { id, role: "user", agent: "build", sessionID: s.id } } });
-    // OpenCode repeats message.updated: one block only.
-    await d.fake("/__emit", { events: [buildMessage("msg_fromtui"), buildMessage("msg_fromtui")] });
+    const buildMessage = (id: string, created: number) => ({ type: "message.updated", properties: { sessionID: s.id, info: { id, role: "user", agent: "build", sessionID: s.id, time: { created } } } });
+    // A late update of a user message written before the switch (OpenCode adds its summary after the turn): the switch to plan stays (GH-905).
+    await d.fake("/__emit", { events: [buildMessage("msg_earlier", switchedAt - 1000)] });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(d.requests("PATCH", `/session/${s.id}`)).toHaveLength(patches);
+    expect(s.find("session_agent")?.agent).toBe("plan");
+    // plan_exit "Yes": OpenCode writes a user message of the build agent. OpenCode repeats message.updated: one block only.
+    const now = Date.now();
+    await d.fake("/__emit", { events: [buildMessage("msg_fromtui", now), buildMessage("msg_fromtui", now)] });
     await until(() => s.find("session_agent")?.agent === "build");
     await new Promise((r) => setTimeout(r, 300));
     expect(d.requests("PATCH", `/session/${s.id}`)).toHaveLength(patches + 1);
