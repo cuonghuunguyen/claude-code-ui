@@ -13,6 +13,7 @@ import { fakeQuery } from "./fake-query.ts";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const BIN = fileURLToPath(new URL("./fixtures/opencode/fake-opencode-bin.mjs", import.meta.url));
+const TEXT_TURN = fileURLToPath(new URL("./fixtures/opencode/turn-text.json", import.meta.url));
 const token = "t0ken-for-tests_abcdefghijklmnopqrstuvwxyz0";
 const until = async (cond: () => boolean, ms = 8000) => {
   for (let i = 0; i < ms / 25 && !cond(); i++) await new Promise((r) => setTimeout(r, 25));
@@ -95,7 +96,7 @@ async function boot(o: { config?: object; file?: string; fileName?: string; env?
   const plugins = (msg: object) => ok({ cwd: project, engine: "opencode", ...msg });
   const serverPort = () => log().find((l) => l.type === "start")!.port as number;
   const names = (r: { servers: { name: string }[] }) => r.servers.map((s) => s.name).sort();
-  return { root, project, ok, request, requests, log, mcp, plugins, port: serverPort, names, file: (f = "opencode.jsonc") => readFileSync(join(project, f), "utf8") };
+  return { root, project, ok, request, requests, inbox, log, mcp, plugins, port: serverPort, names, file: (f = "opencode.jsonc") => readFileSync(join(project, f), "utf8") };
 }
 
 describe("OpenCode MCP servers dialog", { timeout: TEST_MS }, () => {
@@ -464,5 +465,39 @@ describe("OpenCode Plugins dialog", { timeout: TEST_MS }, () => {
     expect(await d.request({ type: "plugins.list", cwd: d.project, engine: "opencode" })).toMatchObject({ type: "error", code: "opencode_v2_unsupported" });
     const claude = await d.request({ type: "plugins.list", cwd: d.project });
     expect(JSON.stringify(claude)).not.toContain("listed-one");
+  });
+});
+
+describe("OpenCode config saved while a session of the folder is busy", { timeout: TEST_MS }, () => {
+  const COMBINED = `{
+  "mcp": { "echo": { "type": "local", "command": ["node", "echo.mjs"] } },
+  "plugin": ["listed-one"],
+  "permission": { "skill": { "legacy": "allow" } }
+}
+`;
+  it.each([
+    ["a skill state", "skills", { type: "skills.setState", name: "review", state: "off" }, (r: any) => r.confirmed],
+    ["an MCP server removal", "mcp", { type: "mcp.remove", name: "echo", scope: "project" }, (r: any) => r.applied !== false],
+    ["a plugin install", "plugins", { type: "plugins.install", pluginId: "later", scope: "project" }, (r: any) => r.applied !== false],
+  ])("%s is applied when the folder's sessions are idle: the folder is reloaded then and config.changed is sent", async (_name, kind, msg, applied) => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "occ-home-")));
+    const saved = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+    process.env.HOME = join(root, "home");
+    process.env.XDG_CONFIG_HOME = join(root, "xdg");
+    cleanups.push(() => Object.entries(saved).forEach(([k, v]) => (v === undefined ? delete process.env[k] : (process.env[k] = v))));
+    const d = await boot({ file: COMBINED, fileName: "opencode.jsonc", env: { FAKE_OPENCODE_CONFIG_CACHE: "1", FAKE_OPENCODE_SCRIPT: TEXT_TURN } });
+    mkdirSync(join(d.project, ".opencode/skills/review"), { recursive: true });
+    writeFileSync(join(d.project, ".opencode/skills/review/SKILL.md"), "---\nname: review\n---\n");
+    const id: string = (await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" })).session.id;
+    const status = (body: object) => fetch(`http://127.0.0.1:${d.port()}/__status`, { method: "POST", body: JSON.stringify({ sessionId: id, ...body }) });
+    await status({ status: { type: "busy" } });
+    const r = await d.ok({ cwd: d.project, engine: "opencode", ...msg });
+    expect(applied(r)).toBe(false);
+    expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
+    // The turn ends: the session is idle and the folder is reloaded without another change of the user.
+    await status({});
+    await d.ok({ type: "session.prompt", sessionId: id, text: "hi" });
+    await until(() => d.requests("POST", "/instance/dispose").length === 1);
+    await until(() => d.inbox.some((m) => m.type === "config.changed" && m.kind === kind && m.cwd === d.project));
   });
 });

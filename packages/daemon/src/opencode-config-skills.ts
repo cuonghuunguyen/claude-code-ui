@@ -45,7 +45,7 @@ function sourceOf(location: string, cwd: string): string {
   return "external";
 }
 
-export function createOpenCodeSkillsConfig(o: { server: OpenCodeServer; repair(cwd: string): Promise<boolean>; waitMs?: number }): EngineConfig["skills"] {
+export function createOpenCodeSkillsConfig(o: { server: OpenCodeServer; repair(cwd: string): Promise<boolean>; /** Reloads the folder after a save: true when done, false when it waits for the folder's sessions to be idle (docs/spec.md "Config dialogs"). */ reload?(cwd: string): Promise<boolean>; waitMs?: number }): EngineConfig["skills"] {
   const { server } = o;
   const waitMs = o.waitMs ?? WAIT_MS;
   /** States saved while a session of the folder was busy: OpenCode keeps the old rules until the folder is reloaded, so the list shows these meanwhile. */
@@ -98,7 +98,7 @@ export function createOpenCodeSkillsConfig(o: { server: OpenCodeServer; repair(c
       explicit = merged === undefined || skillState(rest, name) !== "on";
     }
     if (explicit) editProjectFile(cwd, ["permission", "skill", name], action);
-    const disposed = await o.repair(cwd);
+    const disposed = await (o.reload ?? o.repair)(cwd);
     if (!disposed) pending.set(cwd, (pending.get(cwd) ?? new Map()).set(name, state));
     else pending.get(cwd)?.delete(name);
     return { ...(await list(cwd)), confirmed: disposed };

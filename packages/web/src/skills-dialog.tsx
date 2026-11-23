@@ -81,7 +81,12 @@ export function SkillsDialog({
     setFilter("");
     void load();
   }, [open, cwd, sessionId, engine]);
-  useEffect(() => void (open && changed && load()), [changed]);
+  // The folder was reloaded (config.changed): the saved-for-later text no longer holds.
+  useEffect(() => {
+    if (!open || !changed) return;
+    setNotice((n) => (n === t("session.skillsDialog.savedLater") ? undefined : n));
+    void load();
+  }, [changed]);
 
   /** Cycles a skill's state: the row shows the next one at once, then the daemon's answer (the session's own view of it). */
   async function change(skill: SkillRow) {

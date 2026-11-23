@@ -127,7 +127,12 @@ export function McpDialog({
     void load();
   }, [open, cwd, sessionId]);
   useEffect(() => void (open && setSelected(initialServer)), [initialServer]);
-  useEffect(() => void (open && changed && load()), [changed]);
+  // The folder was reloaded (config.changed): the saved-for-later text no longer holds.
+  useEffect(() => {
+    if (!open || !changed) return;
+    setSuccess((s) => (s === t("session.mcpDialog.savedLater") ? undefined : s));
+    void load();
+  }, [changed]);
   const pending = servers.some((s) => s.status === "pending");
   useEffect(() => {
     if (!open || (!waiting && !pending)) return;

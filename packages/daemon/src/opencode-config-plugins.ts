@@ -72,7 +72,7 @@ const canon = (spec: string, base: string) => (RELATIVE.test(spec) ? pathToFileU
 
 const WRITTEN: PluginWriteResult = { reload: { reloaded: 0, failed: [], errorCount: 0 } };
 
-export function createOpenCodePluginsConfig(o: { server: OpenCodeServer; repair(cwd: string): Promise<boolean>; waitMs?: number }): EngineConfig["plugins"] {
+export function createOpenCodePluginsConfig(o: { server: OpenCodeServer; repair(cwd: string): Promise<boolean>; /** As the skills config's `reload`. */ reload?(cwd: string): Promise<boolean>; waitMs?: number }): EngineConfig["plugins"] {
   const waitMs = o.waitMs ?? WAIT_MS;
   /** `GET /config` of a folder in flight: concurrent lists share it (it is never aborted: a cut-off read of a folder still loading can break the folder). */
   const reads = new Map<string, Promise<string[] | undefined>>();
@@ -115,14 +115,14 @@ export function createOpenCodePluginsConfig(o: { server: OpenCodeServer; repair(
     const entry = normalize(spec, cwd);
     if ((await known(cwd)).includes(canon(entry, dirname(writeTarget(cwd))))) throw fail("already_exists", `${entry} is already in the plugin list.`);
     editProjectList(cwd, ["plugin"], { append: entry });
-    return { ...WRITTEN, ...((await o.repair(cwd)) ? {} : { applied: false }) };
+    return { ...WRITTEN, ...((await (o.reload ?? o.repair)(cwd)) ? {} : { applied: false }) };
   }
 
   async function uninstall(cwd: string, id: string, scope: string | undefined): Promise<PluginWriteResult> {
     if (scope !== undefined && scope !== "project") throw fail("invalid_input", REMOVE_GAP);
     const done = editProjectList(cwd, ["plugin"], { drop: (item, file) => canon(specOf(item) ?? "", dirname(file)) === id || specOf(item) === id });
     if (!done.length) throw fail("invalid_input", REMOVE_GAP);
-    return { ...WRITTEN, ...((await o.repair(cwd)) ? {} : { applied: false }) };
+    return { ...WRITTEN, ...((await (o.reload ?? o.repair)(cwd)) ? {} : { applied: false }) };
   }
 
   return async (msg, cwd) => {

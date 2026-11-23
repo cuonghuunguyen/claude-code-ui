@@ -49,7 +49,7 @@ const pairs = (lines: string[], sep: string) =>
     }),
   );
 
-export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd: string): Promise<boolean>; hidden(name: string): boolean; waitMs?: number }): EngineConfig["mcp"] {
+export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd: string): Promise<boolean>; /** As the skills config's `reload`. */ reload?(cwd: string): Promise<boolean>; hidden(name: string): boolean; waitMs?: number }): EngineConfig["mcp"] {
   const { server } = o;
   const waitMs = o.waitMs ?? MCP_WAIT_MS;
   /** `GET /mcp` of a folder in flight: concurrent reads share it (the request is never aborted, so they would pile up on a slow OpenCode). */
@@ -166,7 +166,7 @@ export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd:
           editProjectFile(cwd, ["mcp", msg.name], undefined);
           removed.set(cwd, (removed.get(cwd) ?? new Set()).add(msg.name));
           await raced(call(cwd, mcpPath(msg.name, "/disconnect")).catch(() => {}));
-          return await after(cwd, await o.repair(cwd));
+          return await after(cwd, await (o.reload ?? o.repair)(cwd));
         }
         case "mcp.authenticate": {
           if (ctx.local) {
@@ -194,7 +194,7 @@ export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd:
         }
         case "mcp.clearAuth": {
           await raced(call(cwd, mcpPath(msg.name, "/auth"), "DELETE"));
-          return await after(cwd, await o.repair(cwd));
+          return await after(cwd, await (o.reload ?? o.repair)(cwd));
         }
       }
     } catch (e) {
