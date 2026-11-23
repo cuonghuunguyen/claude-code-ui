@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import pkg from "../package.json" with { type: "json" };
 
 const at = (p) => fileURLToPath(new URL(p, import.meta.url));
+// jsonc-parser's "main" is a UMD build whose relative require() calls esbuild leaves dynamic, so the ESM bundle throws at load: take its ESM build.
+const alias = { "jsonc-parser": "jsonc-parser/lib/esm/main.js" };
 rmSync(at("../dist"), { recursive: true, force: true });
 await build({
   entryPoints: { cli: at("../../daemon/src/main.ts"), launcher: at("../../daemon/src/launcher-main.ts") },
@@ -18,6 +20,7 @@ await build({
   target: `node${pkg.engines.node.replace(/^>=\s*/, "").split(".")[0]}`,
   // Native or platform-specific packages stay runtime dependencies.
   external: Object.keys(pkg.dependencies),
+  alias,
   banner: { js: "#!/usr/bin/env node" },
 });
 // The side JS of the Docker bundle: everything but node-pty (native) and the Agent SDK (Anthropic's terms: the hub fetches it
@@ -31,6 +34,7 @@ const side = await build({
   target: `node${pkg.engines.node.replace(/^>=\s*/, "").split(".")[0]}`,
   // bufferutil and utf-8-validate are optional to ws.
   external: ["node-pty", "@anthropic-ai/claude-agent-sdk", "bufferutil", "utf-8-validate"],
+  alias,
   // Inlined CommonJS packages call require() for Node built-ins.
   banner: { js: "import { createRequire as __cuiRequire } from 'node:module'; const require = __cuiRequire(import.meta.url);" },
   metafile: true,
