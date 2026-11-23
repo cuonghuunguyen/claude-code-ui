@@ -23,8 +23,12 @@ import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 /** What the OpenCode 2 adapter has: as OpenCode 1's (`/compact`, `/undo`, `/redo` are the daemon's commands, the others OpenCode's; `fork`: the Aside). */
 export const OPENCODE2_CAPABILITIES: EngineCapabilities = {
   ...OPENCODE_CAPABILITIES,
-  // The config dialogs (GH-864): OpenCode 2 signs an MCP server in through its integrations, not through a route of the server.
-  config: { ...OPENCODE_CAPABILITIES.config!, gaps: { ...OPENCODE_CAPABILITIES.config!.gaps, mcpAuth: "OpenCode 2 signs MCP servers in through its integrations. Sign in with OpenCode's own app." } },
+  // The config dialogs (GH-864): OpenCode 2 signs an MCP server in through its integrations, not through a route of the server, and reports a plugin's load result
+  // (a row shows its error), which OpenCode 1 does not (`pluginStatus` is no gap here).
+  config: (({ pluginStatus: _status, ...gaps }) => ({
+    ...OPENCODE_CAPABILITIES.config!,
+    gaps: { ...gaps, mcpAuth: "OpenCode 2 signs MCP servers in through its integrations. Sign in with OpenCode's own app.", pluginUpdate: "claude-ui does not update OpenCode 2 plugins. Update them in OpenCode's own app." },
+  }))(OPENCODE_CAPABILITIES.config!.gaps),
 };
 
 /** A permission rule of OpenCode 2. */

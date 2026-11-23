@@ -19,7 +19,7 @@ type SkillInfo = { name: string; description?: string; location: string };
 const fail = (code: string, message: string) => new EngineError(code, message);
 
 /** OpenCode's wildcard: `*` any text, `?` one character, the whole name must match. */
-const matches = (pattern: string, name: string) => new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`, "s").test(name);
+export const matches = (pattern: string, name: string) => new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`, "s").test(name);
 
 /**
  * The state of skill `name` under a merged `permission` config: OpenCode's default is allow, then a top-level `*` (or one string for every tool), then the

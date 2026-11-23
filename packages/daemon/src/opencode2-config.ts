@@ -1,13 +1,17 @@
 // The config dialogs on OpenCode 2 (docs/spec.md "Config dialogs", GH-864): MCP servers, skills and plugins. Reads go to OpenCode 2's routes; saved changes are written by the
 // daemon into the project config file (opencode-config-file.ts: OpenCode 2 reads the OpenCode 1 shape too, and a file that already uses its own keys keeps them).
 import { homedir } from "node:os";
-import { join, sep } from "node:path";
+import { dirname, join, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { OpenCodeClient } from "@opencode/client";
-import type { McpAddConfig, McpListResult, McpServerInfo } from "@claude-ui/protocol";
+import type { InstalledPlugin, McpAddConfig, McpListResult, McpServerInfo, PluginsListResult, PluginWriteResult, SkillRow, SkillsResult, SkillsSetStateResult, SkillState } from "@claude-ui/protocol";
 import { DAEMON_SERVER } from "./daemon-mcp.ts";
 import { EngineError, type EngineConfig } from "./engine-catalogue.ts";
-import { ConfigFileError, editFileAt, editProjectFile, projectDocs, shapeOf, writeTarget, fileShape } from "./opencode-config-file.ts";
+import { ConfigFileError, editFileAt, editProjectFile, editProjectList, fileShape, projectDocs, readProjectValue, shapeOf, writeTarget } from "./opencode-config-file.ts";
 import { MCP_WAIT_MS, NAME, mapStatus, pairs } from "./opencode-config-mcp.ts";
+import { canon, inPluginFolder, normalize, REMOVE_GAP, specOf } from "./opencode-config-plugins.ts";
+import { matches } from "./opencode-config-skills.ts";
+import type { Agent2 } from "./opencode2-engine.ts";
 import type { OpenCodeServer } from "./opencode-server.ts";
 
 export const fail = (code: string, message: string) => new EngineError(code, message);
@@ -16,6 +20,8 @@ const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typ
 export const userConfigDir = () => join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "opencode");
 export const inside = (file: string, dir: string) => file.startsWith(dir.endsWith(sep) ? dir : dir + sep);
 
+/** The agent lists of the OpenCode 2 engine (the skills' states are the default agent's rules). */
+export type AgentSource = { agents(cwd: string): Promise<Agent2[]>; defaultAgent(cwd: string): Promise<string>; forgetAgents(cwd: string): void };
 /** What the config modules need of the OpenCode 2 side. */
 export type Config2Deps = {
   server: OpenCodeServer;
@@ -168,6 +174,181 @@ export function createOpenCode2McpConfig(o: Config2Deps): EngineConfig["mcp"] {
         case "mcp.oauthCallback":
         case "mcp.clearAuth":
           throw fail("unsupported", "OpenCode 2 signs MCP servers in through its integrations. Sign in with OpenCode's own app.");
+      }
+    } catch (e) {
+      if (e instanceof ConfigFileError) throw fail(e.code, e.message);
+      throw e;
+    }
+  };
+}
+
+// ---- Skills ----
+
+const WAIT_MS = 3000;
+const ACTION: Record<string, SkillState> = { allow: "on", ask: "ask", deny: "off" };
+const RULE: Partial<Record<SkillState, "allow" | "ask" | "deny">> = { on: "allow", ask: "ask", off: "deny" };
+type Rule = { action: string; resource: string; effect: string };
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** The state of skill `name` under OpenCode 2's rules (the default agent's, config rules included): the last rule matching action `skill` and the name wins, none = ask. */
+export function skillState2(rules: readonly Rule[], name: string): SkillState {
+  let state: SkillState = "ask";
+  for (const r of rules) if (ACTION[r.effect] && matches(r.action, "skill") && matches(r.resource, name)) state = ACTION[r.effect]!;
+  return state;
+}
+
+/** Where a skill comes from, by its path: built into OpenCode (`skill://`), in the project, in OpenCode's own folder, else outside both (`~/.claude/skills`, `~/.agents/skills`). */
+const sourceOf = (path: string, cwd: string) => (path.startsWith("skill://") ? "built-in" : inside(path, cwd) ? "project" : inside(path, userConfigDir()) ? "user" : "external");
+
+/** The longest the list waits for the reloaded folder to show a saved change (a reload answers empty lists for a moment, 2.3.0). */
+const SHOW_MS = 5000;
+
+export function createOpenCode2SkillsConfig(o: Config2Deps & { engine: AgentSource }): EngineConfig["skills"] {
+  const waitMs = o.waitMs ?? WAIT_MS;
+  /** States saved while the folder could not be reloaded: OpenCode keeps the old rules until it is, so the list shows these meanwhile. */
+  const pending = new Map<string, Map<string, SkillState>>();
+  const within = async <T>(p: Promise<T>): Promise<T> => {
+    let timer: NodeJS.Timeout | undefined;
+    p.catch(() => {});
+    try {
+      return await Promise.race([p, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(fail("opencode_loading", "OpenCode is still loading this folder. Try again in a moment.")), waitMs)))]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  /** The rows as OpenCode has them now. `fresh`: the agent list is asked again (the cached one may predate a reload). */
+  async function read(cwd: string, fresh: boolean): Promise<SkillRow[]> {
+    if (fresh) o.engine.forgetAgents(cwd);
+    const [found, agents, first] = await within(Promise.all([o.server.client().then((c) => c.skill.list({ location: { directory: cwd } })).then((r) => r.data), o.engine.agents(cwd), o.engine.defaultAgent(cwd)]));
+    const rules = (agents.find((a) => a.id === first)?.permissions ?? []) as Rule[];
+    return found.map((s) => ({ name: s.name, displayName: s.name, description: s.description ?? "", source: sourceOf(s.path, cwd), state: skillState2(rules, s.name), advertised: true }));
+  }
+  /** The rows with the states saved but not shown yet; a state OpenCode shows is dropped from the memory. */
+  async function list(cwd: string): Promise<SkillsResult> {
+    const saved = pending.get(cwd);
+    const rows = await read(cwd, !!saved);
+    for (const r of rows) {
+      if (saved?.get(r.name) === r.state) saved.delete(r.name);
+    }
+    if (saved && !saved.size) pending.delete(cwd);
+    return { skills: rows.map((r) => ({ ...r, state: saved?.get(r.name) ?? r.state })) };
+  }
+
+  /** Writes the rule of one skill: the exact-name rule of every project file goes, then the new one is appended to the winning file in its own keys. */
+  function writeRule(cwd: string, name: string, effect: "allow" | "ask" | "deny") {
+    const permission = readProjectValue(cwd, ["permission"]);
+    if (typeof permission === "string") throw fail("invalid_input", "opencode.json sets one permission for every tool; set skill rules there by hand.");
+    // One action for every skill (an OpenCode 1 key) becomes the `*` rule, so the rule of this skill can follow it.
+    const rules = readProjectValue(cwd, ["permission", "skill"]);
+    if (typeof rules === "string") editProjectFile(cwd, ["permission", "skill"], { "*": rules });
+    editProjectFile(cwd, ["permission", "skill", name], undefined);
+    editProjectList(cwd, ["permissions"], { drop: (item) => isObject(item) && item.action === "skill" && item.resource === name });
+    if (fileShape(writeTarget(cwd)) === "v2") editProjectList(cwd, ["permissions"], { append: { action: "skill", resource: name, effect } });
+    else editProjectFile(cwd, ["permission", "skill", name], effect);
+  }
+
+  async function setState(cwd: string, name: string, state: SkillState): Promise<SkillsSetStateResult> {
+    const effect = RULE[state];
+    if (!effect) throw fail("invalid_input", `OpenCode has no ${state} state for a skill.`);
+    if (!(await read(cwd, false)).some((s) => s.name === name)) throw fail("bad_request", `Unknown skill: ${name}`);
+    writeRule(cwd, name, effect);
+    const reloaded = await o.reload(cwd, "skills");
+    let shown = false;
+    if (reloaded) {
+      for (const stop = Date.now() + SHOW_MS; !shown && Date.now() < stop; ) {
+        shown = (await read(cwd, true).catch(() => [])).find((s) => s.name === name)?.state === state;
+        if (!shown) await sleep(250);
+      }
+    }
+    if (shown) pending.get(cwd)?.delete(name);
+    else pending.set(cwd, (pending.get(cwd) ?? new Map()).set(name, state));
+    return { ...(await list(cwd)), confirmed: shown };
+  }
+
+  return async (msg, cwd) => {
+    try {
+      return msg.type === "skills.list" ? await list(cwd) : await setState(cwd, msg.name, msg.state);
+    } catch (e) {
+      if (e instanceof ConfigFileError) throw fail(e.code, e.message);
+      throw e;
+    }
+  };
+}
+
+// ---- Plugins ----
+
+/** The spec of a plugin list entry: a string, `[spec, options]` (OpenCode 1) or `{package, options}` (OpenCode 2). */
+const specOf2 = (entry: unknown): string | undefined => (isObject(entry) && typeof entry.package === "string" ? entry.package : specOf(entry));
+const WRITTEN: PluginWriteResult = { reload: { reloaded: 0, failed: [], errorCount: 0 } };
+
+export function createOpenCode2PluginsConfig(o: Config2Deps): EngineConfig["plugins"] {
+  const waitMs = o.waitMs ?? WAIT_MS;
+  type Row = { id?: string; source: { type: string; target?: string; version?: string; path?: string }; state: { status: string; error?: string } };
+  const read = async (cwd: string): Promise<Row[]> => {
+    let timer: NodeJS.Timeout | undefined;
+    const p = o.server.client().then((c) => c.plugin.list({ location: { directory: cwd } })).then((r) => r.data as unknown as Row[]);
+    p.catch(() => {});
+    try {
+      return await Promise.race([p, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(fail("opencode_loading", "OpenCode is still loading this folder. Try again in a moment.")), waitMs)))]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  /** The entries of the plugin lists of the project files (`plugin`, OpenCode 1; `plugins`, OpenCode 2) by identity, as OpenCode reports them. */
+  const projectSpecs = (cwd: string) => new Set(projectDocs(cwd).flatMap(({ file, data }) => [data.plugin, data.plugins].flatMap((l) => (Array.isArray(l) ? l.flatMap((e) => specOf2(e) ?? []) : [])).map((x) => canon(x, dirname(file)))));
+  const idOf = (r: Row) => (r.source.type === "package" ? r.source.target : r.source.type === "local" && r.source.path ? (r.source.path.startsWith("file://") ? r.source.path : pathToFileURL(r.source.path).href) : undefined);
+
+  async function list(cwd: string): Promise<PluginsListResult> {
+    const rows = await read(cwd);
+    const project = projectSpecs(cwd);
+    const installed: InstalledPlugin[] = rows.flatMap((r) => {
+      const id = idOf(r);
+      if (!id) return [];
+      const failed = r.state.status === "failed";
+      return [{ id, ...(r.source.version && { version: r.source.version }), scope: project.has(id) ? "project" : inPluginFolder(id, cwd) ? "folder" : "user", enabled: !failed, ...(failed && { description: `Failed to load: ${r.state.error ?? "unknown error"}` }), updatable: false } satisfies InstalledPlugin];
+    });
+    return { installed, available: [], marketplaces: [] };
+  }
+
+  /** After a reload OpenCode lists no plugin for a moment: waits until `done` holds for the list (or the time is up) so the dialog's next read is right. */
+  async function settle(cwd: string, done: (ids: string[]) => boolean) {
+    for (const stop = Date.now() + SHOW_MS; Date.now() < stop; await sleep(250)) if (done((await read(cwd).catch(() => [])).flatMap((r) => idOf(r) ?? []))) return;
+  }
+
+  async function install(cwd: string, typed: string): Promise<PluginWriteResult> {
+    const spec = typed.trim();
+    if (!spec) throw fail("invalid_input", "Type an npm package or a path.");
+    if (/\s/.test(spec)) throw fail("invalid_input", "A plugin is one npm package or one path, without spaces.");
+    const entry = normalize(spec, cwd);
+    const id = canon(entry, dirname(writeTarget(cwd)));
+    if (projectSpecs(cwd).has(id) || (await list(cwd)).installed.some((p) => p.id === id)) throw fail("already_exists", `${entry} is already in the plugin list.`);
+    editProjectList(cwd, [fileShape(writeTarget(cwd)) === "v2" ? "plugins" : "plugin"], { append: entry });
+    if (!(await o.reload(cwd, "plugins"))) return { ...WRITTEN, applied: false };
+    await settle(cwd, (ids) => ids.includes(id));
+    return WRITTEN;
+  }
+
+  async function uninstall(cwd: string, id: string, scope: string | undefined): Promise<PluginWriteResult> {
+    if (scope !== undefined && scope !== "project") throw fail("invalid_input", REMOVE_GAP);
+    const drop = (item: unknown, file: string) => canon(specOf2(item) ?? "", dirname(file)) === id || specOf2(item) === id;
+    const done = [...editProjectList(cwd, ["plugin"], { drop }), ...editProjectList(cwd, ["plugins"], { drop })];
+    if (!done.length) throw fail("invalid_input", REMOVE_GAP);
+    if (!(await o.reload(cwd, "plugins"))) return { ...WRITTEN, applied: false };
+    await settle(cwd, (ids) => !ids.includes(id));
+    return WRITTEN;
+  }
+
+  return async (msg, cwd) => {
+    try {
+      switch (msg.type) {
+        case "plugins.list":
+          return await list(cwd);
+        case "plugins.install":
+          return await install(cwd, msg.pluginId);
+        case "plugins.uninstall":
+          return await uninstall(cwd, msg.pluginId, msg.scope);
+        default:
+          throw fail("unsupported", "OpenCode 2 plugins are installed or uninstalled here. They have no switch, update or marketplace in this dialog.");
       }
     } catch (e) {
       if (e instanceof ConfigFileError) throw fail(e.code, e.message);

@@ -7,7 +7,7 @@ import { OPENCODE_MODES, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { openCodeWanted } from "./opencode-catalogue.ts";
 import { OpenCodeError, type OpenCodeServer } from "./opencode-server.ts";
 import { createOpenCode2Engine, loadOpenCode2History, OPENCODE2_CAPABILITIES } from "./opencode2-engine.ts";
-import { createOpenCode2McpConfig } from "./opencode2-config.ts";
+import { createOpenCode2McpConfig, createOpenCode2PluginsConfig, createOpenCode2SkillsConfig } from "./opencode2-config.ts";
 import { INLINE_META } from "./opencode2-inline.ts";
 import { createFolderReloads } from "./folder-reload.ts";
 import { mapLimit } from "./session-scan.ts";
@@ -42,12 +42,8 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
   const reloads = createFolderReloads({ reload: async () => !server.running() || engine.reloadLocations(), changed: (kind, cwd) => ctx.broadcast({ type: "config.changed", kind, cwd }) });
   const config: EngineConfig = {
     mcp: createOpenCode2McpConfig({ server, reload: (cwd, kind) => reloads.request(cwd, [kind]), waitMs: o.mcpWaitMs }),
-    skills: async () => {
-      throw new EngineError("opencode_v2_unsupported", "OpenCode 2 does not support the skills dialog in claude-ui yet.");
-    },
-    plugins: async () => {
-      throw new EngineError("opencode_v2_unsupported", "OpenCode 2 does not support the Plugins dialog in claude-ui yet.");
-    },
+    skills: createOpenCode2SkillsConfig({ server, engine, reload: (cwd, kind) => reloads.request(cwd, [kind]), waitMs: o.mcpWaitMs }),
+    plugins: createOpenCode2PluginsConfig({ server, reload: (cwd, kind) => reloads.request(cwd, [kind]), waitMs: o.mcpWaitMs }),
   };
   const sessionOpts = (initial: Partial<SessionSettings>) => ({ ...ctx.sessionOpts(initial), engine });
   const failure = (err: unknown) => (err instanceof OpenCodeError ? new EngineError(err.code, err.message) : new EngineError("opencode_failed", (err as Error).message));

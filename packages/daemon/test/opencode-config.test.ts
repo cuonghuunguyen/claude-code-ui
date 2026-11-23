@@ -37,14 +37,14 @@ const FILE = `{
 }
 `;
 
-async function boot(o: { config?: object; file?: string; fileName?: string; env?: Record<string, string>; mcpWaitMs?: number; orchestration?: boolean; /** The fake OpenCode 2 binary. */ v2?: boolean } = {}) {
+async function boot(o: { config?: object; file?: string; fileName?: string; env?: Record<string, string>; mcpWaitMs?: number; orchestration?: boolean; /** The fake OpenCode 2 binary. */ v2?: boolean; /** More of the fake's data file (OpenCode 2: `skills`). */ data?: object } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "occ-")));
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
   if (o.file !== undefined) writeFileSync(join(project, o.fileName ?? "opencode.jsonc"), o.file);
   const logFile = join(root, "fake.log");
   const dataFile = join(root, "data.json");
-  writeFileSync(dataFile, JSON.stringify({ sessions: [], messages: {}, ...(o.config && { config: o.config }) }));
+  writeFileSync(dataFile, JSON.stringify({ sessions: [], messages: {}, ...(o.config && { config: o.config }), ...o.data }));
   const env: Record<string, string> = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_DATA: dataFile, FAKE_OPENCODE_SCRIPT: "", XDG_CONFIG_HOME: join(root, "xdg"), ...(o.v2 && { FAKE_OPENCODE2_DATA: dataFile, FAKE_OPENCODE2_SCRIPT: "", FAKE_OPENCODE2_PROJECT_CONFIG: "1" }), ...o.env };
   const appSettings = createSettings();
   appSettings.set({ terminalAccess: { enabled: false }, inlineTask: { enabled: false }, fork: { enabled: false }, ...(o.orchestration && { orchestration: { enabled: true, workerCap: 20 } }) } as never);
@@ -561,12 +561,126 @@ describe("OpenCode Plugins dialog", { timeout: TEST_MS }, () => {
     await d.plugins({ type: "plugins.install", pluginId: "first", scope: "project" });
     expect(JSON.parse(d.file("opencode.json")).plugin).toEqual(["first"]);
   });
+});
 
-  it("plugins requests without engine reach Claude and with an OpenCode 2 binary answer opencode_v2_unsupported", async () => {
-    const d = await boot({ file: PLUGIN_FILE, fileName: "opencode.json", env: { FAKE_OPENCODE_VERSION: "2.3.0" } });
-    expect(await d.request({ type: "plugins.list", cwd: d.project, engine: "opencode" })).toMatchObject({ type: "error", code: "opencode_v2_unsupported" });
-    const claude = await d.request({ type: "plugins.list", cwd: d.project });
-    expect(JSON.stringify(claude)).not.toContain("listed-one");
+describe("OpenCode 2 config dialogs routing", { timeout: TEST_MS }, () => {
+  it("a plugins request without engine reaches Claude, not OpenCode 2", async () => {
+    const d = await boot({ v2: true, file: `{ "plugins": ["listed-one"] }`, fileName: "opencode.json" });
+    expect(JSON.stringify(await d.request({ type: "plugins.list", cwd: d.project }))).not.toContain("listed-one");
+  });
+});
+
+const HOLD = fileURLToPath(new URL("./fixtures/opencode2/turn-hold.json", import.meta.url));
+
+describe("OpenCode 2 skills dialog", { timeout: TEST_MS }, () => {
+  const SKILLS = `{ "permissions": [{ "action": "skill", "resource": "team-*", "effect": "ask" }, { "action": "skill", "resource": "legacy", "effect": "deny" }] }`;
+  async function bootSkills(file: string | null = SKILLS, fileName = "opencode.json", env: Record<string, string> = {}) {
+    const root0 = realpathSync(mkdtempSync(join(tmpdir(), "occ-skills-")));
+    const saved = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+    process.env.HOME = join(root0, "home");
+    process.env.XDG_CONFIG_HOME = join(root0, "xdg");
+    cleanups.push(() => Object.entries(saved).forEach(([k, v]) => (v === undefined ? delete process.env[k] : (process.env[k] = v))));
+    const d = await boot({ v2: true, ...(file !== null && { file }), fileName, env, data: { skills: [{ id: "skl_builtin", name: "builtin", description: "Built in", path: "skill://builtin/SKILL.md", content: "" }, { id: "skl_mine", name: "mine", path: join(root0, "xdg", "opencode", "skills", "mine", "SKILL.md"), content: "" }, { id: "skl_shared", name: "shared", path: join(root0, "home", ".claude", "skills", "shared", "SKILL.md"), content: "" }] } });
+    for (const n of ["review", "legacy", "team-docs"]) {
+      mkdirSync(join(d.project, ".opencode/skills", n), { recursive: true });
+      writeFileSync(join(d.project, ".opencode/skills", n, "SKILL.md"), `---\nname: ${n}\n---\n`);
+    }
+    const skills = () => d.ok({ type: "skills.list", cwd: d.project, engine: "opencode" });
+    await skills(); // the dialog lists first: OpenCode has loaded the folder before the file changes
+    const set = (name: string, state: string) => d.ok({ type: "skills.setState", cwd: d.project, engine: "opencode", name, state });
+    const states = (r: { skills: { name: string; state: string }[] }) => Object.fromEntries(r.skills.map((s) => [s.name, s.state]));
+    return { ...d, skills, set, states };
+  }
+
+  it("skills.list gives each skill's source and the state of the last rule matching it in the default agent's rules; no rule means ask", async () => {
+    const d = await bootSkills();
+    const r = await d.skills();
+    expect(d.states(r)).toEqual({ builtin: "on", mine: "on", shared: "on", review: "on", legacy: "off", "team-docs": "ask" });
+    expect(Object.fromEntries(r.skills.map((s: any) => [s.name, s.source]))).toEqual({ builtin: "built-in", mine: "user", shared: "external", review: "project", legacy: "project", "team-docs": "project" });
+    expect(r.skills.find((s: any) => s.name === "builtin")).toMatchObject({ description: "Built in", displayName: "builtin", advertised: true });
+  });
+
+  it.each([
+    ["an OpenCode 2 file", SKILLS, "opencode.json", (t: any) => t.permissions.filter((x: any) => x.resource === "review")],
+    ["an OpenCode 1 file", `// mine\n{ "permission": { "skill": { "legacy": "deny" } } }`, "opencode.jsonc", (t: any) => t.permission.skill.review],
+    ["no file", null, "opencode.json", (t: any) => t.permission.skill.review],
+  ])("skills.setState in %s writes the rule in the file's own keys, reloads the folder once and shows the new state", async (_n, file, name, found) => {
+    const d = await bootSkills(file, name);
+    const r = await d.set("review", "off");
+    expect(r.confirmed).toBe(true);
+    expect(d.states(r).review).toBe("off");
+    const t = jsonOf(d.file(name));
+    expect(found(t)).toEqual(name === "opencode.json" && file ? [{ action: "skill", resource: "review", effect: "deny" }] : "deny");
+    expect(d.requests("POST", "/api/location/reload")).toHaveLength(1);
+    // Back to On: the exact-name rule is replaced, not stacked.
+    const on = await d.set("review", "on");
+    expect(d.states(on).review).toBe("on");
+    const again = jsonOf(d.file(name));
+    expect(JSON.stringify(again).match(/"review"/g)).toHaveLength(1);
+    // The other rules stay.
+    expect(d.states(await d.skills()).legacy).toBe(file === SKILLS || file?.includes("legacy") ? "off" : "on");
+  });
+
+  it("skills.setState of an unknown skill is refused and nothing is written", async () => {
+    const d = await bootSkills();
+    expect(await d.request({ type: "skills.setState", cwd: d.project, engine: "opencode", name: "nope", state: "off" })).toMatchObject({ type: "error", code: "bad_request" });
+    expect(d.file("opencode.json")).toBe(SKILLS);
+    expect(d.requests("POST", "/api/location/reload")).toHaveLength(0);
+  });
+});
+
+const PLUGINS2 = `{ "plugins": ["listed-one", { "package": "with-opts", "options": { "k": 1 } }, "broken-pkg"] }`;
+
+describe("OpenCode 2 Plugins dialog", { timeout: TEST_MS }, () => {
+  async function bootPlugins(file = PLUGINS2, name = "opencode.json") {
+    const d = await boot({ v2: true, file, fileName: name });
+    await d.plugins({ type: "plugins.list" }); // OpenCode has loaded the folder before the file changes
+    return d;
+  }
+
+  it("plugins.list shows the packages OpenCode loaded without its built-in ones, a plugin that failed to load as not enabled with its error, and the scope", async () => {
+    const d = await bootPlugins();
+    mkdirSync(join(d.project, ".opencode", "plugins"), { recursive: true });
+    const r = await d.plugins({ type: "plugins.list" });
+    const by = Object.fromEntries(r.installed.map((p: any) => [p.id, p]));
+    expect(Object.keys(by).sort()).toEqual(["broken-pkg", "listed-one", "with-opts"]);
+    expect(by["listed-one"]).toMatchObject({ scope: "project", enabled: true, version: "1.0.0", updatable: false });
+    expect(by["broken-pkg"]).toMatchObject({ scope: "project", enabled: false, description: "Failed to load: Plugin failed to load" });
+    expect(r.available).toEqual([]);
+  });
+
+  it.each([
+    ["an OpenCode 2 file", PLUGINS2, "opencode.json", (t: any) => t.plugins],
+    ["an OpenCode 1 file", `// mine\n{ "plugin": ["listed-one"] }`, "opencode.jsonc", (t: any) => t.plugin],
+  ])("plugins.install and uninstall in %s edit the plugin list with the file's own key and reload the folder", async (_n, file, name, list) => {
+    const d = await bootPlugins(file, name);
+    const added = await d.plugins({ type: "plugins.install", pluginId: "later-pkg", scope: "project" });
+    expect(added.applied).toBeUndefined();
+    expect(list(jsonOf(d.file(name)))).toContain("later-pkg");
+    expect(d.requests("POST", "/api/location/reload")).toHaveLength(1);
+    expect((await d.plugins({ type: "plugins.list" })).installed.map((p: any) => p.id)).toContain("later-pkg");
+    expect(await d.request({ type: "plugins.install", cwd: d.project, engine: "opencode", pluginId: "later-pkg", scope: "project" })).toMatchObject({ type: "error", code: "already_exists" });
+    await d.plugins({ type: "plugins.uninstall", pluginId: "later-pkg", scope: "project" });
+    expect(list(jsonOf(d.file(name)))).not.toContain("later-pkg");
+    expect(list(jsonOf(d.file(name)))).toContain("listed-one");
+    expect((await d.plugins({ type: "plugins.list" })).installed.map((p: any) => p.id)).not.toContain("later-pkg");
+  });
+
+  it("a plugin installed with a wrong name shows its load error after the reload", async () => {
+    const d = await bootPlugins();
+    await d.plugins({ type: "plugins.install", pluginId: "broken-new", scope: "project" });
+    expect((await d.plugins({ type: "plugins.list" })).installed.find((p: any) => p.id === "broken-new")).toMatchObject({ enabled: false, description: expect.stringContaining("Plugin failed to load") });
+  });
+
+  it("uninstall of a plugin that is not listed in the project is refused with the reason, and a switch or an update is not offered", async () => {
+    const d = await bootPlugins();
+    expect(await d.request({ type: "plugins.uninstall", cwd: d.project, engine: "opencode", pluginId: "elsewhere" })).toMatchObject({ type: "error", code: "invalid_input", message: expect.stringContaining("project") });
+    expect(await d.request({ type: "plugins.update", cwd: d.project, engine: "opencode", pluginId: "listed-one", scope: "project" })).toMatchObject({ type: "error", code: "unsupported" });
+    const created = await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" });
+    const gaps = created.session.capabilities.config.gaps;
+    expect(gaps.pluginStatus).toBeUndefined();
+    expect(gaps.pluginUpdate).toContain("OpenCode 2");
+    expect(gaps.pluginSwitch).toBeDefined();
   });
 });
 
@@ -600,6 +714,35 @@ describe("OpenCode config saved while a session of the folder is busy", { timeou
     await status({});
     await d.ok({ type: "session.prompt", sessionId: id, text: "hi" });
     await until(() => d.requests("POST", "/instance/dispose").length === 1);
+    await until(() => d.inbox.some((m) => m.type === "config.changed" && m.kind === kind && m.cwd === d.project));
+  });
+});
+
+describe("OpenCode 2 config saved while a session is running", { timeout: TEST_MS }, () => {
+  it.each([
+    ["a skill state", "skills", { type: "skills.setState", name: "review", state: "off" }, (r: any) => r.confirmed],
+    ["a plugin install", "plugins", { type: "plugins.install", pluginId: "later", scope: "project" }, (r: any) => r.applied !== false],
+  ])("%s is saved, not applied, until no session runs: the locations are reloaded then and config.changed is sent", async (_n, kind, msg, applied) => {
+    const root0 = realpathSync(mkdtempSync(join(tmpdir(), "occ-busy-")));
+    const saved = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+    process.env.HOME = join(root0, "home");
+    process.env.XDG_CONFIG_HOME = join(root0, "xdg");
+    cleanups.push(() => Object.entries(saved).forEach(([k, v]) => (v === undefined ? delete process.env[k] : (process.env[k] = v))));
+    const d = await boot({ v2: true, file: `{ "plugins": ["listed-one"] }`, fileName: "opencode.json", env: { FAKE_OPENCODE2_SCRIPT: HOLD } });
+    mkdirSync(join(d.project, ".opencode/skills/review"), { recursive: true });
+    writeFileSync(join(d.project, ".opencode/skills/review/SKILL.md"), "---\nname: review\n---\n");
+    await d.ok({ type: "skills.list", cwd: d.project, engine: "opencode" });
+    const id: string = (await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" })).session.id;
+    await d.ok({ type: "session.subscribe", sessionId: id, sinceSeq: 0 });
+    await d.ok({ type: "session.prompt", sessionId: id, text: "work" });
+    await until(() => JSON.stringify(d.inbox).includes('"working"'));
+    const r = await d.ok({ cwd: d.project, engine: "opencode", ...msg });
+    expect(applied(r)).toBe(false);
+    // The pending state shows meanwhile.
+    if (kind === "skills") expect((await d.ok({ type: "skills.list", cwd: d.project, engine: "opencode" })).skills.find((s: any) => s.name === "review").state).toBe("off");
+    expect(d.requests("POST", "/api/location/reload")).toHaveLength(0);
+    await d.ok({ type: "session.interrupt", sessionId: id });
+    await until(() => d.requests("POST", "/api/location/reload").length === 1);
     await until(() => d.inbox.some((m) => m.type === "config.changed" && m.kind === kind && m.cwd === d.project));
   });
 });
