@@ -74,3 +74,20 @@ it("a bash mode command and a compaction show the same parts live and from stora
     { type: "notice", id: "error:msg_c2", level: "warning", text: "Nothing to compact yet" },
   ]);
 });
+
+it("a Fork card that ends live keeps the start time of its running card (the end event carries only the end time)", async () => {
+  const { FORK_TOOL } = await import("../src/opencode-fork.ts");
+  const { vi } = await import("vitest");
+  vi.useFakeTimers();
+  try {
+    const m = new OpenCode2Mapper();
+    m.event("session.tool.input.started", { ...base, id: "call_f", name: FORK_TOOL });
+    const [running] = m.event("session.tool.called", { ...base, id: "call_f", input: { description: "task" } }) as any[];
+    vi.advanceTimersByTime(1500);
+    const [done] = m.event("session.tool.success", { ...base, id: "call_f", content: [], metadata: {} }) as any[];
+    expect(done.startedAt).toBe(running.startedAt);
+    expect(done.endedAt - done.startedAt).toBe(1500);
+  } finally {
+    vi.useRealTimers();
+  }
+});
