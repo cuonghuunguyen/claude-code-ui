@@ -8,7 +8,7 @@ import { createOpenCodeMcpConfig } from "./opencode-config-mcp.ts";
 import { createOpenCodeSkillsConfig } from "./opencode-config-skills.ts";
 import { createOpenCodePluginsConfig } from "./opencode-config-plugins.ts";
 import { checkLogin, listProviders, loginError } from "./opencode-providers.ts";
-import { createOpenCodeServer, OpenCodeError, type OpenCodeServer } from "./opencode-server.ts";
+import { createOpenCodeServer, OpenCodeError, OpenCodeHttpError, type OpenCodeServer } from "./opencode-server.ts";
 import { mapLimit } from "./session-scan.ts";
 import { Session, type SessionOpts, type SessionSettings } from "./session.ts";
 
@@ -308,7 +308,18 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     restore: (id) => restoreOpenCode(id),
     locate: async (id, live) => {
       // The folder it was listed, created or opened in; its store is OpenCode's.
-      const cwd = live?.cwd ?? openCodeMeta.get(id)?.cwd;
+      let cwd = live?.cwd ?? openCodeMeta.get(id)?.cwd;
+      if (!cwd) {
+        // One not seen in this run (an Aside left by a stopped daemon, GH-944): OpenCode answers without a folder. Undefined only when it does not have it,
+        // so a failed read never drops what claude-ui keeps of a session that still exists.
+        const row = await openCode.request<OpenCodeSessionRow>(`/session/${id}`, { timeoutMs: 0 }).catch((err) => {
+          if (err instanceof OpenCodeHttpError && err.status === 404) return undefined;
+          const e = openCodeFail(err);
+          throw new EngineError(e.code, e.message);
+        });
+        cwd = row?.directory && ctx.allowed(row.directory);
+        if (cwd) openCodeMeta.set(id, { cwd, title: row!.title ?? "New session" });
+      }
       return cwd && ctx.allowed(cwd) ? { cwd, transcript: false } : undefined;
     },
     title: async (s) => openCodeMeta.get(s.id)?.title ?? "New session",
