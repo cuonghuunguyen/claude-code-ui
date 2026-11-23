@@ -844,6 +844,14 @@ describe("slots, extends and claudeUi (GH-870)", () => {
       expect(a.serve("base", "b.css", "b", "garbage")).toBeUndefined();
     });
 
+    it("the own css of an extending theme is served with the base css files of its chain (for the names they define)", async () => {
+      const { a } = await run({ base: { themes: [th("b", { css: "b.css" })] }, main: { themes: [th("m", { extends: "base:b", css: "m.css" }), th("lone", { css: "l.css" })] } }, { base: { "b.css": "@keyframes spin{to{opacity:0}}" }, main: { "m.css": ".x{animation:spin 1s}", "l.css": ".y{}" } });
+      const own = a.serve("main", "m.css", "m")!;
+      expect(own.baseCss?.map((p) => p.endsWith("b.css"))).toEqual([true]);
+      expect(a.serve("main", "l.css", "lone")!.baseCss).toBeUndefined();
+      expect(a.serve("base", "b.css", "b", "main:m")!.baseCss).toBeUndefined();
+    });
+
     it("a theme of a disabled addon cannot be the extender, a disabled base is not served", async () => {
       const { a } = await run({ base: { themes: [th("b", { css: "b.css" })] }, main: { themes: [th("m", { extends: "base:b" })] } }, { base: { "b.css": "a{}" } }, ["base"]);
       expect(a.serve("base", "b.css", "b", "main:m")).toBeUndefined(); // main is not enabled

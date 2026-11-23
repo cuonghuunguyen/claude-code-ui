@@ -19,7 +19,7 @@ export const appVersionOf = (v: string | undefined): V | undefined => {
   return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : undefined;
 };
 
-/** Whether `version` meets `range`. A malformed range or a version that is not `x.y.z` (a source checkout) is met. `^` keeps the major (the minor while the major is 0), `~` keeps the minor. */
+/** Whether `version` meets `range`. A malformed range or a version that is not `x.y.z` (a source checkout) is met. `^` keeps the major (the minor while the major is 0, the patch too while both are 0), `~` keeps the minor. */
 export function satisfiesClaudeUi(range: string, version: string | undefined): boolean {
   const v = appVersionOf(version);
   const m = RANGE.exec(range);
@@ -29,7 +29,8 @@ export function satisfiesClaudeUi(range: string, version: string | undefined): b
   if (cmp(v, base) < 0) return false;
   if (m[2] === ">=") return true;
   if (m[2] === "~") return v[0] === base[0] && v[1] === base[1];
-  return base[0] > 0 ? v[0] === base[0] : v[0] === 0 && v[1] === base[1];
+  if (base[0] > 0) return v[0] === base[0];
+  return v[0] === 0 && v[1] === base[1] && (m[3]!.split(".").length < 3 || base[1] > 0 || v[2] === base[2]); // ^0.0.z: that patch only, as in npm
 }
 
 /** `needs Claude UI >=1.6 (this is 1.5.0)` */

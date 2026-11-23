@@ -1343,7 +1343,7 @@ export type AddonBackgroundImage = { image: string; mobile?: string };
 export type AddonBackground = { light?: AddonBackgroundImage; dark?: AddonBackgroundImage; veil?: number; panelAlpha?: number };
 /** Slots of a theme (docs/spec.md "Addon themes and CSS" > Slots): `loader`, `done-icon`, `send-icon` = ids of image `assets` shown instead of the built-in mark while the file exists; `thinking-phrases` = per language (`en`, `vi`, `pt-BR`, at most 4) 1..12 phrases of 1..60 characters that replace the "Thinking" label. */
 export type AddonThemeSlots = { loader?: string; "done-icon"?: string; "send-icon"?: string; "thinking-phrases"?: Record<string, string[]> };
-export type AddonTheme = { id: string; name: string; light?: AddonPalette; dark?: AddonPalette; vars?: AddonThemeVars; background?: AddonBackground; options?: AddonThemeOption[]; slots?: AddonThemeSlots; /** `<theme>` (same addon) or `<addon>:<theme>`: that theme's css, vars, background, slots and options apply under this theme's own (protocol addon-theme.ts `extendsChain`). */ extends?: string; /** A `.css` A `.css` file of the addon that applies only while this theme is picked: the daemon scopes it when it serves it (`?theme=<id>`). */ css?: string };
+export type AddonTheme = { id: string; name: string; light?: AddonPalette; dark?: AddonPalette; vars?: AddonThemeVars; background?: AddonBackground; options?: AddonThemeOption[]; slots?: AddonThemeSlots; /** `<theme>` (same addon) or `<addon>:<theme>`: that theme's css, vars, background, slots and options apply under this theme's own (protocol addon-theme.ts `extendsChain`). */ extends?: string; /** A `.css` file of the addon that applies only while this theme is picked: the daemon scopes it when it serves it (`?theme=<id>`). */ css?: string };
 export type AddonManifest = {
   name: string;
   version: string;
@@ -1369,14 +1369,13 @@ export type AddonLint = {
   /** Addon-relative path of the CSS file. */
   file?: string;
   line?: number;
-  /** The part name (`unknown-part` with `^=` `$=` `*=` `|=`: the value as a glob such as `side*`), `@keyframes` / `@font-face` family / `@property` name. `low-contrast`: `<theme>: fg on bg 3.2:1 (dark)`. */
+  /** The part name (`unknown-part` with `^=` `$=` `*=` `|=`: the value as a glob such as `side*`), `@keyframes` / `@font-face` family / `@property` name. `asset-missing` / `asset-large`: the asset id (file in `file`). `extends-missing`: `<theme>` (`suggest` = its `extends` value). `low-contrast`: `<theme>: fg on bg 3.2:1 (dark)`. */
   name?: string;
   /** The prefixed form of `name`; for `unknown-part` the nearest part name (at most 2 edits away). */
   suggest?: string;
   /** `deprecated-part`: the release that removes the part. */
   until?: string;
-  /** `asset-missing` / `asset-large`: the asset id (`name`), file in `file`. `asset-large`: size in KB in `count`. `extends-missing`: `name` = `<theme>`, `suggest` = its `extends` value. */
-  /** `selects-testid`: how many selectors. */
+  /** `selects-testid`: how many selectors. `asset-large`: size in KB. */
   count?: number;
 };
 /** Per asset id: whether its file exists now (read on every list) and its size in bytes. */

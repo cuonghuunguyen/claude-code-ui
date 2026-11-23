@@ -279,13 +279,21 @@ function render(nodes: Node[], hoist: string[], names: Names | undefined): strin
   return out.join("\n");
 }
 
-/** `css` rewritten so that it applies only under `root` (a selector for the root element, e.g. `:root[data-theme="addon:x:y"]`). `prefix` (see `themeNames`): the names of the theme's own @keyframes, @counter-style and @font-palette-values get it, and the references to them follow, so they cannot replace a name of the app or of another theme. Throws `CssScanError`. */
-export function scopeCss(css: string, root: string, prefix?: string): string {
+/** `css` rewritten so that it applies only under `root` (a selector for the root element, e.g. `:root[data-theme="addon:x:y"]`). `prefix` (see `themeNames`): the names of the theme's own @keyframes, @counter-style and @font-palette-values get it, and the references to them follow, so they cannot replace a name of the app or of another theme. `baseCss`: texts of the css files of the theme's base chain, whose names the file may reference. Throws `CssScanError`. */
+export function scopeCss(css: string, root: string, prefix?: string, baseCss: string[] = []): string {
   if (css.length > MAX_THEME_CSS) throw new CssScanError("too large");
   const tree = parse(css);
   let names: Names | undefined;
   if (prefix) {
     names = { keyframes: new Map(), counter: new Map(), palette: new Map() };
+    // `baseCss`: the css of the base themes of an extending theme. They are served under this theme with the same prefix, so the names they define are renamed alike and this file may refer to them. A base file that does not scan is served empty, so it defines nothing.
+    for (const b of baseCss) {
+      try {
+        if (b.length <= MAX_THEME_CSS) collect(parse(b), prefix, names);
+      } catch {
+        /* served empty */
+      }
+    }
     collect(tree, prefix, names);
   }
   const hoist: string[] = [];

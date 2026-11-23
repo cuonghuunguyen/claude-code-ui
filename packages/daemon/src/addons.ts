@@ -798,7 +798,7 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
   };
 
   /** The file of an enabled addon (a local folder is re-read: an edit that needs approval stops serving), else undefined. `net`: approved origins for connect-src. `theme` (query `?theme=<id>`): when it is a theme of this addon whose `css` is this file, `scope` is the root selector to scope the file under and `names` the prefix of the theme's own global names (addon-css.ts). */
-  function serve(name: string, rest: string, theme?: string, as?: string): { root: string; path: string; type: string; net: string[]; html: boolean; scope?: string; names?: string } | undefined {
+  function serve(name: string, rest: string, theme?: string, as?: string): { root: string; path: string; type: string; net: string[]; html: boolean; scope?: string; names?: string; baseCss?: string[] } | undefined {
     const r = store.get().addons[name];
     if (!r) return undefined;
     const root = rootOf(dir, name, r);
@@ -819,7 +819,16 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
     // `as`: "<addon>:<theme>", the extending theme that loads this file (a base theme's css) under its own root. Allowed only when that theme runs and its extends chain holds the theme `theme` of this addon.
     const scope = !scoped ? undefined : as === undefined ? { addon: name, theme: theme! } : extender(name, theme!, as);
     if (as !== undefined && !scope) return undefined; // never the unscoped file for a bad `as`
-    return { root, ...f, net: r.approved.filter((c) => c.startsWith("net:")).map((c) => c.slice(4)), html, ...(scope && { scope: themeRoot(scope.addon, scope.theme), names: themeNames(scope.addon, scope.theme) }) };
+    // The own css of an extending theme may refer to the names (keyframes, counter-style, palette) its base css defines: the files of the base chain go along.
+    const baseCss: string[] = [];
+    const top = scope && as === undefined ? findTheme(scope.addon, scope.theme) : undefined;
+    if (top?.extends !== undefined)
+      for (const c of extendsChain(name, top, findTheme).chain) {
+        const br = store.get().addons[c.addon];
+        const bf = c.theme.css && br ? addonFile(rootOf(dir, c.addon, br), c.theme.css) : undefined;
+        if (bf) baseCss.push(bf.path);
+      }
+    return { root, ...f, net: r.approved.filter((c) => c.startsWith("net:")).map((c) => c.slice(4)), html, ...(scope && { scope: themeRoot(scope.addon, scope.theme), names: themeNames(scope.addon, scope.theme), ...(baseCss.length && { baseCss }) }) };
   }
 
   /** Stops every watcher (daemon shutdown). */

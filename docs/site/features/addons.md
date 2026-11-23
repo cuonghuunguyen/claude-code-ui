@@ -176,7 +176,7 @@ A theme may replace four small things of the app. `slots` goes in the theme:
 
 The theme starts from the base and adds its own on top; the theme's own wins:
 
-- `css`, `vars`, `background`, `slots` and `options` of the base apply under the theme's own. A base `css` is loaded under the extending theme, so its rules reach it.
+- `css`, `vars`, `background`, `slots` and `options` of the base apply under the theme's own. A base `css` is loaded under the extending theme, so its rules reach it. The renamed `@keyframes`, `@counter-style` and `@font-palette-values` of a base `css` can be used by the theme's own `css` under their plain name (`animation: spin 1s`).
 - The palette is not inherited: a mode the theme gives is its own. A mode it does not give uses the palette of the base.
 - A base may extend another base, at most 3 links in all.
 

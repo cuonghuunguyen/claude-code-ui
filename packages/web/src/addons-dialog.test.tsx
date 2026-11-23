@@ -167,7 +167,7 @@ it("an addon row lists its lint warnings under Checks, with the file, line and t
     { level: "warning", code: "deprecated-part", file: "dusk.css", line: 5, name: "tab", until: "1.7" },
     { level: "warning", code: "asset-missing", file: "art/dark.png", name: "bg-dark" },
     { level: "warning", code: "asset-large", file: "art/big.jpg", name: "big", count: 3072 },
-    { level: "warning", code: "extends-missing", name: "gojo", suggest: "base:night" },
+    { level: "warning", code: "extends-missing", name: "acme", suggest: "base:night" },
   ];
   const d = await render({ addons: [addon("themed", { lint }), addon("plain")], picks: {} });
   const rows = d.all("addons-row");
@@ -186,7 +186,7 @@ it("an addon row lists its lint warnings under Checks, with the file, line and t
   expect(items[7]).toContain("removed in 1.7");
   expect(items[8]).toContain('"bg-dark" (art/dark.png) is not in the addon folder');
   expect(items[9]).toContain("3072 KB");
-  expect(items[10]).toContain('Theme "gojo" extends "base:night"');
+  expect(items[10]).toContain('Theme "acme" extends "base:night"');
   expect(rows[1]!.querySelector('[data-testid="addons-checks"]')).toBeNull();
 });
 

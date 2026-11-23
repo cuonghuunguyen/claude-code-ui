@@ -1167,9 +1167,9 @@ it("Appearance (GH-868): an addon theme's typed options show a select, a slider 
   const palette = Object.fromEntries(["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"].map((k) => [k, "#101010"]));
   testAddons = [
     {
-      name: "gojo", source: { kind: "local", path: "/x" }, approved: [], state: "enabled", base: "/addon/aa/gojo/",
+      name: "acme", source: { kind: "local", path: "/x" }, approved: [], state: "enabled", base: "/addon/aa/acme/",
       manifest: {
-        name: "gojo", version: "1", description: "", capabilities: [], views: [], commands: [], renderers: [],
+        name: "acme", version: "1", description: "", capabilities: [], views: [], commands: [], renderers: [],
         themes: [
           {
             id: "void", name: "Void", dark: palette, light: palette,
@@ -1184,10 +1184,10 @@ it("Appearance (GH-868): an addon theme's typed options show a select, a slider 
       },
     } as AddonInfo,
   ];
-  localStorage.setItem("claude-ui.colorTheme", "addon:gojo:void");
-  localStorage.setItem("claude-ui.theme-options", JSON.stringify({ "addon:gojo:void": { density: 9, tint: "red" } }));
+  localStorage.setItem("claude-ui.colorTheme", "addon:acme:void");
+  localStorage.setItem("claude-ui.theme-options", JSON.stringify({ "addon:acme:void": { density: 9, tint: "red" } }));
   const html = document.documentElement;
-  html.setAttribute("data-theme", "addon:gojo:void");
+  html.setAttribute("data-theme", "addon:acme:void");
   applyAddonThemes(addonThemes(testAddons)); // App does this when the addons arrive
   const { q } = await render();
   const slider = q("settings-theme-option-density") as HTMLInputElement;
@@ -1216,7 +1216,7 @@ it("Appearance (GH-868): an addon theme's typed options show a select, a slider 
   await act(async () => q("settings-theme-option-mood-storm")!.click());
   expect(html.getAttribute("data-opt-mood")).toBe("storm");
   expect(html.style.getPropertyValue("--opt-mood")).toBe("storm");
-  expect(JSON.parse(localStorage.getItem("claude-ui.theme-options")!)).toEqual({ "addon:gojo:void": { density: 0.8, tint: "#00ff88", mood: "storm" } });
+  expect(JSON.parse(localStorage.getItem("claude-ui.theme-options")!)).toEqual({ "addon:acme:void": { density: 0.8, tint: "#00ff88", mood: "storm" } });
   html.removeAttribute("data-theme");
   applyAddonThemes([]);
   for (const n of ["mood", "density", "tint", "glow"]) (html.removeAttribute(`data-opt-${n}`), html.style.removeProperty(`--opt-${n}`));

@@ -148,3 +148,17 @@ describe("scopeCss names", () => {
     expect(Date.now() - t).toBeLessThan(1500);
   });
 });
+
+describe("scopeCss names of a base theme", () => {
+  const base = ["@keyframes spin { to { opacity: 0 } } @counter-style dots { system: cyclic; symbols: '*' } @font-palette-values --warm { font-family: F }"];
+  it("an extending theme's own css reaches the names its base css defines (renamed under the extending theme)", () => {
+    const out = scopeCss(".x { animation: spin 1s; list-style: dots; font-palette: --warm; animation-name: other } @keyframes own { to { opacity: 1 } } .y { animation: own 1s }", themeRoot("reze", "dusk"), themeNames("reze", "dusk"), base);
+    expect(out).toContain(".x { animation: reze-dusk--spin 1s; list-style: reze-dusk--dots; font-palette: --reze-dusk--warm; animation-name: other }");
+    expect(out).toContain("@keyframes reze-dusk--own {");
+    expect(out).toContain(".y { animation: reze-dusk--own 1s }");
+    expect(out).not.toContain("@keyframes reze-dusk--spin"); // defined by the base file only
+  });
+  it("a broken base file is ignored", () => {
+    expect(scopeCss(".x { animation: spin 1s }", themeRoot("reze", "dusk"), themeNames("reze", "dusk"), ["@keyframes spin {"])).toContain("animation: spin 1s");
+  });
+});

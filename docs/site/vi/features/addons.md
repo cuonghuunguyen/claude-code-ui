@@ -176,7 +176,7 @@ Một giao diện có thể thay bốn thứ nhỏ của ứng dụng. `slots` n
 
 Giao diện bắt đầu từ bản gốc rồi thêm phần của mình lên trên; phần của chính giao diện thắng:
 
-- `css`, `vars`, `background`, `slots` và `options` của bản gốc áp dụng bên dưới phần của giao diện. `css` của bản gốc được nạp dưới giao diện kế thừa nên quy tắc của nó có hiệu lực ở đó.
+- `css`, `vars`, `background`, `slots` và `options` của bản gốc áp dụng bên dưới phần của giao diện. `css` của bản gốc được nạp dưới giao diện kế thừa nên quy tắc của nó có hiệu lực ở đó. Tên `@keyframes`, `@counter-style`, `@font-palette-values` trong `css` của bản gốc (đã được đổi tên) dùng được trong `css` riêng của giao diện bằng tên gốc (`animation: spin 1s`).
 - Bảng màu không được kế thừa: chế độ mà giao diện có là của chính nó. Chế độ không có thì dùng bảng màu của bản gốc.
 - Bản gốc có thể kế thừa tiếp bản gốc khác, tối đa 3 mắc xích.
 

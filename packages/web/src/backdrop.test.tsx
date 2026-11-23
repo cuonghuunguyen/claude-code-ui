@@ -11,17 +11,17 @@ import { addonThemes, themeCss } from "./themes.ts";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const root = document.documentElement;
 const palette = Object.fromEntries(["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"].map((k) => [k, "#101010"]));
-const BASE = `/addon/${"a".repeat(32)}/gojo/`;
+const BASE = `/addon/${"a".repeat(32)}/acme/`;
 const addon = (present: Record<string, boolean>, bg: object = { dark: { image: "bg-dark", mobile: "bg-phone" }, veil: 0.35, panelAlpha: 0.6 }): AddonInfo =>
   ({
-    name: "gojo",
+    name: "acme",
     source: { kind: "local", path: "/x" },
     approved: [],
     state: "enabled",
     base: BASE,
     assets: Object.fromEntries(Object.entries(present).map(([k, p]) => [k, { present: p }])),
     manifest: {
-      name: "gojo", version: "1", description: "", capabilities: [], views: [], commands: [], renderers: [],
+      name: "acme", version: "1", description: "", capabilities: [], views: [], commands: [], renderers: [],
       assets: { "bg-dark": { path: "art/dark one.png" }, "bg-phone": { path: "art/phone.webp" }, "bg-light": { path: "art/light.jpg" } },
       themes: [{ id: "void", name: "Void", dark: palette, light: palette, background: bg }],
     },
@@ -39,7 +39,7 @@ beforeEach(() => {
   document.body.append(host);
   r = createRoot(host);
   root.classList.add("dark");
-  applyColorTheme("addon:gojo:void");
+  applyColorTheme("addon:acme:void");
 });
 afterEach(async () => {
   await act(async () => r.unmount());
@@ -57,7 +57,7 @@ it("shows the backdrop and data-backdrop only while the asset file of the curren
   await show(addon({ "bg-dark": false, "bg-phone": true }));
   expect(host.querySelector('[data-part="backdrop"]')).toBeNull();
   expect(root.hasAttribute("data-backdrop")).toBe(false);
-  expect(document.getElementById("claude-ui-addon-themes")!.textContent).toContain('[data-theme="addon:gojo:void"].dark');
+  expect(document.getElementById("claude-ui-addon-themes")!.textContent).toContain('[data-theme="addon:acme:void"].dark');
   expect(document.getElementById("claude-ui-addon-themes")!.textContent).not.toContain("--backdrop-image");
 });
 

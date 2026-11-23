@@ -7,7 +7,7 @@ import { PARTS, type AddonManifest } from "@claude-ui/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { lintAddon, lintCss } from "../src/addon-lint.ts";
 
-const codes = (css: string, addon = "gojo") => lintCss(css, addon, "t.css").map((l) => `${l.code}${l.name ? `:${l.name}` : ""}`);
+const codes = (css: string, addon = "acme") => lintCss(css, addon, "t.css").map((l) => `${l.code}${l.name ? `:${l.name}` : ""}`);
 
 describe("selectors", () => {
   it.each([
@@ -26,7 +26,7 @@ describe("selectors", () => {
   ])("test hook: %s", (css, want) => expect(codes(css)).toEqual(want));
 
   it("suggests the nearest part within two edits, and none for a far name", () => {
-    const l = (css: string) => lintCss(css, "gojo", "t.css").map((x) => x.suggest);
+    const l = (css: string) => lintCss(css, "acme", "t.css").map((x) => x.suggest);
     expect(l('[data-part="sidebr"] {}')).toEqual(["sidebar"]);
     expect(l('[data-part="tabs"] {}')).toEqual(["tab"]);
     expect(l('[data-part="zzzzzzzz"] {}')).toEqual([undefined]);
@@ -36,7 +36,7 @@ describe("selectors", () => {
     const part = PARTS.find((p) => p.name === "tab")!;
     part.deprecated = "1.7";
     try {
-      expect(lintCss('[data-part="tab"] {}', "gojo", "t.css")).toEqual([{ level: "warning", code: "deprecated-part", file: "t.css", line: 1, name: "tab", until: "1.7" }]);
+      expect(lintCss('[data-part="tab"] {}', "acme", "t.css")).toEqual([{ level: "warning", code: "deprecated-part", file: "t.css", line: 1, name: "tab", until: "1.7" }]);
     } finally {
       delete part.deprecated;
     }
@@ -44,7 +44,7 @@ describe("selectors", () => {
   });
 
   it("reports one testid warning per file, with the count and the first line", () => {
-    const l = lintCss('\n\n[data-testid="a"] {}\n[data-testid="b"] {}', "gojo", "t.css");
+    const l = lintCss('\n\n[data-testid="a"] {}\n[data-testid="b"] {}', "acme", "t.css");
     expect(l).toEqual([{ level: "warning", code: "selects-testid", file: "t.css", line: 3, count: 2 }]);
   });
 
@@ -74,35 +74,35 @@ describe("global names", () => {
   it.each([
     ["@keyframes spin { to { opacity: 0 } }", ["unprefixed-name:spin"]],
     ["@counter-style dots { system: cyclic }", ["unprefixed-name:dots"]],
-    ["@counter-style gojo-dots { system: cyclic }", []],
+    ["@counter-style acme-dots { system: cyclic }", []],
     ["@font-palette-values --warm { font-family: F }", ["unprefixed-name:--warm"]],
-    ["@font-palette-values --gojo-warm { font-family: F }", []],
+    ["@font-palette-values --acme-warm { font-family: F }", []],
     ['@font-feature-values Font One { @styleset { nice: 1 } }', ["unprefixed-name:Font One"]],
-    ["@font-feature-values gojo-display { @styleset { nice: 1 } }", []],
+    ["@font-feature-values acme-display { @styleset { nice: 1 } }", []],
     ["@-webkit-keyframes spin { to { opacity: 0 } }", ["unprefixed-name:spin"]],
     ['@keyframes "spin" { to { opacity: 0 } }', ["unprefixed-name:spin"]],
-    ["@keyframes gojo-spin { to { opacity: 0 } }", []],
-    ["@keyframes gojospin { to { opacity: 0 } }", ["unprefixed-name:gojospin"]],
+    ["@keyframes acme-spin { to { opacity: 0 } }", []],
+    ["@keyframes acmespin { to { opacity: 0 } }", ["unprefixed-name:acmespin"]],
     ["/* x */\n@media (width > 1px) { @keyframes pulse { to { opacity: 0 } } }", ["unprefixed-name:pulse"]],
     ['@font-face { font-family: "Inter"; src: url(a.woff2) }', ["unprefixed-name:Inter"]],
-    ["@font-face { src: url(a.woff2); font-family: Gojo Display }", []],
+    ["@font-face { src: url(a.woff2); font-family: Acme Display }", []],
     ["@font-face { /* } */ font-family: Inter }", ["unprefixed-name:Inter"]],
     ['@font-face { src: url("a}.woff2"); font-family: Inter }', ["unprefixed-name:Inter"]],
-    ['@font-face { font-family: "gojo-display"; src: url(a.woff2) }', []],
+    ['@font-face { font-family: "acme-display"; src: url(a.woff2) }', []],
     ["@property --glow { syntax: '<color>'; inherits: false; initial-value: red }", ["unprefixed-name:--glow"]],
-    ["@property --gojo-glow { syntax: '<color>'; inherits: false; initial-value: red }", []],
+    ["@property --acme-glow { syntax: '<color>'; inherits: false; initial-value: red }", []],
     ["a { animation: spin 1s }", []],
   ])("%s", (css, want) => expect(codes(css)).toEqual(want));
 
   it("suggests the prefixed name", () => {
-    const l = lintCss("@keyframes spin {} @property --glow {}", "gojo", "t.css");
-    expect(l.map((x) => x.suggest)).toEqual(["gojo-spin", "--gojo-glow"]);
+    const l = lintCss("@keyframes spin {} @property --glow {}", "acme", "t.css");
+    expect(l.map((x) => x.suggest)).toEqual(["acme-spin", "--acme-glow"]);
   });
 
   it("in a theme css the daemon renames keyframes, counter styles and palettes, so only the names it keeps are reported", () => {
     const css = "@keyframes spin {} @counter-style dots { system: cyclic } @font-palette-values --warm { font-family: F } @property --glow {} @font-face { font-family: Inter }";
-    expect(lintCss(css, "gojo", "t.css", "dusk").map((x) => x.name)).toEqual(["--glow", "Inter"]);
-    expect(lintCss(css, "gojo", "t.css").map((x) => x.name)).toEqual(["spin", "dots", "--warm", "--glow", "Inter"]);
+    expect(lintCss(css, "acme", "t.css", "dusk").map((x) => x.name)).toEqual(["--glow", "Inter"]);
+    expect(lintCss(css, "acme", "t.css").map((x) => x.name)).toEqual(["spin", "dots", "--warm", "--glow", "Inter"]);
   });
 });
 
@@ -117,7 +117,7 @@ describe("broken css", () => {
   });
 
   it("a comment or url( that never ends is placed on its line", () => {
-    expect(lintCss("a {}\nb {}\n/* open", "gojo", "t.css")).toEqual([{ level: "warning", code: "css-broken", file: "t.css", line: 3 }]);
+    expect(lintCss("a {}\nb {}\n/* open", "acme", "t.css")).toEqual([{ level: "warning", code: "css-broken", file: "t.css", line: 3 }]);
   });
 
   it.each([
@@ -125,12 +125,12 @@ describe("broken css", () => {
     ["a stray }", "a {}\nb {}\n}\nc {}", 3],
     ["groups nested too deep (no position: the last line)", "@media (x) {".repeat(40) + "\n" + "}".repeat(40) + "\n", 3],
   ])("in a theme css, %s is placed on its line", (_n, css, line) => {
-    expect(lintCss(css, "gojo", "t.css", "dusk")).toEqual([{ level: "warning", code: "css-broken", file: "t.css", line }]);
-    expect(lintCss(css, "gojo", "t.css")).toEqual([]); // top-level css is not scoped by the daemon
+    expect(lintCss(css, "acme", "t.css", "dusk")).toEqual([{ level: "warning", code: "css-broken", file: "t.css", line }]);
+    expect(lintCss(css, "acme", "t.css")).toEqual([]); // top-level css is not scoped by the daemon
   });
 
   it("stray braces and unclosed blocks do not throw", () => {
-    expect(() => lintCss("} } a { b { [data-part=x] {", "gojo", "t.css")).not.toThrow();
+    expect(() => lintCss("} } a { b { [data-part=x] {", "acme", "t.css")).not.toThrow();
   });
 });
 
@@ -158,7 +158,7 @@ describe("hostile input stays fast and quiet", () => {
     ["many brace pairs and strays", fill("}{")],
   ])("%s", (_, css) => {
     const t = performance.now();
-    expect(() => lintCss(css, "gojo", "t.css")).not.toThrow();
+    expect(() => lintCss(css, "acme", "t.css")).not.toThrow();
     expect(performance.now() - t).toBeLessThan(2000);
   });
 
@@ -168,7 +168,7 @@ describe("hostile input stays fast and quiet", () => {
     const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
     for (let n = 0; n < 3000; n++) {
       const css = Array.from({ length: 1 + Math.floor(rnd() * 40) }, () => toks[Math.floor(rnd() * toks.length)]).join("");
-      expect(() => lintCss(css, "gojo", "t.css"), css).not.toThrow();
+      expect(() => lintCss(css, "acme", "t.css"), css).not.toThrow();
     }
   });
 });
@@ -176,7 +176,7 @@ describe("hostile input stays fast and quiet", () => {
 describe("lintAddon", () => {
   let dir: string | undefined;
   afterEach(() => dir && rmSync(dir, { recursive: true, force: true }));
-  const manifest = (o: Partial<AddonManifest>): AddonManifest => ({ name: "gojo", version: "1", description: "", capabilities: [], themes: [], views: [], commands: [], renderers: [], ...o });
+  const manifest = (o: Partial<AddonManifest>): AddonManifest => ({ name: "acme", version: "1", description: "", capabilities: [], themes: [], views: [], commands: [], renderers: [], ...o });
   const root = (files: Record<string, string>) => {
     dir = mkdtempSync(join(tmpdir(), "lint-"));
     for (const [f, text] of Object.entries(files)) {

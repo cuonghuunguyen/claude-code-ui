@@ -20,18 +20,18 @@ globalThis.ResizeObserver ??= class {
 } as never;
 const html = document.documentElement;
 const palette = Object.fromEntries(["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"].map((k) => [k, "#101010"]));
-const BASE = `/addon/${"a".repeat(32)}/gojo/`;
+const BASE = `/addon/${"a".repeat(32)}/acme/`;
 const SLOTS = { loader: "ring", "done-icon": "tick", "send-icon": "arrow", "thinking-phrases": { en: ["Casting", "Expanding"], vi: ["Đang niệm chú"] } };
 const addon = (present: Record<string, boolean>, slots: object = SLOTS): AddonInfo =>
   ({
-    name: "gojo",
+    name: "acme",
     source: { kind: "local", path: "/x" },
     approved: [],
     state: "enabled",
     base: BASE,
     assets: Object.fromEntries(Object.entries(present).map(([k, p]) => [k, { present: p }])),
     manifest: {
-      name: "gojo", version: "1", description: "", capabilities: [], views: [], commands: [], renderers: [],
+      name: "acme", version: "1", description: "", capabilities: [], views: [], commands: [], renderers: [],
       assets: { ring: { path: "art/ring.svg" }, tick: { path: "art/tick.png" }, arrow: { path: "art/arrow.webp" } },
       themes: [{ id: "void", name: "Void", dark: palette, slots }],
     },
@@ -65,7 +65,7 @@ beforeEach(() => {
   document.body.append(host);
   r = createRoot(host);
   html.classList.add("dark");
-  applyColorTheme("addon:gojo:void");
+  applyColorTheme("addon:acme:void");
 });
 afterEach(async () => {
   await act(async () => r.unmount());
