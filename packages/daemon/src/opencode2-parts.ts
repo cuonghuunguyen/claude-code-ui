@@ -243,7 +243,7 @@ export class OpenCode2Mapper {
     const { tool, input: mapped } = mapTool2(name, parsed);
     // A Fork run (docs/spec.md "Fork runs"): the `fork` tool of the claude-ui server shows as the Fork run card (a `subagent` part), as on OpenCode 1.
     if (tool === FORK_TOOL) {
-      const run = { type: "subagent" as const, id: callId, toolUseId: callId, description: String(mapped.description ?? ""), status: st, startedAt: time?.ran ?? time?.created ?? 0, agentType: "fork", ...(time?.completed && { endedAt: time.completed }) };
+      const run = { type: "subagent" as const, id: callId, toolUseId: callId, description: String(mapped.description ?? ""), status: st, startedAt: time?.ran ?? time?.created ?? Date.now(), agentType: "fork", ...(time?.completed && { endedAt: time.completed }) };
       this.calls.set(callId, run);
       return [run];
     }

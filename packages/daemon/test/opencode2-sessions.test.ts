@@ -1274,12 +1274,14 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
   });
 
   it("a Stop while an early /name prepares drops the prompt typed meanwhile", async () => {
-    const d = await boot({ env: { FAKE_OPENCODE2_COMMAND_LIST_MS: "800" } });
+    const d = await boot({ env: { FAKE_OPENCODE2_COMMAND_LIST_MS: "300", FAKE_OPENCODE2_COMMAND_MS: "1500" }, script: ["hold"] });
     await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
     const s = await d.open();
     await s.prompt("/hello world");
     await s.prompt("then this");
-    await until(() => s.states().includes("running"));
+    // The command reached OpenCode, which has not answered yet: the session is running, the prompt still waits.
+    await until(() => d.requests("POST", `/api/session/${s.id}/command`).length === 1);
+    expect(s.states().at(-1)).toBe("running");
     await d.ok({ type: "session.interrupt", sessionId: s.id });
     await sleep(1200);
     expect(d.requests("POST", `/api/session/${s.id}/prompt`)).toEqual([]);

@@ -204,7 +204,7 @@ export function PluginsDialog({
     setFailure(undefined);
     setUpdating(p.id);
     try {
-      const r = await request<PluginUpdateResult>({ type: "plugins.update", cwd, pluginId: p.id, scope: p.scope });
+      const r = await request<PluginUpdateResult>({ type: "plugins.update", cwd, ...eng, pluginId: p.id, scope: p.scope });
       if (r.outcome === "failed") {
         // A "turned off" answer for a plugin that is on is the generic failure (the extension's rule).
         setFailure({ plugin: p, kind: r.kind === "disabled" && p.enabled ? "other" : r.kind, message: r.message });

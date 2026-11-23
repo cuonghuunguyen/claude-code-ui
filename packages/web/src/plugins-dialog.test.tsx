@@ -194,6 +194,13 @@ it("updates: a notice when nothing changed, a dialog per failure kind with its a
   expect(d.button("Copy error")).toBeDefined();
 });
 
+it("with OpenCode the Update of an outdated plugin is sent with the engine (else the Claude handler answers not installed)", async () => {
+  const list: PluginsListResult = { installed: [{ id: "old-pkg", scope: "project", enabled: true, updatable: true }], available: [], marketplaces: [] };
+  const d = await render({ "plugins.list": () => structuredClone(list), "plugins.update": () => ({ outcome: "ok", message: "updated" }) }, { engine: "opencode", config: OPENCODE, sessionId: "s1" });
+  await d.click(d.button("Update plugin"));
+  expect(d.calls).toContainEqual({ type: "plugins.update", cwd: "/p", engine: "opencode", pluginId: "old-pkg", scope: "project" });
+});
+
 it("shows the reload-failed dialog after a change, and Restart restarts those sessions", async () => {
   const d = await render({ "plugins.setEnabled": () => ({ reload: { reloaded: 0, failed: ["s1"], errorCount: 0 } }) });
   await d.click(d.all("plugin-switch")[1]);
