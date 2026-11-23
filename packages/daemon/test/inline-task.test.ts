@@ -56,10 +56,11 @@ describe("inline_task group", () => {
   it("instructions carry the when-to-use rules and the scenarios (at most 1300 chars)", () => {
     expect(INLINE_INSTRUCTIONS.length).toBeLessThanOrEqual(1300);
     expect(INLINE_INSTRUCTIONS).toMatch(/inline_task/);
-    expect(INLINE_INSTRUCTIONS).toMatch(/instead of Agent|over Agent/);
-    expect(INLINE_INSTRUCTIONS).toMatch(/Use a subagent instead/);
-    expect(INLINE_INSTRUCTIONS).toMatch(/Do it directly when 1-2 tool calls/);
-    for (const e of ["Test run", "CI failure triage", "Log extraction", "Mechanical edit"]) expect(INLINE_INSTRUCTIONS).toContain(e);
+    expect(INLINE_INSTRUCTIONS).toMatch(/is a filter/);
+    expect(INLINE_INSTRUCTIONS).toMatch(/before Agent/);
+    expect(INLINE_INSTRUCTIONS).toMatch(/Keep for yourself or a subagent/);
+    expect(INLINE_INSTRUCTIONS).toMatch(/Act directly when 1-2 tool calls/);
+    for (const e of ["Test, typecheck, lint, build", "Playwright UI steps", "Big log", "Edit whose exact content"]) expect(INLINE_INSTRUCTIONS).toContain(e);
   });
 
   it("returns the runner's result as is, with the default tools, the setting's maxTurns and the call's id", async () => {

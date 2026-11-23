@@ -6,23 +6,22 @@ import { z } from "zod";
 import { DAEMON_SERVER, ToolError, type DaemonTool, type DaemonToolCtx, type DaemonToolGroup } from "./daemon-mcp.ts";
 import { INLINE_BUILTINS, INLINE_DEFAULT_TOOLS, INLINE_MAX_PER_SESSION, INLINE_TIMEOUT_MS, type InlineBuiltin, type InlineResult, type InlineSpec } from "./inline-types.ts";
 
-export const INLINE_INSTRUCTIONS = `inline_task runs a task in one tool call and keeps its steps out of your context. A small model with minimized context does the work with the tools you grant and returns only the result.
+export const INLINE_INSTRUCTIONS = `inline_task is a filter: raw input and output stay in the run, the part matching your criterion comes back. Reach for it before Agent (Explore, haiku, general-purpose) when you can name the criterion.
 
-Prefer inline_task over Agent (haiku, Explore, general-purpose) when the task:
-- is mechanical: search, read logs, run tests, extract, summarize, classify, format, small edit;
-- needs no judgment or design, and no parent conversation context beyond what fits in prompt + files;
-- needs only the result, not the raw output.
+Prompt: goal, where to look, criterion, reply format. Over ~250 KB: tell the run to grep or script it.
 
-Use a subagent instead when the task needs judgment or design, long exploration, parallel runs, or parent context.
-Do it directly when 1-2 tool calls suffice, or when the next step needs the raw output.
+Use cases and their criterion:
+- Test, typecheck, lint, build: failing items with message and file:line.
+- Long shell or CI output (git log, npm ls, gh): lines or fields you name.
+- Playwright UI steps (grant mcp "playwright" or Bash): steps in the user's words, about 10 per call; pass/fail per step and screenshot paths. View the screenshots before declaring a pass.
+- Big log, trace, HAR, changelog, .d.ts, bundle: entries matching your keyword.
+- Many files (transcripts, LICENSE, locale, coverage): the count or list asked.
+- Large diff or history (lockfile, blame, git log -p): matching changes or commits.
+- Symbol, string or file search: file:line list.
+- Edit whose exact content is in the prompt (rename, version, config key): files changed, typecheck result.
+- Download or format conversion: path and size, or the data.
 
-Grant the least: tools default to Read, Grep, Glob; add Bash, Write, Edit or an MCP server only when needed.
-
-Examples:
-- Test run: run the suite, return only the failures with message.
-- CI failure triage: fetch the CI log, return failing test, error message, file:line.
-- Log extraction: grep a large log, return the lines asked for.
-- Mechanical edit: rename a symbol in a few files, return files changed and check result.`;
+Keep for yourself or a subagent the tasks where choosing what matters is the work. Act directly when 1-2 tool calls suffice or the next step needs the raw output.`;
 
 /** Bytes of `files` appended to the prompt. Assumption: the smallest default run context is 200k tokens; minus output, system and tools, and at 2-3 bytes per token for dense input (minified JSON, base64), 250,000 bytes stay inside it. A file that does not fit is not appended; the run reads it with Read or Grep. */
 export const INLINE_FILES_BUDGET_BYTES = 250_000;
@@ -124,7 +123,7 @@ export function createInlineTask(deps: InlineTaskDeps): DaemonToolGroup {
   const inlineTask = {
     name: "inline_task",
     description:
-      "Run a mechanical task (search, read logs, run tests, extract, summarize, small edit) in one call without filling your context: a small model does the steps and only the result comes back, {status, text, model, turns, tokens, filesChanged}. Prefer it over Agent when the task needs no judgment and only the result matters: about 5k tokens to start against 25-30k for a subagent, median 6.6 s.",
+      "Filter: run a task whose raw input or output is large and return only the part matching a criterion you state (errors, failing tests, keyword, pattern, field, file:line). Fits test and build runs, long shell or CI output, Playwright UI steps, big logs, files, diffs and history, symbol search, edits whose exact content you give. A small model does the steps; about 5k tokens to start against 25-30k for a subagent.",
     shape,
     alwaysLoad: true,
     permission: "allow",
