@@ -1,5 +1,5 @@
 // OpenCode 2 sessions over the daemon's WebSocket: a real daemon, the fake OpenCode 2 binary (fixtures/opencode2) and scripted turns cut from a recording of a real OpenCode 2.3.0.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -578,6 +578,32 @@ describe("OpenCode 2 sessions: adapter record and version mismatch", { timeout: 
     const kept = JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8"));
     expect(Object.keys(kept)).toContain("ses_two");
     expect(Object.keys(kept)).not.toContain("ses_gone");
+  });
+
+  it("changing opencode.path from the OpenCode 2 binary to an OpenCode 1 binary pushes sessions.changed and the next list has the OpenCode 1 sessions", async () => {
+    const d = await boot();
+    const wrap = (name: string, bin: string, dataEnv: string, data: object, version: string) => {
+      const dataFile = join(d.root, `${name}.json`);
+      writeFileSync(dataFile, JSON.stringify(data));
+      const file = join(d.root, name);
+      writeFileSync(file, `#!/bin/sh\nFAKE_OPENCODE_VERSION=${version} ${dataEnv}=${JSON.stringify(dataFile)} exec ${JSON.stringify(process.execPath)} ${JSON.stringify(bin)} "$@"\n`);
+      chmodSync(file, 0o755);
+      return file;
+    };
+    const v2 = wrap("oc2", BIN2, "FAKE_OPENCODE2_DATA", { sessions: [row("ses_v2", d.project, "From two", 5000)], messages: {} }, "2.3.0");
+    const v1 = wrap("oc1", BIN1, "FAKE_OPENCODE_DATA", { sessions: [v1row("ses_v1", d.project)], messages: {} }, "1.18.34");
+    const titles = async () => (await d.ok({ type: "session.list" })).sessions.filter((x: any) => x.engine === "opencode").map((x: any) => x.id);
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" }, opencode: { path: v2 } } });
+    await d.ok({ type: "session.list" });
+    await until(() => d.inbox.some((m) => m.type === "sessions.changed"));
+    for (let i = 0; i < 80 && !(await titles()).includes("ses_v2"); i++) await sleep(50);
+    expect(await titles()).toEqual(["ses_v2"]);
+    const seen = d.inbox.length;
+    await d.ok({ type: "settings.set", patch: { opencode: { path: v1 } } });
+    await until(() => d.inbox.slice(seen).some((m) => m.type === "sessions.changed"));
+    // The version 1 server starts on this list; its own push follows when it answered.
+    for (let i = 0; i < 100 && !(await titles()).includes("ses_v1"); i++) await sleep(50);
+    expect(await titles()).toEqual(["ses_v1"]);
   });
 });
 

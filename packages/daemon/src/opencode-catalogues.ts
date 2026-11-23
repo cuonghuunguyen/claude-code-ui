@@ -85,7 +85,7 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
         // The answer goes on as the adapter's own list would have gone on: OpenCode 1 starts its server and pushes `sessions.changed` when it answered.
         void ran
           .then(async () => {
-            if (srv.major() !== undefined) await pick().list(lctx);
+            if (srv.major() !== undefined && (await pick().list(lctx)).items.length) ctx.broadcast({ type: "sessions.changed" });
           })
           .catch(() => {});
         return { items: [], keep: () => true };
@@ -163,8 +163,12 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
     settled: () => v1.settled?.(),
     forget: (id) => v1.forget?.(id),
     settingsChanged: (before, after) => {
-      if (after.opencode.path !== before.opencode.path) forget();
-      v1.settingsChanged?.(before, after);
+      if (after.opencode.path === before.opencode.path) return v1.settingsChanged?.(before, after);
+      const wasRunning = srv.running();
+      v1.settingsChanged?.(before, after); // resets the server and its remembered version synchronously
+      forget();
+      // The sidebar list and Settings show the old binary's sessions and version until the new binary was asked: ask now, then tell the clients.
+      if (wasRunning || openCodeWanted(after.sessions.engine, new Map(ctx.settings.entries()))) void check().finally(() => ctx.broadcast({ type: "sessions.changed" }));
     },
     requests,
     close: () => v1.close(),
