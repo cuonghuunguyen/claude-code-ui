@@ -7,11 +7,14 @@ import type {
   AddonCandidate,
   AddonInfo,
   AddonManifest,
+  AddonPalette,
   AddonSource,
+  AddonThemeVars,
   AddonUpdateCheck,
   AddonsListResult,
   ClientMessage,
 } from "@claude-ui/protocol";
+import { ADDON_GRAPH_SIZE, MAX_THEME_VARS, varNameError, varValueError } from "@claude-ui/protocol";
 import { ConfigError } from "./config.ts";
 import { assetKey, assetType, ARTIFACT_ASSET_HEADERS } from "./artifact-preview.ts";
 import { BATCH_SSH, runGit, type GitRunner } from "./git-runner.ts";
@@ -87,6 +90,27 @@ const list = (v: unknown, what: string): unknown[] => {
   return v;
 };
 
+/** `themes[].vars`: per mode a map of custom properties; checked by protocol addon-theme.ts (names, values, palette tokens). Undefined when none are given. */
+function themeVars(raw: unknown, tid: string): AddonThemeVars | undefined {
+  if (raw === undefined) return undefined;
+  if (!isObj(raw)) throw bad(`themes[${tid}].vars: not an object`);
+  const out: AddonThemeVars = {};
+  for (const [mode, m] of Object.entries(raw)) {
+    if (mode !== "light" && mode !== "dark") throw bad(`themes[${tid}].vars.${mode}: only light and dark`);
+    if (!isObj(m)) throw bad(`themes[${tid}].vars.${mode}: not an object`);
+    const entries = Object.entries(m);
+    if (entries.length > MAX_THEME_VARS) throw bad(`themes[${tid}].vars.${mode}: at most ${MAX_THEME_VARS}`);
+    const vars: Record<string, string> = {};
+    for (const [name, value] of entries) {
+      const err = varNameError(name) ?? (typeof value !== "string" ? "var value must be text" : varValueError(value));
+      if (err) throw bad(`themes[${tid}].vars.${mode}.${name.slice(0, 50)}: ${err}`);
+      vars[name] = value as string;
+    }
+    if (entries.length) out[mode] = vars;
+  }
+  return out.light || out.dark ? out : undefined;
+}
+
 /** Missing capability per manifest entry, e.g. `views[stats] needs capability ui.pane`. */
 export function coverageErrors(m: Pick<AddonManifest, "capabilities" | "views" | "commands" | "renderers">): string[] {
   const has = new Set(m.capabilities);
@@ -113,20 +137,27 @@ export function parseManifest(raw: unknown, root: string): AddonManifest {
     const tid = id(t.id, `themes[${i}].id`);
     const err = seen(themeIds, tid, `themes[${tid}]`);
     if (err) throw err;
-    const palette = (mode: "light" | "dark") => {
+    const palette = (mode: "light" | "dark"): AddonPalette | undefined => {
       const p = t[mode];
       if (p === undefined) return undefined;
       if (!isObj(p)) throw bad(`themes[${tid}].${mode}: not an object`);
       const out: Record<string, string> = {};
+      let graph: string[] | undefined;
       for (const [k, v] of Object.entries(p)) {
         if (!/^[a-z]+$/.test(k)) throw bad(`themes[${tid}].${mode}.${k}: invalid key`);
+        if (k === "graph") {
+          if (!Array.isArray(v) || v.length !== ADDON_GRAPH_SIZE || v.some((c) => typeof c !== "string" || !COLOR.test(c))) throw bad(`themes[${tid}].${mode}.graph: must be ${ADDON_GRAPH_SIZE} colours as #rrggbb`);
+          graph = v as string[];
+          continue;
+        }
         if (typeof v !== "string" || !COLOR.test(v)) throw bad(`themes[${tid}].${mode}.${k}: not a colour`);
         out[k] = v;
       }
       const missing = PALETTE_KEYS.filter((k) => !(k in out));
       if (missing.length) throw bad(`themes[${tid}].${mode}: missing ${missing.join(", ")}`);
-      return out;
+      return { ...out, ...(graph && { graph }) };
     };
+    const vars = themeVars(t.vars, tid);
     const light = palette("light");
     const dark = palette("dark");
     const rawOptions = list(t.options, `themes[${tid}].options`);
@@ -142,7 +173,7 @@ export function parseManifest(raw: unknown, root: string): AddonManifest {
       return { id: oid, label: str(o.label, `themes[${tid}].options[${oid}].label`, 40), ...(o.default !== undefined && { default: o.default }) };
     });
     const css = t.css === undefined ? undefined : pathOk(root, t.css, ".css", `themes[${tid}].css`);
-    return { id: tid, name: str(t.name, `themes[${tid}].name`, 64), ...(light && { light }), ...(dark && { dark }), ...(options.length && { options }), ...(css && { css }) };
+    return { id: tid, name: str(t.name, `themes[${tid}].name`, 64), ...(light && { light }), ...(dark && { dark }), ...(vars && { vars }), ...(options.length && { options }), ...(css && { css }) };
   });
   const viewIds = new Set<string>();
   const views: AddonManifest["views"] = list(raw.views, "views").map((v, i) => {

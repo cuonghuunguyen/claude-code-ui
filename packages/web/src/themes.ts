@@ -10,7 +10,7 @@
  *   One Light / One Dark              https://github.com/atom/atom (one-{light,dark}-syntax)  MIT    Copyright (c) 2011-2022 GitHub Inc.
  */
 
-import type { AddonInfo } from "@claude-ui/protocol";
+import { ADDON_CONTEXT_SIZE, ADDON_GRAPH_SIZE, varNameError, varValueError, type AddonInfo, type AddonPalette } from "@claude-ui/protocol";
 
 export type Mode = "light" | "dark";
 export const KEYS = ["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"] as const;
@@ -175,8 +175,9 @@ export const swatchOf = (id: ThemeId, list: readonly Theme[] = THEMES): [string,
 };
 
 const HEX6 = /^#[0-9a-f]{6}$/i;
-/** A palette an addon declares: all 19 keys as `#rrggbb` (tokensOf mixes and adds alpha to hex), unknown keys ignored; else undefined (that mode is left out, like Dracula light). */
-function addonPalette(raw: Record<string, string> | undefined): Palette | undefined {
+/** A palette an addon declares: all 19 keys as `#rrggbb` (tokensOf mixes and adds alpha to hex), unknown keys ignored; else undefined (that mode is left out, like Dracula light).
+ * `graph` (8 colours) sets `--graph-1..8` and the first 6 `--context-1..6`; `vars` (custom properties, checked again here: they go into a <style> text) come last and may replace `--context-*`. */
+function addonPalette(raw: AddonPalette | undefined, vars: Record<string, string> | undefined): Palette | undefined {
   if (!raw) return undefined;
   const out: Record<string, string> = {};
   for (const k of KEYS) {
@@ -184,7 +185,14 @@ function addonPalette(raw: Record<string, string> | undefined): Palette | undefi
     if (typeof v !== "string" || !HEX6.test(v)) return undefined;
     out[k] = v;
   }
-  return out as Palette;
+  const x: Record<string, string> = {};
+  const g = raw.graph;
+  if (Array.isArray(g) && g.length === ADDON_GRAPH_SIZE && g.every((c) => typeof c === "string" && HEX6.test(c))) {
+    g.forEach((c, i) => (x[`--graph-${i + 1}`] = c));
+    g.slice(0, ADDON_CONTEXT_SIZE).forEach((c, i) => (x[`--context-${i + 1}`] = c));
+  }
+  for (const [name, value] of Object.entries(vars ?? {})) if (varNameError(name) === undefined && typeof value === "string" && varValueError(value) === undefined) x[name] = value;
+  return (Object.keys(x).length ? { ...out, x } : out) as Palette;
 }
 
 /** The themes of these addons (pass the enabled ones), as `addon:<name>:<id>`; a theme without a complete palette in either mode is left out. */
@@ -192,8 +200,8 @@ export function addonThemes(addons: readonly AddonInfo[]): Theme[] {
   return addons.flatMap((a) =>
     (a.manifest?.themes ?? []).flatMap((th) => {
       const id = `addon:${a.name}:${th.id}`;
-      const light = addonPalette(th.light);
-      const dark = addonPalette(th.dark);
+      const light = addonPalette(th.light, th.vars?.light);
+      const dark = addonPalette(th.dark, th.vars?.dark);
       return ADDON_THEME_ID.test(id) && (light || dark) ? [{ id: id as ThemeId, name: th.name, ...(light && { light }), ...(dark && { dark }), ...(th.options?.length && { options: th.options }) }] : [];
     }),
   );
