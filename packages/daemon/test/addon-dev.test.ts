@@ -192,7 +192,7 @@ describe("capabilities never grow without approval", () => {
     expect(open()).toHaveLength(0);
   });
 
-  it("a capability removed and declared again prompts again", async () => {
+  it("a capability removed and declared again keeps its approval (subset of the approved set)", async () => {
     const a = make();
     write({ capabilities: ["ui.pane", "ui.toast"] });
     await call(a, { type: "addons.install", source: { kind: "local", path: root } });
@@ -201,11 +201,11 @@ describe("capabilities never grow without approval", () => {
     write(); // ui.toast removed: fewer capabilities, no prompt
     watchers[0]!.emit("change", "addon.json");
     await settle();
-    expect(await one(a)).toMatchObject({ state: "enabled", approved: ["ui.pane"] });
+    expect(await one(a)).toMatchObject({ state: "enabled", approved: ["ui.pane", "ui.toast"] });
     write({ capabilities: ["ui.pane", "ui.toast"] });
     watchers[0]!.emit("change", "addon.json");
     await settle();
-    expect(await one(a)).toMatchObject({ state: "needs_approval" });
+    expect(await one(a)).toMatchObject({ state: "enabled" });
   });
 });
 

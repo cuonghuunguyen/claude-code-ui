@@ -154,7 +154,7 @@ export function applyAddonCss(addons: readonly AddonInfo[]) {
       const s = document.createElement("style");
       s.id = id;
       s.textContent = text;
-      const done = () => document.querySelectorAll(`style[data-addon-stale="${id}"]`).forEach((x) => x.remove());
+      const done = () => s.id === id && document.querySelectorAll(`style[data-addon-stale="${id}"]`).forEach((x) => x.remove());
       s.addEventListener("load", done, { once: true });
       s.addEventListener("error", done, { once: true });
       document.head.append(s);

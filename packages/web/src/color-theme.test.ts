@@ -180,6 +180,17 @@ describe("addon themes and CSS (GH-516)", () => {
     }
   });
 
+  it("dev mode: a sheet replaced before it loaded does not drop the older sheets when it fires load", () => {
+    const dev = (rev: number) => ({ ...addon("example", "legacy.css"), dev: true, rev });
+    applyAddonCss([dev(1)]);
+    applyAddonCss([dev(2)]);
+    const first = document.querySelector<HTMLElement>("style[data-addon-stale]")!;
+    applyAddonCss([dev(3)]);
+    const stale = document.querySelectorAll("style[data-addon-stale]").length;
+    first.dispatchEvent(new Event("load")); // rev 2 never became the current sheet: nothing may go yet
+    expect(document.querySelectorAll("style[data-addon-stale]")).toHaveLength(stale);
+  });
+
   it("an addon name that starts with a digit still gets a valid layer name", () => {
     applyAddonCss([addon("1st-theme", "t.css")]);
     expect(sheets()[0]![1]).toContain("layer(addon.\\31 st-theme)");

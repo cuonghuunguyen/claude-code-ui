@@ -397,21 +397,14 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
       // already closed
     }
   };
-  /** An edit settled in a dev addon's folder: re-read it. Capabilities that are no longer declared lose their approval (declaring one again prompts, like an update); one that is declared and not approved disables the addon (syncWatch then closes the watcher). */
+  /** An edit settled in a dev addon's folder: re-read it. A capability declared and not approved disables the addon (syncWatch then closes the watcher; approving prompts like an update). Fewer or the same capabilities never prompt (plan: approvals stay while the declared set is a subset). */
   const edited = (name: string) => {
     const r = store.get().addons[name];
     if (!r?.dev) return;
     bump(name);
     const l = loadDev(rootOf(dir, name, r), name, r);
-    const caps = "manifest" in l ? l.manifest.capabilities : undefined;
-    const approved = caps ? r.approved.filter((c) => caps.includes(c)) : r.approved;
-    const stops = "manifest" in l && !covered(l.manifest, approved) && r.enabled;
-    if (approved.length === r.approved.length && !stops) return void (valid.clear(), opts.onChanged());
-    changed((s) => {
-      const x = s.addons[name]!;
-      x.approved = approved;
-      if (stops) x.enabled = false;
-    });
+    if (!("manifest" in l) || covered(l.manifest, r.approved) || !r.enabled) return void (valid.clear(), opts.onChanged());
+    changed((s) => void (s.addons[name]!.enabled = false));
   };
   const startWatch = (name: string, r: Record_) => {
     const root = rootOf(dir, name, r);
