@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import type { ModelInfo, Settings } from "@claude-ui/protocol";
+import type { ModelInfo, ProjectOverrides, Settings } from "@claude-ui/protocol";
 import type { Request } from "./client.ts";
 import { ProjectSettingsDialog } from "./project-settings-dialog.tsx";
 import { jiraOf, jiraOriginOf } from "./project-settings.ts";
@@ -18,7 +18,7 @@ const MODELS: ModelInfo[] = [
   { value: "opus", displayName: "Opus", description: "" },
 ];
 
-async function render({ side = "local", overrides = {}, refuse, tokens, hold, refuseWhen }: { side?: string; overrides?: Settings["projects"]["overrides"]; refuse?: string; tokens?: string[]; hold?: string; refuseWhen?: string } = {}) {
+async function render({ side = "local", overrides = {}, refuse, tokens, hold, refuseWhen, projectPatch }: { projectPatch?: boolean; side?: string; overrides?: Settings["projects"]["overrides"]; refuse?: string; tokens?: string[]; hold?: string; refuseWhen?: string } = {}) {
   let release = () => {};
   const held = new Promise<void>((r) => (release = r));
   let saved = tokens;
@@ -32,13 +32,21 @@ async function render({ side = "local", overrides = {}, refuse, tokens, hold, re
       const patch = msg.patch as { projects?: Settings["projects"]; git?: Partial<Settings["git"]>; labels?: Partial<Settings["labels"]> };
       settings = { ...settings, ...(patch.projects && { projects: { overrides: patch.projects.overrides } }), ...(patch.git && { git: { ...settings.git, ...patch.git } }), ...(patch.labels && { labels: { ...settings.labels, ...patch.labels } }) };
     }
+    if (msg.type === "settings.project") {
+      if (refuse) throw new Error(refuse);
+      const { side: sd, cwd: c, overrides: o } = msg as unknown as { side: string; cwd: string; overrides: ProjectOverrides | null };
+      const { [c]: _, ...rest } = settings.projects.overrides[sd] ?? {};
+      const side2 = o ? { ...rest, [c]: o } : rest;
+      const { [sd]: __, ...others } = settings.projects.overrides;
+      settings = { ...settings, projects: { overrides: { ...others, ...(Object.keys(side2).length && { [sd]: side2 }) } } };
+    }
     if (msg.type === "jira.token") {
       if (refuse) throw new Error(refuse);
       const origin = jiraOriginOf(jiraOf(settings.projects.overrides, side, "/p", settings.jira).url);
       saved = msg.token === null ? saved?.filter((o) => o !== origin) : [...new Set([...(saved ?? []), origin])];
     }
     if (msg.type === "jira.test") return { user: "Dana Center" };
-    return { settings, daemon: { claudeEnvToken: false }, claudeAccounts: [{ id: "a1", name: "Work" }], ...(saved && { jiraTokens: saved }) };
+    return { settings, ...(projectPatch && { projectPatch: true }), daemon: { claudeEnvToken: false }, claudeAccounts: [{ id: "a1", name: "Work" }], ...(saved && { jiraTokens: saved }) };
   });
   const el = document.createElement("div");
   document.body.append(el);
@@ -75,6 +83,17 @@ it("setting a field saves the whole map, shows Project and a reset that unsets i
   await click(q("project-effort-reset"));
   expect(patches()[1]).toEqual({ local: { "/p": { engine: "claude" } } });
   expect(q("project-effort-status")!.textContent).toBe("Global");
+});
+
+it("a daemon with the per-Project patch gets only this Project's entry (null when it empties) and never the whole map (GH-903)", async () => {
+  const { q, requests, sets } = await render({ projectPatch: true, overrides: { local: { "/other": { mode: "auto" } }, "ssh:x": { "/p": { effort: "low" } } } });
+  await click(q("project-effort-select"));
+  await click(q("project-effort-high"));
+  expect(requests("settings.project")[0]).toMatchObject({ side: "local", cwd: "/p", overrides: { effort: "high", engine: "claude" } });
+  await click(q("project-effort-reset"));
+  await click(q("project-engine-reset"));
+  expect(requests("settings.project").at(-1)).toMatchObject({ side: "local", cwd: "/p", overrides: null });
+  expect(sets()).toEqual([]);
 });
 
 it("each select field can be set: mode, model, history off, account", async () => {

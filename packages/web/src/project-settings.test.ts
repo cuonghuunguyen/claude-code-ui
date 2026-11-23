@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectOverrides } from "@claude-ui/protocol";
-import { accountKeyOf, accountScopeOf, draftStart, jiraOf, jiraOriginOf, jiraTokenFor, overridesOf, setOverride } from "./project-settings.ts";
+import { accountKeyOf, accountScopeOf, draftStart, jiraOf, jiraOriginOf, jiraTokenFor, overridesOf, overridesRequest, setOverride } from "./project-settings.ts";
 
 const map = (side: string, cwd: string, o: ProjectOverrides) => ({ [side]: { [cwd]: o } });
 
@@ -42,6 +42,19 @@ describe("setOverride", () => {
     const all = map("local", "/a", { model: "m" });
     setOverride(all, "local", "/a", { model: undefined });
     expect(all).toEqual(map("local", "/a", { model: "m" }));
+  });
+});
+
+describe("overridesRequest (GH-903)", () => {
+  const all = { local: { "/a": { mode: "plan" as const }, "/b": { effort: "high" as const } }, "ssh:x": { "/a": { model: "opus" } } };
+  it("a daemon with the per-Project patch gets only this Project's entry, the others are not sent", () => {
+    expect(overridesRequest(all, "local", "/a", { model: "haiku" }, true)).toEqual({ type: "settings.project", side: "local", cwd: "/a", overrides: { mode: "plan", model: "haiku" } });
+  });
+  it("unsetting the last field sends null", () => {
+    expect(overridesRequest(all, "local", "/a", { mode: undefined }, true)).toEqual({ type: "settings.project", side: "local", cwd: "/a", overrides: null });
+  });
+  it("an older daemon gets the whole map", () => {
+    expect(overridesRequest(all, "local", "/a", { mode: undefined }, undefined)).toEqual({ type: "settings.set", patch: { projects: { overrides: { local: { "/b": { effort: "high" } }, "ssh:x": { "/a": { model: "opus" } } } } } });
   });
 });
 

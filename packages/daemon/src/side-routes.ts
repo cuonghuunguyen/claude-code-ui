@@ -82,6 +82,7 @@ export const ROUTES: { readonly [T in ClientMessage["type"]]: Route } = {
   // Named, not Hub: a Side's settings are readable with `side` (the sync result of the Hub's settings, sides.test.ts).
   "settings.get": NAMED,
   "settings.set": HUB,
+  "settings.project": HUB,
   "back.set": SESSION,
   "back.done": SESSION,
   "back.brief": SESSION,

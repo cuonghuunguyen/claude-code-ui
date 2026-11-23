@@ -60,7 +60,6 @@ it("an invalid hand-edited field falls back to its default, the valid ones stay;
   }
 });
 
-
 it("workerCapTotal defaults to 0 and takes 0 to 100; a stored workerCap keeps its value", () => {
   const f = file();
   const s = createSettings({ file: f });
@@ -115,7 +114,6 @@ it("workerMode defaults to coordinator, accepts the five values, refuses others 
   expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ orchestration: {} });
 });
 
-
 it("the file keeps only fields that differ from their default", () => {
   const f = file();
   const s = createSettings({ file: f });
@@ -148,7 +146,6 @@ it("focus.nextForYou defaults off, is saved when on, refuses a non-boolean; usag
     expect(() => s.set({ usageLimit: { autoContinue: "yes" as never } })).toThrow("Continue automatically after a usage limit resets must be on or off");
   }
 });
-
 
 it("an install that saved nothing for autoContinue gets it on after the update (GH-524)", () => {
   const f = file();
@@ -520,4 +517,23 @@ it("sideSettings: a Side gets the Jira fields of its own Projects (not secret) a
   const text = JSON.stringify(patch);
   for (const token of secrets.values()) expect(text).not.toContain(token);
   expect(text).not.toMatch(/jiraToken|wsl\.example\.com/);
+});
+
+it("refuses a 201st Project of a Side and a 21st Side, a change of an existing Project still works at the limit", () => {
+  const settings = createSettings();
+  for (let i = 0; i < 200; i++) settings.setProject("local", `/p${i}`, { mode: "plan" });
+  expect(() => settings.setProject("local", "/extra", { mode: "plan" })).toThrow(/at most/);
+  expect(() => settings.setProject("local", "/p0", { mode: "auto" })).not.toThrow();
+  expect(() => settings.setProject("local", "/p1", null)).not.toThrow();
+  expect(() => settings.setProject("local", "/extra", { mode: "plan" })).not.toThrow();
+  const sides = createSettings();
+  for (let i = 0; i < 20; i++) sides.setProject(`ssh:h${i}`, "/p", { mode: "plan" });
+  expect(() => sides.setProject("ssh:h20", "/p", { mode: "plan" })).toThrow(/at most/);
+});
+
+it("a key like __proto__ is a plain key", () => {
+  const settings = createSettings();
+  settings.setProject("__proto__", "__proto__", { mode: "plan" });
+  expect(Object.getPrototypeOf(settings.get().projects.overrides)).toBe(Object.prototype);
+  expect(({} as Record<string, unknown>).mode).toBeUndefined();
 });

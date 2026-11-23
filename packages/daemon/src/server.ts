@@ -496,7 +496,7 @@ export function createDaemon(opts: {
   const secrets = opts.secrets ?? createSecrets();
   const jira = createJira({ config: (project) => jiraSettings(appSettings.get(), project), token: (o) => secrets.jiraToken(o), ...(opts.jiraFetch && { fetch: opts.jiraFetch }) });
   /** `settings.get` / `settings.set` / `jira.token` reply: the settings, the daemon, whether a Jira token is saved (never the token). */
-  const settingsReply = (settings = appSettings.get()) => ({ settings, daemon: daemonInfo(), jiraToken: !!secrets.jiraToken(jiraOrigin(settings.jira.url)), jiraTokens: secrets.jiraOrigins(), claudeAccounts: secrets.claudeAccounts(), ...(secrets.jiraTokenReset() && { jiraTokenReset: true as const }) });
+  const settingsReply = (settings = appSettings.get()) => ({ settings, daemon: daemonInfo(), jiraToken: !!secrets.jiraToken(jiraOrigin(settings.jira.url)), jiraTokens: secrets.jiraOrigins(), projectPatch: true as const, claudeAccounts: secrets.claudeAccounts(), ...(secrets.jiraTokenReset() && { jiraTokenReset: true as const }) });
   /** The Claude account of the settings as the CLI env takes it: undefined = Default, null = CLI login, a token; an unknown id (removed, hand edit) is Default. */
   const accountToken = () => {
     const a = appSettings.get().claude.account;

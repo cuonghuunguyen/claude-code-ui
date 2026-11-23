@@ -25,6 +25,8 @@ export type SettingsView = {
   // Daemon facts: only settings.get carries them; settings_changed keeps the previous value.
   desktopForcedOff: boolean;
   claudeEnvToken: boolean;
+  /** The daemon takes a per-Project overrides patch (settings.project); false: an older daemon, which only takes the whole map. */
+  projectPatch: boolean;
   /** undefined: the daemon reports no keep-awake (side, older daemon). */
   keepAwakeSupported?: boolean;
   computerAwake?: { on: boolean; supported: boolean };
@@ -34,8 +36,8 @@ export type SettingsView = {
   appEditors?: EditorInfo[];
 };
 
-type Facts = Pick<SettingsView, "desktopForcedOff" | "claudeEnvToken" | "keepAwakeSupported" | "detectedEditors">;
-const NO_FACTS: Facts = { desktopForcedOff: false, claudeEnvToken: false };
+type Facts = Pick<SettingsView, "desktopForcedOff" | "claudeEnvToken" | "projectPatch" | "keepAwakeSupported" | "detectedEditors">;
+const NO_FACTS: Facts = { desktopForcedOff: false, claudeEnvToken: false, projectPatch: false };
 
 function project(s: Settings, accounts: ClaudeAccountInfo[] | undefined, f: Facts): SettingsView {
   return {
@@ -52,6 +54,7 @@ function project(s: Settings, accounts: ClaudeAccountInfo[] | undefined, f: Fact
     desktop: s.notifications?.desktop === true,
     desktopForcedOff: f.desktopForcedOff,
     claudeEnvToken: f.claudeEnvToken,
+    projectPatch: f.projectPatch,
     keepAwakeSupported: f.keepAwakeSupported,
     detectedEditors: f.detectedEditors,
     computerAwake: s.power && f.keepAwakeSupported !== undefined ? { on: s.power.keepAwake, supported: f.keepAwakeSupported } : undefined,
@@ -64,6 +67,7 @@ export function fromSettingsGet(r: SettingsResult): SettingsView {
   return project(r.settings, r.claudeAccounts, {
     desktopForcedOff: !!d?.desktopForcedOff,
     claudeEnvToken: !!d?.claudeEnvToken,
+    projectPatch: r.projectPatch === true,
     keepAwakeSupported: d?.keepAwake?.supported,
     detectedEditors: d?.editors?.filter((e) => e.id !== "custom"),
   });
