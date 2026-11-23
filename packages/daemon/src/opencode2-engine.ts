@@ -167,7 +167,7 @@ const ANSWERED = "Answered in OpenCode";
 const SHELL_POLL_MS = 500;
 /** A user message that shows in the timeline (text or an image). */
 const shownUser = (m: OpenCode2Message) => m.type === "user" && (!!m.text || !!m.files?.some((f) => f.mime?.startsWith("image/") && f.data));
-type Req = { kind: "permission"; callId?: string; sessionID: string; /** The mapper of the call: an inline run's own. */ mapper: OpenCode2Mapper; /** An inline run's call: its denied card shows under it. */ parentId?: string } | { kind: "question"; sessionID: string; questions: Question[]; fields: { key: string; type: string }[] };
+type Req = { kind: "permission"; callId?: string; sessionID: string; /** The mapper of the call: an inline run's own. */ mapper: OpenCode2Mapper; /** An inline run's call: its denied card shows under it. */ parentId?: string } | { kind: "question"; sessionID: string; form: Json; questions: Question[]; /** The shown fields, one per question. */ fields: Json[] };
 /** A running inline task: its child session's events feed `notify`; `callId` = the call its steps show under. */
 type InlineRun = { callId?: string; mapper: OpenCode2Mapper; notify: (type: string, d: Json) => void; /** Its prompt reached OpenCode: a check that finds it not running ends it. */ posted?: boolean; /** Ends the run as OpenCode stored its end (an end event lost with a stream drop). */ settle: (end: StoredEnd) => void };
 /** The text of the last assistant message of a stored child session (the fallback when its events were missed). */
@@ -1109,20 +1109,74 @@ class OpenCode2Session implements EngineSession {
     if (run.callId) for (const part of run.mapper.event(type, d)) this.session.emit({ ...part, parentId: run.callId });
   }
 
-  /** A question form of OpenCode 2 (`form.created`, metadata kind `question`: the `question` tool) as a question part under its call. Another form: a notice. */
+  /**
+   * A form of OpenCode 2 (`form.created`) as a question part under its call (docs/spec.md "OpenCode 2 adapter", Questions): `metadata.kind` `question` is the
+   * `question` tool, another kind has no call (the part's `toolUseId` is the form's id). A form with no shown field: a notice.
+   */
   private askForm(form: Json) {
     if (this.session.pendingRequest(form.id) || this.reqs.has(form.id)) return;
-    const fields: Json[] = form.fields ?? [];
-    if (form.metadata?.kind !== "question" || !fields.length || fields.some((f) => f.type !== "string" && f.type !== "multiselect")) {
+    const all: Json[] = form.fields ?? [];
+    const shown = all.filter((f) => !f.hidden);
+    if (!shown.length) {
       if (!this.unshown.has(form.id)) this.notice(`form:${form.id}`, `OpenCode asks for input claude-ui cannot show yet (${form.title ?? "a form"}). Answer it in OpenCode.`);
       return void this.unshown.add(form.id);
     }
-    const questions: Question[] = fields.map((f) => ({ question: f.description ?? f.title ?? f.key, header: f.title ?? "", options: (f.options ?? []).map((o: Json) => ({ label: o.label, description: o.description ?? "" })), multiSelect: f.type === "multiselect" }));
-    this.reqs.set(form.id, { kind: "question", sessionID: form.sessionID, questions, fields: fields.map((f) => ({ key: f.key, type: f.type })) });
+    const titleOf = (key: string) => all.find((f) => f.key === key)?.title ?? key;
+    const seen = new Map<string, number>();
+    const questions: Question[] = shown.map((f, i) => {
+      const base = f.description ?? f.title ?? f.key;
+      // Questions are answered by their text: an equal text gets a number.
+      const n = (seen.get(base) ?? 0) + 1;
+      seen.set(base, n);
+      const when = (f.when as Json[] | undefined)?.map((w) => `${titleOf(w.key)} ${w.op === "neq" ? "is not" : "is"} ${w.value}`).join(" and ");
+      const header = `${i === 0 && form.metadata?.kind !== "question" ? (form.title ?? "") : (f.title ?? "")}${when ? ` (if ${when})` : ""}`;
+      const options: Question["options"] =
+        f.type === "boolean" ? [{ label: "Yes", description: "" }, { label: "No", description: "" }] : f.type === "external" ? [{ label: "Done", description: f.url ?? "" }] : (f.options ?? []).map((o: Json) => ({ label: o.label, description: o.description ?? "" }));
+      return { question: n > 1 ? `${base} (${n})` : base, header, options, multiSelect: f.type === "multiselect" };
+    });
+    this.reqs.set(form.id, { kind: "question", sessionID: form.sessionID, form, questions, fields: shown });
     this.session.request({ part: { type: "question", id: form.id, requestId: form.id, toolUseId: form.metadata?.tool?.id ?? form.id, questions, settled: false, at: Date.now() }, reply: (r) => this.answerQuestion(form.id, r) });
   }
 
-  /** The answer by field key (a multi-select field as the list of chosen labels); anything else cancels the form, which ends OpenCode's turn. */
+  /**
+   * The reply of a form: each shown field's answer as OpenCode expects it (an option by its value, a boolean, a number), the defaults of hidden fields, and no answer
+   * for a field whose `when` does not hold. A string OpenCode would refuse is `{error}`.
+   */
+  private formAnswer(req: Extract<Req, { kind: "question" }>, r: Extract<Reply, { kind: "answer" }>): { answer: Record<string, string | number | boolean | string[]> } | { error: string } {
+    const answer: Record<string, string | number | boolean | string[]> = {};
+    for (const [i, f] of req.fields.entries()) {
+      const q = req.questions[i]!;
+      const text = r.answers[q.question]?.trim();
+      if (text === undefined) continue;
+      const labels = r.choices?.[q.question] ?? (q.multiSelect ? splitLabels(text, q.options.map((o) => o.label)) : [text]);
+      const value = (label: string) => (f.options as Json[] | undefined)?.find((o) => o.label === label)?.value ?? label;
+      if (f.type === "multiselect") answer[f.key] = labels.map(value);
+      else if (f.type === "boolean") {
+        const yes = /^(yes|true|y)$/i.test(text);
+        if (!yes && !/^(no|false|n)$/i.test(text)) return { error: `${f.title ?? f.key} needs Yes or No` };
+        answer[f.key] = yes;
+      } else if (f.type === "number" || f.type === "integer") {
+        const n = text === "" ? NaN : Number(text);
+        const bound = (b: unknown) => (typeof b === "number" ? b : undefined);
+        if (!Number.isFinite(n) || (f.type === "integer" && !Number.isInteger(n))) return { error: `${f.title ?? f.key} needs ${f.type === "integer" ? "a whole" : "a"} number` };
+        if ((bound(f.minimum) ?? -Infinity) > n || (bound(f.maximum) ?? Infinity) < n) return { error: `${f.title ?? f.key} must be ${bound(f.minimum) !== undefined && bound(f.maximum) !== undefined ? `between ${f.minimum} and ${f.maximum}` : bound(f.minimum) !== undefined ? `at least ${f.minimum}` : `at most ${f.maximum}`}` };
+        answer[f.key] = n;
+      } else if (f.type === "external") answer[f.key] = true;
+      else answer[f.key] = value(labels[0] ?? text);
+    }
+    // Hidden fields answer with their default, when they have one.
+    for (const f of (req.form.fields ?? []) as Json[]) if (f.hidden && f.default !== undefined) answer[f.key] = f.default;
+    // A field whose condition does not hold is not active: OpenCode refuses an answer for it.
+    const active = (f: Json) => ((f.when as Json[] | undefined) ?? []).every((w) => (answer[w.key] === w.value) === (w.op !== "neq"));
+    let again = true;
+    while (again) {
+      again = false;
+      for (const f of (req.form.fields ?? []) as Json[]) if (f.key in answer && !active(f)) (delete answer[f.key], (again = true));
+    }
+    return { answer };
+  }
+
+  /** The answer of a question (a multi-select field as the list of chosen labels); anything else cancels the form, which ends OpenCode's turn. */
   private answerQuestion(id: string, r: Reply) {
     const req = this.reqs.get(id);
     this.reqs.delete(id);
@@ -1133,14 +1187,13 @@ class OpenCode2Session implements EngineSession {
         .then(f)
         .catch((err) => this.notice(`answer_failed:${ascending("msg")}`, `Could not answer OpenCode: ${(err as Error).message}`));
     if (r.kind === "answer") {
-      const answer: Record<string, string | string[]> = {};
-      req.questions.forEach((q, i) => {
-        const text = r.answers[q.question];
-        if (text === undefined) return;
-        const labels = r.choices?.[q.question] ?? (q.multiSelect ? splitLabels(text, q.options.map((o) => o.label)) : [text]);
-        answer[req.fields[i]!.key] = req.fields[i]!.type === "multiselect" ? labels : (labels[0] ?? text);
-      });
-      return call((c) => c.session.form.reply({ sessionID: req.sessionID, formID: id, answer }));
+      const a = this.formAnswer(req, r);
+      // A value OpenCode would refuse is not sent: the question comes back with the reason.
+      if ("error" in a) {
+        this.notice(`form_invalid:${ascending("msg")}`, `${a.error}. Answer again.`);
+        return void setTimeout(() => this.reqs.has(id) || this.askForm(req.form), 0);
+      }
+      return call((c) => c.session.form.reply({ sessionID: req.sessionID, formID: id, answer: a.answer }));
     }
     if (r.kind !== "cancel" || r.message !== ANSWERED) call((c) => c.session.form.cancel({ sessionID: req.sessionID, formID: id }));
   }

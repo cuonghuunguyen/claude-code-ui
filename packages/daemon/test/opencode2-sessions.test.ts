@@ -1021,6 +1021,55 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     await until(() => d.requests("DELETE", new RegExp(`/form/${q2.requestId}$`)).length === 1);
     await until(() => s.states().at(-1) === "idle");
   });
+
+  // A form of OpenCode with these fields, asked by the turn (`kind` other than question: no call of the question tool).
+  const formTurn = (fields: object[], kind?: string) => {
+    const file = join(mkdtempSync(join(tmpdir(), "oc2-form-")), "turn.json");
+    const step = (event: string, data: object) => ({ event, data: { sessionID: "$SESSION", ...data } });
+    writeFileSync(file, JSON.stringify([step("session.execution.started", {}), step("session.step.started", { agent: "build", model: { id: "m", providerID: "fake" }, assistantMessageID: "$A1" }), { form: { fields, ...(kind && { kind }) } }, { wait: "form" }, step("session.step.ended", { assistantMessageID: "$A1", finish: "stop", tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0, files: [] }), step("session.execution.succeeded", {})]));
+    return file;
+  };
+  const opts = [{ value: "v1", label: "One", description: "first" }, { value: "v2", label: "Two" }];
+  it.each([
+    ["a string with options answers with the option's value", [{ key: "a", type: "string", title: "A", description: "Pick", options: opts, custom: true }], undefined, [{ question: "Pick", header: "A", options: [{ label: "One", description: "first" }, { label: "Two", description: "" }], multiSelect: false }], { Pick: "Two" }, { a: "v2" }],
+    ["a string with no options is a question with the free text", [{ key: "a", type: "string", title: "Name", description: "Your name?" }], undefined, [{ question: "Your name?", header: "Name", options: [], multiSelect: false }], { "Your name?": "Ada" }, { a: "Ada" }],
+    ["a boolean offers Yes and No and answers true or false", [{ key: "b", type: "boolean", title: "Sure" }], undefined, [{ question: "Sure", header: "Sure", options: [{ label: "Yes", description: "" }, { label: "No", description: "" }], multiSelect: false }], { Sure: "No" }, { b: false }],
+    ["a number and an integer answer as numbers", [{ key: "n", type: "number", title: "Ratio" }, { key: "i", type: "integer", title: "Count", minimum: 1, maximum: 5 }], undefined, [{ question: "Ratio", header: "Ratio", options: [], multiSelect: false }, { question: "Count", header: "Count", options: [], multiSelect: false }], { Ratio: "0.5", Count: "3" }, { n: 0.5, i: 3 }],
+    ["a hidden field is not shown and answers with its default", [{ key: "h", type: "string", title: "H", hidden: true, default: "dflt" }, { key: "a", type: "string", title: "A" }], undefined, [{ question: "A", header: "A", options: [], multiSelect: false }], { A: "x" }, { h: "dflt", a: "x" }],
+    ["a field with a condition says so and is left out of the answer when the condition fails", [{ key: "b", type: "boolean", title: "Deploy" }, { key: "w", type: "string", title: "Where", when: [{ key: "b", op: "eq", value: true }] }], undefined, [{ question: "Deploy", header: "Deploy", options: [{ label: "Yes", description: "" }, { label: "No", description: "" }], multiSelect: false }, { question: "Where", header: "Where (if Deploy is true)", options: [], multiSelect: false }], { Deploy: "No", Where: "prod" }, { b: false }],
+    ["two fields with the same question text get a number", [{ key: "a", type: "string", title: "A", description: "Same?" }, { key: "b", type: "string", title: "B", description: "Same?" }], undefined, [{ question: "Same?", header: "A", options: [], multiSelect: false }, { question: "Same? (2)", header: "B", options: [], multiSelect: false }], { "Same?": "one", "Same? (2)": "two" }, { a: "one", b: "two" }],
+    ["a multi-select answers with the values of the chosen options", [{ key: "m", type: "multiselect", title: "M", description: "Which?", options: opts }], undefined, [{ question: "Which?", header: "M", options: [{ label: "One", description: "first" }, { label: "Two", description: "" }], multiSelect: true }], { "Which?": "One, Two" }, { m: ["v1", "v2"] }],
+    ["an external field shows its address and is acknowledged with Done", [{ key: "e", type: "external", title: "Sign in", url: "https://example.com/x" }], undefined, [{ question: "Sign in", header: "Sign in", options: [{ label: "Done", description: "https://example.com/x" }], multiSelect: false }], { "Sign in": "Done" }, { e: true }],
+    ["a form of another kind shows as a question with the form's title", [{ key: "a", type: "string", title: "A", description: "Value?" }], "input", [{ question: "Value?", header: "Questions", options: [], multiSelect: false }], { "Value?": "z" }, { a: "z" }],
+  ])("OpenCode 2 form: %s", async (_name, fields, kind, questions, answers, body) => {
+    const d = await boot({ env: { FAKE_OPENCODE2_SCRIPT: formTurn(fields, kind) } });
+    const s = await d.open();
+    await s.prompt("ask");
+    await until(() => !!s.find("question"));
+    const q = s.find("question")!;
+    expect(q.questions).toEqual(questions);
+    if (kind) expect(q.toolUseId).toBe(q.requestId);
+    await d.ok({ type: "question.respond", requestId: q.requestId, answers });
+    await until(() => s.parts().some((p) => p.type === "turn_result"));
+    expect(d.requests("POST", new RegExp(`/form/${q.requestId}/reply$`))[0]!.body).toEqual({ answer: body });
+  });
+
+  it("a number that is not a whole number or out of range is not sent: a warning names the field and the question comes back", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_SCRIPT: formTurn([{ key: "i", type: "integer", title: "Count", minimum: 1, maximum: 5 }]) } });
+    const s = await d.open();
+    await s.prompt("ask");
+    await until(() => !!s.find("question"));
+    const q = s.find("question")!;
+    for (const [bad, text] of [["2.5", /Count needs a whole number/], ["9", /Count must be between 1 and 5/]] as const) {
+      await d.ok({ type: "question.respond", requestId: q.requestId, answers: { Count: bad } });
+      await until(() => !!s.find("notice", (n) => text.test(n.text)));
+      await until(() => s.find("question")!.settled === false);
+    }
+    expect(d.requests("POST", /\/form\/[^/]+\/reply$/)).toHaveLength(0);
+    await d.ok({ type: "question.respond", requestId: q.requestId, answers: { Count: "4" } });
+    await until(() => s.parts().some((p) => p.type === "turn_result"));
+    expect(d.requests("POST", /\/form\/[^/]+\/reply$/).map((r) => r.body)).toEqual([{ answer: { i: 4 } }]);
+  });
 });
 
 describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS }, () => {

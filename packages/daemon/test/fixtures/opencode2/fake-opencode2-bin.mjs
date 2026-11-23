@@ -26,7 +26,7 @@
 //   {wait: "permission"}  holds the turn until `…/permission/:rid/reply` came; {when: "once"|"always"|"reject"|"allowed"} on a step skips it unless that was the reply (`allowed` = once or always); `$REJECT` is the reply's message
 //   {hold: true}    holds the turn until `…/interrupt`, which then ends it as the user's stop (`step.failed` aborted, `execution.interrupted`)
 //   {sleep: ms}
-//   {form: {fields, title?, sessionID?}}  asks a question form (of `sessionID`, default the turn's) (`form.created`, metadata kind question, tool `$A1`/`$CALL`); {wait: "form"} holds until it is answered ("replied")
+//   {form: {fields, title?, sessionID?, kind?}}  asks a question form (of `sessionID`, default the turn's) (`form.created`, metadata kind question, tool `$A1`/`$CALL`); {wait: "form"} holds until it is answered ("replied")
 //     or cancelled ("cancelled": the call fails aborted and the turn ends interrupted); `$ANSWER` is the answer
 // FAKE_OPENCODE2_MODEL_DELAY / _PROMPT_DELAY / _MESSAGE_DELAY: ms the model routes / the prompt route / the message read wait. FAKE_OPENCODE2_SWALLOW_STOP: an interrupt sends no end events. POST /__drop ends the event streams; POST /__forget/<id> drops a session; POST /__stage/<id>/<message id> and /__clear/<id> revert as OpenCode's own app.
 // POST …/synthetic {text}: stored as a `synthetic` message, no turn. Instruction entries: PUT/DELETE …/instructions/entries/:key and GET …/entries.
@@ -126,7 +126,7 @@ async function runTurn(sid, userId, steps) {
       emit("permission.replied", { sessionID: sid, requestID: vars.$PERM, reply: last }, dir);
       asked.delete(vars.$PERM);
     } else if (step.form) {
-      const form = { id: vars.$FORM, sessionID: step.form.sessionID ?? sid, title: step.form.title ?? "Questions", metadata: { kind: "question", tool: { messageID: vars.$A1, id: vars.$CALL } }, fields: step.form.fields };
+      const form = { id: vars.$FORM, sessionID: step.form.sessionID ?? sid, title: step.form.title ?? "Questions", metadata: step.form.kind ? { kind: step.form.kind } : { kind: "question", tool: { messageID: vars.$A1, id: vars.$CALL } }, fields: step.form.fields };
       forms.set(form.id, { form, turn });
       emit("form.created", { form }, dir);
     } else if (step.wait === "form") {
