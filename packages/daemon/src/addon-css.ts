@@ -5,7 +5,7 @@
 // selectors `:root`, `html`, `.dark` and the old prefixed `:root[data-theme=...] .x` match nothing (only `:scope` names the root itself),
 // so rewriting is needed either way, and nesting runs on older browsers (Chrome 120, Safari 17.2, Firefox 117 against 118 / 17.4 / 146).
 
-/** The CSS is malformed (an unclosed comment or block, a stray `}`) or over the size cap. The caller serves the file as it is. */
+/** The CSS is malformed (an unclosed comment or block, a stray `}`) or over the size cap. The caller serves an empty stylesheet (the theme's palette still applies). */
 export class CssScanError extends Error {}
 
 /** Largest theme CSS file the daemon rewrites. */
@@ -114,6 +114,8 @@ const MAX_WRAP = 4;
 const rootRelative = (sel: string, wrap = 0): string => {
   const s = sel.trim();
   if (s.startsWith("&")) return s;
+  // A leading `*` matches every element, the root too: inside the scope it would miss the root, so it is both the root and its descendants.
+  if (s.startsWith("*") && !s.startsWith("*|")) return `&${s.slice(1)}, & *${s.slice(1)}`;
   const m = ROOT_LEAD.exec(s) ?? DARK_LEAD.exec(s);
   if (m) return "&" + s.slice(m[0].length);
   // `:where(:root[...].dark)` / `:is(:root, .dark)` at the start: every item that names the root gets the same rewrite inside the wrapper.
@@ -144,31 +146,155 @@ const rootRelative = (sel: string, wrap = 0): string => {
 /** Deepest `@media`-in-`@media` nesting that is scanned: each level re-scans its block, so depth is capped (real CSS has 2 or 3 levels). */
 const MAX_DEPTH = 32;
 
-function scopeRules(css: string, hoist: string[], depth = 0): string {
+type Node = { prelude: string; block?: string; kids?: Node[] };
+
+/** The rule tree: group at-rules hold their statements as `kids` (parsed once, then read twice: names first, output second). */
+function parse(css: string, depth = 0): Node[] {
   if (depth > MAX_DEPTH) throw new CssScanError("nested too deep");
+  return statements(css).map((st) => {
+    const name = st.prelude.startsWith("@") ? /^@([\w-]+)/.exec(st.prelude)?.[1]?.toLowerCase() ?? "" : "";
+    return GROUPS.has(name) && st.block !== undefined ? { ...st, kids: parse(st.block, depth + 1) } : st;
+  });
+}
+
+/** Names a theme declares itself, per namespace: old name -> new name. */
+type Names = { keyframes: Map<string, string>; counter: Map<string, string>; palette: Map<string, string> };
+/** Property -> namespace of the names its value may hold. */
+const REF_PROPS: Record<string, keyof Names> = { animation: "keyframes", "animation-name": "keyframes", "list-style": "counter", "list-style-type": "counter", "font-palette": "palette" };
+/** Inside `@counter-style` blocks. */
+const COUNTER_PROPS: Record<string, keyof Names> = { fallback: "counter", system: "counter" };
+const IDENT = /[\w-]/;
+
+const atName = (prelude: string) => /^@([\w-]+)/.exec(prelude)?.[1]?.toLowerCase() ?? "";
+/** The one name after an at-rule keyword when it is a plain identifier (a string name is left alone). */
+const defName = (prelude: string) => /^@[\w-]+\s+(-{0,2}[A-Za-z_][\w-]*)\s*$/.exec(prelude)?.[1];
+
+function collect(nodes: Node[], prefix: string, names: Names): void {
+  for (const n of nodes) {
+    if (n.kids) collect(n.kids, prefix, names);
+    else if (n.block !== undefined && n.prelude.startsWith("@")) {
+      const kind = atName(n.prelude);
+      const name = defName(n.prelude);
+      if (!name) continue;
+      if (kind === "keyframes" || kind === "-webkit-keyframes") names.keyframes.set(name, prefix + name);
+      else if (kind === "counter-style") names.counter.set(name, prefix + name);
+      else if (kind === "font-palette-values" && name.startsWith("--")) names.palette.set(name, `--${prefix}${name.slice(2)}`);
+    }
+  }
+}
+
+/** `text` (declarations and nested rules) with the identifiers in the values of `props` swapped for their new names. Token level: strings, comments, url() and `var(...)` are left alone. */
+function renameRefs(text: string, props: Record<string, keyof Names>, names: Names): string {
+  let out = "";
+  let last = 0;
+  let i = 0;
+  let declStart = true;
+  const n = text.length;
+  while (i < n) {
+    const j = skipToken(text, i);
+    if (j !== i) {
+      i = j;
+      declStart = false;
+      continue;
+    }
+    const c = text[i]!;
+    if (c === ";" || c === "{" || c === "}") {
+      declStart = true;
+      i++;
+    } else if (c === " " || c === "\n" || c === "\t" || c === "\r") i++;
+    else if (declStart && IDENT.test(c)) {
+      let k = i;
+      while (k < n && IDENT.test(text[k]!)) k++;
+      const space = /^\s*:/.exec(text.slice(k, k + 40)); // only whitespace (bounded) between the property and its colon
+      const ns = space ? props[text.slice(i, k).toLowerCase().replace(/^-webkit-/, "")] : undefined;
+      declStart = false;
+      i = k;
+      if (!ns || !space) continue;
+      const map = names[ns];
+      if (!map.size) continue;
+      // The value: up to the next `;` or `}` outside strings, urls and parentheses.
+      let v = k + space[0].length;
+      const valueStart = v;
+      let depth = 0;
+      while (v < n) {
+        const w = skipToken(text, v);
+        if (w !== v) v = w;
+        else {
+          const d = text[v]!;
+          if (d === "\\") v += 2;
+          else if (d === "(") (depth++, v++);
+          else if (d === ")") (depth--, v++);
+          else if ((d === ";" || d === "}") && depth <= 0) break;
+          else v++;
+        }
+      }
+      v = Math.min(v, n);
+      let p = valueStart;
+      let value = "";
+      let from = valueStart;
+      while (p < v) {
+        const w = skipToken(text, p);
+        if (w !== p) p = w;
+        else if (IDENT.test(text[p]!) && !(text[p - 1] === "." || text[p - 1] === "\\")) {
+          let e = p;
+          while (e < v && IDENT.test(text[e]!)) e++;
+          const word = text.slice(p, e);
+          const to = map.get(word);
+          if (to && !/var\(\s*$/i.test(text.slice(Math.max(valueStart, p - 12), p))) (value += text.slice(from, p) + to, (from = e));
+          p = e;
+        } else p++;
+      }
+      out += text.slice(last, valueStart) + value + text.slice(from, v);
+      last = v;
+      i = v;
+    } else {
+      declStart = false;
+      i++;
+    }
+  }
+  return out + text.slice(last);
+}
+
+function render(nodes: Node[], hoist: string[], names: Names | undefined): string {
   const out: string[] = [];
-  for (const st of statements(css)) {
+  const fix = (t: string, props = REF_PROPS) => (names ? renameRefs(t, props, names) : t);
+  for (const st of nodes) {
     const p = st.prelude;
     if (!p) continue;
     if (p.startsWith("@")) {
-      const name = /^@([\w-]+)/.exec(p)?.[1]?.toLowerCase() ?? "";
+      const name = atName(p);
       if (name === "charset" || name === "import") continue; // @charset cannot sit inside a rule; @import is refused (CSP blocks other origins, same-addon import is out of scope)
-      const text = st.block === undefined ? `${p};` : `${p} {${st.block}}`;
-      if (HOISTED.has(name) || (name === "layer" && st.block === undefined)) hoist.push(text);
-      else if (GROUPS.has(name) && st.block !== undefined) out.push(`${p} {\n${scopeRules(st.block, hoist, depth + 1)}\n}`);
-      else out.push(text);
-    } else if (st.block !== undefined) out.push(`${splitList(p).map((x) => rootRelative(x)).join(", ")} {${st.block}}`);
+      if (st.kids) out.push(`${p} {\n${render(st.kids, hoist, names)}\n}`);
+      else if (HOISTED.has(name) || (name === "layer" && st.block === undefined)) {
+        let head = p;
+        const def = defName(p);
+        if (names && st.block !== undefined && def) {
+          const to = name === "counter-style" ? names.counter.get(def) : name === "font-palette-values" ? names.palette.get(def) : name.endsWith("keyframes") ? names.keyframes.get(def) : undefined;
+          if (to) head = p.slice(0, p.length - def.length) + to; // the name ends the prelude
+        }
+        hoist.push(st.block === undefined ? `${head};` : `${head} {${name === "counter-style" ? fix(st.block, COUNTER_PROPS) : st.block}}`);
+      } else out.push(st.block === undefined ? `${p};` : `${p} {${fix(st.block)}}`);
+    } else if (st.block !== undefined) out.push(`${splitList(p).map((x) => rootRelative(x)).join(", ")} {${fix(st.block)}}`);
   }
   return out.join("\n");
 }
 
-/** `css` rewritten so that it applies only under `root` (a selector for the root element, e.g. `:root[data-theme="addon:x:y"]`). Throws `CssScanError`. */
-export function scopeCss(css: string, root: string): string {
+/** `css` rewritten so that it applies only under `root` (a selector for the root element, e.g. `:root[data-theme="addon:x:y"]`). `prefix` (see `themeNames`): the names of the theme's own @keyframes, @counter-style and @font-palette-values get it, and the references to them follow, so they cannot replace a name of the app or of another theme. Throws `CssScanError`. */
+export function scopeCss(css: string, root: string, prefix?: string): string {
   if (css.length > MAX_THEME_CSS) throw new CssScanError("too large");
+  const tree = parse(css);
+  let names: Names | undefined;
+  if (prefix) {
+    names = { keyframes: new Map(), counter: new Map(), palette: new Map() };
+    collect(tree, prefix, names);
+  }
   const hoist: string[] = [];
-  const body = scopeRules(css, hoist);
+  const body = render(tree, hoist, names);
   return [...hoist, `${root} {\n${body}\n}`].join("\n") + "\n";
 }
+
+/** The prefix of the global names of one theme: `<addon>-<theme>--` (both parts match `^[a-z0-9-]+$`). */
+export const themeNames = (addon: string, theme: string) => `${addon}-${theme}--`;
 
 /** The root selector of a theme, as the web app sets it (`data-theme` = `addon:<name>:<id>`; both parts match `^[a-z0-9-]+$`). */
 export const themeRoot = (addon: string, theme: string) => `:root[data-theme="addon:${addon}:${theme}"]`;

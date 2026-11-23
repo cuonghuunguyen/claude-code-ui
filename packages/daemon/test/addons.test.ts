@@ -1,7 +1,7 @@
 // Addons (docs/spec.md "Addons"): install from a local bare git repo or a folder, approval, serving with the addon CSP, updates, redaction.
 import { canSymlink, needsLinks } from "./symlink-support.ts";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { get as httpGet } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -291,19 +291,21 @@ describe("serving", () => {
       expect((await fetchAddon(`${base}dusk.css?theme=dawn`, "style")).body).toBe(":root { --background: #111 }");
     });
 
-    it("broken css is served unscoped and never fails the request", async () => {
+    it("broken css is served as an empty stylesheet (it never reaches other themes) and never fails the request", async () => {
       const base = await themed({ "dusk.css": ".a { color: red", "dawn.css": "" });
       const r = await fetchAddon(`${base}dusk.css?theme=dusk`, "style");
       expect(r.status).toBe(200);
-      expect(r.body).toBe(".a { color: red");
+      expect(r.body).not.toContain("color");
+      expect(r.body).toMatch(/^\/\*.*\*\/\s*$/);
     });
 
-    it("a file over the size cap reaches the client as it is; HEAD answers with the headers only", async () => {
+    it("a file over the size cap is served as an empty stylesheet, without its bytes; HEAD answers with the headers only", async () => {
       const big = ":root { --a: 1 }" + " ".repeat(512 * 1024);
       const base = await themed({ "dusk.css": big, "dawn.css": "" });
       const r = await fetchAddon(`${base}dusk.css?theme=dusk`, "style");
       expect(r.status).toBe(200);
-      expect(r.body).toBe(big);
+      expect(r.body).not.toContain("--a");
+      expect(r.body.length).toBeLessThan(200);
       const head = await new Promise<{ status: number; len: string | undefined; body: string }>((resolve, reject) =>
         httpGet({ host: "127.0.0.1", port, method: "HEAD", path: `${base}dusk.css?theme=dusk`, headers: { "sec-fetch-dest": "style" } }, (res) => {
           let body = "";
@@ -311,7 +313,38 @@ describe("serving", () => {
           res.on("end", () => resolve({ status: res.statusCode!, len: res.headers["content-length"], body }));
         }).on("error", reject),
       );
-      expect(head).toEqual({ status: 200, len: String(big.length), body: "" });
+      expect(head).toEqual({ status: 200, len: String(r.body.length), body: "" });
+    });
+
+    it("an edit with the same size and mtime shows on the next request", async () => {
+      const base = await themed({ "dusk.css": ".a { x: 1 }", "dawn.css": "" });
+      const f = join(tmp, "folder-themed", "dusk.css");
+      const { mtime } = statSync(f);
+      expect((await fetchAddon(`${base}dusk.css?theme=dusk`, "style")).body).toContain(".a { x: 1 }");
+      writeFileSync(f, ".a { x: 2 }");
+      utimesSync(f, mtime, mtime);
+      expect((await fetchAddon(`${base}dusk.css?theme=dusk`, "style")).body).toContain(".a { x: 2 }");
+    });
+
+    it("two themes sharing one css file each keep their own scoped copy after an edit", async () => {
+      const d = folder("shared", { themes: [{ id: "dusk", name: "Dusk", dark: palette, css: "t.css" }, { id: "dawn", name: "Dawn", dark: palette, css: "t.css" }] });
+      writeFileSync(join(d, "t.css"), ".a { x: 1 }");
+      await c.request({ type: "addons.install", source: { kind: "local", path: d } });
+      const base = (await approveAll("shared")).base!;
+      const get = async (t: string) => (await fetchAddon(`${base}t.css?theme=${t}`, "style")).body;
+      expect(await get("dusk")).toContain('addon:shared:dusk"] {');
+      expect(await get("dawn")).toContain('addon:shared:dawn"] {');
+      writeFileSync(join(d, "t.css"), ".a { x: 22 }");
+      expect(await get("dusk")).toContain(".a { x: 22 }");
+      expect(await get("dawn")).toContain(".a { x: 22 }");
+      expect(await get("dawn")).toContain('addon:shared:dawn"] {');
+    });
+
+    it("a theme's @keyframes is renamed for that theme, so it cannot replace the app's own", async () => {
+      const base = await themed({ "dusk.css": "@keyframes spin { to { opacity: 0 } } .a { animation: spin 1s }", "dawn.css": "" });
+      const body = (await fetchAddon(`${base}dusk.css?theme=dusk`, "style")).body;
+      expect(body).toContain("@keyframes themed-dusk--spin");
+      expect(body).toContain("animation: themed-dusk--spin 1s");
     });
 
     it("an edit of the file shows on the next request", async () => {

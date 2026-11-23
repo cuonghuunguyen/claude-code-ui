@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { CssScanError, MAX_THEME_CSS, scopeCss, themeRoot } from "../src/addon-css.ts";
+import { CssScanError, MAX_THEME_CSS, scopeCss, themeNames, themeRoot } from "../src/addon-css.ts";
 
 const ROOT = themeRoot("reze", "dusk");
 const scope = (css: string) => scopeCss(css, ROOT);
+const PFX = themeNames("reze", "dusk");
+const scopeN = (css: string) => flat(scopeCss(css, ROOT, PFX));
 /** The text with whitespace folded, to compare rules. */
 const flat = (s: string) => s.replace(/\s+/g, " ").trim();
 
@@ -87,5 +89,62 @@ describe("scopeCss", () => {
 
   it("empty or comment-only CSS gives an empty scope, not a throw", () => {
     expect(flat(scope("/* nothing */"))).toBe(`${ROOT} { }`);
+  });
+
+  it.each([
+    ["*", "&, & *"],
+    ["* > .a", "& > .a, & * > .a"],
+    ["*::before", "&::before, & *::before"],
+    [".a, *", ".a, &, & *"],
+    ["*.a", "&.a, & *.a"],
+    [".a *", ".a *"],
+    ["& *", "& *"],
+  ])("a selector that starts with * also matches the root element itself: %s", (sel, want) => {
+    expect(flat(scope(`${sel} { --x: 1 }`))).toBe(`${ROOT} { ${want} { --x: 1 } }`);
+  });
+});
+
+describe("scopeCss names", () => {
+  it("renames @keyframes (and -webkit-) per theme and rewrites animation / animation-name references", () => {
+    const out = scopeN("@keyframes spin { to { opacity: 0 } } @-webkit-keyframes spin { to { opacity: 0 } } .a { animation: spin 1s linear infinite; animation-name: spin, other } .b { animation: spinner 1s } .c { content: 'spin'; background: url(spin.png) }");
+    expect(out).toContain("@keyframes reze-dusk--spin {");
+    expect(out).toContain("@-webkit-keyframes reze-dusk--spin {");
+    expect(out).toContain(".a { animation: reze-dusk--spin 1s linear infinite; animation-name: reze-dusk--spin, other }");
+    expect(out).toContain(".b { animation: spinner 1s }");
+    expect(out).toContain(".c { content: 'spin'; background: url(spin.png) }");
+  });
+
+  it("renames a @keyframes inside @media and the reference inside a nested rule or another group", () => {
+    const out = scopeN("@media (width > 1px) { @keyframes k { to { opacity: 1 } } } .a { &:hover { animation: k 1s } } @supports (a: b) { .b { animation-name: k } }");
+    expect(out).toContain("@keyframes reze-dusk--k {");
+    expect(out).toContain("&:hover { animation: reze-dusk--k 1s }");
+    expect(out).toContain(".b { animation-name: reze-dusk--k }");
+  });
+
+  it("a reference before the definition, a var() of the same name and a custom property are left right", () => {
+    const out = scopeN(".a { animation: k 1s; --k: k; color: var(--k) } @keyframes k { to { opacity: 1 } }");
+    expect(out).toContain(".a { animation: reze-dusk--k 1s; --k: k; color: var(--k) }");
+  });
+
+  it("renames @counter-style and @font-palette-values and rewrites list-style / font-palette", () => {
+    const out = scopeN("@counter-style dots { system: cyclic; symbols: '*' } @counter-style more { system: extends dots; fallback: dots } @font-palette-values --warm { font-family: F; base-palette: 1 } li { list-style: dots inside; list-style-type: more } .t { font-palette: --warm; font-family: F }");
+    expect(out).toContain("@counter-style reze-dusk--dots {");
+    expect(out).toContain("@counter-style reze-dusk--more { system: extends reze-dusk--dots; fallback: reze-dusk--dots }");
+    expect(out).toContain("@font-palette-values --reze-dusk--warm {");
+    expect(out).toContain("li { list-style: reze-dusk--dots inside; list-style-type: reze-dusk--more }");
+    expect(out).toContain(".t { font-palette: --reze-dusk--warm; font-family: F }");
+  });
+
+  it("keeps @font-face and @property global and names unchanged without a prefix", () => {
+    const css = "@font-face { font-family: F; src: url(f.woff2) } @property --p { syntax: '*'; inherits: false } @keyframes spin { to { opacity: 0 } } .a { animation: spin 1s }";
+    expect(scopeN(css)).toContain("@font-face { font-family: F; src: url(f.woff2) } @property --p { syntax: '*'; inherits: false }");
+    expect(flat(scope(css))).toContain("@keyframes spin {");
+  });
+
+  it("many names and references stay linear", () => {
+    const t = Date.now();
+    const css = Array.from({ length: 3000 }, (_, i) => `@keyframes k${i} { to { opacity: 1 } } .a${i} { animation: k${i} 1s; list-style: none }`).join("\n");
+    scopeCss(css, ROOT, PFX);
+    expect(Date.now() - t).toBeLessThan(1500);
   });
 });

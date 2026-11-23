@@ -110,10 +110,10 @@ The Addons dialog lists **Checks** under each addon: warnings from the addon lin
 |---|---|---|
 | `selects-testid` | A selector uses `[data-testid]`. It is a test hook and changes without notice. | Select `[data-part="..."]`. |
 | `unknown-part` | `[data-part="x"]` names a part that is not in the table. It matches nothing. | Fix the name (see the table). |
-| `unprefixed-name` | An `@keyframes`, `@font-face` family or `@property` name has no addon prefix. These names are global and can replace a name of the app. | Name it `<addon>-name` (`--<addon>-name` for `@property`). |
+| `unprefixed-name` | An `@keyframes`, `@font-face` family or `@property` name has no addon prefix. These names are global and can replace a name of the app. The daemon renames the `@keyframes`, `@counter-style` and `@font-palette-values` of a `themes[].css` itself (the top-level `css` is not renamed); `@font-face` and `@property` stay global. | Name it `<addon>-name` (`--<addon>-name` for `@property`). |
 | `top-level-css` | `css` in `addon.json` applies to every theme, and the addon has themes. | Move it to `themes[].css`. |
-| `css-broken` | The CSS does not parse: an unclosed block, comment or `url(`, a stray `}`, or groups nested over 32 deep. A theme CSS is then served unscoped and applies under every theme. | Fix it. |
-| `css-too-large` | The file is larger than 512 KB. A theme CSS is then served unscoped and applies under every theme. | Split or shrink it. |
+| `css-broken` | The CSS does not parse: an unclosed block, comment or `url(`, a stray `}`, or groups nested over 32 deep. A theme CSS is then served empty: the theme keeps its palette and loses its rules. | Fix it. |
+| `css-too-large` | The file is larger than 512 KB. A theme CSS is then served empty: the theme keeps its palette and loses its rules. | Split or shrink it. |
 
 A selector with `^=`, `$=`, `*=` or `|=` on `data-part` is not checked.
 

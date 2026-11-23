@@ -133,7 +133,7 @@ function readCss(path: string): { text: string } | { size: false } | undefined {
   }
 }
 
-/** Findings of an addon: manifest rules, and its CSS files (top-level `css` and every `themes[].css`, each once). A missing or irregular file is skipped (the manifest check reports a missing one). A theme CSS that the daemon cannot scope (`scopeCss` throws: unclosed block, stray `}`, groups nested too deep) is served unscoped, so it gets `css-broken` too. */
+/** Findings of an addon: manifest rules, and its CSS files (top-level `css` and every `themes[].css`, each once). A missing or irregular file is skipped (the manifest check reports a missing one). A theme CSS that the daemon cannot scope (`scopeCss` throws: unclosed block, stray `}`, groups nested too deep) is served empty, so it gets `css-broken` too. */
 export function lintAddon(root: string, m: AddonManifest): AddonLint[] {
   const out: AddonLint[] = [];
   if (m.css && m.themes.length) out.push({ level: "warning", code: "top-level-css", file: m.css });
@@ -161,7 +161,7 @@ export function lintAddon(root: string, m: AddonManifest): AddonLint[] {
           try {
             scopeCss(r.text, themeRoot(m.name, theme.id));
           } catch {
-            l = [...l, { level: "warning", code: "css-broken", file: f }]; // any failure: the server serves the raw file then too
+            l = [...l, { level: "warning", code: "css-broken", file: f }]; // any failure: the server serves an empty stylesheet then
           }
       }
       if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value!);

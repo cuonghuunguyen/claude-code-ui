@@ -20,7 +20,7 @@ import { assetKey, assetType, ARTIFACT_ASSET_HEADERS } from "./artifact-preview.
 import { BATCH_SSH, runGit, type GitRunner } from "./git-runner.ts";
 import { redactUrls, tidy } from "./git-remote.ts";
 import { createJsonFile } from "./json-file.ts";
-import { themeRoot } from "./addon-css.ts";
+import { themeNames, themeRoot } from "./addon-css.ts";
 import { lintAddon } from "./addon-lint.ts";
 
 export type AddonsRequest = Extract<ClientMessage, { type: `addons.${string}` }>;
@@ -656,8 +656,8 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
     }
   }
 
-  /** The file of an enabled addon (a local folder is re-read: an edit that needs approval stops serving), else undefined. `net`: approved origins for connect-src. `theme` (query `?theme=<id>`): when it is a theme of this addon whose `css` is this file, `scope` is the root selector to scope the file under (addon-css.ts). */
-  function serve(name: string, rest: string, theme?: string): { root: string; path: string; type: string; net: string[]; html: boolean; scope?: string } | undefined {
+  /** The file of an enabled addon (a local folder is re-read: an edit that needs approval stops serving), else undefined. `net`: approved origins for connect-src. `theme` (query `?theme=<id>`): when it is a theme of this addon whose `css` is this file, `scope` is the root selector to scope the file under and `names` the prefix of the theme's own global names (addon-css.ts). */
+  function serve(name: string, rest: string, theme?: string): { root: string; path: string; type: string; net: string[]; html: boolean; scope?: string; names?: string } | undefined {
     const r = store.get().addons[name];
     if (!r) return undefined;
     const root = rootOf(dir, name, r);
@@ -675,7 +675,7 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
       const l = loadDev(root, name, r);
       return "manifest" in l && l.manifest.themes.some((t) => t.id === theme && t.css === assetKey(rest));
     })();
-    return { root, ...f, net: r.approved.filter((c) => c.startsWith("net:")).map((c) => c.slice(4)), html, ...(scoped && { scope: themeRoot(name, theme) }) };
+    return { root, ...f, net: r.approved.filter((c) => c.startsWith("net:")).map((c) => c.slice(4)), html, ...(scoped && { scope: themeRoot(name, theme), names: themeNames(name, theme) }) };
   }
 
   /** Stops every watcher (daemon shutdown). */
