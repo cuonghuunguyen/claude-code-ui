@@ -293,7 +293,8 @@ describe("OpenCode 2 MCP servers dialog", { timeout: TEST_MS }, () => {
     const added = await d.mcp({ type: "mcp.add", name: "tool", scope: "project", config: { transport: "stdio", command: "node", args: ["t.mjs"], env: ["K=v"] } });
     expect(servers(jsonOf(d.file("opencode.json"))).tool).toEqual({ type: "local", command: ["node", "t.mjs"], environment: { K: "v" } });
     expect(d.requests("PUT", "/api/experimental/mcp/tool")[0]!.body.config).toEqual({ type: "local", command: ["node", "t.mjs"], environment: { K: "v" } });
-    expect(added.servers.find((s: any) => s.name === "tool")).toMatchObject({ status: "connected", scope: "project" });
+    // The first list after the add already has the server's type and command (the dialog's Authenticate reason needs the type), though OpenCode's documents were not read again.
+    expect(added.servers.find((s: any) => s.name === "tool")).toMatchObject({ status: "connected", scope: "project", config: { type: "stdio", command: "node" } });
     const dup = await d.request({ type: "mcp.add", cwd: d.project, engine: "opencode", name: "tool", scope: "project", config: { transport: "http", url: "http://127.0.0.1:1/m", headers: [] } });
     expect(dup).toMatchObject({ type: "error", code: "already_exists" });
     const removed = await d.mcp({ type: "mcp.remove", name: "tool", scope: "project" });

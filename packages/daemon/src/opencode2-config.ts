@@ -62,6 +62,13 @@ function projectServers(cwd: string): Map<string, { file: string; shape: "v1" | 
   return out;
 }
 
+/** The entry of server `name` in the project file that defines it (OpenCode 1 or 2 shape). */
+function fileEntry(cwd: string, project: Map<string, { file: string; shape: "v1" | "v2" }[]>, name: string): { type?: string; command?: string[]; url?: string } | undefined {
+  const shape = project.get(name)?.at(-1)?.shape;
+  const v = shape && readProjectValue(cwd, shape === "v2" ? ["mcp", "servers", name] : ["mcp", name]);
+  return isObject(v) ? (v as { type?: string; command?: string[]; url?: string }) : undefined;
+}
+
 export function createOpenCode2McpConfig(o: Config2Deps): EngineConfig["mcp"] {
   const { server } = o;
   const waitMs = o.waitMs ?? MCP_WAIT_MS;
@@ -100,7 +107,8 @@ export function createOpenCode2McpConfig(o: Config2Deps): EngineConfig["mcp"] {
       .filter((r) => !daemonServer(r.name))
       .map((r) => {
         const owner = defined(r.name);
-        const c = owner?.info.mcp?.servers?.[r.name];
+        // OpenCode's documents are read again only by a reload: a server just added is taken from the project's own file.
+        const c = owner?.info.mcp?.servers?.[r.name] ?? fileEntry(cwd, project, r.name);
         const scope = project.has(r.name) ? "project" : owner ? (owner.path ? "user" : "dynamic") : "dynamic";
         const s = r.status.status;
         return {
