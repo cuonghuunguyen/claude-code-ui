@@ -312,12 +312,22 @@ describe("OpenCode 2 MCP servers dialog", { timeout: TEST_MS }, () => {
     expect(d.file("opencode.json")).toBe(V2_FILE);
   });
 
-  it("sign-in actions answer with the reason OpenCode 2 has no route for them, and its capabilities carry the mcpAuth gap", async () => {
-    const d = await bootV2(V2_FILE);
-    for (const msg of [{ type: "mcp.authenticate", name: "echo" }, { type: "mcp.clearAuth", name: "echo" }, { type: "mcp.oauthCallback", name: "echo", callbackUrl: "http://127.0.0.1/x?code=1" }])
-      expect(await d.request({ cwd: d.project, engine: "opencode", ...msg })).toMatchObject({ type: "error", code: "unsupported", message: expect.stringContaining("integrations") });
+  it("an MCP server that needs sign-in is signed in through the OAuth attempt of its integration (authenticate gives the page, the list polls the attempt until it connects), and clearAuth signs it out", async () => {
+    const d = await bootV2(`{ "mcp": { "servers": { "remote": { "type": "remote", "url": "http://127.0.0.1:1/oauth" } } } }`);
     const created = await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" });
-    expect(created.session.capabilities.config.gaps.mcpAuth).toContain("integrations");
+    expect(created.session.capabilities.config.gaps.mcpAuth).toBeUndefined();
+    const status = async () => (await d.mcp({ type: "mcp.list" })).servers.find((s: any) => s.name === "remote").status;
+    expect(await status()).toBe("needs-auth");
+    const auth = await d.mcp({ type: "mcp.authenticate", name: "remote" });
+    expect(auth).toMatchObject({ requiresUserAction: true, authUrl: expect.stringContaining("provider=mcp-remote") });
+    expect(d.requests("POST", "/api/integration/mcp-remote/connect/oauth")).toHaveLength(1);
+    expect(await status()).toBe("needs-auth"); // first read of the attempt: pending
+    expect(await status()).toBe("connected"); // second: complete, the server connects
+    expect(d.requests("POST", "/api/experimental/mcp/remote/connect").length).toBeGreaterThan(0);
+    const out = await d.mcp({ type: "mcp.clearAuth", name: "remote" });
+    expect(out.servers.find((s: any) => s.name === "remote").status).toBe("needs-auth");
+    expect(d.requests("DELETE", /^\/api\/credential\//)).toHaveLength(1);
+    expect(await d.request({ type: "mcp.authenticate", cwd: d.project, engine: "opencode", name: "echo" })).toMatchObject({ type: "error", code: "unsupported" });
   });
 
   it("mcp.reconnect disconnects and connects the server again", async () => {
@@ -673,14 +683,27 @@ describe("OpenCode 2 Plugins dialog", { timeout: TEST_MS }, () => {
     expect((await d.plugins({ type: "plugins.list" })).installed.find((p: any) => p.id === "broken-new")).toMatchObject({ enabled: false, description: expect.stringContaining("Plugin failed to load") });
   });
 
-  it("uninstall of a plugin that is not listed in the project is refused with the reason, and a switch or an update is not offered", async () => {
+  it("a package OpenCode reports as outdated offers Update: plugins.update posts the target, reloads the folder and the row is no longer updatable", async () => {
+    const d = await bootPlugins(`{ "plugins": ["listed-one", "old-outdated-pkg"] }`);
+    const by = async () => Object.fromEntries((await d.plugins({ type: "plugins.list" })).installed.map((p: any) => [p.id, p]));
+    expect((await by())["old-outdated-pkg"].updatable).toBe(true);
+    expect((await by())["listed-one"].updatable).toBe(false);
+    const created = await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" });
+    expect(created.session.capabilities.config.gaps.pluginUpdate).toBeUndefined();
+    expect(await d.plugins({ type: "plugins.update", pluginId: "old-outdated-pkg", scope: "project" })).toMatchObject({ outcome: "ok" });
+    expect(d.requests("POST", "/api/plugin/update")[0]!.body).toEqual({ targets: ["old-outdated-pkg"] });
+    expect(d.requests("POST", "/api/location/reload")).toHaveLength(1);
+    expect((await by())["old-outdated-pkg"].updatable).toBe(false);
+  });
+
+  it("uninstall of a plugin that is not listed in the project is refused with the reason, and a switch is not offered", async () => {
     const d = await bootPlugins();
     expect(await d.request({ type: "plugins.uninstall", cwd: d.project, engine: "opencode", pluginId: "elsewhere" })).toMatchObject({ type: "error", code: "invalid_input", message: expect.stringContaining("project") });
-    expect(await d.request({ type: "plugins.update", cwd: d.project, engine: "opencode", pluginId: "listed-one", scope: "project" })).toMatchObject({ type: "error", code: "unsupported" });
+    expect(await d.request({ type: "plugins.setEnabled", cwd: d.project, engine: "opencode", pluginId: "listed-one", enabled: false })).toMatchObject({ type: "error", code: "unsupported" });
     const created = await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" });
     const gaps = created.session.capabilities.config.gaps;
     expect(gaps.pluginStatus).toBeUndefined();
-    expect(gaps.pluginUpdate).toContain("OpenCode 2");
+    expect(gaps.pluginUpdate).toBeUndefined();
     expect(gaps.pluginSwitch).toBeDefined();
   });
 });
