@@ -1,4 +1,5 @@
 export * from "./parts.ts";
+export * from "./addon-compat.ts";
 export * from "./addon-parts.ts";
 export * from "./addon-theme.ts";
 export { partHash } from "./part-hash.ts";

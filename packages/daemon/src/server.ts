@@ -619,7 +619,7 @@ export function createDaemon(opts: {
       broadcast({ type: "config.changed", kind: "plugins", cwd, ...(reload && { reloadFailed: reload.failed }) });
     },
   });
-  const addons = opts.addonsDir ? createAddons({ dir: opts.addonsDir, file: join(opts.addonsDir, "addons.json"), onChanged: () => broadcast({ type: "config.changed", kind: "addons", cwd: "" }) }) : undefined;
+  const addons = opts.addonsDir ? createAddons({ dir: opts.addonsDir, file: join(opts.addonsDir, "addons.json"), onChanged: () => broadcast({ type: "config.changed", kind: "addons", cwd: "" }), appVersion: opts.buildInfo?.version }) : undefined;
   const root = resolve(opts.webRoot);
   // Model list per Claude account key (its subscription decides which models and auto mode it offers), cached until the login or an account changes (claudeLoginChanged).
   const modelCaches = new Map<string, { list?: ReturnType<typeof listModels>; known: ModelInfo[]; loaded?: true }>();
@@ -1854,7 +1854,8 @@ export function createDaemon(opts: {
   const serveAddon = (req: IncomingMessage, res: ServerResponse, nonce: string, name: string, rest: string) => {
     if (req.method !== "GET" && req.method !== "HEAD") return void res.writeHead(405, { allow: "GET, HEAD" }).end();
     const theme = /^[a-z0-9]+(-[a-z0-9]+)*$/.exec(new URL(req.url ?? "/", "http://x").searchParams.get("theme") ?? "")?.[0];
-    const f = addons && nonce === addons.nonce ? addons.serve(name, rest, theme) : undefined;
+    const as = new URL(req.url ?? "/", "http://x").searchParams.get("as") ?? undefined;
+    const f = addons && nonce === addons.nonce ? addons.serve(name, rest, theme, as) : undefined;
     if (!f) return void res.writeHead(404).end();
     const h = req.headers;
     const dest = h["sec-fetch-dest"] as string | undefined;

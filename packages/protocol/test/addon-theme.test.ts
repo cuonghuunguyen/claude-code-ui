@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { optionCss, optionDefault, optionValue, varNameError, varValueError, type AddonThemeOption } from "../src/index.ts";
+import { extendsChain, optionCss, optionDefault, optionValue, phrasesFor, satisfiesClaudeUi, varNameError, varValueError, type AddonThemeOption } from "../src/index.ts";
 
 describe("addon theme var names", () => {
   it.each(["--glow", "--gojo-glow-2", "--a", "--context-3"])("accepts %s", (n) => expect(varNameError(n)).toBeUndefined());
@@ -86,5 +86,51 @@ describe("typed theme options: a stored value is checked against the type, a bad
     expect(optionCss(color, "#00ff88")).toBe("#00ff88");
     expect(optionCss(select, "a;}b")).toBe("storm");
     expect(optionCss(color, "#aa00ff;}")).toBe("#aa00ff");
+  });
+});
+
+describe("claudeUi ranges", () => {
+  it.each([
+    ["*", "0.1.0", true],
+    [">=1.6", "1.5.0", false],
+    [">=1.5", "1.5.0", true],
+    [">=1.5.1", "1.5.0", false],
+    [">=1.5", "2.0.0", true],
+    ["^1.5", "1.9.2", true],
+    ["^1.5", "2.0.0", false],
+    ["^1.5", "1.4.9", false],
+    ["^0.2", "0.2.9", true],
+    ["^0.2", "0.3.0", false],
+    ["~1.5", "1.5.9", true],
+    ["~1.5", "1.6.0", false],
+    ["~1.5.2", "1.5.1", false],
+    ["1.5.0", "1.5.0", true],
+    ["1.5.0", "1.5.1", false],
+    [">=1.6", "1.6.0-beta.1", true],
+    [">=9.0", "dev", true],
+    [">=9.0", undefined, true],
+  ])("%s with app %s is %s", (range, version, ok) => expect(satisfiesClaudeUi(range, version)).toBe(ok));
+});
+
+describe("extends chain and thinking phrases", () => {
+  type T = { id: string; extends?: string };
+  const all: Record<string, T> = { "a:t1": { id: "t1", extends: "t2" }, "a:t2": { id: "t2", extends: "b:t3" }, "b:t3": { id: "t3" }, "a:loop": { id: "loop", extends: "b:l2" }, "b:l2": { id: "l2", extends: "a:loop" } };
+  const find = (a: string, id: string) => all[`${a}:${id}`];
+  it("follows the links nearest first; a missing target, a loop and a malformed value give no base", () => {
+    expect(extendsChain("a", all["a:t1"]!, find).chain.map((c) => `${c.addon}:${c.theme.id}`)).toEqual(["a:t2", "b:t3"]);
+    expect(extendsChain("a", { id: "x", extends: "gone" }, find)).toEqual({ chain: [], problem: "missing" });
+    expect(extendsChain("a", all["a:loop"]!, find)).toEqual({ chain: [], problem: "cycle" });
+    expect(extendsChain("a", { id: "x", extends: "Bad Id" }, find)).toEqual({ chain: [], problem: "bad" });
+  });
+  it("allows 3 links and refuses a fourth", () => {
+    const l: Record<string, T> = { "a:b": { id: "b", extends: "c" }, "a:c": { id: "c", extends: "d" }, "a:d": { id: "d" }, "a:e": { id: "e", extends: "f" }, "a:f": { id: "f" } };
+    const f = (a: string, id: string) => l[`${a}:${id}`];
+    expect(extendsChain("a", { id: "x", extends: "b" }, f).chain).toHaveLength(3);
+    l["a:d"] = { id: "d", extends: "e" };
+    expect(extendsChain("a", { id: "x", extends: "b" }, f).problem).toBe("deep");
+  });
+  it("phrases: the exact locale, then its language, else none", () => {
+    const p = { en: ["a"], "pt-BR": ["b"], pt: ["c"] };
+    expect([phrasesFor(p, "en"), phrasesFor(p, "pt-BR"), phrasesFor(p, "pt-PT"), phrasesFor(p, "vi"), phrasesFor(undefined, "en")]).toEqual([["a"], ["b"], ["c"], undefined, undefined]);
   });
 });

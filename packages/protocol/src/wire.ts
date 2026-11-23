@@ -1341,7 +1341,9 @@ export type AddonAsset = { path: string; label?: string };
 export type AddonBackgroundImage = { image: string; mobile?: string };
 /** Background of a theme: an image per mode (`mobile`: below the md breakpoint), `veil` = opacity (0..1) of the page background over the image, `panelAlpha` = opacity (0..1) of the main panels (`--panel-alpha`). Shown only while the asset file exists. */
 export type AddonBackground = { light?: AddonBackgroundImage; dark?: AddonBackgroundImage; veil?: number; panelAlpha?: number };
-export type AddonTheme = { id: string; name: string; light?: AddonPalette; dark?: AddonPalette; vars?: AddonThemeVars; background?: AddonBackground; options?: AddonThemeOption[]; /** A `.css` file of the addon that applies only while this theme is picked: the daemon scopes it when it serves it (`?theme=<id>`). */ css?: string };
+/** Slots of a theme (docs/spec.md "Addon themes and CSS" > Slots): `loader`, `done-icon`, `send-icon` = ids of image `assets` shown instead of the built-in mark while the file exists; `thinking-phrases` = per language (`en`, `vi`, `pt-BR`, at most 4) 1..12 phrases of 1..60 characters that replace the "Thinking" label. */
+export type AddonThemeSlots = { loader?: string; "done-icon"?: string; "send-icon"?: string; "thinking-phrases"?: Record<string, string[]> };
+export type AddonTheme = { id: string; name: string; light?: AddonPalette; dark?: AddonPalette; vars?: AddonThemeVars; background?: AddonBackground; options?: AddonThemeOption[]; slots?: AddonThemeSlots; /** `<theme>` (same addon) or `<addon>:<theme>`: that theme's css, vars, background, slots and options apply under this theme's own (protocol addon-theme.ts `extendsChain`). */ extends?: string; /** A `.css` A `.css` file of the addon that applies only while this theme is picked: the daemon scopes it when it serves it (`?theme=<id>`). */ css?: string };
 export type AddonManifest = {
   name: string;
   version: string;
@@ -1349,6 +1351,8 @@ export type AddonManifest = {
   capabilities: string[];
   themes: AddonTheme[];
   assets?: Record<string, AddonAsset>;
+  /** Claude UI versions the addon works with (`*`, `x.y.z`, `>=x.y[.z]`, `^x.y[.z]`, `~x.y[.z]`; protocol addon-compat.ts). Absent = any. Outside it the addon state is `error`. */
+  claudeUi?: string;
   css?: string;
   views: AddonView[];
   commands: AddonCommand[];
@@ -1358,7 +1362,7 @@ export type AddonManifest = {
 /** needs_approval: declared capabilities not all approved (never enabled). error: the manifest does not load. */
 export type AddonState = "enabled" | "disabled" | "needs_approval" | "error";
 /** One finding of the addon lint (docs/spec.md "Addon lint"). Warnings only: a finding never blocks an install or an enable. `text` is built by the client from `code` and the fields. */
-export type AddonLintCode = "selects-testid" | "unknown-part" | "unprefixed-name" | "top-level-css" | "css-broken" | "css-too-large" | "css-large" | "deprecated-part" | "low-contrast" | "asset-missing" | "asset-large";
+export type AddonLintCode = "selects-testid" | "unknown-part" | "unprefixed-name" | "top-level-css" | "css-broken" | "css-too-large" | "css-large" | "deprecated-part" | "low-contrast" | "asset-missing" | "asset-large" | "extends-missing";
 export type AddonLint = {
   level: "warning";
   code: AddonLintCode;
@@ -1371,7 +1375,7 @@ export type AddonLint = {
   suggest?: string;
   /** `deprecated-part`: the release that removes the part. */
   until?: string;
-  /** `asset-missing` / `asset-large`: the asset id (`name`), file in `file`. `asset-large`: size in KB in `count`. */
+  /** `asset-missing` / `asset-large`: the asset id (`name`), file in `file`. `asset-large`: size in KB in `count`. `extends-missing`: `name` = `<theme>`, `suggest` = its `extends` value. */
   /** `selects-testid`: how many selectors. */
   count?: number;
 };

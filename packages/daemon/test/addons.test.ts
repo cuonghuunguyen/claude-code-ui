@@ -11,7 +11,7 @@ import WebSocket from "ws";
 import type { AddonCandidate, AddonInfo, AddonUpdateCheck, AddonsListResult, ServerMessage } from "@claude-ui/protocol";
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createDaemon } from "../src/server.ts";
-import { parseManifest, toInfo } from "../src/addons.ts";
+import { createAddons, parseManifest, toInfo } from "../src/addons.ts";
 import { lintAddon } from "../src/addon-lint.ts";
 
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), "addons-")));
@@ -718,6 +718,136 @@ describe("assets, theme background and typed options (GH-868)", () => {
     ["a colour that is a CSS injection", { type: "color", default: "#aa00ff;}" }],
   ])("refuses an option with %s", (_n, o) => {
     expect(() => parse(make(theme(undefined, [{ id: "x", label: "X", ...o }])))).toThrow(/options\[x\]/);
+  });
+});
+
+describe("slots, extends and claudeUi (GH-870)", () => {
+  const pal = Object.fromEntries(["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"].map((k) => [k, "#112233"]));
+  const make = (name: string, extra: Record<string, unknown>, files: Record<string, string> = {}) => {
+    const d = folder(`gh870-${name}-${Math.random().toString(36).slice(2, 8)}`, { name, ...extra });
+    for (const [f, c] of Object.entries(files)) writeFileSync(join(d, f), c);
+    return d;
+  };
+  const parse = (d: string) => parseManifest(JSON.parse(readFileSync(join(d, "addon.json"), "utf8")), d);
+  const assets = { spin: { path: "art/spin.svg" } };
+  const th = (id: string, extra: Record<string, unknown> = {}) => ({ id, name: id, dark: pal, ...extra });
+
+  it("slots: asset ids and phrases are kept; the asset file may be missing", () => {
+    const d = make("slots", { assets, themes: [th("a", { slots: { loader: "spin", "done-icon": "spin", "send-icon": "spin", "thinking-phrases": { en: ["Casting"], vi: ["Đang niệm"], "pt-BR": ["x"] } } })] });
+    expect(parse(d).themes[0]!.slots).toEqual({ loader: "spin", "done-icon": "spin", "send-icon": "spin", "thinking-phrases": { en: ["Casting"], vi: ["Đang niệm"], "pt-BR": ["x"] } });
+  });
+
+  it.each([
+    ["an undeclared asset id", { loader: "nope" }],
+    ["a slot that does not exist", { spinner: "spin" }],
+    ["a slot value that is not text", { loader: 3 }],
+    ["phrases that are not an object", { "thinking-phrases": ["a"] }],
+    ["a language that is not a locale id", { "thinking-phrases": { english: ["a"] } }],
+    ["a lower-case region", { "thinking-phrases": { "pt-br": ["a"] } }],
+    ["five languages", { "thinking-phrases": Object.fromEntries(["aa", "bb", "cc", "dd", "ee"].map((l) => [l, ["a"]])) }],
+    ["thirteen phrases", { "thinking-phrases": { en: Array.from({ length: 13 }, (_, i) => `p${i}`) } }],
+    ["no phrase", { "thinking-phrases": { en: [] } }],
+    ["a phrase of 61 characters", { "thinking-phrases": { en: ["x".repeat(61)] } }],
+    ["an empty phrase", { "thinking-phrases": { en: [""] } }],
+    ["a phrase with a line break", { "thinking-phrases": { en: ["a\nb"] } }],
+    ["a phrase with markup", { "thinking-phrases": { en: ["<b>a</b>"] } }],
+    ["a phrase that is not text", { "thinking-phrases": { en: [1] } }],
+  ])("slots: refuses %s", (_n, slots) => {
+    const d = make("badslots", { assets, themes: [th("a", { slots })] });
+    expect(() => parse(d)).toThrow(/slots/);
+  });
+
+  it("extends: both forms are kept; a base that is missing or in another addon is no manifest error", () => {
+    const d = make("ext", { themes: [th("a"), th("b", { extends: "a" }), th("c", { extends: "ext:b" }), th("d", { extends: "other:x" }), th("e", { extends: "nope" })] });
+    expect(parse(d).themes.map((t) => t.extends)).toEqual([undefined, "a", "ext:b", "other:x", "nope"]);
+  });
+
+  it.each([
+    ["a malformed value", [th("a", { extends: "A:b" })], /extends/],
+    ["three parts", [th("a", { extends: "x:y:z" })], /extends/],
+    ["itself", [th("a", { extends: "a" })], /itself/],
+    ["itself with the addon name", [th("a", { extends: "loop:a" })], /itself/],
+    ["a loop of two themes of the addon", [th("a", { extends: "b" }), th("b", { extends: "a" })], /loop/],
+    ["a loop of three", [th("a", { extends: "b" }), th("b", { extends: "loop:c" }), th("c", { extends: "a" })], /loop/],
+  ])("extends: refuses %s", (_n, themes, re) => {
+    const d = make("loop", { themes });
+    expect(() => parse(d)).toThrow(re);
+  });
+
+  it.each(["*", "1.5.0", ">=1.5", ">=1.5.2", "^1.5", "~1.5", "~1.5.2"])("claudeUi: accepts %s", (v) => {
+    expect(parse(make("cu", { claudeUi: v })).claudeUi).toBe(v);
+  });
+  it.each(["1.5", ">1.5", "latest", ">=1", "^", "1.x", ">=1.5 <2", "", 5, ">=1.5.0.1"])("claudeUi: refuses %j", (v) => {
+    expect(() => parse(make("cu", { claudeUi: v }))).toThrow(/claudeUi/);
+  });
+
+  describe("claudeUi against the app version", () => {
+    const rec = (d: string) => ({ source: { kind: "local" as const, path: d }, approved: ["ui.pane"], enabled: true });
+    it("a newer requirement makes the addon an error with the reason, its manifest still listed and not served", () => {
+      const d = make("newer", { claudeUi: ">=1.6" });
+      const i = toInfo("newer", rec(d), tmp, "n", undefined, undefined, { appVersion: "1.5.0" });
+      expect(i).toMatchObject({ state: "error", error: "needs Claude UI >=1.6 (this is 1.5.0)" });
+      expect(i.manifest?.name).toBe("newer");
+      expect(i.base).toBeUndefined();
+    });
+    it("a met range, no claudeUi, an unknown app version (source checkout) change nothing", () => {
+      for (const [claudeUi, appVersion] of [[">=1.5", "1.5.0"], ["^1.4", "1.5.0"], [undefined, "1.5.0"], [">=9.0", "dev"], [">=9.0", undefined]] as const)
+        expect(toInfo("ok", rec(make("ok", claudeUi ? { claudeUi } : {})), tmp, "n", undefined, undefined, { appVersion }).state).toBe("enabled");
+    });
+    it("an incompatible addon cannot be enabled and its files are not served", async () => {
+      const d = make("blocked", { claudeUi: ">=2.0" }, { "t.css": "a{}" });
+      const a = createAddons({ dir: join(tmp, "cfg-blocked"), file: join(tmp, "cfg-blocked", "addons.json"), onChanged: () => {}, appVersion: "1.5.0" });
+      await a.handle({ type: "addons.install", source: { kind: "local", path: d } } as never);
+      await a.handle({ type: "addons.approve", name: "blocked", capabilities: ["ui.pane"] } as never).catch(() => {});
+      expect(a.serve("blocked", "pane.html")).toBeUndefined();
+      await expect(a.handle({ type: "addons.setEnabled", name: "blocked", enabled: true } as never)).rejects.toThrow(/needs Claude UI >=2.0 \(this is 1.5.0\)/);
+    });
+  });
+
+  describe("extends: lint and the base css under the extending theme", () => {
+    const run = async (specs: Record<string, Record<string, unknown>>, files: Record<string, Record<string, string>> = {}, enable: string[] = Object.keys(specs)) => {
+      const dir = join(tmp, `cfg-ext-${Math.random().toString(36).slice(2, 8)}`);
+      const a = createAddons({ dir, file: join(dir, "addons.json"), onChanged: () => {}, appVersion: "1.5.0" });
+      for (const [name, extra] of Object.entries(specs)) {
+        const d = make(name, extra, files[name]);
+        await a.handle({ type: "addons.install", source: { kind: "local", path: d } } as never);
+        if (enable.includes(name)) await a.handle({ type: "addons.approve", name, capabilities: ["ui.pane"] } as never);
+      }
+      const lint = async (name: string) => ((await a.handle({ type: "addons.list" } as never)) as AddonsListResult).addons.find((x) => x.name === name)!.lint?.filter((l) => l.code === "extends-missing");
+      return { a, lint };
+    };
+
+    it("warns for a missing target, a loop across addons, a chain deeper than 3 and a target in an addon that is not enabled; a good chain is clean", async () => {
+      const { lint } = await run(
+        {
+          base: { themes: [th("b"), th("deep1", { extends: "deep2" }), th("deep2", { extends: "deep3" }), th("deep3", { extends: "deep4" }), th("deep4", { extends: "deep5" }), th("deep5")], },
+          main: { themes: [th("ok", { extends: "base:b" }), th("gone", { extends: "nope" }), th("off", { extends: "idle:x" }), th("cyc", { extends: "pong:y" }), th("far", { extends: "base:deep1" })] },
+          pong: { themes: [th("y", { extends: "main:cyc" })] },
+          idle: { themes: [th("x")] },
+        },
+        {},
+        ["base", "main", "pong"],
+      );
+      expect((await lint("main"))?.map((l) => `${l.name}>${l.suggest}`)).toEqual(["gone>nope", "off>idle:x", "cyc>pong:y", "far>base:deep1"]);
+      expect((await lint("base"))?.map((l) => l.name)).toEqual(["deep1"]); // 4 links
+    });
+
+    it("the base css is served under the extending theme's root and names, only when the chain holds the base theme", async () => {
+      const { a } = await run({ base: { themes: [th("b", { css: "b.css" })] }, main: { themes: [th("m", { extends: "base:b" }), th("lone")] } }, { base: { "b.css": ".x { color: red } @keyframes spin { to { opacity: 0 } }" } });
+      const ok = a.serve("base", "b.css", "b", "main:m")!;
+      expect(ok.scope).toBe(':root[data-theme="addon:main:m"]');
+      expect(ok.names).toBe("main-m--");
+      expect(a.serve("base", "b.css", "b")!.scope).toBe(':root[data-theme="addon:base:b"]');
+      expect(a.serve("base", "b.css", "b", "main:lone")).toBeUndefined(); // lone does not extend b
+      expect(a.serve("base", "b.css", "b", "main:nope")).toBeUndefined();
+      expect(a.serve("base", "b.css", "b", "nobody:m")).toBeUndefined();
+      expect(a.serve("base", "b.css", "b", "garbage")).toBeUndefined();
+    });
+
+    it("a theme of a disabled addon cannot be the extender, a disabled base is not served", async () => {
+      const { a } = await run({ base: { themes: [th("b", { css: "b.css" })] }, main: { themes: [th("m", { extends: "base:b" })] } }, { base: { "b.css": "a{}" } }, ["base"]);
+      expect(a.serve("base", "b.css", "b", "main:m")).toBeUndefined(); // main is not enabled
+    });
   });
 });
 

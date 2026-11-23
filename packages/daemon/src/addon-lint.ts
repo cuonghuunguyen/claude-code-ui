@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
-import { ASSET_LARGE_BYTES, PARTS, type AddonAssetState, type AddonLint, type AddonManifest } from "@claude-ui/protocol";
+import { ASSET_LARGE_BYTES, extendsChain, PARTS, type AddonAssetState, type AddonLint, type AddonManifest, type AddonTheme } from "@claude-ui/protocol";
 import { CssScanError, MAX_THEME_CSS, scopeCss, skipToken, themeRoot } from "./addon-css.ts";
 
 const PART_BY_NAME = new Map(PARTS.map((p) => [p.name as string, p]));
@@ -263,12 +263,19 @@ function lintAssets(root: string, m: AddonManifest): AddonLint[] {
   return out;
 }
 
-/** Findings of an addon: manifest rules (palette contrast), and its CSS files (top-level `css` and every `themes[].css`, each once). A missing or irregular file is skipped (the manifest check reports a missing one). A theme CSS that the daemon cannot scope (unclosed block, stray `}`, groups nested too deep) is served empty, so it gets `css-broken` too. Results are cached by the file content (a hash), so an edit that keeps size and mtime is seen. Assets: `asset-missing` (declared, no file yet: the user fills it) and `asset-large` (over 2 MB). */
-export function lintAddon(root: string, m: AddonManifest): AddonLint[] {
+/** `extends-missing` per theme whose `extends` cannot be followed (target not found, not running, a loop, deeper than 3): the theme works without its base. `find`: themes of the addons that run in other addons (same-addon targets are found in the manifest itself). */
+function lintExtends(m: AddonManifest, find?: (addon: string, theme: string) => AddonTheme | undefined): AddonLint[] {
+  const lookup = (addon: string, id: string) => (addon === m.name ? m.themes.find((t) => t.id === id) : find?.(addon, id));
+  return m.themes.flatMap((t) => (t.extends !== undefined && extendsChain(m.name, t, lookup).problem ? [{ level: "warning" as const, code: "extends-missing" as const, name: t.id, suggest: t.extends }] : []));
+}
+
+/** Findings of an addon: manifest rules (palette contrast), and its CSS files (top-level `css` and every `themes[].css`, each once). A missing or irregular file is skipped (the manifest check reports a missing one). A theme CSS that the daemon cannot scope (unclosed block, stray `}`, groups nested too deep) is served empty, so it gets `css-broken` too. Results are cached by the file content (a hash), so an edit that keeps size and mtime is seen. Assets: `asset-missing` (declared, no file yet: the user fills it; background and slot images alike) and `asset-large` (over 2 MB). `extends-missing`: see `lintExtends`. */
+export function lintAddon(root: string, m: AddonManifest, find?: (addon: string, theme: string) => AddonTheme | undefined): AddonLint[] {
   const out: AddonLint[] = [];
   if (m.css && m.themes.length) out.push({ level: "warning", code: "top-level-css", file: m.css });
   out.push(...lintContrast(m));
   out.push(...lintAssets(root, m));
+  out.push(...lintExtends(m, find));
   const files = [...new Set([m.css, ...m.themes.map((t) => t.css)].filter((f): f is string => !!f))];
   for (const f of files) {
     const r = readCss(join(root, f));

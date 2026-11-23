@@ -139,3 +139,64 @@ export function optionError(o: Record<string, unknown>): string | undefined {
   if (type === "color") return typeof o.default === "string" && HEX6.test(o.default) ? undefined : "default: required colour as #rrggbb";
   return "type: must be boolean, select, range or color";
 }
+
+/** Slots of a theme that name an image asset. */
+export const SLOT_ASSETS = ["loader", "done-icon", "send-icon"] as const;
+export type SlotAsset = (typeof SLOT_ASSETS)[number];
+/** `thinking-phrases` limits: languages, phrases per language, characters per phrase. */
+export const MAX_PHRASE_LANGS = 4;
+export const MAX_PHRASES = 12;
+export const MAX_PHRASE_LENGTH = 60;
+/** A language key: the id of an app locale (`en`, `vi`) or any `xx` / `xx-XX`. */
+export const PHRASE_LANG = /^[a-z]{2}(?:-[A-Z]{2})?$/;
+
+/** Why a `thinking-phrases` value is refused, else undefined. Phrases are plain text: no control character (newline included) and no `<` or `>`. */
+export function phrasesError(v: unknown): string | undefined {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return "thinking-phrases: an object {<language>: [phrases]}";
+  const langs = Object.entries(v);
+  if (langs.length === 0 || langs.length > MAX_PHRASE_LANGS) return `thinking-phrases: 1 to ${MAX_PHRASE_LANGS} languages`;
+  for (const [lang, list] of langs) {
+    if (!PHRASE_LANG.test(lang)) return `thinking-phrases.${lang.slice(0, 20)}: language must look like en or pt-BR`;
+    if (!Array.isArray(list) || list.length === 0 || list.length > MAX_PHRASES) return `thinking-phrases.${lang}: 1 to ${MAX_PHRASES} phrases`;
+    // eslint-disable-next-line no-control-regex
+    if (list.some((p) => typeof p !== "string" || p === "" || p.length > MAX_PHRASE_LENGTH || /[\u0000-\u001f\u007f<>]/.test(p))) return `thinking-phrases.${lang}: each phrase is plain text of 1 to ${MAX_PHRASE_LENGTH} characters (no < > or line break)`;
+  }
+  return undefined;
+}
+
+/** The phrases for a UI locale: the exact key (`pt-BR`), else the language part (`pt`), else none. */
+export function phrasesFor(phrases: Record<string, string[]> | undefined, locale: string): string[] | undefined {
+  if (!phrases) return undefined;
+  const list = Object.hasOwn(phrases, locale) ? phrases[locale] : Object.hasOwn(phrases, locale.slice(0, 2)) ? phrases[locale.slice(0, 2)] : undefined;
+  return list?.length ? list : undefined;
+}
+
+const EXTENDS = /^(?:([a-z0-9]+(?:-[a-z0-9]+)*):)?([a-z0-9]+(?:-[a-z0-9]+)*)$/;
+/** Chain of `extends` links followed at most this many times. */
+export const MAX_EXTENDS_DEPTH = 3;
+
+/** `extends` as `{addon, theme}` (`addon` defaults to `own`, the addon that holds the theme), undefined when malformed (an id is `[a-z0-9]+(-[a-z0-9]+)*`, up to 64 characters). */
+export function parseExtends(v: string, own: string): { addon: string; theme: string } | undefined {
+  const m = v.length <= 130 ? EXTENDS.exec(v) : null;
+  return m && m[2]!.length <= 64 && (m[1] ?? "").length <= 64 ? { addon: m[1] ?? own, theme: m[2]! } : undefined;
+}
+
+export type ExtendsProblem = "bad" | "missing" | "cycle" | "deep";
+/** The themes `theme` of `addon` extends, nearest first (`find` looks a theme up in the addons that run: a theme of a disabled or missing addon is not found). Any problem (malformed value, missing target, loop, more than `MAX_EXTENDS_DEPTH` links) gives an empty chain and the problem: the theme then works without a base. */
+export function extendsChain<T extends { id: string; extends?: string }>(addon: string, theme: T, find: (addon: string, id: string) => T | undefined): { chain: { addon: string; theme: T }[]; problem?: ExtendsProblem } {
+  const chain: { addon: string; theme: T }[] = [];
+  const seen = new Set([`${addon}\0${theme.id}`]);
+  let cur = { addon, theme };
+  while (cur.theme.extends !== undefined) {
+    const ref = parseExtends(cur.theme.extends, cur.addon);
+    if (!ref) return { chain: [], problem: "bad" };
+    const key = `${ref.addon}\0${ref.theme}`;
+    if (seen.has(key)) return { chain: [], problem: "cycle" };
+    seen.add(key);
+    const next = find(ref.addon, ref.theme);
+    if (!next) return { chain: [], problem: "missing" };
+    if (chain.length >= MAX_EXTENDS_DEPTH) return { chain: [], problem: "deep" };
+    chain.push((cur = { addon: ref.addon, theme: next }));
+  }
+  return { chain };
+}
