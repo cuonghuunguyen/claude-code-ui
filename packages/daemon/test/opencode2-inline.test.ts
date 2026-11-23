@@ -102,7 +102,7 @@ describe("OpenCode 2 inline task", () => {
       { action: "edit", resource: "*", effect: "ask" },
     ]);
     expect(r.called("instructions.put")).toEqual([{ sessionID: "ses_child", key: "claude-ui-inline", value: INLINE_SYSTEM }]);
-    expect(r.called("session.prompt")).toEqual([{ sessionID: "ses_child", text: "find foo" }]);
+    expect(r.called("session.prompt")).toEqual([{ id: expect.any(String), sessionID: "ses_child", text: "find foo" }]);
     const steps = r.emitted.filter((p) => p.parentId === "call_1");
     expect(steps.map((p) => `${p.type}:${p.id}`)).toEqual(expect.arrayContaining(["tool_call:c1", "tool_result:c1:result", "assistant_text:msg_a2:text:0"]));
     await sleep(0);

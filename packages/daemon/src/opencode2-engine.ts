@@ -190,7 +190,7 @@ const SHELL_POLL_MS = 500;
 const shownUser = (m: OpenCode2Message) => m.type === "user" && (!!m.text || !!m.files?.some((f) => f.mime?.startsWith("image/") && f.data));
 type Req = { kind: "permission"; callId?: string; sessionID: string; /** The mapper of the call: an inline run's own. */ mapper: OpenCode2Mapper; /** An inline run's call: its denied card shows under it. */ parentId?: string } | { kind: "question"; sessionID: string; form: Json; questions: Question[]; /** The shown fields, one per question. */ fields: Json[] };
 /** A running inline task: its child session's events feed `notify`; `callId` = the call its steps show under. */
-type InlineRun = { callId?: string; mapper: OpenCode2Mapper; notify: (type: string, d: Json) => void; /** Its prompt reached OpenCode: a check that finds it not running ends it. */ posted?: boolean; /** Ends the run as OpenCode stored its end (an end event lost with a stream drop). */ settle: (end: StoredEnd) => void };
+type InlineRun = { callId?: string; mapper: OpenCode2Mapper; notify: (type: string, d: Json) => void; /** Its prompt reached OpenCode: a check that finds it not running ends it. */ posted?: boolean; /** The id of its prompt: stored rows with a smaller id are copied from a parent (a fork's), not its own. */ after?: string; /** Ends the run as OpenCode stored its end (an end event lost with a stream drop). */ settle: (end: StoredEnd) => void };
 /** The text of the last assistant message of a stored child session (the fallback when its events were missed). */
 const lastAssistantText2 = (messages: readonly OpenCode2Message[]) => {
   for (const m of [...messages].reverse()) {
@@ -415,7 +415,9 @@ class OpenCode2Session implements EngineSession {
     if (!active) return;
     for (const [id, r] of posted) {
       if (id in active) continue;
-      const newest = await client.message.list({ sessionID: id, order: "desc", limit: 5 }).then((p) => p.data as unknown as Json[], () => []);
+      const listed = await client.message.list({ sessionID: id, order: "desc", limit: 5 }).then((p) => p.data as unknown as Json[], () => []);
+      // A fork holds the parent's copied rows (their ids are smaller than its own prompt's): they are not its state.
+      const newest = r.after ? listed.filter((m) => String(m.id) > r.after!) : listed;
       // OpenCode lists a session as active only some time after its prompt request answered: no end row and no assistant message yet = the run is still starting.
       if (!newest.some((m) => m.type === "idle" || m.type === "assistant")) continue;
       r.settle(storedEnd(newest));
@@ -629,7 +631,9 @@ class OpenCode2Session implements EngineSession {
   prompt(text: string, images: string[] = []): string | undefined {
     if (this.commandGate) {
       this.localRun = undefined;
-      void this.commandGate.then(() => this.prompt(text, images));
+      // A Stop while the command waits or prepares drops this prompt too (as sendPlain's).
+      const stops = this.stops;
+      void this.commandGate.then(() => this.stops === stops && this.prompt(text, images));
       return undefined;
     }
     const local = !images.length && /^\/(compact|undo|redo)$/.exec(text.trim())?.[1];
@@ -1166,8 +1170,10 @@ class OpenCode2Session implements EngineSession {
       await this.server.streamReady();
       // A Stop that came while the session was made sends no prompt.
       if (!hooks.signal.aborted && !(callId && !this.inlineStops.has(callId))) {
-        await client.session.prompt({ sessionID: id, text: spec.text });
+        const messageID = ascending("msg");
         const run = this.inlineRuns.get(id);
+        if (run) run.after = messageID;
+        await client.session.prompt({ sessionID: id, id: messageID, text: spec.text });
         if (run) run.posted = true;
       }
       const end = await outcome;
@@ -1430,8 +1436,9 @@ class OpenCode2Session implements EngineSession {
         // Its prompt is not echoed under the card.
         const messageID = ascending("msg");
         mapper.own.add(messageID);
-        await client.session.prompt({ sessionID: id, id: messageID, text: `${FORK_PREAMBLE}\n\n${spec.prompt}` });
         const run = this.inlineRuns.get(id);
+        if (run) run.after = messageID;
+        await client.session.prompt({ sessionID: id, id: messageID, text: `${FORK_PREAMBLE}\n\n${spec.prompt}` });
         if (run) run.posted = true;
       }
       const end = await outcome;

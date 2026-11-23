@@ -15,7 +15,7 @@ const BUILD = [{ action: "*", resource: "*", effect: "allow" }, { action: "brows
 const PARENT = [{ id: "msg_u1", type: "user", text: "hello" }, { id: "msg_a1", type: "assistant", time: { completed: 1 }, content: [] }, { id: "msg_u2", type: "user", text: "do it" }, { id: "msg_a2", type: "assistant", content: [] }];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; parent?: Json[]; copied?: Json[]; stored?: Json[]; model?: string; failFork?: boolean } = {}) {
+function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; parent?: Json[]; copied?: Json[]; stored?: Json[] | ((promptId: string) => Json[]); model?: string; failFork?: boolean } = {}) {
   const calls: { name: string; input: Json }[] = [];
   const handlers = new Set<{ event: (dir: string | undefined, p: { type: string; properties: Json }) => void; resync: () => void }>();
   const emit = (type: string, d: Json) => handlers.forEach((h) => h.event("/p", { type, properties: d }));
@@ -25,6 +25,7 @@ function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; par
     (name: string, f: (i: Json) => unknown = () => undefined) =>
     async (input: Json) => (calls.push({ name, input }), f(input));
   const parent = o.parent ?? PARENT;
+  let promptId = "";
   const client = {
     agent: { list: rec("agent.list", () => ({ data: [{ id: "build", mode: "primary", hidden: false, permissions: BUILD }] })) },
     config: { get: rec("config.get", () => []) },
@@ -34,7 +35,7 @@ function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; par
       update: rec("session.update"),
       switchAgent: rec("session.switchAgent"),
       switchModel: rec("session.switchModel"),
-      prompt: rec("session.prompt", () => void queueMicrotask(() => o.script?.(fork))),
+      prompt: rec("session.prompt", (i) => ((promptId = i.id), void queueMicrotask(() => o.script?.(fork)))),
       interrupt: rec("session.interrupt", () => ({ interrupted: true })),
       remove: rec("session.remove"),
       active: rec("session.active", () => ({})),
@@ -44,7 +45,7 @@ function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; par
     permission: { reply: rec("permission.reply"), request: { list: rec("permission.request.list", () => ({ data: [] })) } },
     message: {
       list: rec("message.list", (i) => {
-        if (i.sessionID === "ses_fork") return { data: o.stored ?? o.copied ?? [{ id: "msg_c_1", type: "user" }, { id: "msg_c_2", type: "assistant" }, { id: "msg_c_3", type: "idle" }], cursor: {} };
+        if (i.sessionID === "ses_fork") return { data: (typeof o.stored === "function" ? o.stored(promptId) : o.stored) ?? o.copied ?? [{ id: "msg_c_1", type: "user" }, { id: "msg_c_2", type: "assistant" }, { id: "msg_c_3", type: "idle" }], cursor: {} };
         // The fork point is read first (oldest, then newest), the history of a parent later.
         return { data: i.order === "desc" ? [...parent].reverse() : i.limit === 1 ? parent.slice(0, 1) : parent, cursor: {} };
       }),
@@ -72,7 +73,9 @@ function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; par
     emit("session.tool.called", { sessionID: "ses_parent", assistantMessageID: "msg_a2", id, input });
   };
   const called = (name: string) => calls.filter((c) => c.name === name).map((c) => c.input);
-  return { run, emit, fork, emitted, asks, cancelled, links, callRunning, called, calls };
+  /** The event stream reconnected (events may have been lost). */
+  const reconnect = () => handlers.forEach((h) => h.resync());
+  return { run, emit, fork, emitted, asks, cancelled, links, callRunning, called, calls, reconnect };
 }
 const hooks = (signal = new AbortController().signal) => ({ signal, input: INPUT });
 const waitPrompt = async (r: ReturnType<typeof rig>) => {
@@ -190,6 +193,21 @@ describe("OpenCode 2 Fork run", () => {
     await sleep(0);
     expect(r.called("session.remove")).toEqual([{ sessionID: "ses_fork" }]);
   }, 10_000);
+
+  it("a reconnect before OpenCode lists the fork as active does not end it on the parent's rows copied into the fork", async () => {
+    // Stored newest first: the fork's own prompt and notice, under them the parent's copied rows (their ids sort before the fork's prompt).
+    const stored = (mine: string) => [{ id: `${mine}z`, type: "notice" }, { id: mine, type: "user", text: "fork prompt" }, { id: "msg_000000000003", type: "idle", outcome: "succeeded" }, { id: "msg_000000000002", type: "assistant", content: [{ type: "text", text: "PARENT REPLY" }] }, { id: "msg_000000000001", type: "user", text: "hello" }];
+    const r = rig({ stored });
+    r.callRunning();
+    let end: unknown;
+    const running = r.run.forkRun(SPEC, hooks()).then((x) => (end = x));
+    await waitPrompt(r);
+    r.reconnect();
+    await sleep(50);
+    expect(end).toBeUndefined();
+    answer(r.fork);
+    expect(await running).toMatchObject({ status: "done", text: "fork answer" });
+  });
 
   it("a parent without messages forks nothing and says why; a refused fork is an error", async () => {
     const empty = rig({ parent: [] });
