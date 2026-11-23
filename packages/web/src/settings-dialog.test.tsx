@@ -2,7 +2,10 @@
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import type { DockerState, Settings, SideInfo } from "@claude-ui/protocol";
+import type { AddonInfo, DockerState, Settings, SideInfo } from "@claude-ui/protocol";
+import { AddonsContext } from "./addons.ts";
+import { applyAddonThemes } from "./theme.ts";
+import { addonThemes } from "./themes.ts";
 import type { Request } from "./client.ts";
 import { saveGroup, SettingsDialog } from "./settings-dialog.tsx";
 import { loadSignalOnly, saveSignalOnly } from "./signal.ts";
@@ -13,9 +16,12 @@ import { loadSidebarView, saveSidebarView } from "./sessions.ts";
 import { WEB_VERSION } from "./version.ts";
 
 let root: ReturnType<typeof createRoot> | undefined;
+/** Addons the Settings dialog sees (AddonsContext); reset after each test. */
+let testAddons: AddonInfo[] = [];
 afterEach(() => {
   act(() => root?.unmount());
   document.body.innerHTML = "";
+  testAddons = [];
 });
 
 async function render({ project, overrides, legacy = false, sides, docker, failGet = false, tokenReset = false, group, daemon = { host: "box" } as { host: string; version?: string; desktopForcedOff?: true; keepAwake?: { supported: boolean; error?: string }; shortcut?: { installed: boolean } } | null, push = { on: false, supported: true, busy: false, error: undefined as string | undefined } }: { project?: { cwd: string; name: string; side?: string }; overrides?: Settings["projects"]["overrides"]; legacy?: boolean; sides?: SideInfo[]; docker?: DockerState; failGet?: boolean; tokenReset?: boolean; group?: string; daemon?: { host: string; version?: string; desktopForcedOff?: true; keepAwake?: { supported: boolean; error?: string }; shortcut?: { installed: boolean } } | null; push?: { on: boolean; supported: boolean; busy: boolean; error: string | undefined } } = {}) {
@@ -101,7 +107,7 @@ async function render({ project, overrides, legacy = false, sides, docker, failG
     );
   }
   root = createRoot(el);
-  await act(async () => root!.render(<Host />));
+  await act(async () => root!.render(<AddonsContext value={{ addons: testAddons, picks: {} }}><Host /></AddonsContext>));
   const q = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
   const pick = async (group: string) => void (await act(async () => q(`settings-group-${group}`)!.click()));
   return { bump: () => act(async () => bump()), refuse: (m: string) => void (refuse = m), calls, toggle, q, pick, prompt, onTabGrouping, onTabCompact, onTabAutoClose, onShortcuts, onAddons, onProjectSettings, onRestartGuide };
@@ -1154,6 +1160,66 @@ it("Appearance: a theme with options shows one switch per option; toggling appli
   expect(document.documentElement.hasAttribute("data-opt-rain")).toBe(false);
   expect(document.documentElement.hasAttribute("data-opt-rain-light")).toBe(false);
   document.documentElement.removeAttribute("data-theme");
+});
+
+it("Appearance (GH-868): an addon theme's typed options show a select, a slider with its value and a colour input; each applies --opt-<id> and is kept; a bad stored value shows the default", async () => {
+  localStorage.clear();
+  const palette = Object.fromEntries(["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"].map((k) => [k, "#101010"]));
+  testAddons = [
+    {
+      name: "acme", source: { kind: "local", path: "/x" }, approved: [], state: "enabled", base: "/addon/aa/acme/",
+      manifest: {
+        name: "acme", version: "1", description: "", capabilities: [], views: [], commands: [], renderers: [],
+        themes: [
+          {
+            id: "void", name: "Void", dark: palette, light: palette,
+            options: [
+              { id: "mood", label: "Mood", type: "select", choices: [{ value: "calm", label: "Calm" }, { value: "storm", label: "Storm" }], default: "calm" },
+              { id: "density", label: "Density", type: "range", min: 0, max: 1, step: 0.1, default: 0.5 },
+              { id: "tint", label: "Tint", type: "color", default: "#aa00ff" },
+              { id: "glow", label: "Glow", default: false },
+            ],
+          },
+        ],
+      },
+    } as AddonInfo,
+  ];
+  localStorage.setItem("claude-ui.colorTheme", "addon:acme:void");
+  localStorage.setItem("claude-ui.theme-options", JSON.stringify({ "addon:acme:void": { density: 9, tint: "red" } }));
+  const html = document.documentElement;
+  html.setAttribute("data-theme", "addon:acme:void");
+  applyAddonThemes(addonThemes(testAddons)); // App does this when the addons arrive
+  const { q } = await render();
+  const slider = q("settings-theme-option-density") as HTMLInputElement;
+  expect(slider.type).toBe("range");
+  expect(slider.value).toBe("0.5"); // stored 9 is outside 0..1: the default
+  expect(q("settings-theme-option-density-value")!.textContent).toBe("0.5");
+  expect((q("settings-theme-option-tint") as HTMLInputElement).value).toBe("#aa00ff"); // stored "red" is not #rrggbb
+  expect(q("settings-theme-option-mood")!.textContent).toContain("Calm");
+  expect(q("settings-theme-option-glow")!.getAttribute("aria-checked")).toBe("false");
+  expect(html.style.getPropertyValue("--opt-mood")).toBe("calm");
+  expect(html.getAttribute("data-opt-mood")).toBe("calm");
+  expect(html.style.getPropertyValue("--opt-glow")).toBe("0");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(slider, "0.8");
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(html.style.getPropertyValue("--opt-density")).toBe("0.8");
+  expect(q("settings-theme-option-density-value")!.textContent).toBe("0.8");
+  const tint = q("settings-theme-option-tint") as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(tint, "#00ff88");
+    tint.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(html.style.getPropertyValue("--opt-tint")).toBe("#00ff88");
+  await act(async () => q("settings-theme-option-mood")!.click());
+  await act(async () => q("settings-theme-option-mood-storm")!.click());
+  expect(html.getAttribute("data-opt-mood")).toBe("storm");
+  expect(html.style.getPropertyValue("--opt-mood")).toBe("storm");
+  expect(JSON.parse(localStorage.getItem("claude-ui.theme-options")!)).toEqual({ "addon:acme:void": { density: 0.8, tint: "#00ff88", mood: "storm" } });
+  html.removeAttribute("data-theme");
+  applyAddonThemes([]);
+  for (const n of ["mood", "density", "tint", "glow"]) (html.removeAttribute(`data-opt-${n}`), html.style.removeProperty(`--opt-${n}`));
 });
 
 it("Appearance (GH-468): Dracula in light mode shows the warning; dark mode does not", async () => {

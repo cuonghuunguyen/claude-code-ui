@@ -5,3 +5,7 @@
 [data-testid="pane-session"] {
   letter-spacing: 0.01em;
 }
+/* The "Accent intensity" option of the theme (a range): --opt-intensity, 0 to 1; not set under another theme. */
+[data-part="titlebar"] {
+  border-bottom: 1px solid color-mix(in srgb, var(--primary) calc(var(--opt-intensity, 0) * 100%), transparent);
+}

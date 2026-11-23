@@ -1,9 +1,10 @@
 // The client commands (docs/spec.md "CLI"): status, open, sessions, projects, workers. Text by default, `--json` for scripts.
 // The token is never written to stdout or stderr except by `open --print`.
 import { spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { release } from "node:os";
 import { resolve } from "node:path";
-import type { ListResult, SessionListItem } from "@claude-ui/protocol";
+import type { AddonInfo, ListResult, SessionListItem } from "@claude-ui/protocol";
 import type { Cli } from "../cli.ts";
 import { CtlError, pidAlive, probe, readToken, request, resolvePort, tokenPath } from "./connect.ts";
 import { readDaemonFile } from "./daemon-file.ts";
@@ -85,6 +86,36 @@ export async function runClient(cli: Client, io: ClientIo): Promise<number> {
         };
         const ordered = [...groups].sort(([a], [b]) => depth(a) - depth(b));
         out(ordered.map(([id, ws]) => `${header(id)}\n${table(["WORKER", "STATE", "ID", "ACTIVITY"], ws.map((w) => [w.workerName!, w.state, w.id, when(w.lastActivity)]))}`).join("\n\n"));
+        return 0;
+      }
+      case "addon": {
+        // `addon dev <path>`: install as a dev addon (or switch an installed one of the same folder to dev), enable it unless it needs approval.
+        const path = resolve(cli.addonPath!);
+        const real = (() => {
+          try {
+            return realpathSync(path); // the daemon stores the real path
+          } catch {
+            return path;
+          }
+        })();
+        const call = <T>(msg: { type: string } & Record<string, unknown>) => request<T>(port, token, msg);
+        let info: AddonInfo;
+        try {
+          info = await call<AddonInfo>({ type: "addons.install", source: { kind: "local", path } });
+        } catch (e) {
+          if (!(e instanceof CtlError) || e.code !== "exists") throw e;
+          const { addons } = await call<{ addons: AddonInfo[] }>({ type: "addons.list" });
+          const same = addons.find((a) => a.source.kind === "local" && a.source.path === real);
+          if (!same) throw e; // the name belongs to another folder or a git addon: say so
+          info = same;
+        }
+        info = await call<AddonInfo>({ type: "addons.setDev", name: info.name, dev: true });
+        if (info.state === "disabled") info = await call<AddonInfo>({ type: "addons.setEnabled", name: info.name, enabled: true });
+        const next = info.state === "needs_approval" ? "approve its capabilities in Settings › Addons to start watching" : info.state === "enabled" ? "watching the folder, edits reload" : `state ${info.state}`;
+        // The kitchen-sink page of the web app (every part in every state, light and dark); no token: the browser is paired already.
+        const preview = `${url}#/addon-preview`;
+        if (cli.json) json({ name: info.name, state: info.state, dev: true, path, preview, ...(info.lint && { lint: info.lint }) });
+        else out(`${info.name}: ${next}${info.lint?.length ? `\nlint: ${info.lint.length} warning(s), see Settings › Addons` : ""}\npreview: ${preview}`);
         return 0;
       }
       case "open": {

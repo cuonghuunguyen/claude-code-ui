@@ -102,9 +102,10 @@ describe("parseCli", () => {
       expect(parseCli(["ls"], {}, "/h")).toMatchObject({ cmd: "sessions" });
       expect(parseCli(["projects"], {}, "/h")).toMatchObject({ cmd: "projects" });
       expect(parseCli(["workers", "--json"], {}, "/h")).toMatchObject({ cmd: "workers", json: true });
+      expect(parseCli(["addon", "dev", "./x"], {}, "/h")).toMatchObject({ kind: "client", cmd: "addon", addonPath: "./x" });
     });
     it("rejects unknown and reserved names, extra arguments, bad values", () => {
-      for (const bad of [["bogus"], ["new"], ["send"], ["tail"], ["interrupt"], ["doctor"], ["logs"], ["stop"], ["status", "x"], ["sessions", "x"], ["sessions", "--state", "nope"], ["status", "--port", "abc"], ["projects", "--archived"], ["status", "--project", "/p"]]) expect(parseCli(bad, {}, "/h").kind, bad.join(" ")).toBe("error");
+      for (const bad of [["bogus"], ["new"], ["send"], ["tail"], ["interrupt"], ["doctor"], ["logs"], ["stop"], ["status", "x"], ["sessions", "x"], ["sessions", "--state", "nope"], ["status", "--port", "abc"], ["projects", "--archived"], ["status", "--project", "/p"], ["addon"], ["addon", "dev"], ["addon", "install", "/x"], ["addon", "dev", "/a", "/b"]]) expect(parseCli(bad, {}, "/h").kind, bad.join(" ")).toBe("error");
       expect(parseCli(["new"], {}, "/h")).toMatchObject({ message: expect.stringContaining("not implemented") });
     });
     it("bare and daemon flags still start the daemon; --token-file and --json are client only", () => {

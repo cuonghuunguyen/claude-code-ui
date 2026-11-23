@@ -16,8 +16,11 @@ Addon giao diện tạo kiểu cho claude-ui bằng CSS. Để tìm phần tử 
 - Chọn `[data-part="..."]`, không bao giờ chọn `[data-testid="..."]`. `data-testid` chỉ dùng cho kiểm thử.
 - Trạng thái là thuộc tính nằm trên chính phần đó. Bảng liệt kê các thuộc tính của từng phần. Thuộc tính khác không thuộc hợp đồng.
 - Một phần chỉ bị gỡ sau một bản minor mà phần đó được đánh dấu **deprecated** trong bảng. Phần mới có phiên bản `since`.
-- Phần đánh dấu **reserved** đã có tên nhưng ứng dụng chưa hiển thị.
 - Danh sách cũng nằm trong `packages/protocol/src/addon-parts.ts` (`PARTS`, `PART_NAMES`, `PartName`, `PARTS_VERSION`).
+
+## Trình duyệt hỗ trợ {#browser}
+
+CSS của giao diện (`themes[].css`) cần CSS nesting: Chrome 120, Safari 17.2 (iOS 17.2) hoặc Firefox 117 trở lên. Bảng màu và `vars` của giao diện vẫn chạy trên trình duyệt cũ hơn, nhưng các quy tắc trong tệp CSS bị bỏ ở đó, nên giao diện chỉ hiện màu.
 
 ## Cascade {#cascade}
 
@@ -25,8 +28,8 @@ Tệp CSS của addon (`css` trong `addon.json`) được tải trong một lớ
 
 - Quy tắc của bạn thắng quy tắc của ứng dụng mà không cần `!important` hay bộ chọn dài. Đừng thêm `!important` chỉ để thắng ứng dụng.
 - Ngoại lệ, thư viện: style của CodeMirror (`.cm-*`, trình soạn tệp), terminal (`.xterm*`), KaTeX (`.katex*`) và bộ tô màu mã không nằm trong lớp nào, nên thắng quy tắc của bạn bất kể bộ chọn. Hãy thêm `!important` để ghi đè.
-- Ngoại lệ: khai báo có `!important` trong giao diện Neon tích hợp thắng quy tắc của bạn, và chỉ khi Neon đang được chọn.
-- Thuộc tính `style` nội tuyến của phần tử vẫn thắng lớp. Hãy thêm `!important` trong quy tắc của bạn để ghi đè.
+- Ngoại lệ: khai báo có `!important` trong giao diện Neon tích hợp (kể cả các khai báo cho trình soạn, terminal và bộ tô màu mã của nó) thắng quy tắc của bạn, và chỉ khi Neon đang được chọn.
+- Thuộc tính `style` nội tuyến của phần tử vẫn thắng lớp. Hãy thêm `!important` trong quy tắc của bạn để ghi đè. Một vài phần tử của ứng dụng dùng tiện ích Tailwind `!important` (ví dụ `px-0!`); chúng cũng thắng `!important` của bạn.
 - Lớp riêng trong tệp của bạn vẫn dùng bình thường, ví dụ `@layer base, effects;`; chúng nằm trong `addon.<name>`.
 
 ## Vòng đời {#lifecycle}
@@ -98,9 +101,9 @@ Ngân sách hiệu năng cho animation:
 | `commit-message` | Ô nội dung commit | | 1.5 |
 | `changed-file` | Một dòng tệp trong danh sách thay đổi | | 1.5 |
 | `file-diff` | Diff của một tệp | | 1.5 |
-| `loader` | Reserved: dấu đang tải của một lượt chạy | | 1.5 |
-| `done-icon` | Reserved: dấu hoàn tất của lần gọi công cụ | | 1.5 |
-| `backdrop` | Reserved: lớp nền toàn cửa sổ | | 1.5 |
+| `loader` | Dấu đang tải: vòng quay của lần gọi công cụ đang chạy, dòng phiên đang chạy và tab đang chạy. Chứa ảnh của [slot `loader`](addons#slots) khi giao diện có; lúc đó `<html>` có `data-slot-loader` | | 1.5 |
+| `done-icon` | Dấu hoàn tất (dấu tích) của lần gọi công cụ đã xong. Chứa ảnh của [slot `done-icon`](addons#slots) khi giao diện có; lúc đó `<html>` có `data-slot-done-icon` | | 1.5 |
+| `backdrop` | Ảnh nền toàn cửa sổ của giao diện có [`background`](addons#background). Chỉ có trong trang khi tệp ảnh tồn tại; cố định phía sau ứng dụng | | 1.5 |
 
 ## Kiểm tra {#checks}
 
@@ -109,13 +112,19 @@ Hộp thoại Addons liệt kê **Kiểm tra** dưới mỗi addon: cảnh báo 
 | Kiểm tra | Ý nghĩa | Cách sửa |
 |---|---|---|
 | `selects-testid` | Một bộ chọn dùng `[data-testid]`. Đó là mốc kiểm thử và đổi mà không báo trước. | Chọn `[data-part="..."]`. |
-| `unknown-part` | `[data-part="x"]` nêu một part không có trong bảng. Nó không khớp phần tử nào. | Sửa tên (xem bảng). |
-| `unprefixed-name` | Tên `@keyframes`, họ phông của `@font-face` hoặc `@property` không có tiền tố addon. Các tên này là toàn cục và có thể thay tên của ứng dụng. | Đặt tên `<addon>-name` (`--<addon>-name` cho `@property`). |
+| `unknown-part` | `[data-part="x"]` nêu một part không có trong bảng, hoặc `^=`, `$=`, `*=`, `|=` có giá trị mà không tên part nào khớp. Nó không khớp phần tử nào. Tên gần đúng được gợi ý ("Ý bạn là"). | Sửa tên (xem bảng). |
+| `deprecated-part` | Bộ chọn dùng một part sắp bị bỏ. | Chuyển sang part thay thế trước bản được nêu. |
+| `unprefixed-name` | Tên `@keyframes`, họ phông của `@font-face` hoặc `@property` không có tiền tố addon. Các tên này là toàn cục và có thể thay tên của ứng dụng. Daemon tự đổi tên `@keyframes`, `@counter-style` và `@font-palette-values` trong `themes[].css` (`css` cấp cao nhất không được đổi tên); `@font-face` và `@property` vẫn toàn cục. | Đặt tên `<addon>-name` (`--<addon>-name` cho `@property`). |
 | `top-level-css` | `css` trong `addon.json` áp dụng cho mọi giao diện, mà addon có giao diện riêng. | Chuyển vào `themes[].css`. |
-| `css-broken` | CSS không phân tích được: khối, chú thích hoặc `url(` chưa đóng, thừa `}`, hoặc nhóm lồng quá 32 cấp. CSS của giao diện khi đó được phục vụ không giới hạn và áp dụng cho mọi giao diện. | Sửa lại. |
-| `css-too-large` | Tệp lớn hơn 512 KB. CSS của giao diện khi đó được phục vụ không giới hạn và áp dụng cho mọi giao diện. | Chia nhỏ hoặc rút gọn. |
+| `css-broken` | CSS không phân tích được: khối, chú thích hoặc `url(` chưa đóng, thừa `}`, hoặc nhóm lồng quá 32 cấp. CSS của giao diện khi đó được phục vụ rỗng: giao diện giữ bảng màu và mất các quy tắc. | Sửa lại. |
+| `css-too-large` | Tệp lớn hơn 512 KB. CSS của giao diện khi đó được phục vụ rỗng: giao diện giữ bảng màu và mất các quy tắc. | Chia nhỏ hoặc rút gọn. |
+| `css-large` | Tệp lớn hơn 256 KB (giới hạn là 512 KB). | Rút gọn trước khi chạm giới hạn. |
+| `asset-missing` | Một tệp trong `assets` chưa có trong thư mục addon (ảnh nền hoặc ảnh slot). Giao diện không có ảnh nền, hoặc dùng biểu tượng có sẵn. | Thêm tệp. |
+| `asset-large` | Ảnh lớn hơn 2 MB. | Thu nhỏ. |
+| `extends-missing` | `extends` của giao diện không dùng được: không có giao diện đó, addon của nó chưa bật, bị lặp vòng, hoặc hơn 3 mắc xích. Giao diện chạy không có nó. | Sửa giá trị hoặc bật addon. |
+| `low-contrast` | Một màu chữ của bảng màu có độ tương phản dưới 4.5:1 so với nền: `fg` và `muted` trên `bg`, `fg` trên `card`, `pfg` trên `primary`, `err`, `ok` và `warn` trên `bg`. Mục này nêu cặp màu, tỉ lệ và chế độ. `border` không được kiểm tra. | Đổi màu. |
 
-Bộ chọn dùng `^=`, `$=`, `*=` hoặc `|=` trên `data-part` không được kiểm tra.
+Tên `@keyframes`, `@counter-style` và `@font-palette-values` trong `themes[].css` được ứng dụng tự đổi tên, nên không bị kiểm tra ở đó (trong `css` cấp cao nhất thì có).
 
 ## Nhật ký thay đổi {#changelog}
 

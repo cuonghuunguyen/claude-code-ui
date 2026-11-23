@@ -55,14 +55,16 @@ The card lists what the addon asks for, one plain line each, and the themes, vie
 | `name` | Lowercase letters, digits and `-`, up to 64. The namespace of commands and pane ids. Never changes between versions |
 | `version`, `description` | Shown in the dialog |
 | `capabilities` | The list above; every entry that needs one must be covered |
-| `themes` | `[{id, name, light?, dark?, vars?, options?, css?}]`, see [themes](#themes). `css`: a `.css` file that applies only while this theme is picked, in the [`addon` cascade layer](addon-parts#cascade) |
+| `assets` | `{<id>: {path, label?}}`: image files the addon names by id, see [assets and background](#background). `path` may point to a file that does not exist yet |
+| `claudeUi` | Version range of Claude UI the addon works with, see [compatibility](#compat). Absent: any version |
+| `themes` | `[{id, name, light?, dark?, vars?, background?, options?, slots?, extends?, css?}]`, see [themes](#themes), [slots](#slots) and [extends](#extends). `css`: a `.css` file that applies only while this theme is picked, in the [`addon` cascade layer](addon-parts#cascade) |
 | `css` | Legacy. A `.css` file applied while the addon is enabled, whichever theme is picked, in the [`addon` cascade layer](addon-parts#cascade). Its `:root` and `.dark` rules also reach the built-in themes: use `themes[].css` for a theme |
 | `views` | `[{id, title, entry, kind: "pane" \| "band", phone?}]`. `phone: false` hides the view below 640 px |
 | `commands` | `[{name, description, argumentHint?}]` |
 | `commandsEntry` | The `.html` that handles commands; the first view's entry when absent |
 | `renderers` | `[{fence \| tool, entry}]` |
 
-Paths are relative, without `..`, and must exist. A view needs `ui.pane` or `ui.band`, a command needs `ui.command`, a renderer needs its `render.fence:` or `render.tool:` capability; the install says which is missing.
+Paths are relative, without `..`, and must exist (an `assets` path is the exception: see [assets and background](#background)). A view needs `ui.pane` or `ui.band`, a command needs `ui.command`, a renderer needs its `render.fence:` or `render.tool:` capability; the install says which is missing.
 
 ## Talking to claude-ui from a view {#bridge}
 
@@ -110,9 +112,79 @@ A palette may also have a `graph` key: a list of exactly 8 `#rrggbb` colours for
 
 `vars` adds your own CSS custom properties, per mode: `"vars": {"light": {"--glow": "none"}, "dark": {"--glow": "0 0 12px #00e5ff"}}`. Use them in your `css` with `var(--glow)`. A var applies only while the theme is picked, in a mode that has a palette. Rules: at most 64 per mode; a name matches `--[a-z][a-z0-9-]*` (up to 41 characters after the dashes); the name may not be one the palette sets (`--background`, `--primary`, `--syntax-*`, `--graph-*` and so on: use the palette keys for those; `--context-*` are allowed); a value has 1 to 200 characters, no `;` `{` `}` `<` `>` `\` `@` or newline, no `/*`, balanced brackets and quotes, and no function that loads an image (`url()`, `image-set()` ...: images come with a later `background` field). Installing an addon that breaks a rule fails and names the var.
 
-A theme may have its own `css` file. It applies only while that theme is picked, so it cannot change another theme, a built-in one included. Write plain selectors: `:root`, `html` and `.dark` still mean the page root, other selectors match inside it. `@font-face`, `@keyframes` and `@property` stay global (they belong to no theme and join the addon layer, so give them names with your addon name as prefix: a `@keyframes spin` would replace the app's own `spin` under every theme). A selector that names no element of the page (`*` alone, `::-webkit-scrollbar`) matches inside the root only: start it with `:root`. `@import` is dropped. The file is rewritten when the app loads it (CSS nesting; needs Chrome 120, Safari 17.2 or Firefox 117, older browsers show the palette only). A file with a syntax error (unclosed `{` or comment) is loaded as it is, without this scope.
+A theme may have its own `css` file. It applies only while that theme is picked, so it cannot change another theme, a built-in one included. Write plain selectors: `:root`, `html` and `.dark` still mean the page root, other selectors match inside it. `@font-face` and `@property` stay global (they belong to no theme and join the addon layer, so give them names with your addon name as prefix: an `@font-face` family the app also uses would be replaced under every theme). The names of your `@keyframes`, `@counter-style` and `@font-palette-values` are renamed for you per theme (`spin` becomes `<addon>-<theme>--spin`, and `animation`, `list-style` and `font-palette` follow), so they cannot replace the app's own. A selector that starts with `*` (`*`, `* > .a`) also matches the page root. `::-webkit-scrollbar` and other selectors that name no element match inside the root only: start them with `:root`. `@import` is dropped. The file is rewritten when the app loads it (CSS nesting; needs Chrome 120, Safari 17.2 or Firefox 117, older browsers show the palette only). A file with a syntax error (unclosed `{` or comment) or over 512 KB is served empty: the theme keeps its palette and loses its rules, and the Addons dialog shows a check.
 
-A theme may declare up to 4 on/off `options`: `[{id, label, default?}]` (`id` lowercase words joined by `-`, up to 24 characters; `label` 1 to 40 characters; `default` is `true` when absent). **Settings › Appearance** shows one switch per option while the theme is picked. While it is picked, `<html>` has `data-opt-<id>="on"` or `"off"` (the attributes of other themes' options are removed), so the addon CSS can react: `:root[data-opt-rain="off"] .rain { display: none }`.
+Moving an old addon: a top-level `css` applies under every theme and overrides the other themes too. Move its rules into `themes[].css` of the theme that should have them (the Addons dialog warns `top-level-css`).
+
+A theme may declare up to 8 `options`: a control each in **Settings › Appearance** while the theme is picked. `id` is lowercase words joined by `-` (up to 24 characters), `label` 1 to 40 characters. `type` is one of:
+
+| `type` | Fields | Control | `--opt-<id>` | `data-opt-<id>` |
+| --- | --- | --- | --- | --- |
+| `boolean` (or absent) | `default?` (`true` when absent) | switch | `1` or `0` | `on` or `off` |
+| `select` | `choices: [{value, label}]` (2 to 12; `value` `[a-z0-9-]+`), `default?` (one of the values, else the first) | select | the value | the value |
+| `range` | `min`, `max`, `step`, `default` (numbers, at most 3 decimals, `min` < `max`, `step` > 0, `default` inside) | slider with its value | the number | none |
+| `color` | `default` (`#rrggbb`) | colour input | the hex | none |
+
+While the theme is picked, `<html>` has these custom properties (and attributes); those of other themes' options are removed. Use them in your `css`: `:root[data-opt-rain="off"] .rain { display: none }`, `opacity: calc(var(--opt-density) * 0.4)`. The choice is kept in this browser; a stored value that does not fit the option (an old value, a removed choice, a number outside `min` to `max`) is replaced by the default.
+
+## Assets and background {#background}
+
+`assets` names image files by id: `"assets": {"bg-dark": {"path": "art/dark.jpg", "label": "Dark background"}}`. The id is lowercase words joined by `-` (up to 24 characters), at most 16 assets. The path is relative and ends in `.png`, `.jpg`, `.jpeg`, `.webp`, `.avif`, `.gif` or `.svg`. **The file may be missing**: the user adds it later, so an addon repository does not have to ship art it has no right to share. The Addons dialog warns `asset-missing` until the file is there and `asset-large` over 2 MB. A file that exists must be inside the addon folder (a link out of it makes the manifest invalid).
+
+A theme `background` puts one of these images behind the app:
+
+```json
+"background": { "light": { "image": "bg-light" }, "dark": { "image": "bg-dark", "mobile": "bg-phone" }, "veil": 0.4, "panelAlpha": 0.8 }
+```
+
+- `light`, `dark`: the `image` shown in that mode, and optionally a `mobile` image used below 768 px. Both are ids from `assets`; an unknown id makes the manifest invalid.
+- `veil` (0 to 1): how strongly the page background colour covers the image, so text stays readable. Default 0.
+- `panelAlpha` (0 to 1): how opaque the main panels (sidebar, title bar, session panel, prompt box, side panel) are over the image. Default 1, fully opaque. Your CSS can change `--panel-alpha`.
+
+The background shows only while the theme is picked and the image file of the current mode exists. Without the file the theme works as if it had no `background`, and the panels stay opaque. The image is part `backdrop` (`<div data-part="backdrop">`, fixed behind the app) and `<html>` has `data-backdrop` while it shows, so your CSS can adapt.
+
+## Slots: your own loader, done icon, send icon and Thinking text {#slots}
+
+A theme may replace four small things of the app. `slots` goes in the theme:
+
+```json
+"assets": { "ring": { "path": "art/ring.svg" }, "tick": { "path": "art/tick.svg" } },
+"themes": [{ "id": "void", "name": "Void", "dark": { "...": "..." },
+  "slots": {
+    "loader": "ring",
+    "done-icon": "tick",
+    "send-icon": "ring",
+    "thinking-phrases": { "en": ["Casting", "Expanding"], "vi": ["Đang niệm chú"] }
+  } }]
+```
+
+| Slot | Value | Shown instead of |
+| --- | --- | --- |
+| `loader` | An asset id | The spinner of a running tool call, a running session in the sidebar and a running tab. The part is [`loader`](addon-parts) |
+| `done-icon` | An asset id | The check of a finished tool call. The part is [`done-icon`](addon-parts) |
+| `send-icon` | An asset id | The arrow of the send button. The Stop, Queue and offline icons stay. The button keeps its name for screen readers |
+| `thinking-phrases` | `{<language>: [phrases]}` | The "Thinking" text of the working row |
+
+- An image slot names an id of [`assets`](#background); an unknown id makes the manifest invalid. The file may be missing: the app then keeps its own mark and the Addons dialog warns `asset-missing`. Use `.svg`, `.png`, `.webp`, `.avif` or `.gif`.
+- The image is decorative (empty `alt`, hidden from screen readers) and sized like the mark it replaces (16 px). It does not spin by itself: animate it in your `css` (`[data-part="loader"] img { animation: ... }`, with `@media (prefers-reduced-motion: reduce)` or `:root[data-motion="off"]`), or use an SVG that animates itself.
+- Phrases: 1 to 4 languages, a language is `en`, `vi` or any `xx` / `xx-XX` (the app's languages are `en` and `vi`), 1 to 12 phrases each, each 1 to 60 characters of plain text (no `<`, `>` or line break). The list of the UI language is used (`pt-BR` before `pt`); a language without a list keeps "Thinking". One phrase is picked per turn from the list, the same phrase until the turn ends, so nothing flickers and nothing moves.
+- `<html>` has `data-slot-loader`, `data-slot-done-icon`, `data-slot-send-icon` and `data-slot-thinking-phrases` while that slot is in effect (the file exists; for phrases, a list exists for the UI language). Your CSS can adapt, for example hide a ring the image replaces.
+
+## Extend another theme {#extends}
+
+`extends` lets a theme build on another one, so a variant needs only what differs: `"extends": "void"` (a theme of the same addon) or `"extends": "pack:void"` (a theme of the enabled addon `pack`).
+
+The theme starts from the base and adds its own on top; the theme's own wins:
+
+- `css`, `vars`, `background`, `slots` and `options` of the base apply under the theme's own. A base `css` is loaded under the extending theme, so its rules reach it. The renamed `@keyframes`, `@counter-style` and `@font-palette-values` of a base `css` can be used by the theme's own `css` under their plain name (`animation: spin 1s`).
+- The palette is not inherited: a mode the theme gives is its own. A mode it does not give uses the palette of the base.
+- A base may extend another base, at most 3 links in all.
+
+When the base cannot be used (no such theme, its addon is not installed or not enabled, a loop, more than 3 links) the theme works without it and the Addons dialog warns `extends-missing`. A malformed value, a theme that extends itself and a loop between themes of the same addon make the manifest invalid.
+
+## Compatibility with Claude UI {#compat}
+
+`claudeUi` says which versions of Claude UI the addon works with: `"claudeUi": ">=1.6"`. Forms: `*` (any), `1.6.0` (exactly), `>=1.6` or `>=1.6.2` (this or newer), `^1.6` (same major version, 1.6 or newer), `~1.6` (same minor version). Leave it out and any version is accepted. Outside the range the addon shows the state **Error** with `needs Claude UI >=1.6 (this is 1.5.0)`, it is not enabled and none of its files are served, but it stays in the dialog (a git addon can still check for an update). A source checkout of the app (version `dev`) accepts every range.
 
 ## Panes, band and commands {#views}
 
@@ -123,6 +195,12 @@ A theme may declare up to 4 on/off `options`: `[{id, label, default?}]` (`id` lo
 ## Drawing code blocks and tool results {#renderers}
 
 A `fence` renderer draws the code blocks of one language in assistant answers and in your own messages, before the built-in renderers (also the Mermaid diagram). A `tool` renderer draws the result of one tool. Each drawing has a **Show raw** button for the built-in view. The frame is created only when the block is near the screen. If two addons draw the same thing, the Addons dialog has a picker; until you pick, the first by name wins.
+
+## Write and check an addon {#authoring}
+
+Run `claude-ui addon dev <folder>` once: it installs the folder in Dev mode (the daemon watches it) and enables it when it declares no capabilities. It prints the lint warning count and a line `preview: http://127.0.0.1:<port>/#/addon-preview`. Every edit of a file in the folder reloads the manifest, the lint and the CSS without a page reload.
+
+Open the **preview page** (that URL, or **Open preview** on the addon's row in Settings › Addons). It shows every [part](addon-parts) in every state with the app's own components and sample data: a session that runs, waits for a permission or a question, just finished, is idle or in error; a tool card in each of its six statuses; the tab, sidebar row and send button states; the three plan usage levels; the Focus page; the toast and the command palette. Pick your theme and **Light**, **Dark** or **System** at the top of the page, edit your CSS and watch the page change. **Replay animations** restarts the 1.2 second `data-just-finished` and `data-focus-opened` states. The graph, changes, commit message and terminal need a daemon: the page shows static stand-ins with the same part names and attributes. Lint warnings of the addon are under **Checks** in Settings › Addons.
 
 ## The example addon {#example}
 

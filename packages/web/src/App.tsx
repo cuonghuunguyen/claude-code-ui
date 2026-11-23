@@ -96,6 +96,9 @@ import { VisualizeContext, VisualizeReadContext } from "./visualize-block.tsx";
 import { addonCommandOf, commandRows, AddonApiContext, AddonCommandContext, AddonStatusContext, AddonsContext, EMPTY_ADDONS, enabledAddons, logAllowed, useAddonLog, paneIdsOf, paneTitlesOf, addonViewOf, type AddonApi, type AddonsListResult, type AddonsState } from "./addons.ts";
 import { AddonBands, AddonFrame, type AddonHandle } from "./addon-frame.tsx";
 import { addonThemes } from "./themes.ts";
+import { Backdrop } from "./backdrop.tsx";
+import { SlotsProvider, useThinkingPhrase } from "./slots.tsx";
+import { isPreviewHash } from "./addon-preview-route.ts";
 import { saveGroup as saveSettingsGroup } from "./settings-group.ts";
 import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
@@ -230,6 +233,7 @@ const ShellsDialog = lazy(() => import("./shells-dialog.tsx").then((x) => ({ def
 const ProjectSettingsDialog = lazy(() => import("./project-settings-dialog.tsx").then((x) => ({ default: x.ProjectSettingsDialog })));
 const SettingsDialog = lazy(() => import("./settings-dialog.tsx").then((x) => ({ default: x.SettingsDialog })));
 const PluginsDialog = lazy(() => import("./plugins-dialog.tsx").then((x) => ({ default: x.PluginsDialog })));
+const AddonPreview = lazy(() => import("./addon-preview.tsx").then((x) => ({ default: x.AddonPreview })));
 const AddonsDialog = lazy(() => import("./addons-dialog.tsx").then((x) => ({ default: x.AddonsDialog })));
 const CleanupDialog = lazy(() => import("./cleanup-dialog.tsx").then((x) => ({ default: x.CleanupDialog })));
 const CreateWorktreeDialog = lazy(() => import("./create-worktree-dialog.tsx").then((x) => ({ default: x.CreateWorktreeDialog })));
@@ -474,6 +478,14 @@ export function App() {
   // Open project lists the sides as of now: a container started since the last list joins.
   useEffect(() => void (openingProject && refreshList()), [openingProject]);
   const [theme, setTheme] = useState<ThemePref>(loadPref);
+  // The addon preview page (`#/addon-preview`, addon-preview.tsx) replaces the workspace while the hash is its own.
+  const [previewHash, setPreviewHash] = useState(() => isPreviewHash(location.hash));
+  useEffect(() => {
+    const on = () => setPreviewHash(isPreviewHash(location.hash));
+    window.addEventListener("hashchange", on);
+    window.addEventListener("popstate", on);
+    return () => (window.removeEventListener("hashchange", on), window.removeEventListener("popstate", on));
+  }, []);
   const [error, setError] = useState<string>();
   const [toast, setToastState] = useState<{ key: number; message: string; action?: { label: string; onClick: () => void } }>();
   const toastKey = useRef(0);
@@ -3785,10 +3797,17 @@ export function App() {
     <AddonApiContext value={addonApi}>
     <AddonStatusContext value={addonStatus}>
     <AddonCommandContext value={runAddonCommand}>
+    <SlotsProvider>
     <AvatarColors value={colors}>
     <SideLabel value={sideOf.badge}>
     <SideState value={sideState}>
+    {previewHash && status !== "unauthorized" ? (
+      <Suspense fallback={null}>
+        <AddonPreview onBack={() => (history.replaceState(null, "", location.pathname + location.search), setPreviewHash(false))} />
+      </Suspense>
+    ) : (
     <div className="flex h-dvh flex-col bg-background text-foreground">
+      <Backdrop />
       <header className="flex h-9 shrink-0 items-center gap-1.5 px-2 max-md:h-11 max-md:gap-2 md:pr-3 md:pl-4" data-testid="titlebar" data-part="titlebar">
         <IconButton className="md:hidden" label={tr("app.main.sessions")} onClick={() => setDrawer(true)} testId="open-drawer">
           <MenuIcon />
@@ -4769,9 +4788,11 @@ export function App() {
         />
       </ToastRegion>
     </div>
+    )}
     </SideState>
     </SideLabel>
     </AvatarColors>
+    </SlotsProvider>
     </AddonCommandContext>
     </AddonStatusContext>
     </AddonApiContext>
@@ -5018,7 +5039,7 @@ function StartingSession({ cwd, place, pending }: { cwd: string; place?: string;
             {pending.map((p, i) => (
               <PendingMessage key={p.key} p={p} view={EMPTY_VIEW} index={i} />
             ))}
-            <ThinkingRow className="mt-3" />
+            <ThinkingRow className="mt-3" turn={pending[pending.length - 1]?.key} />
           </>
         }
       />
@@ -5610,7 +5631,7 @@ export function SessionPane({
   const shownPending = current ? [] : unechoed(pending, view);
   // GH-683: while OpenCode waits to retry a failed model call, the retry line (why, and when) stands in for Thinking.
   const thinking = ((view.state === "running" && (!current || current.status === "running")) || shownPending.length > 0) &&
-    (view.retry && view.state === "running" && !current ? <RetryRow retry={view.retry} className="mt-3" /> : <ThinkingRow className={shownPending.length ? "mt-3" : ""} />);
+    (view.retry && view.state === "running" && !current ? <RetryRow retry={view.retry} className="mt-3" /> : <ThinkingRow className={shownPending.length ? "mt-3" : ""} turn={shownPending.length ? shownPending[shownPending.length - 1]!.key : [...view.order].reverse().find((pid) => view.parts.get(pid)?.type === "user_text")} />);
   const [draft, setDraft] = useState<{ text: string; images: string[] }>();
   // A queued message taken back (Edit) or an error of a chip action: the prompt box shows it once per key.
   const [takeBack, setTakeBack] = useState<{ key: string; text: string; images: string[]; bash?: boolean; error?: string }>();
@@ -6812,12 +6833,14 @@ function PendingMessage({ p, view, index }: { p: Pending; view: SessionView; ind
 }
 
 /** The working row: shown while a turn runs, and at once for a just-sent prompt. */
-function ThinkingRow({ className }: { className?: string }) {
+function ThinkingRow({ className, turn }: { className?: string; turn?: string }) {
   const tr = useT();
+  // The theme's phrase for this turn (slots.tsx), else the built-in label.
+  const phrase = useThinkingPhrase(turn);
   return (
     <div data-testid="thinking" data-part="thinking" className={className}>
       <Shimmer as="span" className="font-medium text-sm">
-        {tr("app.timeline.thinking")}
+        {phrase ?? tr("app.timeline.thinking")}
       </Shimmer>
     </div>
   );

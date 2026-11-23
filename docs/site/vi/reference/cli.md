@@ -23,6 +23,7 @@ Các lệnh này giao tiếp với daemon đang chạy trên máy tính này. Ch
 | `sessions` (`ls`) | Liệt kê phiên. `--project <dir>`, `--state <idle\|running\|needs_input\|error\|closed>`, `--archived` (hiện cả phiên đã lưu trữ) |
 | `projects` | Liệt kê dự án |
 | `workers` | Liệt kê worker điều phối theo coordinator |
+| `addon dev <path>` | Cài thư mục cục bộ làm addon ở chế độ Dev (daemon theo dõi thư mục, tải lại CSS và frame sau mỗi lần sửa). Addon không có capability được bật ngay; addon có capability chờ bạn duyệt trong Settings › Addons. Chạy lại trên cùng thư mục sẽ dùng lại bản đã cài. Lệnh in URL trang xem trước (`preview: http://127.0.0.1:<port>/#/addon-preview`, không có token). `--json` in name, state, preview và lint |
 
 Tùy chọn của mọi lệnh: `--json` (cho máy đọc; có thể được thêm trường), `--port <n>` (mặc định: cổng của daemon đang chạy lấy từ `daemon.json`, nếu không thì `PORT`, nếu không thì `4280`), `--token-file <path>` (mặc định: `CLAUDE_UI_TOKEN_FILE`, nếu không thì `token` trong thư mục cấu hình).
 

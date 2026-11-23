@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { Request } from "./client.ts";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
+import { PREVIEW_HASH } from "./addon-preview-route.ts";
 import { isImeKey } from "./ime.ts";
 import { useT } from "./i18n.ts";
 import { capabilityDiff, capabilityLine, rendererConflicts, sourceText, type AddonCandidate, type AddonInfo, type AddonSource, type AddonLogEntry, type AddonUpdateCheck, type AddonsListResult } from "./addons.ts";
@@ -236,7 +237,7 @@ export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onCl
             <p className="text-muted-foreground text-xs [overflow-wrap:anywhere]">{sourceText(a)}</p>
             {a.error && (
               <p className="text-destructive text-xs" data-testid="addons-error">
-                {a.manifest && `${t("addons.devLastGood")} `}
+                {a.dev && a.manifest && `${t("addons.devLastGood")} `}
                 {a.error}
               </p>
             )}
@@ -247,7 +248,7 @@ export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onCl
                   {a.lint.map((l, i) => (
                     <li key={i} className="flex items-start gap-1.5 [overflow-wrap:anywhere]" data-testid="addons-check" data-code={l.code}>
                       <TriangleAlertIcon className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
-                      <span>{t(`addons.lint.${l.code}`, { file: l.file ?? "", where: l.line ? t("addons.lint.where", { file: l.file ?? "", line: l.line }) : (l.file ?? ""), name: l.name ?? "", suggest: l.suggest ?? "", count: l.count ?? 0 })}</span>
+                      <span>{t(l.code === "unknown-part" && l.suggest ? "addons.lint.unknown-part-suggest" : `addons.lint.${l.code}`, { until: l.until ?? "", file: l.file ?? "", where: l.line ? t("addons.lint.where", { file: l.file ?? "", line: l.line }) : (l.file ?? ""), name: l.name ?? "", suggest: l.suggest ?? "", count: l.count ?? 0 })}</span>
                     </li>
                   ))}
                 </ul>
@@ -278,10 +279,15 @@ export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onCl
             {(a.state === "enabled" || a.state === "disabled") && (
               <Switch on={a.state === "enabled"} label={t("addons.enable", { name: a.name })} held={!!working} onToggle={(enabled) => void act(a.name, { type: "addons.setEnabled", name: a.name, enabled })} testId="addons-enabled" />
             )}
+            {a.state === "enabled" && (
+              <Button variant="ghost" size="sm" className="text-muted-foreground max-md:h-11" aria-label={t("addons.previewLabel", { name: a.name })} onClick={() => ((location.hash = PREVIEW_HASH), onClose())} data-testid="addons-preview">
+                {t("addons.preview")}
+              </Button>
+            )}
             {a.source.kind === "local" && (
               <Switch on={!!a.dev} label={t("addons.dev", { name: a.name })} held={!!working} onToggle={(dev) => void act(a.name, { type: "addons.setDev", name: a.name, dev })} testId="addons-dev" />
             )}
-            {a.source.kind === "git" && a.state !== "error" && (
+            {a.source.kind === "git" && (a.state !== "error" || !!a.manifest) && (
               <Button variant="ghost" size="sm" className="text-muted-foreground max-md:h-11" disabled={!!working} onClick={() => void check(a.name)} data-testid="addons-check-update">
                 {t("addons.checkUpdate")}
               </Button>

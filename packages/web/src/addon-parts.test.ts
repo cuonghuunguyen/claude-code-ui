@@ -25,9 +25,9 @@ it("every data-part in the UI is a listed part", () => {
   expect([...used()].filter((n) => !listed.has(n))).toEqual([]);
 });
 
-it("every listed part that is not deprecated or reserved is rendered", () => {
+it("every listed part that is not deprecated is rendered", () => {
   const rendered = used();
-  expect(PARTS.filter((x) => !x.deprecated && !x.reserved && !rendered.has(x.name)).map((x) => x.name)).toEqual([]);
+  expect(PARTS.filter((x) => !x.deprecated && !rendered.has(x.name)).map((x) => x.name)).toEqual([]);
 });
 
 it("part names are unique", () => {

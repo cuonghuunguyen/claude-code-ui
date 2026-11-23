@@ -120,6 +120,48 @@ describe("addonThemes", () => {
     expect(rest).toEqual([]);
   });
 
+  describe("extends (GH-870)", () => {
+    const run = (...a: AddonInfo[]) => Object.fromEntries(addonThemes(a).map((t) => [t.id, t]));
+    const plain = { ...full("#223344") };
+    const bundle = (name: string, themes: NonNullable<AddonInfo["manifest"]>["themes"], extra: Partial<AddonInfo> = {}) => ({ ...addon(themes, name), base: `/addon/${"b".repeat(32)}/${name}/`, ...extra }) as AddonInfo;
+    const assets = { ring: { path: "ring.svg" }, art: { path: "art.png" } };
+
+    it("a theme takes the vars, options and slots of its base under its own; the palette stays its own, a mode it lacks comes from the base", () => {
+      const a = bundle(
+        "ex",
+        [
+          { id: "base", name: "B", light: full("#eeeeee"), dark: plain, vars: { dark: { "--glow": "1", "--ring-w": "2px" } }, options: [{ id: "rain", label: "Rain" }, { id: "fog", label: "Fog" }], slots: { loader: "ring", "thinking-phrases": { en: ["a"], vi: ["b"] } } },
+          { id: "kid", name: "K", dark: full("#aabbcc"), extends: "base", vars: { dark: { "--glow": "9" } }, options: [{ id: "rain", label: "Rain!" }], slots: { "thinking-phrases": { en: ["own"] } } },
+        ],
+        { assets: { ring: { present: true } } },
+      );
+      a.manifest!.assets = assets;
+      const kid = run(a)["addon:ex:kid"]!;
+      expect(kid.dark!.bg).toBe("#aabbcc"); // own palette
+      expect(kid.light!.bg).toBe("#eeeeee"); // none of its own for light: the base's
+      expect(kid.dark!.x).toMatchObject({ "--glow": "9", "--ring-w": "2px" }); // own var wins, the other is inherited
+      expect(kid.options!.map((o) => `${o.id}:${o.label}`).sort()).toEqual(["fog:Fog", "rain:Rain!"]);
+      expect(kid.slots).toEqual({ loader: `/addon/${"b".repeat(32)}/ex/ring.svg`, phrases: { en: ["own"], vi: ["b"] } });
+    });
+
+    it("a base in another enabled addon applies; its background shows under the theme; a missing or disabled target leaves the theme without a base", () => {
+      const baseAddon = bundle("pack", [{ id: "night", name: "N", dark: plain, background: { dark: { image: "art" }, veil: 0.4 }, vars: { dark: { "--x": "1" } } }], { assets: { art: { present: true } } });
+      baseAddon.manifest!.assets = assets;
+      const main = bundle("main", [{ id: "a", name: "A", dark: full("#010203"), extends: "pack:night" }, { id: "b", name: "B", dark: full("#010203"), extends: "gone:night" }, { id: "c", name: "C", dark: full("#010203"), extends: "c" }]);
+      const t = run(baseAddon, main);
+      expect(t["addon:main:a"]!.dark!.x).toMatchObject({ "--x": "1", "--backdrop-veil": "0.4" });
+      expect(t["addon:main:a"]!.background!.dark!.image).toBe(`/addon/${"b".repeat(32)}/pack/art.png`);
+      expect(t["addon:main:b"]!.dark!.x).toBeUndefined();
+      expect(t["addon:main:c"]!.dark!.x).toBeUndefined(); // a loop
+      expect(run(main)["addon:main:a"]!.dark!.x).toBeUndefined(); // the base addon is not among the running ones
+    });
+
+    it("a theme with no palette of its own and none in its base is left out", () => {
+      const a = bundle("ex", [{ id: "base", name: "B" }, { id: "kid", name: "K", extends: "base" }]);
+      expect(addonThemes([a])).toEqual([]);
+    });
+  });
+
   it("a colour that is not #rrggbb drops that mode (tokens mix and add alpha to hex)", () => {
     expect(addonThemes([addon([{ id: "dusk", name: "D", dark: { ...full(), fg: "rgb(1, 2, 3)" } }])])).toEqual([]);
   });

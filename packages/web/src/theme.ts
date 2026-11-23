@@ -1,7 +1,7 @@
 // Color scheme: follows the OS by default (OpenCode `system`), or forced light / dark; kept per browser.
 import { useSyncExternalStore } from "react";
-import type { AddonInfo } from "@claude-ui/protocol";
-import { ADDON_THEME_ID, THEMES, themeById, themeCss, type Theme, type ThemeId } from "./themes.ts";
+import { optionCss, optionType, optionValue, type AddonInfo } from "@claude-ui/protocol";
+import { ADDON_THEME_ID, baseThemes, THEMES, themeById, themeCss, type Theme, type ThemeId, type ThemeOption } from "./themes.ts";
 export type ThemePref = "system" | "light" | "dark";
 
 const KEY = "claude-ui.theme";
@@ -49,48 +49,64 @@ export function loadColorTheme(): ThemeId {
   }
 }
 
-/** The switches a user turned on or off, per theme: `{ "<themeId>": { "<optionId>": boolean } }`; anything that is not a boolean is ignored. */
-function loadOptions(): Record<string, Record<string, boolean>> {
+/** What a user chose per theme: `{ "<themeId>": { "<optionId>": boolean | string | number } }`. Only primitive values are kept here; each is checked against the option's type when it is read (`optionValue`). */
+type Stored = Record<string, Record<string, boolean | string | number>>;
+const storable = (v: unknown): v is boolean | string | number => typeof v === "boolean" || (typeof v === "string" && v.length <= 64) || (typeof v === "number" && Number.isFinite(v));
+function loadOptions(): Stored {
   try {
     const v: unknown = JSON.parse(localStorage.getItem(OPTIONS_KEY) ?? "null");
     if (typeof v !== "object" || v === null || Array.isArray(v)) return {};
     return Object.fromEntries(
-      Object.entries(v).flatMap<[string, Record<string, boolean>]>(([t, o]) => (typeof o === "object" && o !== null && !Array.isArray(o) ? [[t, Object.fromEntries(Object.entries(o).filter(([, b]) => typeof b === "boolean")) as Record<string, boolean>]] : [])),
+      Object.entries(v).flatMap<[string, Stored[string]]>(([t, o]) => (typeof o === "object" && o !== null && !Array.isArray(o) ? [[t, Object.fromEntries(Object.entries(o).filter(([, x]) => storable(x))) as Stored[string]]] : [])),
     );
   } catch {
     return {};
   }
 }
 
-/** Switches of this page when storage is blocked. */
-let memory: Record<string, Record<string, boolean>> = {};
+/** Choices of this page when storage is blocked. */
+let memory: Stored = {};
 
-/** The options of a theme with their current state (stored value, else the option's default, else on). */
-export function getThemeOptions(theme: Theme | undefined): { id: string; label: string; on: boolean }[] {
+/** One option of the current theme with its current value (stored value when valid for the option's type, else the option's default). */
+export type OptionState = { id: string; label: string; option: ThemeOption; value: boolean | string | number };
+
+/** The options of a theme with their current values. */
+export function getThemeOptions(theme: Theme | undefined): OptionState[] {
   const stored = theme ? { ...loadOptions()[theme.id], ...memory[theme.id] } : undefined;
-  return (theme?.options ?? []).map((o) => ({ id: o.id, label: o.label, on: stored?.[o.id] ?? o.default ?? true }));
+  return (theme?.options ?? []).map((o) => ({ id: o.id, label: o.label, option: o, value: optionValue(o, stored?.[o.id]) }));
 }
 
 /** The addon themes the last `applyAddonThemes` knew: their options are applied once the addons arrive. */
 let addonList: readonly Theme[] = [];
 
-/** `data-opt-<id>="on"|"off"` on <html> for the options of the current theme; the `data-opt-*` of every other theme's options go. */
+/** On <html> for the options of the current theme: `data-opt-<id>` (boolean `on`/`off`, select the value) and `--opt-<id>` (boolean `0`/`1`, select the value, range the number, color the hex; checked again by `optionCss`). Those of every other theme's options go. */
 function syncThemeOptions() {
   const root = document.documentElement;
   const cur = [...THEMES, ...addonList].find((t) => t.id === (root.getAttribute("data-theme") ?? "default"));
-  const want = new Map(getThemeOptions(cur).map((o) => [`data-opt-${o.id}`, o.on ? "on" : "off"]));
-  for (const a of [...root.attributes]) if (a.name.startsWith("data-opt-") && !want.has(a.name)) root.removeAttribute(a.name);
-  for (const [name, v] of want) root.setAttribute(name, v);
+  const attrs = new Map<string, string>();
+  const props = new Map<string, string>();
+  for (const o of getThemeOptions(cur)) {
+    const css = optionCss(o.option, o.value);
+    if (css === undefined) continue;
+    const type = optionType(o.option);
+    if (type === "boolean") attrs.set(`data-opt-${o.id}`, o.value ? "on" : "off");
+    else if (type === "select") attrs.set(`data-opt-${o.id}`, css);
+    props.set(`--opt-${o.id}`, css);
+  }
+  for (const a of [...root.attributes]) if (a.name.startsWith("data-opt-") && !attrs.has(a.name)) root.removeAttribute(a.name);
+  for (const [name, v] of attrs) root.setAttribute(name, v);
+  for (const name of [...root.style]) if (name.startsWith("--opt-") && !props.has(name)) root.style.removeProperty(name);
+  for (const [name, v] of props) root.style.setProperty(name, v);
 }
 
-/** A user switch: applied at once and kept in this browser. */
-export function setThemeOption(themeId: ThemeId, optionId: string, on: boolean) {
+/** A user choice: applied at once and kept in this browser. */
+export function setThemeOption(themeId: ThemeId, optionId: string, value: boolean | string | number) {
   try {
     const all = loadOptions();
-    localStorage.setItem(OPTIONS_KEY, JSON.stringify({ ...all, [themeId]: { ...all[themeId], [optionId]: on } }));
+    localStorage.setItem(OPTIONS_KEY, JSON.stringify({ ...all, [themeId]: { ...all[themeId], [optionId]: value } }));
   } catch {
     // Storage blocked: the choice lasts for this page.
-    memory = { ...memory, [themeId]: { ...memory[themeId], [optionId]: on } };
+    memory = { ...memory, [themeId]: { ...memory[themeId], [optionId]: value } };
   }
   syncThemeOptions();
 }
@@ -125,20 +141,22 @@ const STALE_MS = 2000;
 
 /** The stylesheets of the enabled addons, each a `<style>` that imports a file into the addon's cascade layer (`layer(addon.<name>)`: after `host`, so it wins without `!important`, and a broken file cannot leave the layer). Per addon: the legacy top-level `css` (every theme, unscoped). Per theme with `css`: the same file scoped by the daemon to that theme (`?theme=<id>`), loaded for every enabled theme so a switch shows no unstyled flash. Styles of addons or themes no longer there go (GH-516, GH-868). Same-origin, so the app CSP allows it and blocks what a sheet loads from elsewhere. Dev mode (`rev`): `v=<rev>` in the URL makes an edit load the file again; the sheet it replaces stays until the new one has loaded (or 2 s), so the page never shows the unstyled theme between the two. */
 export function applyAddonCss(addons: readonly AddonInfo[]) {
-  const imp = (a: AddonInfo, path: string, theme?: string) => {
-    const q = [...(theme ? [`theme=${theme}`] : []), ...(a.dev && a.rev !== undefined ? [`v=${a.rev}`] : [])].join("&");
-    return `@import url("${a.base + path.split("/").map(encodeURIComponent).join("/") + (q && `?${q}`)}") layer(addon.${identOf(a.name)});`;
+  /** `file`: the addon whose file it is (URL, `v=`); `owner`: the addon whose layer it loads into; `as`: the extending theme (`<addon>:<theme>`) the daemon scopes a base theme's file under. */
+  const imp = (file: AddonInfo, path: string, owner: AddonInfo, theme?: string, as?: string) => {
+    const q = [...(theme ? [`theme=${theme}`] : []), ...(as ? [`as=${as}`] : []), ...(file.dev && file.rev !== undefined ? [`v=${file.rev}`] : [])].join("&");
+    return `@import url("${file.base + path.split("/").map(encodeURIComponent).join("/") + (q && `?${q}`)}") layer(addon.${identOf(owner.name)});`;
   };
+  const running = addons.filter((a) => a.base && a.manifest);
   const want = new Map<string, string>(
-    addons.flatMap((a) =>
-      !a.base || !a.manifest
-        ? []
-        : [
-            ...(a.manifest.css ? [[`addon-css-${a.name}`, imp(a, a.manifest.css)] as const] : []),
-            // An addon name has no `--`, so these ids cannot collide with the legacy one or another addon's.
-            ...a.manifest.themes.flatMap((t) => (t.css ? [[`addon-css-${a.name}--${t.id}`, imp(a, t.css, t.id)] as const] : [])),
-          ],
-    ),
+    running.flatMap((a) => [
+      ...(a.manifest!.css ? [[`addon-css-${a.name}`, imp(a, a.manifest!.css, a)] as const] : []),
+      // An addon name has no `--`, so these ids cannot collide with the legacy one or another addon's.
+      // One sheet per theme: the css of the themes it extends first (the daemon scopes each under this theme, `as`), then its own, so its own wins at equal specificity.
+      ...a.manifest!.themes.flatMap((t) => {
+        const lines = [...baseThemes(running, a, t).flatMap((b) => (b.theme.css ? [imp(b.addon, b.theme.css, a, b.theme.id, `${a.name}:${t.id}`)] : [])), ...(t.css ? [imp(a, t.css, a, t.id)] : [])];
+        return lines.length ? [[`addon-css-${a.name}--${t.id}`, lines.join("\n")] as const] : [];
+      }),
+    ]),
   );
   for (const l of document.querySelectorAll<HTMLElement>('style[id^="addon-css-"], link[id^="addon-css-"]')) {
     if (want.get(l.id) === l.textContent) continue;

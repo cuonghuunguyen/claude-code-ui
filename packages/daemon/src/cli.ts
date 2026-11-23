@@ -13,6 +13,9 @@ Commands:
   sessions, ls                 list sessions [--project <dir>] [--state <state>] [--archived]
   projects                     list projects
   workers                      list orchestration workers by coordinator
+  addon dev <path>             install a local folder as an addon in Dev mode (watched, reloads on edit) and
+                               enable it when it needs no approval; an addon with capabilities waits for approval
+                               in Settings › Addons
 Command options: --json (machine output), --port <n> (default: daemon.json of the running daemon, PORT, 4280),
   --token-file <path> (default: CLAUDE_UI_TOKEN_FILE, <config dir>/token). Exit codes: 0 ok, 1 daemon
   error, 2 usage, 3 daemon not running or no token.
@@ -39,19 +42,19 @@ Options (a flag overrides its environment variable, which overrides Settings ›
 `;
 
 /** Printed under a usage error; the full HELP is for `--help`. */
-export const USAGE_HINT = "Usage: claude-ui [options] | claude-ui update | claude-ui status|open|sessions|projects|workers [options]\nRun claude-ui --help for the options.";
+export const USAGE_HINT = "Usage: claude-ui [options] | claude-ui update | claude-ui status|open|sessions|projects|workers|addon dev <path> [options]\nRun claude-ui --help for the options.";
 
 /** Printed under the pairing URL of an HTTPS start (--tailscale, --hostname): installing the app needs HTTPS. */
 export const PHONE_HINT = "Phone: open the link, then Install app (Android Chrome) or Share > Add to Home Screen (iOS Safari); on iOS paste the link into the app's pairing field.";
 
-export type Cli = { kind: "run"; port: number; roots: string[]; hostname: string | undefined; lan: boolean; allowBypass: boolean; idleCloseMinutes: number; tailscale?: true; updateCheck?: false; osNotify?: false; open?: false } | { kind: "update" } | { kind: "attach"; start: boolean } | { kind: "client"; cmd: ClientCmd; json: boolean; port?: number; tokenFile?: string; sessionId?: string; print?: true; project?: string; state?: string; archived?: true } | { kind: "help" } | { kind: "version" } | { kind: "error"; message: string };
+export type Cli = { kind: "run"; port: number; roots: string[]; hostname: string | undefined; lan: boolean; allowBypass: boolean; idleCloseMinutes: number; tailscale?: true; updateCheck?: false; osNotify?: false; open?: false } | { kind: "update" } | { kind: "attach"; start: boolean } | { kind: "client"; cmd: ClientCmd; json: boolean; port?: number; tokenFile?: string; sessionId?: string; print?: true; project?: string; state?: string; archived?: true; addonPath?: string } | { kind: "help" } | { kind: "version" } | { kind: "error"; message: string };
 
-export type ClientCmd = "status" | "open" | "sessions" | "projects" | "workers";
-const CLIENT_CMDS: Record<string, ClientCmd> = { status: "status", open: "open", sessions: "sessions", ls: "sessions", projects: "projects", workers: "workers" };
+export type ClientCmd = "status" | "open" | "sessions" | "projects" | "workers" | "addon";
+const CLIENT_CMDS: Record<string, ClientCmd> = { status: "status", open: "open", sessions: "sessions", ls: "sessions", projects: "projects", workers: "workers", addon: "addon" };
 /** Command names kept for later slices: an error now, so no script depends on them meaning something else. */
 const RESERVED = ["new", "send", "tail", "interrupt", "doctor", "logs", "stop"];
 const STATES = ["idle", "running", "needs_input", "error", "closed"];
-const CLIENT_FLAGS: Record<ClientCmd, string[]> = { status: [], open: ["print"], sessions: ["project", "state", "archived"], projects: [], workers: [] };
+const CLIENT_FLAGS: Record<ClientCmd, string[]> = { status: [], open: ["print"], sessions: ["project", "state", "archived"], projects: [], workers: [], addon: [] };
 
 /**
  * Whether `argv` starts the daemon: everything but a known client command, a reserved name or `update` as the first positional argument, or help or version.
@@ -97,7 +100,8 @@ export function parseCli(argv: string[], env: NodeJS.ProcessEnv, home: string, s
   const cmd = word === undefined ? undefined : CLIENT_CMDS[word];
   if (word !== undefined && word !== "update" && !cmd) return { kind: "error", message: RESERVED.includes(word) ? `'${word}' is not implemented yet` : `unknown command '${word}'` };
   if (cmd) {
-    const extra = positionals.slice(cmd === "open" ? 2 : 1);
+    if (cmd === "addon" && (positionals[1] !== "dev" || positionals[2] === undefined)) return { kind: "error", message: "usage: claude-ui addon dev <path>" };
+    const extra = positionals.slice(cmd === "open" ? 2 : cmd === "addon" ? 3 : 1);
     if (extra.length) return { kind: "error", message: `unexpected argument '${extra[0]}'` };
     const bad = ["print", "project", "state", "archived"].find((f) => (values as Record<string, unknown>)[f] !== undefined && !CLIENT_FLAGS[cmd].includes(f));
     if (bad) return { kind: "error", message: `--${bad} does not apply to '${word}'` };
@@ -112,6 +116,7 @@ export function parseCli(argv: string[], env: NodeJS.ProcessEnv, home: string, s
       ...(values.port !== undefined && { port: Number(values.port) }),
       ...(values["token-file"] !== undefined && { tokenFile: values["token-file"] }),
       ...(cmd === "open" && positionals[1] !== undefined && { sessionId: positionals[1] }),
+      ...(cmd === "addon" && { addonPath: positionals[2]! }),
       ...(values.print && { print: true as const }),
       ...(values.project !== undefined && { project: values.project }),
       ...(values.state !== undefined && { state: values.state }),
@@ -120,7 +125,7 @@ export function parseCli(argv: string[], env: NodeJS.ProcessEnv, home: string, s
   }
   if (positionals.length > 1) return { kind: "error", message: `unexpected argument '${positionals.at(-1)}'` };
   const clientOnly = ["json", "token-file", "print", "project", "state", "archived"].find((f) => (values as Record<string, unknown>)[f] !== undefined);
-  if (clientOnly) return { kind: "error", message: `--${clientOnly} applies to a command (status, open, sessions, projects, workers)` };
+  if (clientOnly) return { kind: "error", message: `--${clientOnly} applies to a command (status, open, sessions, projects, workers, addon)` };
   if (positionals[0] === "update") return { kind: "update" };
   const rawPort = values.port ?? env.PORT ?? String(saved?.port ?? 4280);
   const port = Number(rawPort);

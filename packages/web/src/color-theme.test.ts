@@ -49,11 +49,11 @@ describe("colour theme", () => {
     expect(root.hasAttribute("data-opt-rain")).toBe(false);
     applyColorTheme("neon");
     expect(root.getAttribute("data-opt-rain")).toBe("off");
-    expect(getThemeOptions(themeById("neon"))).toEqual([{ id: "rain", label: "Rain", on: false }, { id: "rain-light", label: "Light rain", on: false }]);
+    expect(getThemeOptions(themeById("neon")).map((o) => [o.id, o.label, o.value])).toEqual([["rain", "Rain", false], ["rain-light", "Light rain", false]]);
     localStorage.setItem("claude-ui.theme-options", '{"neon":{"rain":"no"}}');
-    expect(getThemeOptions(themeById("neon"))[0]!.on).toBe(true);
+    expect(getThemeOptions(themeById("neon"))[0]!.value).toBe(true);
     localStorage.setItem("claude-ui.theme-options", "not json");
-    expect(getThemeOptions(themeById("neon"))[0]!.on).toBe(true);
+    expect(getThemeOptions(themeById("neon"))[0]!.value).toBe(true);
   });
 
   it("applyColorTheme at startup writes no storage (a fresh browser stays fresh)", () => {
@@ -146,6 +146,28 @@ describe("addon themes and CSS (GH-516)", () => {
     ]);
     applyAddonCss([]);
     expect(sheets()).toEqual([]);
+  });
+
+  it("a theme that extends loads its bases' css first, each scoped under the extending theme (as=), then its own; a base without css adds none", () => {
+    const base = (n: string) => `/addon/${"0".repeat(32)}/${n}`;
+    const pack = addon("pack");
+    pack.manifest!.themes = [{ id: "night", name: "N", css: "n.css" }, { id: "deep", name: "D", css: "d.css" }];
+    const main = addon("main");
+    main.manifest!.themes = [
+      { id: "kid", name: "K", css: "k.css", extends: "pack:night" },
+      { id: "grand", name: "G", extends: "kid" },
+      { id: "bare", name: "B", extends: "pack:night" },
+      { id: "lost", name: "L", extends: "gone:x", css: "l.css" },
+    ];
+    applyAddonCss([pack, main]);
+    expect(Object.fromEntries(sheets())).toEqual({
+      "addon-css-pack--night": `@import url("${base("pack")}/n.css?theme=night") layer(addon.pack);`,
+      "addon-css-pack--deep": `@import url("${base("pack")}/d.css?theme=deep") layer(addon.pack);`,
+      "addon-css-main--kid": `@import url("${base("pack")}/n.css?theme=night&as=main:kid") layer(addon.main);\n@import url("${base("main")}/k.css?theme=kid") layer(addon.main);`,
+      "addon-css-main--grand": `@import url("${base("pack")}/n.css?theme=night&as=main:grand") layer(addon.main);\n@import url("${base("main")}/k.css?theme=kid&as=main:grand") layer(addon.main);`,
+      "addon-css-main--bare": `@import url("${base("pack")}/n.css?theme=night&as=main:bare") layer(addon.main);`,
+      "addon-css-main--lost": `@import url("${base("main")}/l.css?theme=lost") layer(addon.main);`,
+    });
   });
 
   it("dev mode: the file URLs carry ?v=<rev>; a new rev loads a new sheet and drops the old one when the new one is loaded, or after 2 s", () => {

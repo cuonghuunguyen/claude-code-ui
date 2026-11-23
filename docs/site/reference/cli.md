@@ -23,6 +23,7 @@ They talk to the daemon running on this computer. They never start it and never 
 | `sessions` (`ls`) | List sessions. `--project <dir>`, `--state <idle\|running\|needs_input\|error\|closed>`, `--archived` (also show archived ones) |
 | `projects` | List projects |
 | `workers` | List orchestration workers by coordinator |
+| `addon dev <path>` | Install a local folder as an addon in Dev mode (the daemon watches it and reloads CSS and frames on every edit). An addon without capabilities is enabled at once; one with capabilities waits for your approval in Settings › Addons. Run again on the same folder to reuse the install. It prints the preview page URL (`preview: http://127.0.0.1:<port>/#/addon-preview`, no token). `--json` prints name, state, preview and lint |
 
 Options of every command: `--json` (machine-readable; fields may be added), `--port <n>` (default: the port of the running daemon from `daemon.json`, else `PORT`, else `4280`), `--token-file <path>` (default: `CLAUDE_UI_TOKEN_FILE`, else `token` in the config folder).
 

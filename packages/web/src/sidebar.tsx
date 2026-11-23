@@ -22,6 +22,7 @@ import { CHECK_ITEM, RowContextMenu, RowMenu, Tick } from "./sidebar-menus.tsx";
 import { groupEntries, groupSessions, idleTargets, workerCounts, workerEntries } from "./sidebar-menus.ts";
 import { useKeyContextMenu } from "./context-menu-key.ts";
 import { t, useT } from "./i18n.ts";
+import { LoaderMark } from "./slots.tsx";
 import { count, offer, scrolledFar } from "./recommendations.ts";
 
 /** What follows the last `/` or `\` (a branch tail, a folder name). */
@@ -29,7 +30,12 @@ const lastSegment = (p: string) => p.split(/[\\/]/).pop()!;
 
 /** Only states that need attention get an indicator; idle, error and closed rows stay plain. */
 function StateIcon({ state }: { state: SessionState }) {
-  if (state === "running") return <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-faint motion-reduce:animate-none" aria-hidden />;
+  if (state === "running")
+    return (
+      <LoaderMark>
+        <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-faint motion-reduce:animate-none" aria-hidden />
+      </LoaderMark>
+    );
   if (state === "needs_input") return <CircleAlertIcon className="size-4 shrink-0 text-warning" aria-hidden />;
   return null;
 }

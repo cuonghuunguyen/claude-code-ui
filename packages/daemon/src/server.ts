@@ -619,7 +619,7 @@ export function createDaemon(opts: {
       broadcast({ type: "config.changed", kind: "plugins", cwd, ...(reload && { reloadFailed: reload.failed }) });
     },
   });
-  const addons = opts.addonsDir ? createAddons({ dir: opts.addonsDir, file: join(opts.addonsDir, "addons.json"), onChanged: () => broadcast({ type: "config.changed", kind: "addons", cwd: "" }) }) : undefined;
+  const addons = opts.addonsDir ? createAddons({ dir: opts.addonsDir, file: join(opts.addonsDir, "addons.json"), onChanged: () => broadcast({ type: "config.changed", kind: "addons", cwd: "" }), appVersion: opts.buildInfo?.version }) : undefined;
   const root = resolve(opts.webRoot);
   // Model list per Claude account key (its subscription decides which models and auto mode it offers), cached until the login or an account changes (claudeLoginChanged).
   const modelCaches = new Map<string, { list?: ReturnType<typeof listModels>; known: ModelInfo[]; loaded?: true }>();
@@ -1818,27 +1818,38 @@ export function createDaemon(opts: {
     const base = src.assets.size ? `http://${new URL("http://" + req.headers.host).host}/artifact/${nonce}/` : undefined;
     streamFile(req, res, f.fd, f.size, artifactHeaders(base));
   };
-  /** A theme's CSS file rewritten under its theme root (addon-css.ts). A file that does not scan (broken CSS, over the cap) goes out as it is: the web app loads it into the addon's cascade layer, so it cannot leak out of it. Cached per file version. */
+  /** A theme's CSS file rewritten under its theme root (addon-css.ts). A file that does not scan (broken CSS) or is over the cap is replaced by an empty stylesheet, so a defect costs the theme its rules and never leaks them to other themes (the lint reports it). Cached per file content (a hash, so an edit that keeps size and mtime is seen). */
   const scopedCss = new Map<string, Buffer>();
-  const serveScopedCss = (req: IncomingMessage, res: ServerResponse, o: { fd: number; size: number }, path: string, scope: string) => {
+  const EMPTY_CSS = Buffer.from("/* theme css not served: it is broken or over 512 KB (see the addon lint) */\n");
+  const serveScopedCss = (req: IncomingMessage, res: ServerResponse, o: { fd: number; size: number }, path: string, scope: string, names: string | undefined, baseCss: string[] = []) => {
     let body: Buffer;
     try {
       const st = fstatSync(o.fd);
-      if (st.size > MAX_THEME_CSS) return streamFile(req, res, o.fd, o.size, { ...addonAssetHeaders, "content-type": "text/css; charset=utf-8" }); // over the cap: not read into memory, not scoped
-      const key = `${path}\0${scope}\0${st.mtimeMs}\0${st.size}`;
-      let hit = scopedCss.get(key);
-      if (!hit) {
+      if (st.size > MAX_THEME_CSS) body = EMPTY_CSS; // over the cap: the file is not read into memory
+      else {
         const raw = readFileSync(o.fd);
-        try {
-          hit = Buffer.from(scopeCss(raw.toString("utf8"), scope));
-        } catch {
-          hit = raw; // CssScanError, or any other failure of the scan: the file as it is, and cached so a bad file costs one scan per version
+        // Base css files of an extending theme (their names are shared): read with the cap, part of the cache key.
+        const bases = baseCss.flatMap((p) => {
+          try {
+            return statSync(p).size <= MAX_THEME_CSS ? [readFileSync(p, "utf8")] : [];
+          } catch {
+            return [];
+          }
+        });
+        const key = `${path}\0${scope}\0${createHash("sha1").update(raw).update(bases.join("\0")).digest("hex")}`;
+        let hit = scopedCss.get(key);
+        if (!hit) {
+          try {
+            hit = Buffer.from(scopeCss(raw.toString("utf8"), scope, names, bases));
+          } catch {
+            hit = EMPTY_CSS; // CssScanError, or any other failure of the scan; cached so a bad file costs one scan per version
+          }
+          for (const k of scopedCss.keys()) if (k.startsWith(`${path}\0${scope}\0`)) scopedCss.delete(k); // the older versions of this file under this scope
+          scopedCss.set(key, hit);
+          if (scopedCss.size > 64) scopedCss.delete(scopedCss.keys().next().value!);
         }
-        for (const k of scopedCss.keys()) if (k.startsWith(`${path}\0${scope}\0`)) scopedCss.delete(k);
-        scopedCss.set(key, hit);
-        if (scopedCss.size > 64) scopedCss.delete(scopedCss.keys().next().value!);
+        body = hit;
       }
-      body = hit;
     } catch {
       closeSync(o.fd);
       return void res.writeHead(500).end();
@@ -1851,7 +1862,8 @@ export function createDaemon(opts: {
   const serveAddon = (req: IncomingMessage, res: ServerResponse, nonce: string, name: string, rest: string) => {
     if (req.method !== "GET" && req.method !== "HEAD") return void res.writeHead(405, { allow: "GET, HEAD" }).end();
     const theme = /^[a-z0-9]+(-[a-z0-9]+)*$/.exec(new URL(req.url ?? "/", "http://x").searchParams.get("theme") ?? "")?.[0];
-    const f = addons && nonce === addons.nonce ? addons.serve(name, rest, theme) : undefined;
+    const as = new URL(req.url ?? "/", "http://x").searchParams.get("as") ?? undefined;
+    const f = addons && nonce === addons.nonce ? addons.serve(name, rest, theme, as) : undefined;
     if (!f) return void res.writeHead(404).end();
     const h = req.headers;
     const dest = h["sec-fetch-dest"] as string | undefined;
@@ -1860,7 +1872,7 @@ export function createDaemon(opts: {
     } else if (!hostOk(req) || !assetRequestAllowed({ origin: h.origin, dest, mode: h["sec-fetch-mode"] as string | undefined }, isOwnOrigin(req, hostnames))) return void res.writeHead(403).end();
     const o = openArtifact(f.path, !f.html);
     if (!o) return void res.writeHead(404).end();
-    if (f.scope) return serveScopedCss(req, res, o, f.path, f.scope);
+    if (f.scope) return serveScopedCss(req, res, o, f.path, f.scope, f.names, f.baseCss);
     const base = `http://${new URL("http://" + h.host).host}/addon/${nonce}/${name}/`;
     streamFile(req, res, o.fd, o.size, f.html ? addonHeaders(base, f.net) : { ...addonAssetHeaders, "content-type": f.type, ...(f.type === "image/svg+xml" && { "content-disposition": "attachment" }) });
   };

@@ -8,7 +8,7 @@ Install it from the Addons dialog (`/addons`): choose **Local folder** and enter
 | --- | --- | --- |
 | `addon.json` | The manifest: capabilities, a theme, views, a command, renderers | all |
 | `claude-ui-addon.js`, `claude-ui-addon.d.ts` | The SDK, copied from `packages/addon-sdk/` (keep both identical to it). Every script has `// @ts-check` | none |
-| `theme.css` | Addon CSS, applied while the addon is enabled; the theme "Example Dusk" is in `addon.json` (Settings › Appearance) | none |
+| `theme.css` | Addon CSS, applied while the addon is enabled; the theme "Example Dusk" is in `addon.json` (Settings › Appearance), with an `Accent intensity` slider and a dark-mode background from the asset `backdrop`. The repository ships no image: put your own at `art/backdrop.jpg` and the background appears (until then the Addons dialog says `asset-missing` and the theme shows no background). The `loader` slot names the asset `ring` (`art/ring.svg`, also not shipped: the built-in spinner stays until you add it) and `thinking-phrases` replace the Thinking text in English and Vietnamese. `claudeUi: ">=1.5"` says which Claude UI versions it works with | none |
 | `pane.html`, `pane.js` | Pane "Stats" (not on a phone): part counts (`session.read`, `session.parts`), "Set status" (`ui.status`), "Toast" (`ui.toast`), "Log" (`log`, a line in the Addons dialog log), "Try to submit" (`prompt.submit`, always refused), "Fetch" (`net:https://api.github.com`) | `ui.pane`, `session.read`, `ui.status`, `ui.toast`, `log`, `net:` |
 | `band.html`, `band.js` | Band above the prompt box: turns and last tool | `ui.band`, `session.read` |
 | `command.html`, `command.js` | `/example:cmd [text]` puts a sample prompt in the prompt box | `ui.command`, `prompt.insert` |

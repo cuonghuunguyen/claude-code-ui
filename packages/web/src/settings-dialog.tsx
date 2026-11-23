@@ -4,7 +4,7 @@
 // A later setting is one more row in SECTIONS or a section component; a later section joins a group in `groups`, a later group is one
 // more entry there.
 import { useContext, useEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { APP_ICON_MAX, APP_ICON_PX, APP_NAME_DEFAULT, DEFAULT_COMMIT_INSTRUCTION, LOCAL_SIDE, type ClaudeAccountInfo, type DockerState, type Engine, type ProjectOverrides, type Settings, type SettingsPatch, type SettingsResult, type SideInfo, type UpdateCheckResult } from "@claude-ui/protocol";
+import { APP_ICON_MAX, APP_ICON_PX, APP_NAME_DEFAULT, DEFAULT_COMMIT_INSTRUCTION, LOCAL_SIDE, optionType, type ClaudeAccountInfo, type DockerState, type Engine, type ProjectOverrides, type Settings, type SettingsPatch, type SettingsResult, type SideInfo, type UpdateCheckResult } from "@claude-ui/protocol";
 import { sideStatus, sideTitle } from "./sides.tsx";
 import { LabelDialog } from "./label-dialog.tsx";
 import { LabelIcon } from "./label-icon.tsx";
@@ -46,7 +46,7 @@ import { overridesOf } from "./project-settings.ts";
 import { OpenCodeSection } from "./opencode-settings.tsx";
 import { OpenAppSection } from "./open-app-settings.tsx";
 import { onDaemonMachine } from "./open-external-menu.ts";
-import { getThemeOptions, setColorTheme, setThemeOption, useColorTheme, useDark } from "./theme.ts";
+import { getThemeOptions, setColorTheme, setThemeOption, useColorTheme, useDark, type OptionState } from "./theme.ts";
 import { LOCALES, setLocalePref, t, useLocale, useT, type Key } from "./i18n.ts";
 import { addonThemes, swatchOf, THEMES, type Theme, type ThemeId } from "./themes.ts";
 import { AddonsContext, enabledAddons } from "./addons.ts";
@@ -217,6 +217,69 @@ function AppIconRow({ request }: { request: <T>(msg: Request) => Promise<T> }) {
   );
 }
 
+/** One control of a theme option, by type: switch (boolean), select, slider with its value (range) or colour input. The label is the manifest's; every control is a native or labelled element, so it is keyboard accessible; 44 px tall below md. */
+function OptionRow({ o, onSet }: { o: OptionState; onSet: (v: boolean | string | number) => void }) {
+  const { option, value } = o;
+  const type = optionType(option);
+  const tid = `settings-theme-option-${o.id}`;
+  const row = "flex items-center gap-3 border-t py-2 max-md:min-h-11";
+  if (type === "boolean") {
+    return (
+      <div className={row}>
+        <span className="min-w-0 flex-1 text-sm">{o.label}</span>
+        <Switch on={value === true} label={o.label} held={false} onToggle={onSet} title={o.label} testId={tid} />
+      </div>
+    );
+  }
+  return (
+    <div className={row}>
+      <span id={`${tid}-label`} className="min-w-0 flex-1 text-sm">{o.label}</span>
+      {option.type === "select" && (
+        <Select value={String(value)} onValueChange={(v) => v && onSet(v)}>
+          <SelectTrigger aria-labelledby={`${tid}-label`} data-testid={tid} className="w-44 max-md:data-[size=default]:h-11">
+            <SelectValue>{(v: string) => option.choices.find((c) => c.value === v)?.label ?? v}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {option.choices.map((c) => (
+              <SelectItem key={c.value} value={c.value} data-testid={`${tid}-${c.value}`}>
+                {c.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+      {option.type === "range" && (
+        <>
+          <input
+            type="range"
+            aria-labelledby={`${tid}-label`}
+            min={option.min}
+            max={option.max}
+            step={option.step}
+            value={Number(value)}
+            onChange={(e) => onSet(e.currentTarget.valueAsNumber)}
+            data-testid={tid}
+            className="h-5 w-32 cursor-pointer accent-primary max-md:h-11"
+          />
+          <output aria-hidden="true" className="w-10 text-right text-muted-foreground text-xs tabular-nums" data-testid={`${tid}-value`}>
+            {String(value)}
+          </output>
+        </>
+      )}
+      {option.type === "color" && (
+        <input
+          type="color"
+          aria-labelledby={`${tid}-label`}
+          value={String(value)}
+          onChange={(e) => onSet(e.currentTarget.value)}
+          data-testid={tid}
+          className="h-8 w-10 cursor-pointer rounded-md border bg-transparent p-0.5 max-md:h-11 max-md:w-11"
+        />
+      )}
+    </div>
+  );
+}
+
 /** The colour theme (per browser; the titlebar button still cycles light / dark / system inside it). */
 function AppearanceSection({ app, request }: { app?: Settings["app"]; request: <T>(msg: Request) => Promise<T> }) {
   const t = useT();
@@ -261,10 +324,7 @@ function AppearanceSection({ app, request }: { app?: Settings["app"]; request: <
         </Select>
       </div>
       {options.map((o) => (
-        <div key={o.id} className="flex items-center gap-3 border-t py-2 max-md:min-h-11">
-          <span className="min-w-0 flex-1 text-sm">{o.label}</span>
-          <Switch on={o.on} label={o.label} held={false} onToggle={(on) => (setThemeOption(id, o.id, on), bump())} title={o.label} testId={`settings-theme-option-${o.id}`} />
-        </div>
+        <OptionRow key={o.id} o={o} onSet={(v) => (setThemeOption(id, o.id, v), bump())} />
       ))}
       <LanguageRow />
       {app && <AppIconRow request={request} />}

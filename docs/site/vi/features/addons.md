@@ -55,7 +55,9 @@ Thẻ liệt kê addon xin quyền gì, mỗi quyền một dòng dễ hiểu, c
 | `name` | Chữ thường, chữ số và `-`, tối đa 64. Là không gian tên của lệnh và id pane. Không đổi giữa các phiên bản |
 | `version`, `description` | Hiện trong hộp thoại |
 | `capabilities` | Danh sách ở trên; mục nào cần quyền phải được bao phủ |
-| `themes` | `[{id, name, light?, dark?, vars?, options?, css?}]`, xem [giao diện màu](#themes). `css`: tệp `.css` chỉ áp dụng khi giao diện này được chọn, trong [lớp cascade `addon`](addon-parts#cascade) |
+| `assets` | `{<id>: {path, label?}}`: các tệp ảnh addon đặt tên theo id, xem [tài nguyên và ảnh nền](#background). `path` có thể trỏ tới tệp chưa tồn tại |
+| `claudeUi` | Khoảng phiên bản Claude UI mà addon chạy được, xem [tương thích](#compat). Bỏ trống: mọi phiên bản |
+| `themes` | `[{id, name, light?, dark?, vars?, background?, options?, slots?, extends?, css?}]`, xem [giao diện màu](#themes), [slot](#slots) và [kế thừa](#extends). `css`: tệp `.css` chỉ áp dụng khi giao diện này được chọn, trong [lớp cascade `addon`](addon-parts#cascade) |
 | `css` | Cũ. Tệp `.css` áp dụng khi addon đang bật, dù chọn giao diện nào, trong [lớp cascade `addon`](addon-parts#cascade). Quy tắc `:root` và `.dark` của nó cũng ảnh hưởng giao diện có sẵn: dùng `themes[].css` cho một giao diện |
 | `views` | `[{id, title, entry, kind: "pane" \| "band", phone?}]`. `phone: false` ẩn khung dưới 640 px |
 | `commands` | `[{name, description, argumentHint?}]` |
@@ -110,9 +112,79 @@ Bảng màu có thể có thêm khóa `graph`: danh sách đúng 8 màu `#rrggbb
 
 `vars` thêm thuộc tính CSS riêng của bạn, theo từng chế độ: `"vars": {"light": {"--glow": "none"}, "dark": {"--glow": "0 0 12px #00e5ff"}}`. Dùng trong `css` bằng `var(--glow)`. Var chỉ áp dụng khi giao diện được chọn, ở chế độ có bảng màu. Quy tắc: tối đa 64 var mỗi chế độ; tên khớp `--[a-z][a-z0-9-]*` (tối đa 41 ký tự sau dấu gạch); tên không được trùng token mà bảng màu đặt (`--background`, `--primary`, `--syntax-*`, `--graph-*`...: dùng khóa của bảng màu; `--context-*` được phép); giá trị dài 1 đến 200 ký tự, không có `;` `{` `}` `<` `>` `\` `@` hay xuống dòng, không có `/*`, ngoặc và dấu nháy cân bằng, và không có hàm tải ảnh (`url()`, `image-set()`...: ảnh sẽ đi qua trường `background` ở bản sau). Cài addon vi phạm quy tắc sẽ thất bại và nêu tên var.
 
-Một giao diện có thể có tệp `css` riêng. Tệp chỉ áp dụng khi giao diện đó được chọn, nên không ảnh hưởng giao diện khác, kể cả giao diện có sẵn. Viết bộ chọn thường: `:root`, `html` và `.dark` vẫn là gốc trang, các bộ chọn khác khớp bên trong gốc. `@font-face`, `@keyframes` và `@property` vẫn toàn cục (không thuộc giao diện nào, nằm trong lớp của addon, nên đặt tên có tiền tố là tên addon: `@keyframes spin` sẽ thay `spin` của ứng dụng ở mọi giao diện). Bộ chọn không nêu phần tử nào của trang (`*` một mình, `::-webkit-scrollbar`) chỉ khớp bên trong gốc: bắt đầu bằng `:root`. `@import` bị bỏ. Tệp được viết lại khi ứng dụng tải (CSS nesting; cần Chrome 120, Safari 17.2 hoặc Firefox 117, trình duyệt cũ hơn chỉ hiện bảng màu). Tệp lỗi cú pháp (thiếu `}` hoặc `*/`) được tải nguyên trạng, không có phạm vi này.
+Một giao diện có thể có tệp `css` riêng. Tệp chỉ áp dụng khi giao diện đó được chọn, nên không ảnh hưởng giao diện khác, kể cả giao diện có sẵn. Viết bộ chọn thường: `:root`, `html` và `.dark` vẫn là gốc trang, các bộ chọn khác khớp bên trong gốc. `@font-face` và `@property` vẫn toàn cục (không thuộc giao diện nào, nằm trong lớp của addon, nên đặt tên có tiền tố là tên addon: họ phông `@font-face` mà ứng dụng cũng dùng sẽ bị thay ở mọi giao diện). Tên `@keyframes`, `@counter-style` và `@font-palette-values` của bạn được đổi tên theo từng giao diện (`spin` thành `<addon>-<theme>--spin`, `animation`, `list-style` và `font-palette` đi theo), nên không thay được tên của ứng dụng. Bộ chọn bắt đầu bằng `*` (`*`, `* > .a`) cũng khớp gốc trang. `::-webkit-scrollbar` và bộ chọn khác không nêu phần tử nào chỉ khớp bên trong gốc: bắt đầu bằng `:root`. `@import` bị bỏ. Tệp được viết lại khi ứng dụng tải (CSS nesting; cần Chrome 120, Safari 17.2 hoặc Firefox 117, trình duyệt cũ hơn chỉ hiện bảng màu). Tệp lỗi cú pháp (thiếu `}` hoặc `*/`) hoặc lớn hơn 512 KB được phục vụ rỗng: giao diện giữ bảng màu và mất các quy tắc, hộp thoại Addons hiện một mục kiểm tra.
 
-Giao diện màu có thể khai báo tối đa 4 `options` bật/tắt: `[{id, label, default?}]` (`id` là các từ chữ thường nối bằng `-`, tối đa 24 ký tự; `label` 1 đến 40 ký tự; thiếu `default` nghĩa là `true`). **Settings › Appearance** hiện một công tắc cho mỗi tùy chọn khi giao diện đang được chọn. Khi đó `<html>` có `data-opt-<id>="on"` hoặc `"off"` (thuộc tính của tùy chọn giao diện khác bị xóa), nên CSS của addon có thể phản ứng: `:root[data-opt-rain="off"] .rain { display: none }`.
+Chuyển addon cũ: `css` cấp cao nhất áp dụng cho mọi giao diện và ghi đè cả giao diện khác. Chuyển các quy tắc vào `themes[].css` của giao diện cần có chúng (hộp thoại Addons cảnh báo `top-level-css`).
+
+Giao diện màu có thể khai báo tối đa 8 `options`: mỗi tùy chọn có một điều khiển trong **Settings › Appearance** khi giao diện đang được chọn. `id` là các từ chữ thường nối bằng `-` (tối đa 24 ký tự), `label` 1 đến 40 ký tự. `type` là một trong:
+
+| `type` | Trường | Điều khiển | `--opt-<id>` | `data-opt-<id>` |
+| --- | --- | --- | --- | --- |
+| `boolean` (hoặc không có) | `default?` (thiếu nghĩa là `true`) | công tắc | `1` hoặc `0` | `on` hoặc `off` |
+| `select` | `choices: [{value, label}]` (2 đến 12; `value` `[a-z0-9-]+`), `default?` (một trong các giá trị, nếu không thì giá trị đầu) | ô chọn | giá trị | giá trị |
+| `range` | `min`, `max`, `step`, `default` (số, tối đa 3 chữ số thập phân, `min` < `max`, `step` > 0, `default` nằm trong khoảng) | thanh trượt kèm giá trị | số | không có |
+| `color` | `default` (`#rrggbb`) | ô chọn màu | mã hex | không có |
+
+Khi giao diện đang được chọn, `<html>` có các thuộc tính tùy biến này (và các thuộc tính `data-opt-*`); thuộc tính của tùy chọn giao diện khác bị xóa. Dùng chúng trong `css`: `:root[data-opt-rain="off"] .rain { display: none }`, `opacity: calc(var(--opt-density) * 0.4)`. Lựa chọn được giữ trong trình duyệt này; giá trị đã lưu không còn hợp lệ với tùy chọn (giá trị cũ, lựa chọn đã bị xóa, số ngoài `min` đến `max`) được thay bằng giá trị mặc định.
+
+## Tài nguyên và ảnh nền {#background}
+
+`assets` đặt tên cho các tệp ảnh theo id: `"assets": {"bg-dark": {"path": "art/dark.jpg", "label": "Ảnh nền tối"}}`. Id là các từ chữ thường nối bằng `-` (tối đa 24 ký tự), tối đa 16 tài nguyên. Đường dẫn là tương đối và kết thúc bằng `.png`, `.jpg`, `.jpeg`, `.webp`, `.avif`, `.gif` hoặc `.svg`. **Tệp có thể chưa có**: người dùng thêm sau, nên kho addon không phải chứa ảnh mà tác giả không có quyền chia sẻ. Hộp thoại Addons cảnh báo `asset-missing` cho đến khi có tệp và `asset-large` khi trên 2 MB. Tệp đã tồn tại phải nằm trong thư mục addon (liên kết trỏ ra ngoài làm manifest không hợp lệ).
+
+`background` của giao diện đặt một trong các ảnh này phía sau ứng dụng:
+
+```json
+"background": { "light": { "image": "bg-light" }, "dark": { "image": "bg-dark", "mobile": "bg-phone" }, "veil": 0.4, "panelAlpha": 0.8 }
+```
+
+- `light`, `dark`: `image` hiển thị ở chế độ đó, và tùy chọn `mobile` dùng khi nhỏ hơn 768 px. Cả hai là id trong `assets`; id không có làm manifest không hợp lệ.
+- `veil` (0 đến 1): màu nền trang phủ lên ảnh mạnh đến đâu, để chữ vẫn dễ đọc. Mặc định 0.
+- `panelAlpha` (0 đến 1): các bảng chính (thanh bên, thanh tiêu đề, bảng phiên, hộp nhập, bảng bên) đục đến đâu trên ảnh. Mặc định 1, hoàn toàn đục. CSS của bạn có thể đổi `--panel-alpha`.
+
+Ảnh nền chỉ hiển thị khi giao diện đang được chọn và tệp ảnh của chế độ hiện tại tồn tại. Không có tệp thì giao diện hoạt động như không có `background`, và các bảng vẫn đục. Ảnh là part `backdrop` (`<div data-part="backdrop">`, cố định phía sau ứng dụng) và `<html>` có `data-backdrop` khi ảnh hiển thị, để CSS của bạn thích ứng.
+
+## Slot: loader, biểu tượng hoàn tất, biểu tượng gửi và chữ Thinking riêng {#slots}
+
+Một giao diện có thể thay bốn thứ nhỏ của ứng dụng. `slots` nằm trong giao diện:
+
+```json
+"assets": { "ring": { "path": "art/ring.svg" }, "tick": { "path": "art/tick.svg" } },
+"themes": [{ "id": "void", "name": "Void", "dark": { "...": "..." },
+  "slots": {
+    "loader": "ring",
+    "done-icon": "tick",
+    "send-icon": "ring",
+    "thinking-phrases": { "en": ["Casting", "Expanding"], "vi": ["Đang niệm chú"] }
+  } }]
+```
+
+| Slot | Giá trị | Hiển thị thay cho |
+| --- | --- | --- |
+| `loader` | Một id của asset | Vòng quay của lần gọi công cụ đang chạy, phiên đang chạy ở thanh bên và tab đang chạy. Part là [`loader`](addon-parts) |
+| `done-icon` | Một id của asset | Dấu tích của lần gọi công cụ đã xong. Part là [`done-icon`](addon-parts) |
+| `send-icon` | Một id của asset | Mũi tên của nút gửi. Biểu tượng Stop, Queue và ngoại tuyến giữ nguyên. Nút vẫn giữ tên cho trình đọc màn hình |
+| `thinking-phrases` | `{<ngôn ngữ>: [câu]}` | Chữ "Thinking" của dòng đang làm việc |
+
+- Slot ảnh ghi một id trong [`assets`](#background); id không có thì manifest không hợp lệ. Tệp có thể chưa tồn tại: ứng dụng giữ biểu tượng của mình và hộp thoại Addons cảnh báo `asset-missing`. Dùng `.svg`, `.png`, `.webp`, `.avif` hoặc `.gif`.
+- Ảnh chỉ để trang trí (`alt` rỗng, ẩn với trình đọc màn hình) và có cỡ như biểu tượng nó thay (16 px). Ảnh không tự quay: hãy tạo chuyển động trong `css` của bạn (`[data-part="loader"] img { animation: ... }`, kèm `@media (prefers-reduced-motion: reduce)` hoặc `:root[data-motion="off"]`), hoặc dùng SVG tự chuyển động.
+- Câu: 1 đến 4 ngôn ngữ, ngôn ngữ là `en`, `vi` hoặc bất kỳ `xx` / `xx-XX` (ứng dụng có `en` và `vi`), mỗi ngôn ngữ 1 đến 12 câu, mỗi câu 1 đến 60 ký tự văn bản thuần (không có `<`, `>` hay xuống dòng). Danh sách của ngôn ngữ giao diện được dùng (`pt-BR` trước `pt`); ngôn ngữ không có danh sách giữ "Thinking". Mỗi lượt chọn một câu trong danh sách và giữ nguyên đến hết lượt, nên không nhấp nháy và không chuyển động.
+- `<html>` có `data-slot-loader`, `data-slot-done-icon`, `data-slot-send-icon` và `data-slot-thinking-phrases` khi slot đó đang có hiệu lực (tệp tồn tại; với câu: có danh sách cho ngôn ngữ giao diện). CSS của bạn có thể thích ứng, ví dụ ẩn vòng mà ảnh đã thay.
+
+## Kế thừa giao diện khác {#extends}
+
+`extends` cho một giao diện dựa trên giao diện khác, nên biến thể chỉ cần phần khác biệt: `"extends": "void"` (giao diện của cùng addon) hoặc `"extends": "pack:void"` (giao diện của addon `pack` đang bật).
+
+Giao diện bắt đầu từ bản gốc rồi thêm phần của mình lên trên; phần của chính giao diện thắng:
+
+- `css`, `vars`, `background`, `slots` và `options` của bản gốc áp dụng bên dưới phần của giao diện. `css` của bản gốc được nạp dưới giao diện kế thừa nên quy tắc của nó có hiệu lực ở đó. Tên `@keyframes`, `@counter-style`, `@font-palette-values` trong `css` của bản gốc (đã được đổi tên) dùng được trong `css` riêng của giao diện bằng tên gốc (`animation: spin 1s`).
+- Bảng màu không được kế thừa: chế độ mà giao diện có là của chính nó. Chế độ không có thì dùng bảng màu của bản gốc.
+- Bản gốc có thể kế thừa tiếp bản gốc khác, tối đa 3 mắc xích.
+
+Khi không dùng được bản gốc (không có giao diện đó, addon của nó chưa cài hoặc chưa bật, bị lặp vòng, hơn 3 mắc xích) thì giao diện chạy không có nó và hộp thoại Addons cảnh báo `extends-missing`. Giá trị sai dạng, giao diện tự kế thừa chính nó và vòng lặp giữa các giao diện của cùng addon làm manifest không hợp lệ.
+
+## Tương thích với Claude UI {#compat}
+
+`claudeUi` cho biết addon chạy được với các phiên bản Claude UI nào: `"claudeUi": ">=1.6"`. Các dạng: `*` (mọi bản), `1.6.0` (đúng bản đó), `>=1.6` hoặc `>=1.6.2` (bản này trở lên), `^1.6` (cùng phiên bản chính, từ 1.6 trở lên), `~1.6` (cùng phiên bản phụ). Bỏ trống thì nhận mọi phiên bản. Ngoài khoảng đó addon có trạng thái **Error** với `needs Claude UI >=1.6 (this is 1.5.0)`, không được bật và không phục vụ tệp nào, nhưng vẫn nằm trong hộp thoại (addon git vẫn kiểm tra được bản cập nhật). Bản chạy từ mã nguồn (phiên bản `dev`) chấp nhận mọi khoảng.
 
 ## Pane, băng và lệnh {#views}
 
@@ -123,6 +195,12 @@ Giao diện màu có thể khai báo tối đa 4 `options` bật/tắt: `[{id, l
 ## Vẽ khối mã và kết quả công cụ {#renderers}
 
 Bộ vẽ `fence` vẽ khối mã của một ngôn ngữ trong câu trả lời và tin nhắn của bạn, trước các bộ vẽ có sẵn (cả sơ đồ Mermaid). Bộ vẽ `tool` vẽ kết quả của một công cụ. Mỗi bản vẽ có nút **Hiện bản gốc** để xem cách hiển thị có sẵn. Khung chỉ được tạo khi khối ở gần màn hình. Nếu hai addon vẽ cùng một thứ, hộp thoại Addon có bộ chọn; chưa chọn thì addon đứng đầu theo tên thắng.
+
+## Viết và kiểm tra addon {#authoring}
+
+Chạy `claude-ui addon dev <thư mục>` một lần: lệnh cài thư mục ở chế độ Dev (daemon theo dõi thư mục) và bật addon nếu nó không khai báo quyền. Lệnh in số cảnh báo lint và một dòng `preview: http://127.0.0.1:<port>/#/addon-preview`. Mỗi lần sửa tệp trong thư mục, manifest, lint và CSS được nạp lại mà không cần tải lại trang.
+
+Mở **trang xem trước** (URL đó, hoặc **Mở xem trước** ở dòng addon trong Cài đặt › Addon). Trang hiện mọi [part](addon-parts) ở mọi trạng thái, bằng component thật của ứng dụng và dữ liệu mẫu: phiên đang chạy, chờ cấp quyền hoặc chờ câu trả lời, vừa xong, rảnh hoặc lỗi; thẻ công cụ ở cả sáu trạng thái; trạng thái tab, dòng thanh bên và nút gửi; ba mức dùng gói; trang Focus; toast và bảng lệnh. Chọn theme và **Sáng**, **Tối** hoặc **Theo hệ thống** ở đầu trang, sửa CSS và xem trang đổi. **Chạy lại hiệu ứng** chạy lại hai trạng thái 1,2 giây `data-just-finished` và `data-focus-opened`. Graph, thay đổi, nội dung commit và terminal cần daemon: trang hiện bản tĩnh thay thế, cùng tên part và thuộc tính. Cảnh báo lint của addon nằm ở mục **Kiểm tra** trong Cài đặt › Addon.
 
 ## Addon ví dụ {#example}
 

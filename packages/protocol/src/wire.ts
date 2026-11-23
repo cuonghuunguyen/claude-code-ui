@@ -1329,15 +1329,30 @@ export type AddonRenderer = ({ fence: string } | { tool: string }) & { entry: st
 export type AddonPalette = Record<string, string | string[]>;
 /** Custom properties an addon theme sets per mode (`--name` -> value, protocol addon-theme.ts rules); written into the theme's colour rule. */
 export type AddonThemeVars = { light?: Record<string, string>; dark?: Record<string, string> };
-/** A boolean switch of a theme (Settings > Appearance): the web app sets `data-opt-<id>="on"|"off"` on <html> while the theme is current. `default` absent = on. */
-export type AddonThemeOption = { id: string; label: string; default?: boolean };
-export type AddonTheme = { id: string; name: string; light?: AddonPalette; dark?: AddonPalette; vars?: AddonThemeVars; options?: AddonThemeOption[]; /** A `.css` file of the addon that applies only while this theme is picked: the daemon scopes it when it serves it (`?theme=<id>`). */ css?: string };
+/** A user control of a theme (Settings > Appearance) exposed on <html> while the theme is current: `--opt-<id>` (boolean `0`/`1`, select the value, range the number, color the hex) and `data-opt-<id>` (boolean `on`/`off`, select the value). `type` absent = boolean (`default` absent = on). Rules: protocol addon-theme.ts. */
+export type AddonThemeOption =
+  | { id: string; label: string; type?: "boolean"; default?: boolean }
+  | { id: string; label: string; type: "select"; choices: { value: string; label: string }[]; default?: string }
+  | { id: string; label: string; type: "range"; min: number; max: number; step: number; default: number }
+  | { id: string; label: string; type: "color"; default: string };
+/** A file of the addon the manifest names by id (`assets`): the file may be missing (the user fills it), so the repository ships no art. */
+export type AddonAsset = { path: string; label?: string };
+/** `image` / `mobile`: ids of `assets`. */
+export type AddonBackgroundImage = { image: string; mobile?: string };
+/** Background of a theme: an image per mode (`mobile`: below the md breakpoint), `veil` = opacity (0..1) of the page background over the image, `panelAlpha` = opacity (0..1) of the main panels (`--panel-alpha`). Shown only while the asset file exists. */
+export type AddonBackground = { light?: AddonBackgroundImage; dark?: AddonBackgroundImage; veil?: number; panelAlpha?: number };
+/** Slots of a theme (docs/spec.md "Addon themes and CSS" > Slots): `loader`, `done-icon`, `send-icon` = ids of image `assets` shown instead of the built-in mark while the file exists; `thinking-phrases` = per language (`en`, `vi`, `pt-BR`, at most 4) 1..12 phrases of 1..60 characters that replace the "Thinking" label. */
+export type AddonThemeSlots = { loader?: string; "done-icon"?: string; "send-icon"?: string; "thinking-phrases"?: Record<string, string[]> };
+export type AddonTheme = { id: string; name: string; light?: AddonPalette; dark?: AddonPalette; vars?: AddonThemeVars; background?: AddonBackground; options?: AddonThemeOption[]; slots?: AddonThemeSlots; /** `<theme>` (same addon) or `<addon>:<theme>`: that theme's css, vars, background, slots and options apply under this theme's own (protocol addon-theme.ts `extendsChain`). */ extends?: string; /** A `.css` file of the addon that applies only while this theme is picked: the daemon scopes it when it serves it (`?theme=<id>`). */ css?: string };
 export type AddonManifest = {
   name: string;
   version: string;
   description: string;
   capabilities: string[];
   themes: AddonTheme[];
+  assets?: Record<string, AddonAsset>;
+  /** Claude UI versions the addon works with (`*`, `x.y.z`, `>=x.y[.z]`, `^x.y[.z]`, `~x.y[.z]`; protocol addon-compat.ts). Absent = any. Outside it the addon state is `error`. */
+  claudeUi?: string;
   css?: string;
   views: AddonView[];
   commands: AddonCommand[];
@@ -1347,20 +1362,24 @@ export type AddonManifest = {
 /** needs_approval: declared capabilities not all approved (never enabled). error: the manifest does not load. */
 export type AddonState = "enabled" | "disabled" | "needs_approval" | "error";
 /** One finding of the addon lint (docs/spec.md "Addon lint"). Warnings only: a finding never blocks an install or an enable. `text` is built by the client from `code` and the fields. */
-export type AddonLintCode = "selects-testid" | "unknown-part" | "unprefixed-name" | "top-level-css" | "css-broken" | "css-too-large";
+export type AddonLintCode = "selects-testid" | "unknown-part" | "unprefixed-name" | "top-level-css" | "css-broken" | "css-too-large" | "css-large" | "deprecated-part" | "low-contrast" | "asset-missing" | "asset-large" | "extends-missing";
 export type AddonLint = {
   level: "warning";
   code: AddonLintCode;
   /** Addon-relative path of the CSS file. */
   file?: string;
   line?: number;
-  /** The part name, `@keyframes` / `@font-face` family / `@property` name. */
+  /** The part name (`unknown-part` with `^=` `$=` `*=` `|=`: the value as a glob such as `side*`), `@keyframes` / `@font-face` family / `@property` name. `asset-missing` / `asset-large`: the asset id (file in `file`). `extends-missing`: `<theme>` (`suggest` = its `extends` value). `low-contrast`: `<theme>: fg on bg 3.2:1 (dark)`. */
   name?: string;
-  /** The prefixed form of `name`. */
+  /** The prefixed form of `name`; for `unknown-part` the nearest part name (at most 2 edits away). */
   suggest?: string;
-  /** `selects-testid`: how many selectors. */
+  /** `deprecated-part`: the release that removes the part. */
+  until?: string;
+  /** `selects-testid`: how many selectors. `asset-large`: size in KB. */
   count?: number;
 };
-export type AddonInfo = { name: string; source: AddonSource; sha?: string; manifest?: AddonManifest; /** Lint findings of the manifest and its CSS; absent when there are none. */ lint?: AddonLint[]; approved: string[]; state: AddonState; error?: string; /** Dev mode is on (local folders only). With `error` and a `manifest`: the manifest is the last good one. */ dev?: boolean; /** Dev mode only: changes at every edit of the folder; the client appends it to file URLs (`?v=`). */ rev?: number; /** `/addon/<nonce>/<name>/`: only when enabled. */ base?: string };
+/** Per asset id: whether its file exists now (read on every list) and its size in bytes. */
+export type AddonAssetState = { present: boolean; size?: number };
+export type AddonInfo = { name: string; source: AddonSource; sha?: string; manifest?: AddonManifest; /** Per `manifest.assets` id: the file is there or not. */ assets?: Record<string, AddonAssetState>; /** Lint findings of the manifest and its CSS; absent when there are none. */ lint?: AddonLint[]; approved: string[]; state: AddonState; error?: string; /** Dev mode is on (local folders only). With `error` and a `manifest`: the manifest is the last good one. */ dev?: boolean; /** Dev mode only: changes at every edit of the folder; the client appends it to file URLs (`?v=`). */ rev?: number; /** `/addon/<nonce>/<name>/`: only when enabled. */ base?: string };
 export type AddonsListResult = { addons: AddonInfo[]; picks: Record<string, string> };
 export type AddonUpdateCheck = { name: string; current: string; latest: string; added: string[]; removed: string[]; error?: string };

@@ -61,8 +61,6 @@ export type AddonPart = {
   states?: string[];
   /** Set (to the release that removes it) while the part is on its way out. */
   deprecated?: string;
-  /** Listed for authors, the element itself comes with a later slice of the theme chain (slots, background). Not rendered yet. */
-  reserved?: true;
 };
 
 const SESSION_STATE = "data-state=running|needs_input|idle|error|closed";
@@ -75,9 +73,6 @@ const META: { [K in PartName]?: Omit<AddonPart, "name" | "since"> } = {
   "tool-card": { states: ["data-status=pending|running|done|error|denied|stopped"] },
   "plan-window": { states: ["data-level=ok|warning|limit"] },
   send: { states: ["data-state=idle|running|needs_input|disconnected"] },
-  loader: { reserved: true },
-  "done-icon": { reserved: true },
-  backdrop: { reserved: true },
 };
 
 export const PARTS: readonly AddonPart[] = PART_NAMES.map((name) => ({ name, since: "1.5", ...META[name] }));
