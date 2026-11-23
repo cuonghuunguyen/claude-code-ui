@@ -1,7 +1,7 @@
 // Color scheme: follows the OS by default (OpenCode `system`), or forced light / dark; kept per browser.
 import { useSyncExternalStore } from "react";
-import type { AddonInfo } from "@claude-ui/protocol";
-import { ADDON_THEME_ID, THEMES, themeById, themeCss, type Theme, type ThemeId } from "./themes.ts";
+import { optionCss, optionType, optionValue, type AddonInfo } from "@claude-ui/protocol";
+import { ADDON_THEME_ID, THEMES, themeById, themeCss, type Theme, type ThemeId, type ThemeOption } from "./themes.ts";
 export type ThemePref = "system" | "light" | "dark";
 
 const KEY = "claude-ui.theme";
@@ -49,48 +49,64 @@ export function loadColorTheme(): ThemeId {
   }
 }
 
-/** The switches a user turned on or off, per theme: `{ "<themeId>": { "<optionId>": boolean } }`; anything that is not a boolean is ignored. */
-function loadOptions(): Record<string, Record<string, boolean>> {
+/** What a user chose per theme: `{ "<themeId>": { "<optionId>": boolean | string | number } }`. Only primitive values are kept here; each is checked against the option's type when it is read (`optionValue`). */
+type Stored = Record<string, Record<string, boolean | string | number>>;
+const storable = (v: unknown): v is boolean | string | number => typeof v === "boolean" || (typeof v === "string" && v.length <= 64) || (typeof v === "number" && Number.isFinite(v));
+function loadOptions(): Stored {
   try {
     const v: unknown = JSON.parse(localStorage.getItem(OPTIONS_KEY) ?? "null");
     if (typeof v !== "object" || v === null || Array.isArray(v)) return {};
     return Object.fromEntries(
-      Object.entries(v).flatMap<[string, Record<string, boolean>]>(([t, o]) => (typeof o === "object" && o !== null && !Array.isArray(o) ? [[t, Object.fromEntries(Object.entries(o).filter(([, b]) => typeof b === "boolean")) as Record<string, boolean>]] : [])),
+      Object.entries(v).flatMap<[string, Stored[string]]>(([t, o]) => (typeof o === "object" && o !== null && !Array.isArray(o) ? [[t, Object.fromEntries(Object.entries(o).filter(([, x]) => storable(x))) as Stored[string]]] : [])),
     );
   } catch {
     return {};
   }
 }
 
-/** Switches of this page when storage is blocked. */
-let memory: Record<string, Record<string, boolean>> = {};
+/** Choices of this page when storage is blocked. */
+let memory: Stored = {};
 
-/** The options of a theme with their current state (stored value, else the option's default, else on). */
-export function getThemeOptions(theme: Theme | undefined): { id: string; label: string; on: boolean }[] {
+/** One option of the current theme with its current value (stored value when valid for the option's type, else the option's default). */
+export type OptionState = { id: string; label: string; option: ThemeOption; value: boolean | string | number };
+
+/** The options of a theme with their current values. */
+export function getThemeOptions(theme: Theme | undefined): OptionState[] {
   const stored = theme ? { ...loadOptions()[theme.id], ...memory[theme.id] } : undefined;
-  return (theme?.options ?? []).map((o) => ({ id: o.id, label: o.label, on: stored?.[o.id] ?? o.default ?? true }));
+  return (theme?.options ?? []).map((o) => ({ id: o.id, label: o.label, option: o, value: optionValue(o, stored?.[o.id]) }));
 }
 
 /** The addon themes the last `applyAddonThemes` knew: their options are applied once the addons arrive. */
 let addonList: readonly Theme[] = [];
 
-/** `data-opt-<id>="on"|"off"` on <html> for the options of the current theme; the `data-opt-*` of every other theme's options go. */
+/** On <html> for the options of the current theme: `data-opt-<id>` (boolean `on`/`off`, select the value) and `--opt-<id>` (boolean `0`/`1`, select the value, range the number, color the hex; checked again by `optionCss`). Those of every other theme's options go. */
 function syncThemeOptions() {
   const root = document.documentElement;
   const cur = [...THEMES, ...addonList].find((t) => t.id === (root.getAttribute("data-theme") ?? "default"));
-  const want = new Map(getThemeOptions(cur).map((o) => [`data-opt-${o.id}`, o.on ? "on" : "off"]));
-  for (const a of [...root.attributes]) if (a.name.startsWith("data-opt-") && !want.has(a.name)) root.removeAttribute(a.name);
-  for (const [name, v] of want) root.setAttribute(name, v);
+  const attrs = new Map<string, string>();
+  const props = new Map<string, string>();
+  for (const o of getThemeOptions(cur)) {
+    const css = optionCss(o.option, o.value);
+    if (css === undefined) continue;
+    const type = optionType(o.option);
+    if (type === "boolean") attrs.set(`data-opt-${o.id}`, o.value ? "on" : "off");
+    else if (type === "select") attrs.set(`data-opt-${o.id}`, css);
+    props.set(`--opt-${o.id}`, css);
+  }
+  for (const a of [...root.attributes]) if (a.name.startsWith("data-opt-") && !attrs.has(a.name)) root.removeAttribute(a.name);
+  for (const [name, v] of attrs) root.setAttribute(name, v);
+  for (const name of [...root.style]) if (name.startsWith("--opt-") && !props.has(name)) root.style.removeProperty(name);
+  for (const [name, v] of props) root.style.setProperty(name, v);
 }
 
-/** A user switch: applied at once and kept in this browser. */
-export function setThemeOption(themeId: ThemeId, optionId: string, on: boolean) {
+/** A user choice: applied at once and kept in this browser. */
+export function setThemeOption(themeId: ThemeId, optionId: string, value: boolean | string | number) {
   try {
     const all = loadOptions();
-    localStorage.setItem(OPTIONS_KEY, JSON.stringify({ ...all, [themeId]: { ...all[themeId], [optionId]: on } }));
+    localStorage.setItem(OPTIONS_KEY, JSON.stringify({ ...all, [themeId]: { ...all[themeId], [optionId]: value } }));
   } catch {
     // Storage blocked: the choice lasts for this page.
-    memory = { ...memory, [themeId]: { ...memory[themeId], [optionId]: on } };
+    memory = { ...memory, [themeId]: { ...memory[themeId], [optionId]: value } };
   }
   syncThemeOptions();
 }

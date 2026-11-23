@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { varNameError, varValueError } from "../src/index.ts";
+import { optionCss, optionDefault, optionValue, varNameError, varValueError, type AddonThemeOption } from "../src/index.ts";
 
 describe("addon theme var names", () => {
   it.each(["--glow", "--gojo-glow-2", "--a", "--context-3"])("accepts %s", (n) => expect(varNameError(n)).toBeUndefined());
@@ -47,5 +47,44 @@ describe("addon theme var values (a value is written into a <style> text)", () =
     for (const v of ["(".repeat(1_000_000), '"'.repeat(1_000_000), "a".repeat(1_000_000)]) expect(varValueError(v)).toBeDefined();
     for (let i = 0; i < 2000; i++) varValueError("(".repeat(100) + ")".repeat(100));
     expect(performance.now() - t).toBeLessThan(1000);
+  });
+});
+
+describe("typed theme options: a stored value is checked against the type, a bad one is the default", () => {
+  const select: AddonThemeOption = { id: "mood", label: "M", type: "select", choices: [{ value: "calm", label: "C" }, { value: "storm", label: "S" }], default: "storm" };
+  const range: AddonThemeOption = { id: "d", label: "D", type: "range", min: 0, max: 1, step: 0.1, default: 0.5 };
+  const color: AddonThemeOption = { id: "t", label: "T", type: "color", default: "#aa00ff" };
+  const bool: AddonThemeOption = { id: "b", label: "B" };
+
+  it("defaults: boolean on unless false; select its default, else the first choice; range and color their default", () => {
+    expect(optionDefault(bool)).toBe(true);
+    expect(optionDefault({ ...bool, default: false })).toBe(false);
+    expect(optionDefault(select)).toBe("storm");
+    expect(optionDefault({ ...select, default: "zzz" })).toBe("calm");
+    expect(optionDefault(range)).toBe(0.5);
+  });
+
+  it.each([
+    [bool, "yes", true],
+    [bool, false, false],
+    [select, "calm", "calm"],
+    [select, "other", "storm"],
+    [range, 0.7, 0.7],
+    [range, 2, 0.5],
+    [range, Number.NaN, 0.5],
+    [range, "0.7", 0.5],
+    [color, "#00FF88", "#00ff88"],
+    [color, "#0f8", "#aa00ff"],
+    [color, "red", "#aa00ff"],
+  ])("%j with %j gives %j", (o, v, want) => expect(optionValue(o as AddonThemeOption, v)).toBe(want));
+
+  it("the CSS value: boolean 0/1, the choice, the number, the hex; nothing that could leave the declaration", () => {
+    expect(optionCss(bool, true)).toBe("1");
+    expect(optionCss(bool, false)).toBe("0");
+    expect(optionCss(select, "calm")).toBe("calm");
+    expect(optionCss(range, 0.25)).toBe("0.25");
+    expect(optionCss(color, "#00ff88")).toBe("#00ff88");
+    expect(optionCss(select, "a;}b")).toBe("storm");
+    expect(optionCss(color, "#aa00ff;}")).toBe("#aa00ff");
   });
 });

@@ -55,7 +55,8 @@ Thẻ liệt kê addon xin quyền gì, mỗi quyền một dòng dễ hiểu, c
 | `name` | Chữ thường, chữ số và `-`, tối đa 64. Là không gian tên của lệnh và id pane. Không đổi giữa các phiên bản |
 | `version`, `description` | Hiện trong hộp thoại |
 | `capabilities` | Danh sách ở trên; mục nào cần quyền phải được bao phủ |
-| `themes` | `[{id, name, light?, dark?, vars?, options?, css?}]`, xem [giao diện màu](#themes). `css`: tệp `.css` chỉ áp dụng khi giao diện này được chọn, trong [lớp cascade `addon`](addon-parts#cascade) |
+| `assets` | `{<id>: {path, label?}}`: các tệp ảnh addon đặt tên theo id, xem [tài nguyên và ảnh nền](#background). `path` có thể trỏ tới tệp chưa tồn tại |
+| `themes` | `[{id, name, light?, dark?, vars?, background?, options?, css?}]`, xem [giao diện màu](#themes). `css`: tệp `.css` chỉ áp dụng khi giao diện này được chọn, trong [lớp cascade `addon`](addon-parts#cascade) |
 | `css` | Cũ. Tệp `.css` áp dụng khi addon đang bật, dù chọn giao diện nào, trong [lớp cascade `addon`](addon-parts#cascade). Quy tắc `:root` và `.dark` của nó cũng ảnh hưởng giao diện có sẵn: dùng `themes[].css` cho một giao diện |
 | `views` | `[{id, title, entry, kind: "pane" \| "band", phone?}]`. `phone: false` ẩn khung dưới 640 px |
 | `commands` | `[{name, description, argumentHint?}]` |
@@ -114,7 +115,32 @@ Một giao diện có thể có tệp `css` riêng. Tệp chỉ áp dụng khi g
 
 Chuyển addon cũ: `css` cấp cao nhất áp dụng cho mọi giao diện và ghi đè cả giao diện khác. Chuyển các quy tắc vào `themes[].css` của giao diện cần có chúng (hộp thoại Addons cảnh báo `top-level-css`).
 
-Giao diện màu có thể khai báo tối đa 4 `options` bật/tắt: `[{id, label, default?}]` (`id` là các từ chữ thường nối bằng `-`, tối đa 24 ký tự; `label` 1 đến 40 ký tự; thiếu `default` nghĩa là `true`). **Settings › Appearance** hiện một công tắc cho mỗi tùy chọn khi giao diện đang được chọn. Khi đó `<html>` có `data-opt-<id>="on"` hoặc `"off"` (thuộc tính của tùy chọn giao diện khác bị xóa), nên CSS của addon có thể phản ứng: `:root[data-opt-rain="off"] .rain { display: none }`.
+Giao diện màu có thể khai báo tối đa 8 `options`: mỗi tùy chọn có một điều khiển trong **Settings › Appearance** khi giao diện đang được chọn. `id` là các từ chữ thường nối bằng `-` (tối đa 24 ký tự), `label` 1 đến 40 ký tự. `type` là một trong:
+
+| `type` | Trường | Điều khiển | `--opt-<id>` | `data-opt-<id>` |
+| --- | --- | --- | --- | --- |
+| `boolean` (hoặc không có) | `default?` (thiếu nghĩa là `true`) | công tắc | `1` hoặc `0` | `on` hoặc `off` |
+| `select` | `choices: [{value, label}]` (2 đến 12; `value` `[a-z0-9-]+`), `default?` (một trong các giá trị, nếu không thì giá trị đầu) | ô chọn | giá trị | giá trị |
+| `range` | `min`, `max`, `step`, `default` (số, tối đa 3 chữ số thập phân, `min` < `max`, `step` > 0, `default` nằm trong khoảng) | thanh trượt kèm giá trị | số | không có |
+| `color` | `default` (`#rrggbb`) | ô chọn màu | mã hex | không có |
+
+Khi giao diện đang được chọn, `<html>` có các thuộc tính tùy biến này (và các thuộc tính `data-opt-*`); thuộc tính của tùy chọn giao diện khác bị xóa. Dùng chúng trong `css`: `:root[data-opt-rain="off"] .rain { display: none }`, `opacity: calc(var(--opt-density) * 0.4)`. Lựa chọn được giữ trong trình duyệt này; giá trị đã lưu không còn hợp lệ với tùy chọn (giá trị cũ, lựa chọn đã bị xóa, số ngoài `min` đến `max`) được thay bằng giá trị mặc định.
+
+## Tài nguyên và ảnh nền {#background}
+
+`assets` đặt tên cho các tệp ảnh theo id: `"assets": {"bg-dark": {"path": "art/dark.jpg", "label": "Ảnh nền tối"}}`. Id là các từ chữ thường nối bằng `-` (tối đa 24 ký tự), tối đa 16 tài nguyên. Đường dẫn là tương đối và kết thúc bằng `.png`, `.jpg`, `.jpeg`, `.webp`, `.avif`, `.gif` hoặc `.svg`. **Tệp có thể chưa có**: người dùng thêm sau, nên kho addon không phải chứa ảnh mà tác giả không có quyền chia sẻ. Hộp thoại Addons cảnh báo `asset-missing` cho đến khi có tệp và `asset-large` khi trên 2 MB. Tệp đã tồn tại phải nằm trong thư mục addon (liên kết trỏ ra ngoài làm manifest không hợp lệ).
+
+`background` của giao diện đặt một trong các ảnh này phía sau ứng dụng:
+
+```json
+"background": { "light": { "image": "bg-light" }, "dark": { "image": "bg-dark", "mobile": "bg-phone" }, "veil": 0.4, "panelAlpha": 0.8 }
+```
+
+- `light`, `dark`: `image` hiển thị ở chế độ đó, và tùy chọn `mobile` dùng khi nhỏ hơn 768 px. Cả hai là id trong `assets`; id không có làm manifest không hợp lệ.
+- `veil` (0 đến 1): màu nền trang phủ lên ảnh mạnh đến đâu, để chữ vẫn dễ đọc. Mặc định 0.
+- `panelAlpha` (0 đến 1): các bảng chính (thanh bên, thanh tiêu đề, bảng phiên, hộp nhập, bảng bên) đục đến đâu trên ảnh. Mặc định 1, hoàn toàn đục. CSS của bạn có thể đổi `--panel-alpha`.
+
+Ảnh nền chỉ hiển thị khi giao diện đang được chọn và tệp ảnh của chế độ hiện tại tồn tại. Không có tệp thì giao diện hoạt động như không có `background`, và các bảng vẫn đục. Ảnh là part `backdrop` (`<div data-part="backdrop">`, cố định phía sau ứng dụng) và `<html>` có `data-backdrop` khi ảnh hiển thị, để CSS của bạn thích ứng.
 
 ## Pane, băng và lệnh {#views}
 

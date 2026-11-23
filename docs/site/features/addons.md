@@ -55,14 +55,15 @@ The card lists what the addon asks for, one plain line each, and the themes, vie
 | `name` | Lowercase letters, digits and `-`, up to 64. The namespace of commands and pane ids. Never changes between versions |
 | `version`, `description` | Shown in the dialog |
 | `capabilities` | The list above; every entry that needs one must be covered |
-| `themes` | `[{id, name, light?, dark?, vars?, options?, css?}]`, see [themes](#themes). `css`: a `.css` file that applies only while this theme is picked, in the [`addon` cascade layer](addon-parts#cascade) |
+| `assets` | `{<id>: {path, label?}}`: image files the addon names by id, see [assets and background](#background). `path` may point to a file that does not exist yet |
+| `themes` | `[{id, name, light?, dark?, vars?, background?, options?, css?}]`, see [themes](#themes). `css`: a `.css` file that applies only while this theme is picked, in the [`addon` cascade layer](addon-parts#cascade) |
 | `css` | Legacy. A `.css` file applied while the addon is enabled, whichever theme is picked, in the [`addon` cascade layer](addon-parts#cascade). Its `:root` and `.dark` rules also reach the built-in themes: use `themes[].css` for a theme |
 | `views` | `[{id, title, entry, kind: "pane" \| "band", phone?}]`. `phone: false` hides the view below 640 px |
 | `commands` | `[{name, description, argumentHint?}]` |
 | `commandsEntry` | The `.html` that handles commands; the first view's entry when absent |
 | `renderers` | `[{fence \| tool, entry}]` |
 
-Paths are relative, without `..`, and must exist. A view needs `ui.pane` or `ui.band`, a command needs `ui.command`, a renderer needs its `render.fence:` or `render.tool:` capability; the install says which is missing.
+Paths are relative, without `..`, and must exist (an `assets` path is the exception: see [assets and background](#background)). A view needs `ui.pane` or `ui.band`, a command needs `ui.command`, a renderer needs its `render.fence:` or `render.tool:` capability; the install says which is missing.
 
 ## Talking to claude-ui from a view {#bridge}
 
@@ -114,7 +115,32 @@ A theme may have its own `css` file. It applies only while that theme is picked,
 
 Moving an old addon: a top-level `css` applies under every theme and overrides the other themes too. Move its rules into `themes[].css` of the theme that should have them (the Addons dialog warns `top-level-css`).
 
-A theme may declare up to 4 on/off `options`: `[{id, label, default?}]` (`id` lowercase words joined by `-`, up to 24 characters; `label` 1 to 40 characters; `default` is `true` when absent). **Settings › Appearance** shows one switch per option while the theme is picked. While it is picked, `<html>` has `data-opt-<id>="on"` or `"off"` (the attributes of other themes' options are removed), so the addon CSS can react: `:root[data-opt-rain="off"] .rain { display: none }`.
+A theme may declare up to 8 `options`: a control each in **Settings › Appearance** while the theme is picked. `id` is lowercase words joined by `-` (up to 24 characters), `label` 1 to 40 characters. `type` is one of:
+
+| `type` | Fields | Control | `--opt-<id>` | `data-opt-<id>` |
+| --- | --- | --- | --- | --- |
+| `boolean` (or absent) | `default?` (`true` when absent) | switch | `1` or `0` | `on` or `off` |
+| `select` | `choices: [{value, label}]` (2 to 12; `value` `[a-z0-9-]+`), `default?` (one of the values, else the first) | select | the value | the value |
+| `range` | `min`, `max`, `step`, `default` (numbers, at most 3 decimals, `min` < `max`, `step` > 0, `default` inside) | slider with its value | the number | none |
+| `color` | `default` (`#rrggbb`) | colour input | the hex | none |
+
+While the theme is picked, `<html>` has these custom properties (and attributes); those of other themes' options are removed. Use them in your `css`: `:root[data-opt-rain="off"] .rain { display: none }`, `opacity: calc(var(--opt-density) * 0.4)`. The choice is kept in this browser; a stored value that does not fit the option (an old value, a removed choice, a number outside `min` to `max`) is replaced by the default.
+
+## Assets and background {#background}
+
+`assets` names image files by id: `"assets": {"bg-dark": {"path": "art/dark.jpg", "label": "Dark background"}}`. The id is lowercase words joined by `-` (up to 24 characters), at most 16 assets. The path is relative and ends in `.png`, `.jpg`, `.jpeg`, `.webp`, `.avif`, `.gif` or `.svg`. **The file may be missing**: the user adds it later, so an addon repository does not have to ship art it has no right to share. The Addons dialog warns `asset-missing` until the file is there and `asset-large` over 2 MB. A file that exists must be inside the addon folder (a link out of it makes the manifest invalid).
+
+A theme `background` puts one of these images behind the app:
+
+```json
+"background": { "light": { "image": "bg-light" }, "dark": { "image": "bg-dark", "mobile": "bg-phone" }, "veil": 0.4, "panelAlpha": 0.8 }
+```
+
+- `light`, `dark`: the `image` shown in that mode, and optionally a `mobile` image used below 768 px. Both are ids from `assets`; an unknown id makes the manifest invalid.
+- `veil` (0 to 1): how strongly the page background colour covers the image, so text stays readable. Default 0.
+- `panelAlpha` (0 to 1): how opaque the main panels (sidebar, title bar, session panel, prompt box, side panel) are over the image. Default 1, fully opaque. Your CSS can change `--panel-alpha`.
+
+The background shows only while the theme is picked and the image file of the current mode exists. Without the file the theme works as if it had no `background`, and the panels stay opaque. The image is part `backdrop` (`<div data-part="backdrop">`, fixed behind the app) and `<html>` has `data-backdrop` while it shows, so your CSS can adapt.
 
 ## Panes, band and commands {#views}
 

@@ -104,7 +104,7 @@ Performance budget for animations:
 | `file-diff` | Diff of one file | | 1.5 |
 | `loader` | Reserved: the loading mark of a running turn | | 1.5 |
 | `done-icon` | Reserved: the done mark of a finished tool call | | 1.5 |
-| `backdrop` | Reserved: full-window background layer | | 1.5 |
+| `backdrop` | Full-window background image of a theme with a [`background`](addons#background). Only in the page while the image file exists; fixed behind the app | | 1.5 |
 
 ## Checks {#checks}
 

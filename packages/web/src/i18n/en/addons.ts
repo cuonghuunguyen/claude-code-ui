@@ -42,6 +42,8 @@ export default {
   "addons.lint.top-level-css": "{where}: top-level css applies to every theme. Move it to themes[].css.",
   "addons.lint.css-broken": "{where}: the CSS does not parse (unclosed block, comment or url(), a stray }, or groups nested over 32 deep). A theme CSS is then served empty: the theme keeps its palette and loses its rules.",
   "addons.lint.css-too-large": "{where}: larger than 512 KB. A theme CSS is then served empty: the theme keeps its palette and loses its rules.",
+  "addons.lint.asset-missing": "Image \"{name}\" ({where}) is not in the addon folder yet. Add the file; until then the theme shows no background.",
+  "addons.lint.asset-large": "Image \"{name}\" ({where}) is {count} KB. Over 2048 KB loads slowly; shrink it.",
   "addons.views": "Views",
   "addons.commands": "Commands",
   "addons.renderers": "Renderers",

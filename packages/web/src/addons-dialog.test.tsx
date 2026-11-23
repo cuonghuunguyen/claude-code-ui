@@ -165,13 +165,15 @@ it("an addon row lists its lint warnings under Checks, with the file, line and t
     { level: "warning", code: "low-contrast", name: "dusk: fg on bg 3.3:1 (dark)" },
     { level: "warning", code: "css-large", file: "dusk.css" },
     { level: "warning", code: "deprecated-part", file: "dusk.css", line: 5, name: "tab", until: "1.7" },
+    { level: "warning", code: "asset-missing", file: "art/dark.png", name: "bg-dark" },
+    { level: "warning", code: "asset-large", file: "art/big.jpg", name: "big", count: 3072 },
   ];
   const d = await render({ addons: [addon("themed", { lint }), addon("plain")], picks: {} });
   const rows = d.all("addons-row");
   const checks = rows[0]!.querySelector<HTMLElement>('[data-testid="addons-checks"]')!;
-  expect(checks.textContent).toContain("Checks (8)");
+  expect(checks.textContent).toContain("Checks (10)");
   const items = [...checks.querySelectorAll("li")].map((li) => li.textContent);
-  expect(items).toHaveLength(8);
+  expect(items).toHaveLength(10);
   expect(items[0]).toContain("dusk.css line 3");
   expect(items[0]).toContain("[data-part]");
   expect(items[1]).toContain('"sidebr"');
@@ -181,6 +183,8 @@ it("an addon row lists its lint warnings under Checks, with the file, line and t
   expect(items[5]).toContain("fg on bg 3.3:1 (dark)");
   expect(items[6]).toContain("256 KB");
   expect(items[7]).toContain("removed in 1.7");
+  expect(items[8]).toContain('"bg-dark" (art/dark.png) is not in the addon folder');
+  expect(items[9]).toContain("3072 KB");
   expect(rows[1]!.querySelector('[data-testid="addons-checks"]')).toBeNull();
 });
 

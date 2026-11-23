@@ -5,8 +5,11 @@ import { randomBytes } from "node:crypto";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
   AddonCandidate,
+  AddonAsset,
+  AddonBackground,
   AddonInfo,
   AddonManifest,
+  AddonThemeOption,
   AddonPalette,
   AddonSource,
   AddonThemeVars,
@@ -14,14 +17,14 @@ import type {
   AddonsListResult,
   ClientMessage,
 } from "@claude-ui/protocol";
-import { ADDON_GRAPH_SIZE, MAX_THEME_VARS, varNameError, varValueError } from "@claude-ui/protocol";
+import { ADDON_GRAPH_SIZE, ASSET_EXT, MAX_ADDON_ASSETS, MAX_THEME_OPTIONS, MAX_THEME_VARS, numberOk, optionError, varNameError, varValueError } from "@claude-ui/protocol";
 import { ConfigError } from "./config.ts";
 import { assetKey, assetType, ARTIFACT_ASSET_HEADERS } from "./artifact-preview.ts";
 import { BATCH_SSH, runGit, type GitRunner } from "./git-runner.ts";
 import { redactUrls, tidy } from "./git-remote.ts";
 import { createJsonFile } from "./json-file.ts";
 import { themeNames, themeRoot } from "./addon-css.ts";
-import { lintAddon } from "./addon-lint.ts";
+import { assetStates, lintAddon } from "./addon-lint.ts";
 
 export type AddonsRequest = Extract<ClientMessage, { type: `addons.${string}` }>;
 
@@ -41,7 +44,6 @@ const PALETTE_KEYS = ["bg", "card", "side", "fg", "muted", "border", "primary", 
 const GIT_TIMEOUT = 5 * 60_000;
 const MAX_ERROR = 400;
 const MAX_DEPTH = 3;
-const MAX_THEME_OPTIONS = 4;
 const MAX_CANDIDATES = 50;
 
 const bad = (msg: string) => new ConfigError("bad_manifest", msg);
@@ -111,6 +113,56 @@ function themeVars(raw: unknown, tid: string): AddonThemeVars | undefined {
   return out.light || out.dark ? out : undefined;
 }
 
+/** The path of an asset: the shape of any manifest path (relative, no `.`, `..` or dot-file segment, no backslash), an image extension. The file may be missing (the user fills it); when it exists its real path must stay inside the root (no symlink out). */
+function assetPath(root: string, p: unknown, what: string): string {
+  if (typeof p !== "string" || p === "" || p.length > 200 || p.includes("\0") || p.includes("\\") || isAbsolute(p) || p.split("/").some((s) => s === "" || s.startsWith("."))) throw bad(`${what}: invalid path`);
+  if (!ASSET_EXT.test(p)) throw bad(`${what}: must be a png, jpg, jpeg, webp, avif, gif or svg file`);
+  try {
+    if (!within(realpathSync(root), realpathSync(join(root, p)))) throw bad(`${what}: the file leaves the addon`);
+  } catch (e) {
+    if (e instanceof ConfigError) throw e; // missing: allowed
+  }
+  return p;
+}
+
+/** `assets`: `{<id>: {path, label?}}`, at most 16. Undefined when none. */
+function parseAssets(raw: unknown, root: string): Record<string, AddonAsset> | undefined {
+  if (raw === undefined) return undefined;
+  if (!isObj(raw)) throw bad("assets: not an object");
+  const entries = Object.entries(raw);
+  if (entries.length > MAX_ADDON_ASSETS) throw bad(`assets: at most ${MAX_ADDON_ASSETS}`);
+  const out: Record<string, AddonAsset> = {};
+  for (const [aid, a] of entries) {
+    if (!NAME.test(aid) || aid.length > 24) throw bad(`assets.${aid.slice(0, 30)}: id must match ${NAME} (up to 24 characters)`);
+    if (!isObj(a)) throw bad(`assets.${aid}: not an object`);
+    out[aid] = { path: assetPath(root, a.path, `assets.${aid}.path`), ...(a.label !== undefined && { label: str(a.label, `assets.${aid}.label`, 64) }) };
+  }
+  return entries.length ? out : undefined;
+}
+
+/** `themes[].background`: an image per mode (asset ids declared in `assets`), `veil` and `panelAlpha` in 0..1. Undefined when empty. */
+function themeBackground(raw: unknown, tid: string, assets: Record<string, AddonAsset> | undefined): AddonBackground | undefined {
+  if (raw === undefined) return undefined;
+  const w = `themes[${tid}].background`;
+  if (!isObj(raw)) throw bad(`${w}: not an object`);
+  const out: AddonBackground = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (k === "light" || k === "dark") {
+      if (!isObj(v)) throw bad(`${w}.${k}: not an object`);
+      const ref = (x: unknown, f: string) => {
+        if (typeof x !== "string" || !assets || !Object.hasOwn(assets, x)) throw bad(`${w}.${k}.${f}: not an asset id declared in assets`);
+        return x;
+      };
+      for (const f of Object.keys(v)) if (f !== "image" && f !== "mobile") throw bad(`${w}.${k}.${f.slice(0, 30)}: only image and mobile`);
+      out[k] = { image: ref(v.image, "image"), ...(v.mobile !== undefined && { mobile: ref(v.mobile, "mobile") }) };
+    } else if (k === "veil" || k === "panelAlpha") {
+      if (!numberOk(v) || v < 0 || v > 1) throw bad(`${w}.${k}: a number from 0 to 1`);
+      out[k] = v;
+    } else throw bad(`${w}.${k.slice(0, 30)}: only light, dark, veil and panelAlpha`);
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 /** Missing capability per manifest entry, e.g. `views[stats] needs capability ui.pane`. */
 export function coverageErrors(m: Pick<AddonManifest, "capabilities" | "views" | "commands" | "renderers">): string[] {
   const has = new Set(m.capabilities);
@@ -130,6 +182,7 @@ export function parseManifest(raw: unknown, root: string): AddonManifest {
     if (!capabilityOk(c)) throw bad(`invalid capability "${String(c)}"`);
     return c;
   });
+  const assets = parseAssets(raw.assets, root);
   const seen = (set: Set<string>, key: string, what: string) => (set.has(key) ? bad(`${what}: duplicate`) : void set.add(key));
   const themeIds = new Set<string>();
   const themes = list(raw.themes, "themes").map((t, i) => {
@@ -169,11 +222,24 @@ export function parseManifest(raw: unknown, root: string): AddonManifest {
       if (typeof oid !== "string" || !NAME.test(oid) || oid.length > 24) throw bad(`themes[${tid}].options[${j}].id: must match ${NAME} (up to 24 characters)`);
       const dup = seen(optionIds, oid, `themes[${tid}].options[${oid}]`);
       if (dup) throw dup;
-      if (o.default !== undefined && typeof o.default !== "boolean") throw bad(`themes[${tid}].options[${oid}].default: must be true or false`);
-      return { id: oid, label: str(o.label, `themes[${tid}].options[${oid}].label`, 40), ...(o.default !== undefined && { default: o.default }) };
+      const why = optionError(o);
+      if (why) throw bad(`themes[${tid}].options[${oid}].${why}`);
+      const label = str(o.label, `themes[${tid}].options[${oid}].label`, 40);
+      // Known fields only, per type.
+      switch (o.type) {
+        case "select":
+          return { id: oid, label, type: "select", choices: (o.choices as { value: string; label: string }[]).map((c) => ({ value: c.value, label: c.label })), ...(o.default !== undefined && { default: o.default as string }) } satisfies AddonThemeOption;
+        case "range":
+          return { id: oid, label, type: "range", min: o.min as number, max: o.max as number, step: o.step as number, default: o.default as number } satisfies AddonThemeOption;
+        case "color":
+          return { id: oid, label, type: "color", default: (o.default as string).toLowerCase() } satisfies AddonThemeOption;
+        default:
+          return { id: oid, label, ...(o.default !== undefined && { default: o.default as boolean }) } satisfies AddonThemeOption;
+      }
     });
+    const background = themeBackground(t.background, tid, assets);
     const css = t.css === undefined ? undefined : pathOk(root, t.css, ".css", `themes[${tid}].css`);
-    return { id: tid, name: str(t.name, `themes[${tid}].name`, 64), ...(light && { light }), ...(dark && { dark }), ...(vars && { vars }), ...(options.length && { options }), ...(css && { css }) };
+    return { id: tid, name: str(t.name, `themes[${tid}].name`, 64), ...(light && { light }), ...(dark && { dark }), ...(vars && { vars }), ...(background && { background }), ...(options.length && { options }), ...(css && { css }) };
   });
   const viewIds = new Set<string>();
   const views: AddonManifest["views"] = list(raw.views, "views").map((v, i) => {
@@ -205,6 +271,7 @@ export function parseManifest(raw: unknown, root: string): AddonManifest {
     description: raw.description === undefined ? "" : str(raw.description, "description", 500),
     capabilities,
     themes,
+    ...(assets && { assets }),
     ...(raw.css !== undefined && { css: pathOk(root, raw.css, ".css", "css") }),
     views,
     commands,
@@ -321,7 +388,8 @@ export function toInfo(name: string, r: Record_, dir: string, nonce = "", last?:
   if (!manifest) return { ...base, state: "error", error: redactUrls((l as { error: string }).error) };
   const state = !covered(manifest, r.approved) ? "needs_approval" : r.enabled ? "enabled" : "disabled";
   const lint = lintAddon(root, manifest); // warnings only (addon-lint.ts): never changes the state
-  return { ...base, manifest, ...("error" in l && { error: redactUrls(l.error) }), ...(lint.length && { lint }), state, ...(state === "enabled" && { base: `/addon/${nonce}/${name}/` }) };
+  const assets = assetStates(root, manifest);
+  return { ...base, manifest, ...(assets && { assets }), ...("error" in l && { error: redactUrls(l.error) }), ...(lint.length && { lint }), state, ...(state === "enabled" && { base: `/addon/${nonce}/${name}/` }) };
 }
 
 const err = (code: string, msg: string) => new ConfigError(code, msg);

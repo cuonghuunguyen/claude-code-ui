@@ -12,6 +12,7 @@ import type { AddonCandidate, AddonInfo, AddonUpdateCheck, AddonsListResult, Ser
 import { TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL } from "@claude-ui/protocol";
 import { createDaemon } from "../src/server.ts";
 import { parseManifest, toInfo } from "../src/addons.ts";
+import { lintAddon } from "../src/addon-lint.ts";
 
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), "addons-")));
 const webRoot = join(tmp, "web");
@@ -469,11 +470,11 @@ describe("review fixes (GH-516)", () => {
     expect(u.base).toBeUndefined();
   });
 
-  it("validates theme options: up to 4, unique kebab ids up to 24, label 1-40, boolean default", async () => {
+  it("validates theme options: up to 8, unique kebab ids up to 24, label 1-40, boolean default", async () => {
     const o = { id: "rain", label: "Rain" };
     const all = Object.fromEntries(["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"].map((k) => [k, "#112233"]));
     const theme = (options: unknown) => commitAddon({ themes: [{ id: "dusk", name: "D", dark: all, options }] });
-    for (const bad of [[{ ...o, id: "Rain" }], [{ ...o, id: "a".repeat(25) }], [{ ...o, label: "" }], [{ ...o, label: "x".repeat(41) }], [{ ...o, default: "yes" }], [o, o], Array.from({ length: 5 }, (_, i) => ({ ...o, id: `o${i}` })), "rain"]) {
+    for (const bad of [[{ ...o, id: "Rain" }], [{ ...o, id: "a".repeat(25) }], [{ ...o, label: "" }], [{ ...o, label: "x".repeat(41) }], [{ ...o, default: "yes" }], [o, o], Array.from({ length: 9 }, (_, i) => ({ ...o, id: `o${i}` })), "rain"]) {
       theme(bad);
       expect(await installGit(), JSON.stringify(bad)).toMatchObject({ code: "bad_manifest" });
     }
@@ -609,6 +610,114 @@ describe("local folders, uninstall, renderer picks", () => {
     expect(await c.request({ type: "addons.pickRenderer", target: "fence:example", name: "c" })).toMatchObject({ code: "bad_request" });
     await c.request({ type: "addons.uninstall", name: "b" });
     expect((await list()).picks).toEqual({});
+  });
+});
+
+describe("assets, theme background and typed options (GH-868)", () => {
+  const all = Object.fromEntries(["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"].map((k) => [k, "#112233"]));
+  const make = (extra: Record<string, unknown>, files: Record<string, string> = {}) => {
+    const d = folder(`gh868-${Math.random().toString(36).slice(2)}`, extra);
+    for (const [f, c] of Object.entries(files)) (mkdirSync(join(d, f, ".."), { recursive: true }), writeFileSync(join(d, f), c));
+    return d;
+  };
+  const parse = (d: string) => parseManifest(JSON.parse(readFileSync(join(d, "addon.json"), "utf8")), d);
+  const theme = (background: unknown, options?: unknown) => ({ themes: [{ id: "dusk", name: "D", dark: all, light: all, background, options }] });
+  const assets = { "bg-dark": { path: "art/dark.png", label: "Dark" }, "bg-phone": { path: "art/phone.webp" } };
+
+  it("an asset file may be missing: present is false, a background refers to it, lint says asset-missing; once the file exists present is true", () => {
+    const d = make({ assets, ...theme({ dark: { image: "bg-dark", mobile: "bg-phone" }, veil: 0.4, panelAlpha: 0.8 }) });
+    const m = parse(d);
+    expect(m.themes[0]!.background).toEqual({ dark: { image: "bg-dark", mobile: "bg-phone" }, veil: 0.4, panelAlpha: 0.8 });
+    const rec = { source: { kind: "local" as const, path: d }, approved: ["ui.pane"], enabled: true };
+    expect(toInfo(m.name, rec, tmp, "n").assets).toEqual({ "bg-dark": { present: false }, "bg-phone": { present: false } });
+    expect(lintAddon(d, m).filter((l) => l.code === "asset-missing").map((l) => l.name)).toEqual(["bg-dark", "bg-phone"]);
+    mkdirSync(join(d, "art"), { recursive: true });
+    writeFileSync(join(d, "art/dark.png"), "png");
+    expect(toInfo(m.name, rec, tmp, "n").assets).toEqual({ "bg-dark": { present: true, size: 3 }, "bg-phone": { present: false } });
+  });
+
+  it("an asset over 2 MB is linted asset-large", () => {
+    const d = make({ assets: { big: { path: "big.jpg" } } }, { "big.jpg": "x".repeat(2 * 1024 * 1024 + 1) });
+    expect(lintAddon(d, parse(d)).filter((l) => l.code === "asset-large")).toMatchObject([{ name: "big", file: "big.jpg", count: 2048 }]);
+  });
+
+  it.each([
+    ["a bad id", { Bg: { path: "a.png" } }],
+    ["a long id", { ["a".repeat(25)]: { path: "a.png" } }],
+    ["a path that leaves the addon", { a: { path: "../a.png" } }],
+    ["an absolute path", { a: { path: "/etc/a.png" } }],
+    ["a dot-file segment", { a: { path: ".x/a.png" } }],
+    ["a type that is not an image", { a: { path: "a.html" } }],
+    ["a label that is not text", { a: { path: "a.png", label: 3 } }],
+    ["more than 16", Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`a${i}`, { path: "a.png" }]))],
+  ])("refuses assets with %s", (_n, a) => {
+    const d = make({ assets: a });
+    expect(() => parse(d)).toThrow(/assets/);
+  });
+
+  it.skipIf(!canSymlink)("refuses an asset that is a symlink out of the addon; one inside is accepted but not served (present false)", () => {
+    const outside = join(tmp, "outside.png");
+    writeFileSync(outside, "secret");
+    const d = make({ assets: { a: { path: "a.png" } } }, { "inside.png": "x" });
+    symlinkSync(outside, join(d, "a.png"));
+    expect(() => parse(d)).toThrow(/leaves the addon/);
+    writeFileSync(join(d, "addon.json"), json({ ...BASE, name: "x", assets: { a: { path: "l.png" } } }));
+    symlinkSync(join(d, "inside.png"), join(d, "l.png"));
+    expect(toInfo("x", { source: { kind: "local", path: d }, approved: ["ui.pane"], enabled: true }, tmp, "n").assets).toEqual({ a: { present: false } });
+  });
+
+  it.each([
+    ["an unknown asset id", { dark: { image: "nope" } }],
+    ["a mobile image that is not declared", { dark: { image: "bg-dark", mobile: "nope" } }],
+    ["a veil over 1", { veil: 1.5 }],
+    ["a panelAlpha below 0", { panelAlpha: -0.1 }],
+    ["an unknown mode key", { sepia: { image: "bg-dark" } }],
+    ["an unknown image field", { dark: { image: "bg-dark", url: "x" } }],
+  ])("refuses a background with %s", (_n, bg) => {
+    const d = make({ assets, ...theme(bg) });
+    expect(() => parse(d)).toThrow(/background/);
+  });
+
+  it("a background without assets is refused", () => {
+    expect(() => parse(make(theme({ dark: { image: "bg-dark" } })))).toThrow(/asset id/);
+  });
+
+  it("typed options: boolean without type stays; select, range and color are kept with their fields only", () => {
+    const d = make(
+      theme(undefined, [
+        { id: "rain", label: "Rain", default: false, junk: 1 },
+        { id: "mood", label: "Mood", type: "select", choices: [{ value: "calm", label: "Calm" }, { value: "storm", label: "Storm" }], default: "storm" },
+        { id: "density", label: "Density", type: "range", min: 0, max: 1, step: 0.05, default: 0.5 },
+        { id: "tint", label: "Tint", type: "color", default: "#AA00FF" },
+        { id: "first", label: "First", type: "select", choices: [{ value: "a", label: "A" }, { value: "b", label: "B" }] },
+      ]),
+    );
+    expect(parse(d).themes[0]!.options).toEqual([
+      { id: "rain", label: "Rain", default: false },
+      { id: "mood", label: "Mood", type: "select", choices: [{ value: "calm", label: "Calm" }, { value: "storm", label: "Storm" }], default: "storm" },
+      { id: "density", label: "Density", type: "range", min: 0, max: 1, step: 0.05, default: 0.5 },
+      { id: "tint", label: "Tint", type: "color", default: "#aa00ff" },
+      { id: "first", label: "First", type: "select", choices: [{ value: "a", label: "A" }, { value: "b", label: "B" }] },
+    ]);
+  });
+
+  const ch = (n: number) => Array.from({ length: n }, (_, i) => ({ value: `v${i}`, label: "L" }));
+  it.each([
+    ["an unknown type", { type: "slider" }],
+    ["one choice", { type: "select", choices: ch(1) }],
+    ["13 choices", { type: "select", choices: ch(13) }],
+    ["a choice value with a space or capital", { type: "select", choices: [{ value: "A b", label: "x" }, { value: "b", label: "y" }] }],
+    ["a select default that is not a choice", { type: "select", choices: ch(2), default: "zzz" }],
+    ["duplicate choice values", { type: "select", choices: [{ value: "a", label: "x" }, { value: "a", label: "y" }] }],
+    ["min not below max", { type: "range", min: 1, max: 1, step: 1, default: 1 }],
+    ["step 0", { type: "range", min: 0, max: 1, step: 0, default: 0 }],
+    ["a default outside", { type: "range", min: 0, max: 1, step: 0.1, default: 2 }],
+    ["4 decimals", { type: "range", min: 0, max: 1, step: 0.0001, default: 0 }],
+    ["Infinity as text", { type: "range", min: "0", max: 1, step: 1, default: 0 }],
+    ["a colour in 3 digits", { type: "color", default: "#fff" }],
+    ["a colour that is a CSS injection", { type: "color", default: "#aa00ff;}" }],
+  ])("refuses an option with %s", (_n, o) => {
+    expect(() => parse(make(theme(undefined, [{ id: "x", label: "X", ...o }])))).toThrow(/options\[x\]/);
   });
 });
 

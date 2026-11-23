@@ -49,11 +49,11 @@ describe("colour theme", () => {
     expect(root.hasAttribute("data-opt-rain")).toBe(false);
     applyColorTheme("neon");
     expect(root.getAttribute("data-opt-rain")).toBe("off");
-    expect(getThemeOptions(themeById("neon"))).toEqual([{ id: "rain", label: "Rain", on: false }, { id: "rain-light", label: "Light rain", on: false }]);
+    expect(getThemeOptions(themeById("neon")).map((o) => [o.id, o.label, o.value])).toEqual([["rain", "Rain", false], ["rain-light", "Light rain", false]]);
     localStorage.setItem("claude-ui.theme-options", '{"neon":{"rain":"no"}}');
-    expect(getThemeOptions(themeById("neon"))[0]!.on).toBe(true);
+    expect(getThemeOptions(themeById("neon"))[0]!.value).toBe(true);
     localStorage.setItem("claude-ui.theme-options", "not json");
-    expect(getThemeOptions(themeById("neon"))[0]!.on).toBe(true);
+    expect(getThemeOptions(themeById("neon"))[0]!.value).toBe(true);
   });
 
   it("applyColorTheme at startup writes no storage (a fresh browser stays fresh)", () => {

@@ -10,7 +10,7 @@
  *   One Light / One Dark              https://github.com/atom/atom (one-{light,dark}-syntax)  MIT    Copyright (c) 2011-2022 GitHub Inc.
  */
 
-import { ADDON_CONTEXT_SIZE, ADDON_GRAPH_SIZE, varNameError, varValueError, type AddonInfo, type AddonPalette } from "@claude-ui/protocol";
+import { ADDON_CONTEXT_SIZE, ADDON_GRAPH_SIZE, numberOk, varNameError, varValueError, type AddonInfo, type AddonPalette, type AddonThemeOption } from "@claude-ui/protocol";
 
 export type Mode = "light" | "dark";
 export const KEYS = ["bg", "card", "side", "fg", "muted", "border", "primary", "pfg", "kw", "str", "fn", "type", "num", "cmt", "varc", "err", "warn", "ok", "info"] as const;
@@ -22,9 +22,11 @@ export type BuiltinThemeId = "default" | "catppuccin" | "tokyonight" | "solarize
 export type ThemeId = BuiltinThemeId | `addon:${string}:${string}`;
 export const ADDON_THEME_ID = /^addon:[a-z0-9]+(?:-[a-z0-9]+)*:[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /** Default has no palette: it is the `:root` / `.dark` blocks of index.css. Dracula has no light. */
-/** A boolean switch of a theme: `data-opt-<id>="on"|"off"` on <html> while the theme is current; `default` absent = on. */
-export type ThemeOption = { id: string; label: string; default?: boolean };
-export type Theme = { id: ThemeId; name: string; light?: Palette; dark?: Palette; options?: ThemeOption[] };
+/** A control of a theme (boolean, select, range, color): `data-opt-<id>` and `--opt-<id>` on <html> while the theme is current (theme.ts); boolean `default` absent = on. The built-in Neon options are booleans. */
+export type ThemeOption = AddonThemeOption;
+/** `background` (addon themes): the image URLs of the modes whose file exists now (same-origin addon file URLs), shown as `<div data-part="backdrop">` (backdrop.tsx). The tokens it needs (`--backdrop-image`, `--backdrop-image-mobile`, `--backdrop-veil`, `--panel-alpha`) are in the mode's palette `x`. */
+export type ThemeBackground = { light?: { image: string; mobile?: string }; dark?: { image: string; mobile?: string } };
+export type Theme = { id: ThemeId; name: string; light?: Palette; dark?: Palette; options?: ThemeOption[]; background?: ThemeBackground };
 
 /** The Default `--card` and `--foreground` (index.css): the editor, diff and terminal surface. */
 export const SURFACE = { light: { bg: "#ffffff", fg: "#161616" }, dark: { bg: "#161616", fg: "#fafafa" } } as const;
@@ -177,7 +179,7 @@ export const swatchOf = (id: ThemeId, list: readonly Theme[] = THEMES): [string,
 const HEX6 = /^#[0-9a-f]{6}$/i;
 /** A palette an addon declares: all 19 keys as `#rrggbb` (tokensOf mixes and adds alpha to hex), unknown keys ignored; else undefined (that mode is left out, like Dracula light).
  * `graph` (8 colours) sets `--graph-1..8` and the first 6 `--context-1..6`; `vars` (custom properties, checked again here: they go into a <style> text) come last and may replace `--context-*`. */
-function addonPalette(raw: AddonPalette | undefined, vars: Record<string, string> | undefined): Palette | undefined {
+function addonPalette(raw: AddonPalette | undefined, vars: Record<string, string> | undefined, extra?: Record<string, string>): Palette | undefined {
   if (!raw) return undefined;
   const out: Record<string, string> = {};
   for (const k of KEYS) {
@@ -192,17 +194,56 @@ function addonPalette(raw: AddonPalette | undefined, vars: Record<string, string
     g.slice(0, ADDON_CONTEXT_SIZE).forEach((c, i) => (x[`--context-${i + 1}`] = c));
   }
   for (const [name, value] of Object.entries(vars ?? {})) if (varNameError(name) === undefined && typeof value === "string" && varValueError(value) === undefined) x[name] = value;
+  Object.assign(x, extra); // built by this module from checked values (addonBackground)
   return (Object.keys(x).length ? { ...out, x } : out) as Palette;
 }
+
+/** A same-origin addon file URL: `/addon/<nonce>/<name>/<encoded path>` with nothing but unreserved characters and `%XX` after it (it goes into `url("...")` of a <style> text, so it is checked again here). */
+const FILE_URL = /^\/addon\/[0-9a-f]{1,64}\/[a-z0-9]+(?:-[a-z0-9]+)*\/[A-Za-z0-9._~%/-]+(?:\?v=\d{1,16})?$/;
+const encodePath = (p: string) => p.split("/").map((s) => encodeURIComponent(s).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)).join("/");
+
+/** The background of one addon theme as the web app shows it: per mode the image (and `mobile`) URL, only when the file of the image asset exists now; the veil and panel alpha tokens. Undefined when no mode has a background. */
+function addonBackground(a: AddonInfo, th: NonNullable<AddonInfo["manifest"]>["themes"][number]): { background: ThemeBackground; x: { light: Record<string, string>; dark: Record<string, string> } } | undefined {
+  const bg = th.background;
+  if (!bg || !a.base || !a.manifest?.assets) return undefined;
+  const url = (id: string | undefined) => {
+    const as = id === undefined ? undefined : a.manifest!.assets![id];
+    if (!as || !a.assets?.[id!]?.present) return undefined;
+    const u = a.base! + encodePath(as.path) + (a.dev && a.rev !== undefined ? `?v=${a.rev}` : "");
+    return FILE_URL.test(u) ? u : undefined;
+  };
+  const background: ThemeBackground = {};
+  const x = { light: {} as Record<string, string>, dark: {} as Record<string, string> };
+  for (const mode of ["light", "dark"] as const) {
+    const m = bg[mode];
+    const image = url(m?.image);
+    if (!m || !image) continue;
+    const mobile = url(m.mobile);
+    background[mode] = { image, ...(mobile && { mobile }) };
+    x[mode]["--backdrop-image"] = `url("${image}")`;
+    if (mobile) x[mode]["--backdrop-image-mobile"] = `url("${mobile}")`;
+    if (numberOk(bg.veil) && bg.veil >= 0 && bg.veil <= 1) x[mode]["--backdrop-veil"] = String(bg.veil);
+    if (numberOk(bg.panelAlpha) && bg.panelAlpha >= 0 && bg.panelAlpha <= 1) x[mode]["--panel-alpha"] = String(bg.panelAlpha);
+  }
+  return background.light || background.dark ? { background, x } : undefined;
+}
+
+/** The background of `theme` in `mode`, when it shows one. */
+export const backgroundOf = (theme: Theme | undefined, mode: Mode) => theme?.background?.[mode];
 
 /** The themes of these addons (pass the enabled ones), as `addon:<name>:<id>`; a theme without a complete palette in either mode is left out. */
 export function addonThemes(addons: readonly AddonInfo[]): Theme[] {
   return addons.flatMap((a) =>
     (a.manifest?.themes ?? []).flatMap((th) => {
       const id = `addon:${a.name}:${th.id}`;
-      const light = addonPalette(th.light, th.vars?.light);
-      const dark = addonPalette(th.dark, th.vars?.dark);
-      return ADDON_THEME_ID.test(id) && (light || dark) ? [{ id: id as ThemeId, name: th.name, ...(light && { light }), ...(dark && { dark }), ...(th.options?.length && { options: th.options }) }] : [];
+      const bg = addonBackground(a, th);
+      const light = addonPalette(th.light, th.vars?.light, bg?.x.light);
+      const dark = addonPalette(th.dark, th.vars?.dark, bg?.x.dark);
+      // A mode without a palette is not themed, so its background is not shown either.
+      const background = bg && { ...(light && bg.background.light && { light: bg.background.light }), ...(dark && bg.background.dark && { dark: bg.background.dark }) };
+      return ADDON_THEME_ID.test(id) && (light || dark)
+        ? [{ id: id as ThemeId, name: th.name, ...(light && { light }), ...(dark && { dark }), ...(th.options?.length && { options: th.options }), ...(background && (background.light || background.dark) && { background }) }]
+        : [];
     }),
   );
 }

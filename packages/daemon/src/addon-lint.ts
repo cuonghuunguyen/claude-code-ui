@@ -2,9 +2,9 @@
 // The scan is one linear pass without recursion (`skipToken` of addon-css.ts for comments, strings and url()); broken CSS ends it with a
 // `css-broken` finding, never an exception. Every look-ahead is bounded (an attribute selector 300 characters, an `@font-face` block up to its next brace).
 import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { PARTS, type AddonLint, type AddonManifest } from "@claude-ui/protocol";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, join, relative, sep } from "node:path";
+import { ASSET_LARGE_BYTES, PARTS, type AddonAssetState, type AddonLint, type AddonManifest } from "@claude-ui/protocol";
 import { CssScanError, MAX_THEME_CSS, scopeCss, skipToken, themeRoot } from "./addon-css.ts";
 
 const PART_BY_NAME = new Map(PARTS.map((p) => [p.name as string, p]));
@@ -228,11 +228,47 @@ function lintContrast(m: AddonManifest): AddonLint[] {
   return out;
 }
 
-/** Findings of an addon: manifest rules (palette contrast), and its CSS files (top-level `css` and every `themes[].css`, each once). A missing or irregular file is skipped (the manifest check reports a missing one). A theme CSS that the daemon cannot scope (unclosed block, stray `}`, groups nested too deep) is served empty, so it gets `css-broken` too. Results are cached by the file content (a hash), so an edit that keeps size and mtime is seen. Hook for assets (images in the theme folders: an `asset-large` check): not linted yet. */
+/** Whether each asset file of the manifest exists now, and its size. Same test as the file server (`addonFile`): no dot segment, no link, real path inside the root. */
+export function assetStates(root: string, m: AddonManifest): Record<string, AddonAssetState> | undefined {
+  if (!m.assets) return undefined;
+  const out: Record<string, AddonAssetState> = {};
+  for (const [aid, a] of Object.entries(m.assets)) {
+    try {
+      const path = join(root, a.path);
+      if (lstatSync(path).isSymbolicLink()) throw 0;
+      const real = realpathSync(path);
+      const st = statSync(real);
+      if (!inside(realpathSync(root), real) || !st.isFile()) throw 0;
+      out[aid] = { present: true, size: st.size };
+    } catch {
+      out[aid] = { present: false };
+    }
+  }
+  return out;
+}
+
+const inside = (dir: string, path: string) => {
+  const rel = relative(dir, path);
+  return rel === "" || (rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel));
+};
+
+/** `asset-missing` per declared asset without a file, `asset-large` per file over 2 MB. */
+function lintAssets(root: string, m: AddonManifest): AddonLint[] {
+  const out: AddonLint[] = [];
+  for (const [aid, st] of Object.entries(assetStates(root, m) ?? {})) {
+    const file = m.assets![aid]!.path;
+    if (!st.present) out.push({ level: "warning", code: "asset-missing", name: aid, file });
+    else if (st.size! > ASSET_LARGE_BYTES) out.push({ level: "warning", code: "asset-large", name: aid, file, count: Math.round(st.size! / 1024) });
+  }
+  return out;
+}
+
+/** Findings of an addon: manifest rules (palette contrast), and its CSS files (top-level `css` and every `themes[].css`, each once). A missing or irregular file is skipped (the manifest check reports a missing one). A theme CSS that the daemon cannot scope (unclosed block, stray `}`, groups nested too deep) is served empty, so it gets `css-broken` too. Results are cached by the file content (a hash), so an edit that keeps size and mtime is seen. Assets: `asset-missing` (declared, no file yet: the user fills it) and `asset-large` (over 2 MB). */
 export function lintAddon(root: string, m: AddonManifest): AddonLint[] {
   const out: AddonLint[] = [];
   if (m.css && m.themes.length) out.push({ level: "warning", code: "top-level-css", file: m.css });
   out.push(...lintContrast(m));
+  out.push(...lintAssets(root, m));
   const files = [...new Set([m.css, ...m.themes.map((t) => t.css)].filter((f): f is string => !!f))];
   for (const f of files) {
     const r = readCss(join(root, f));

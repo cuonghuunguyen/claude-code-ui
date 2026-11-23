@@ -104,7 +104,7 @@ Ngân sách hiệu năng cho animation:
 | `file-diff` | Diff của một tệp | | 1.5 |
 | `loader` | Reserved: dấu đang tải của một lượt chạy | | 1.5 |
 | `done-icon` | Reserved: dấu hoàn tất của lần gọi công cụ | | 1.5 |
-| `backdrop` | Reserved: lớp nền toàn cửa sổ | | 1.5 |
+| `backdrop` | Ảnh nền toàn cửa sổ của giao diện có [`background`](addons#background). Chỉ có trong trang khi tệp ảnh tồn tại; cố định phía sau ứng dụng | | 1.5 |
 
 ## Kiểm tra {#checks}
 

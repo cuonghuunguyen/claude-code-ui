@@ -28,9 +28,12 @@
         "bg": "#14111f", "card": "#1d1a2e", "side": "#262240", "fg": "#e6e1f7", "muted": "#a9a2c8", "border": "#322d4d",
         "primary": "#a78bfa", "pfg": "#14111f", "kw": "#c4a8ff", "str": "#8fdca6", "fn": "#8ab4ff", "type": "#f2c879",
         "num": "#ffa66b", "cmt": "#a39dc4", "varc": "#f49ac2", "err": "#ff8a9e", "warn": "#f2c879", "ok": "#8fdca6", "info": "#8ab4ff"
-      }
+      },
+      "background": { "dark": { "image": "backdrop" }, "veil": 0.5, "panelAlpha": 0.85 },
+      "options": [{ "id": "intensity", "label": "Accent intensity", "type": "range", "min": 0, "max": 1, "step": 0.1, "default": 0.5 }]
     }
   ],
+  "assets": { "backdrop": { "path": "art/backdrop.jpg", "label": "Window background in dark mode: add your own image here" } },
   "css": "theme.css",
   "views": [
     { "id": "stats", "title": "Stats", "entry": "pane.html", "kind": "pane", "phone": false },
