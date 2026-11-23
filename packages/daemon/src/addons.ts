@@ -1,6 +1,6 @@
 // Addons (docs/spec.md "Addons", ADR 0006): browser customizations installed from git or a local folder on the Hub.
 // The daemon validates the manifest, keeps what the owner approved, pins git checkouts to a SHA and serves the files of enabled addons.
-import { lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
+import { lstatSync, mkdirSync, watch as fsWatch, readFileSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
@@ -258,7 +258,11 @@ export function addonFile(root: string, rest: string): { path: string; type: str
   }
 }
 
-type Record_ = { source: AddonSource; sha?: string; approved: string[]; enabled: boolean };
+/** `dev`: dev mode (local folder only): the daemon watches the folder while the addon is enabled. */
+type Record_ = { source: AddonSource; sha?: string; approved: string[]; enabled: boolean; dev?: boolean };
+/** The part of `fs.watch` dev mode uses (tests inject a fake). */
+export type WatchFn = (path: string, opts: { recursive: boolean }, cb: (event: string, file: string | null) => void) => { close(): void; on(event: "error", cb: () => void): unknown };
+const DEV_DEBOUNCE_MS = 150;
 type State = { addons: Record<string, Record_>; picks: Record<string, string> };
 const parseState = (raw: unknown): State => {
   const out: State = { addons: {}, picks: {} };
@@ -270,7 +274,7 @@ const parseState = (raw: unknown): State => {
       const source: AddonSource | undefined =
         s.kind === "git" && typeof s.url === "string" ? { kind: "git", url: s.url, ...(typeof s.ref === "string" && { ref: s.ref }), ...(typeof s.path === "string" && s.path !== "" && { path: s.path }) } : s.kind === "local" && typeof s.path === "string" ? { kind: "local", path: s.path } : undefined;
       if (!source) continue;
-      out.addons[k] = { source, ...(typeof v.sha === "string" && { sha: v.sha }), approved: Array.isArray(v.approved) ? v.approved.filter((c): c is string => typeof c === "string") : [], enabled: v.enabled === true };
+      out.addons[k] = { source, ...(typeof v.sha === "string" && { sha: v.sha }), approved: Array.isArray(v.approved) ? v.approved.filter((c): c is string => typeof c === "string") : [], enabled: v.enabled === true, ...(v.dev === true && source.kind === "local" && { dev: true }) };
     }
   if (isObj(raw.picks)) for (const [k, v] of Object.entries(raw.picks)) if (typeof v === "string") out.picks[k] = v;
   return out;
@@ -307,21 +311,23 @@ function load(root: string, name: string): { manifest: AddonManifest } | { error
   }
 }
 
-/** The wire form of a stored addon; the URL never leaves with userinfo. `nonce`: set when files are served (base of an enabled addon). */
-export function toInfo(name: string, r: Record_, dir: string, nonce = ""): AddonInfo {
+/** The wire form of a stored addon; the URL never leaves with userinfo. `nonce`: set when files are served (base of an enabled addon). `last` (dev mode): the last good manifest, used with `error` when addon.json does not load right now. `rev`: dev mode revision. */
+export function toInfo(name: string, r: Record_, dir: string, nonce = "", last?: AddonManifest, rev?: number): AddonInfo {
   const source: AddonSource = r.source.kind === "git" ? { ...r.source, url: redactUrls(r.source.url) } : r.source;
   const root = rootOf(dir, name, r);
   const l = load(root, name);
-  const base = { name, source, ...(r.sha && { sha: r.sha }), approved: r.approved };
-  if ("error" in l) return { ...base, state: "error", error: redactUrls(l.error) };
-  const state = !covered(l.manifest, r.approved) ? "needs_approval" : r.enabled ? "enabled" : "disabled";
-  const lint = lintAddon(root, l.manifest); // warnings only (addon-lint.ts): never changes the state
-  return { ...base, manifest: l.manifest, ...(lint.length && { lint }), state, ...(state === "enabled" && { base: `/addon/${nonce}/${name}/` }) };
+  const base = { name, source, ...(r.sha && { sha: r.sha }), approved: r.approved, ...(r.dev && { dev: true, ...(rev !== undefined && { rev }) }) };
+  const manifest = "manifest" in l ? l.manifest : r.dev ? last : undefined;
+  if (!manifest) return { ...base, state: "error", error: redactUrls((l as { error: string }).error) };
+  const state = !covered(manifest, r.approved) ? "needs_approval" : r.enabled ? "enabled" : "disabled";
+  const lint = lintAddon(root, manifest); // warnings only (addon-lint.ts): never changes the state
+  return { ...base, manifest, ...("error" in l && { error: redactUrls(l.error) }), ...(lint.length && { lint }), state, ...(state === "enabled" && { base: `/addon/${nonce}/${name}/` }) };
 }
 
 const err = (code: string, msg: string) => new ConfigError(code, msg);
 
-export function createAddons(opts: { dir: string; file: string; git?: GitRunner; onChanged: () => void }) {
+/** `watch`, `devDebounceMs`: dev mode's file watcher and its debounce (tests inject both). */
+export function createAddons(opts: { dir: string; file: string; git?: GitRunner; onChanged: () => void; watch?: WatchFn; devDebounceMs?: number }) {
   const dir = resolve(opts.dir);
   const store = createJsonFile<State>(opts.file, parseState, "addons");
   const run = opts.git ?? runGit;
@@ -330,6 +336,13 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
   const checked = new Map<string, string>();
   /** Addons whose manifest loaded and covered their approvals when a page was last served. */
   const valid = new Set<string>();
+  const watch: WatchFn = opts.watch ?? ((p, o, cb) => fsWatch(p, o, (e, f) => cb(e, f === null || f === undefined ? null : String(f))));
+  /** Dev mode: one watcher per enabled dev addon, with its debounce timer. */
+  const watchers = new Map<string, { w: { close(): void }; timer?: NodeJS.Timeout }>();
+  /** Dev mode: the last manifest that loaded (kept while an edit leaves addon.json broken) and the revision that changes at every edit. */
+  const lastGood = new Map<string, AddonManifest>();
+  const revs = new Map<string, number>();
+  const bump = (name: string) => revs.set(name, Math.max((revs.get(name) ?? 0) + 1, Date.now()));
 
   const env = (): NodeJS.ProcessEnv => ({ ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never", ...(!(process.env.GIT_SSH_COMMAND || process.env.GIT_SSH) && { GIT_SSH_COMMAND: BATCH_SSH }) });
   const git = async (cwd: string, args: string[]): Promise<string> => {
@@ -356,14 +369,75 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
     if (!r) throw err("not_found", `unknown addon ${name}`);
     return r;
   };
-  const changed = (fn: (s: State) => void) => (store.change(fn), valid.clear(), opts.onChanged());
+  const changed = (fn: (s: State) => void) => (store.change(fn), valid.clear(), syncWatch(), opts.onChanged());
   const info = (name: string) => {
     const r = get(name);
-    const i = toInfo(name, r, dir, nonce);
+    const i = toInfo(name, r, dir, nonce, r.dev ? lastGood.get(name) : undefined, r.dev ? revs.get(name) : undefined);
+    if (r.dev && i.manifest && !i.error) lastGood.set(name, i.manifest);
     // A manifest that now declares more than was approved never stays enabled.
-    if (i.state === "needs_approval" && r.enabled) store.change((s) => void (s.addons[name]!.enabled = false));
+    if (i.state === "needs_approval" && r.enabled) (store.change((s) => void (s.addons[name]!.enabled = false)), syncWatch());
     return i;
   };
+  /** `load`, but in dev mode an addon.json that does not load right now falls back to the last good manifest (its approvals still cover it). */
+  const loadDev = (root: string, name: string, r: Record_): ReturnType<typeof load> => {
+    const l = load(root, name);
+    if ("manifest" in l) return (r.dev && lastGood.set(name, l.manifest), l);
+    const last = r.dev ? lastGood.get(name) : undefined;
+    return last ? { manifest: last } : l;
+  };
+
+  const stopWatch = (name: string) => {
+    const h = watchers.get(name);
+    if (!h) return;
+    watchers.delete(name);
+    clearTimeout(h.timer);
+    try {
+      h.w.close();
+    } catch {
+      // already closed
+    }
+  };
+  /** An edit settled in a dev addon's folder: re-read it. Capabilities that are no longer declared lose their approval (declaring one again prompts, like an update); one that is declared and not approved disables the addon (syncWatch then closes the watcher). */
+  const edited = (name: string) => {
+    const r = store.get().addons[name];
+    if (!r?.dev) return;
+    bump(name);
+    const l = loadDev(rootOf(dir, name, r), name, r);
+    const caps = "manifest" in l ? l.manifest.capabilities : undefined;
+    const approved = caps ? r.approved.filter((c) => caps.includes(c)) : r.approved;
+    const stops = "manifest" in l && !covered(l.manifest, approved) && r.enabled;
+    if (approved.length === r.approved.length && !stops) return void (valid.clear(), opts.onChanged());
+    changed((s) => {
+      const x = s.addons[name]!;
+      x.approved = approved;
+      if (stops) x.enabled = false;
+    });
+  };
+  const startWatch = (name: string, r: Record_) => {
+    const root = rootOf(dir, name, r);
+    loadDev(root, name, r);
+    bump(name);
+    try {
+      const h: { w: { close(): void }; timer?: NodeJS.Timeout } = { w: { close() {} } };
+      const w = watch(root, { recursive: true }, (_event, file) => {
+        if (file !== null && file.split(/[\\/]/).some((x) => x === ".git" || x === "node_modules")) return;
+        clearTimeout(h.timer);
+        h.timer = setTimeout(() => ((h.timer = undefined), edited(name)), opts.devDebounceMs ?? DEV_DEBOUNCE_MS);
+      });
+      w.on("error", () => stopWatch(name)); // a vanished folder or a watcher limit: dev mode stops, the addon keeps working
+      h.w = w;
+      watchers.set(name, h);
+    } catch {
+      // cannot watch this folder (limit reached, no recursive support): the addon works without live reload
+    }
+  };
+  /** One watcher per enabled dev addon, none for any other: called after every change of the records. */
+  function syncWatch() {
+    const want = new Set(Object.entries(store.get().addons).filter(([, r]) => r.dev && r.enabled && r.source.kind === "local").map(([n]) => n));
+    for (const n of [...watchers.keys()]) if (!want.has(n)) stopWatch(n);
+    for (const n of want) if (!watchers.has(n)) startWatch(n, store.get().addons[n]!);
+  }
+  syncWatch();
   const gitSource = (s: AddonSource) => {
     if (s.kind === "git") {
       if (typeof s.url !== "string" || s.url.trim() === "" || s.url.startsWith("-")) throw err("bad_request", "invalid git URL");
@@ -529,10 +603,21 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
     return info(name);
   }
 
+  function setDev(name: string, dev: unknown): AddonInfo {
+    if (typeof dev !== "boolean") throw err("bad_request", "dev must be a boolean");
+    const r = get(name);
+    if (r.source.kind !== "local") throw err("bad_request", "dev mode is for local folders");
+    if (!dev) (lastGood.delete(name), revs.delete(name));
+    changed((s) => (dev ? void (s.addons[name]!.dev = true) : void delete s.addons[name]!.dev));
+    return info(name);
+  }
+
   function uninstall(name: string): Record<string, never> {
     const r = get(name);
     if (r.source.kind === "git") rmSync(rootOf(dir, name, r), { recursive: true, force: true });
     checked.delete(name);
+    lastGood.delete(name);
+    revs.delete(name);
     changed((s) => {
       delete s.addons[name];
       for (const [t, n] of Object.entries(s.picks)) if (n === name) delete s.picks[t];
@@ -567,6 +652,8 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
         return approve(String(msg.name), msg.capabilities);
       case "addons.setEnabled":
         return setEnabled(String(msg.name), msg.enabled);
+      case "addons.setDev":
+        return setDev(String(msg.name), msg.dev);
       case "addons.uninstall":
         return uninstall(String(msg.name));
       case "addons.pickRenderer":
@@ -586,19 +673,22 @@ export function createAddons(opts: { dir: string; file: string; git?: GitRunner;
     const html = f.type.startsWith("text/html");
     // The manifest is validated when a page (an HTML entry) loads, not for every script, style and image it then asks for.
     if (html || !valid.has(name)) {
-      const l = load(root, name);
+      const l = loadDev(root, name, r);
       const ok = !("error" in l) && r.enabled && covered(l.manifest, r.approved);
       ok ? valid.add(name) : valid.delete(name);
       if (!ok) return undefined;
     } else if (!r.enabled) return undefined;
     const scoped = theme !== undefined && !html && f.type.startsWith("text/css") && (() => {
-      const l = load(root, name);
+      const l = loadDev(root, name, r);
       return "manifest" in l && l.manifest.themes.some((t) => t.id === theme && t.css === assetKey(rest));
     })();
     return { root, ...f, net: r.approved.filter((c) => c.startsWith("net:")).map((c) => c.slice(4)), html, ...(scoped && { scope: themeRoot(name, theme) }) };
   }
 
-  return { handle, serve, nonce };
+  /** Stops every watcher (daemon shutdown). */
+  const close = () => [...watchers.keys()].forEach(stopWatch);
+
+  return { handle, serve, nonce, close };
 }
 
 function readJson(root: string): unknown {

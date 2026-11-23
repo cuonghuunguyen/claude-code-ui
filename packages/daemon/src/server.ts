@@ -2266,7 +2266,7 @@ export function createDaemon(opts: {
       .catch((e) => console.error("uploads: sweep failed:", e));
   const firstSweep = sweepMs > 0 ? setTimeout(() => void sweepUploads(), opts.uploadSweepFirstMs ?? 60_000).unref() : undefined;
   const sweeper = sweepMs > 0 ? setInterval(() => void sweepUploads(), sweepMs).unref() : undefined;
-  http.on("close", () => (clearInterval(sleepTimer), backReminders?.stop(), opts.keepAwake?.close(), orchestration.shutdown(), [...mcpRoutes.keys()].forEach(dropMcp), void Promise.all(catalogues.all.map((c) => c.close())), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close(), warmCommit.stop()));
+  http.on("close", () => (clearInterval(sleepTimer), addons?.close(), backReminders?.stop(), opts.keepAwake?.close(), orchestration.shutdown(), [...mcpRoutes.keys()].forEach(dropMcp), void Promise.all(catalogues.all.map((c) => c.close())), clearInterval(reaper), clearInterval(asideSweeper), clearTimeout(firstSweep), clearInterval(sweeper), perfMon.close(), warmCommit.stop()));
   // transcriptCaches: sessions whose parsed transcript the daemon holds (tests). orchestration: its tools (tests).
   return Object.assign(http, {
     accept,

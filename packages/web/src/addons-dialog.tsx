@@ -234,8 +234,9 @@ export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onCl
             </div>
             {a.manifest?.description && <p className="text-muted-foreground text-xs leading-4">{a.manifest.description}</p>}
             <p className="text-muted-foreground text-xs [overflow-wrap:anywhere]">{sourceText(a)}</p>
-            {a.state === "error" && (
+            {a.error && (
               <p className="text-destructive text-xs" data-testid="addons-error">
+                {a.manifest && `${t("addons.devLastGood")} `}
                 {a.error}
               </p>
             )}
@@ -276,6 +277,9 @@ export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onCl
           <div className="flex shrink-0 items-center gap-1">
             {(a.state === "enabled" || a.state === "disabled") && (
               <Switch on={a.state === "enabled"} label={t("addons.enable", { name: a.name })} held={!!working} onToggle={(enabled) => void act(a.name, { type: "addons.setEnabled", name: a.name, enabled })} testId="addons-enabled" />
+            )}
+            {a.source.kind === "local" && (
+              <Switch on={!!a.dev} label={t("addons.dev", { name: a.name })} held={!!working} onToggle={(dev) => void act(a.name, { type: "addons.setDev", name: a.name, dev })} testId="addons-dev" />
             )}
             {a.source.kind === "git" && a.state !== "error" && (
               <Button variant="ghost" size="sm" className="text-muted-foreground max-md:h-11" disabled={!!working} onClick={() => void check(a.name)} data-testid="addons-check-update">

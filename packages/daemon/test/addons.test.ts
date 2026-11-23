@@ -539,6 +539,25 @@ describe("local folders, uninstall, renderer picks", () => {
     expect(await c.request({ type: "addons.install", source: { kind: "local", path: addonsDir } })).toMatchObject({ code: "bad_request" });
   });
 
+  it("dev mode: a git addon is refused; a real edit in a local folder changes rev and broadcasts", async () => {
+    commitAddon();
+    await installGit();
+    expect(await c.request({ type: "addons.setDev", name: "example", dev: true })).toMatchObject({ code: "bad_request" });
+    const d = folder("devloc", { themes: [{ id: "t", name: "T", css: "t.css" }] });
+    writeFileSync(join(d, "t.css"), "a{}");
+    await c.request({ type: "addons.install", source: { kind: "local", path: d } });
+    await approveAll("devloc");
+    const on = (await c.request({ type: "addons.setDev", name: "devloc", dev: true })).result as AddonInfo;
+    expect(on).toMatchObject({ dev: true, state: "enabled" });
+    c.inbox.length = 0;
+    writeFileSync(join(d, "t.css"), "b{}");
+    await c.waitFor((m) => m.type === "config.changed" && m.kind === "addons");
+    const now = ((await list()).addons.find((a) => a.name === "devloc") as AddonInfo).rev!;
+    expect(now).toBeGreaterThan(on.rev!);
+    await c.request({ type: "addons.setDev", name: "devloc", dev: false });
+    expect(((await list()).addons.find((a) => a.name === "devloc") as AddonInfo).rev).toBeUndefined();
+  });
+
   it("uninstall removes the record and the checkout", async () => {
     commitAddon();
     await installGit();

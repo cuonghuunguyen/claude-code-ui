@@ -224,6 +224,7 @@ export const ROUTES: { readonly [T in ClientMessage["type"]]: Route } = {
   "addons.update": HUB,
   "addons.approve": HUB,
   "addons.setEnabled": HUB,
+  "addons.setDev": HUB,
   "addons.uninstall": HUB,
   "addons.pickRenderer": HUB,
   "update.check": HUB,

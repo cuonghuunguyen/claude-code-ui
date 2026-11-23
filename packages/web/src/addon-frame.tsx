@@ -18,7 +18,7 @@ type Reply = { id: string; ok: true; result: unknown } | { id: string; ok: false
 /** Host -> frame. The only `"*"` target: an opaque-origin frame has no other one. Shapes from the addon SDK (packages/addon-sdk): a part or event it does not accept fails the typecheck. */
 export const postTo = (frame: HTMLIFrameElement | null, msg: EventMessage | Reply) => frame?.contentWindow?.postMessage({ v: 1, ...msg }, "*");
 
-export const frameUrl = (addon: AddonInfo, entry: string) => addon.base + entry.split("/").map(encodeURIComponent).join("/");
+export const frameUrl = (addon: AddonInfo, entry: string) => addon.base + entry.split("/").map(encodeURIComponent).join("/") + (addon.dev && addon.rev !== undefined ? `?v=${addon.rev}` : "");
 
 export type AddonHandle = { post: (msg: EventMessage) => void };
 

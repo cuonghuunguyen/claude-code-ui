@@ -186,6 +186,16 @@ it("the switch enables and disables; uninstall asks first", async () => {
   expect(d.calls).toContainEqual({ type: "addons.uninstall", name: "example" });
 });
 
+it("dev mode: the switch is for local folders only; an addon.json error shows beside the last good manifest", async () => {
+  const local = { ...addon("mine"), source: { kind: "local" as const, path: "/x/mine" }, dev: true, rev: 5, error: "addon.json: bad JSON" };
+  const d = await render({ addons: [local, addon("example")], picks: {} });
+  const rows = d.all("addons-row");
+  expect(rows[0]!.querySelector('[data-testid="addons-error"]')!.textContent).toContain("bad JSON");
+  expect(rows[1]!.querySelector('[data-testid="addons-dev"]')).toBeNull();
+  await d.click(rows[0]!.querySelector<HTMLElement>('[data-testid="addons-dev"]')!);
+  expect(d.calls).toContainEqual({ type: "addons.setDev", name: "mine", dev: false });
+});
+
 it("check for updates shows current and latest SHAs and the capability diff", async () => {
   const check: AddonUpdateCheck = { name: "example", current: "abcdef0123456789", latest: "1234567890abcdef", added: ["ui.toast"], removed: ["ui.band"] };
   const d = await render({ addons: [addon("example")], picks: {} }, { "addons.checkUpdate": () => check });
