@@ -676,7 +676,7 @@ const server = createServer((req, res) => {
   });
 });
 server.listen(port, hostname, () => {
-  log({ type: "start", pid: process.pid, argv: args, passwordSet: true, hostname, port: server.address().port });
+  log({ type: "start", pid: process.pid, argv: args, passwordSet: true, configFile: process.env.OPENCODE_CONFIG, config: process.env.OPENCODE_CONFIG && existsSync(process.env.OPENCODE_CONFIG) ? JSON.parse(readFileSync(process.env.OPENCODE_CONFIG, "utf8")) : undefined, hostname, port: server.address().port });
   console.log(`server listening on http://${hostname}:${server.address().port}`);
   // Dies with its parent: a killed test run must not leave fakes behind.
   const parent = process.ppid;

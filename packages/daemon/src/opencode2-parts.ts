@@ -1,7 +1,7 @@
 // OpenCode 2 messages and events as Parts (docs/spec.md "OpenCode engine"): one stateful mapper for stored history and live events, so both give the same part
 // ids. User message = one `user_text` (id = message id); text and reasoning = `<assistant message id>:<text|reasoning>:<ordinal>` (the ordinal counts per kind inside
 // the message, as the `session.text.*` events do); a tool call's id = its call id. Shapes recorded in development-docs (planner-spike/v2-events.json).
-import type { Part, ToolStatus } from "@claude-ui/protocol";
+import type { Part, TodoItem, ToolStatus } from "@claude-ui/protocol";
 import { canon, mapTool } from "./opencode-parts.ts";
 import { FORK_TOOL } from "./opencode-fork.ts";
 
@@ -61,7 +61,18 @@ const STATUS: Record<string, ToolStatus> = { completed: "done", error: "error", 
 
 /** OpenCode 2 tool names that differ from OpenCode 1's (`shell`) and their input keys (`path`): the Claude card name and input shape the web knows. */
 const KEYS: Record<string, string> = { path: "file_path", oldString: "old_string", newString: "new_string", replaceAll: "replace_all" };
+/** The items of a `todowrite` input, as OpenCode 2's own UI reads them: items without text are dropped, an unknown status is `pending`, `cancelled` shows as `completed` (as on OpenCode 1). */
+export function todoItems2(input: Record<string, unknown> | undefined): TodoItem[] {
+  const todos = Array.isArray(input?.todos) ? (input!.todos as Json[]) : [];
+  return todos.flatMap((t): TodoItem[] => {
+    if (!t || typeof t.content !== "string" || !t.content) return [];
+    const status = t.status === "in_progress" ? "in_progress" : t.status === "completed" || t.status === "cancelled" ? "completed" : "pending";
+    return [{ content: t.content, status }];
+  });
+}
+
 export function mapTool2(name: string, input: Record<string, unknown> = {}): { tool: string; input: Record<string, unknown> } {
+  if (name === "todowrite") return mapTool(name, { ...input, todos: todoItems2(input) });
   if (name === "shell") return mapTool("bash", input);
   if (name === "read" || name === "edit" || name === "write") return mapTool(name, Object.fromEntries(Object.entries(input).map(([k, v]) => [KEYS[k] ?? k, v])));
   return mapTool(name, input);
@@ -77,6 +88,8 @@ const outputOf = (content: unknown): string =>
 export const failureText = (e: Failure | undefined) => (e?.message ?? "").split("\n")[0]!.trim() || e?.type || "OpenCode reported an error";
 
 export class OpenCode2Mapper {
+  /** `todos`: a completed `todowrite` call is also a `todo_update` (the session's own mapper only: inline and Fork runs must not replace the main agent's todo dock). */
+  constructor(private readonly opts: { todos?: boolean } = {}) {}
   private readonly texts = new Map<string, Part & { type: "assistant_text" | "thinking" }>();
   private readonly calls = new Map<string, Part & { type: "tool_call" | "subagent" }>();
   private readonly denied = new Set<string>();
@@ -268,6 +281,7 @@ export class OpenCode2Mapper {
       const error = status === "error";
       const output = error ? [failureText(state.error), outputOf(state.content)].filter(Boolean).join("\n") : outputOf(state.content);
       out.push({ type: "tool_result", id: `${callId}:result`, toolUseId: callId, output, isError: error });
+      if (name === "todowrite" && status === "completed" && this.opts.todos) out.push({ type: "todo_update", id: `${callId}:todos`, items: todoItems2(parsed) });
     }
     return out;
   }

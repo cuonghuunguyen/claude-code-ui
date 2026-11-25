@@ -417,6 +417,24 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     expect(paths).not.toContain("/global/health");
   });
 
+  it("an OpenCode 2 server starts with experimental.todo on as the OPENCODE_CONFIG document; an OPENCODE_CONFIG of the user is kept; an OpenCode 1 server gets none", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "oc-todo-")));
+    const logFile = join(root, "fake.log");
+    const starts = () => readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((l) => l.type === "start");
+    const run = async (bin: string, env: NodeJS.ProcessEnv, major: 1 | 2) => {
+      const server = createOpenCodeServer({ path: () => "", command: [process.execPath, bin], env: () => ({ FAKE_OPENCODE_LOG: logFile, ...env }) });
+      try {
+        await server.ensure(major);
+      } finally {
+        await server.close();
+      }
+      return starts().at(-1);
+    };
+    expect((await run(BIN2, {}, 2)).config).toEqual({ experimental: { todo: true } });
+    expect((await run(BIN2, { OPENCODE_CONFIG: "/user/own.json" }, 2)).configFile).toBe("/user/own.json");
+    expect((await run(BIN, {}, 1)).configFile).toBeUndefined();
+  });
+
   it("the OpenCode 2 client reaches the server through the authenticated node:http transport", async () => {
     const server = createOpenCodeServer({ path: () => "", command: [process.execPath, BIN2] });
     try {
