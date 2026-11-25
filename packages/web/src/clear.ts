@@ -29,4 +29,5 @@ export const heirView = (old: SessionView | undefined): SessionView => ({
   model: old?.model,
   permissionMode: old?.permissionMode,
   effort: old?.effort,
+  agent: old?.agent,
 });
