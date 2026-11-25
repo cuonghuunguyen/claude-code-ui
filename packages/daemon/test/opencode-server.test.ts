@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
@@ -431,6 +431,10 @@ describe("OpenCode engine: lifecycle, create and list", () => {
       return starts().at(-1);
     };
     expect((await run(BIN2, {}, 2)).config).toEqual({ experimental: { todo: true } });
+    // The temp document goes with the server that used it (stop and a crash alike): no folder is left per start.
+    const file = starts().at(-1).configFile as string;
+    await until(() => !existsSync(file));
+    expect(existsSync(dirname(file))).toBe(false);
     expect((await run(BIN2, { OPENCODE_CONFIG: "/user/own.json" }, 2)).configFile).toBe("/user/own.json");
     expect((await run(BIN, {}, 1)).configFile).toBeUndefined();
   });

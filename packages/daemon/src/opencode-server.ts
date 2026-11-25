@@ -1,11 +1,11 @@
 // The OpenCode server of this daemon (docs/spec.md "OpenCode engine"): one `opencode serve` child, started on first use, stopped with the daemon.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { Readable } from "node:stream";
 import { homedir, release, tmpdir } from "node:os";
-import { join, posix, win32 } from "node:path";
+import { dirname, join, posix, win32 } from "node:path";
 import { OPENCODE_MIN, OPENCODE2_MIN, type OpenCodeStatus } from "@claude-ui/protocol";
 import { SERVE_WATCHER } from "./tailscale.ts";
 import { winQuote } from "./update.ts";
@@ -254,15 +254,19 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     let counted = false;
     const count = () => !counted && ((counted = true), fastExits.push(startedAt));
     const run = invocation(cmd[0]!, [...cmd.slice(1), "serve", "--hostname", "127.0.0.1", "--port", "0"]);
+    const config = major === 2 ? defaultConfig(env()) : {};
+    // The document belongs to this start: removed when the child ends (stop, crash) or never spawned.
+    const dropConfig = () => config.OPENCODE_CONFIG && rmSync(dirname(config.OPENCODE_CONFIG), { recursive: true, force: true });
     const proc = spawn(process.execPath, ["-e", SERVE_WATCHER, run.file, ...run.args], {
-      env: { ...(major === 2 ? defaultConfig(env()) : {}), ...env(), OPENCODE_SERVER_USERNAME: "opencode", OPENCODE_SERVER_PASSWORD: password },
+      env: { ...config, ...env(), OPENCODE_SERVER_USERNAME: "opencode", OPENCODE_SERVER_PASSWORD: password },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
     child = proc;
     const exited = new Promise<never>((_, reject) => {
-      proc.once("error", (err) => reject(failed(err.message)));
+      proc.once("error", (err) => (dropConfig(), reject(failed(err.message))));
       proc.once("exit", (code, signal) => {
+        dropConfig();
         if (child === proc) (child = undefined), (up = undefined);
         if (!stopRequested && now() - startedAt < FAST_MS) count();
         else if (!stopRequested) fastExits = [];
