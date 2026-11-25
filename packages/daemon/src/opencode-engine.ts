@@ -1,5 +1,6 @@
 // The OpenCode Engine (ADR 0012, docs/spec.md "OpenCode engine"): sessions run on the daemon's OpenCode server (opencode-server.ts). One event
 // stream of the server feeds every open session; prompts, permissions and questions go back as HTTP calls.
+import { limitOfApiError, type LimitStop } from "./opencode-limit.ts";
 import { randomUUID } from "node:crypto";
 import { permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT } from "./aside.ts";
@@ -126,9 +127,9 @@ const EARLY_EVENTS = 500;
 const INLINE_TOOL = `mcp__${DAEMON_SERVER}__inline_task`;
 type PermissionAsked = { id: string; sessionID: string; permission: string; patterns?: string[]; metadata?: Record<string, unknown>; always?: string[]; tool?: { callID?: string } };
 type QuestionAsked = { id: string; sessionID: string; questions: { question: string; header: string; options: { label: string; description: string }[]; multiple?: boolean }[]; tool?: { callID?: string } };
-type Status = { type: "idle" | "busy" | "retry"; attempt?: number; message?: string; /** `retry`: when the next attempt starts (epoch ms of OpenCode's clock). */ next?: number };
+type Status = { type: "idle" | "busy" | "retry"; attempt?: number; message?: string; /** `retry`: when the next attempt starts (epoch ms of OpenCode's clock). */ next?: number; /** `retry`: OpenCode's action for the failure (upsell link). */ action?: { title?: string; label?: string; link?: string } };
 /** What the `model_retry` part carries. */
-type Retry = { attempt: number; message: string; next?: number };
+type Retry = { attempt: number; message: string; next?: number; action?: { label: string; link: string; title?: string } };
 type Payload = { type: string; properties: Record<string, any> };
 
 /** What `begin()` and `resync()` read of a session: stored messages (and those of its subagents), busy state, pending requests of the folder. */
@@ -139,7 +140,20 @@ export type InlineLink = { inlineId: string; callId: string; /** The inline sess
 export type OpenCodeHistory = { messages: OpenCodeMessage[]; children: Record<string, OpenCodeMessage[]>; /** The fork sessions of the Fork runs of this session with their messages. */ forks: (ForkLink & { messages: OpenCodeMessage[] })[]; /** The inline task sessions of this session with their messages. */ inlines: (InlineLink & { messages: OpenCodeMessage[] })[]; busy: boolean; /** OpenCode is waiting to retry the model call (its status `retry`: counts as busy). */ retry?: Retry; /** The message OpenCode's `revert` cuts the conversation at (it and everything after are hidden). */ revert?: string; permission: Rule[]; permissions: PermissionAsked[]; questions: QuestionAsked[] };
 
 /** The `model_retry` state of a `retry` status: the first line of the reason (OpenCode may append more). */
-const retryOf = (s: Status): Retry => ({ attempt: s.attempt ?? 1, message: firstLine(s.message ?? ""), ...(typeof s.next === "number" && { next: s.next }) });
+export const retryOf = (s: Status): Retry => {
+  let message = firstLine(s.message ?? "");
+  const a = s.action;
+  let link: string | undefined;
+  try {
+    // Only an https link with a label is actionable.
+    if (a && typeof a.link === "string" && new URL(a.link).protocol === "https:") link = a.link;
+  } catch {}
+  const label = typeof a?.label === "string" ? a.label.trim() : "";
+  const action = link && label ? { label, link, ...(typeof a?.title === "string" && a.title && { title: a.title }) } : undefined;
+  // The link shows as the action: cut the trailing " - <link>" of the reason.
+  if (action && message.endsWith(` - ${action.link}`)) message = message.slice(0, -` - ${action.link}`.length);
+  return { attempt: s.attempt ?? 1, message, ...(typeof s.next === "number" && { next: s.next }), ...(action && { action }) };
+};
 
 export async function loadOpenCodeHistory(server: OpenCodeServer, id: string, cwd: string, forkLinks: ForkLink[] = [], inlineLinks: InlineLink[] = []): Promise<OpenCodeHistory> {
   // No timeout: reopening a session after a restart reads a cold folder, whose first answer takes more than 3 s; giving up would lose the session.
@@ -262,6 +276,8 @@ class OpenCodeSession implements EngineSession {
   private turnAt = 0;
   private aborted = false;
   private failed = false;
+  /** The turn ended on a provider usage / rate limit (GH-973): `finish()` tells the auto-continue scheduler. */
+  private limit: LimitStop | undefined;
   private resyncing: Promise<void> | undefined;
   /** Stop was pressed since the last prompt: a prompt still waiting for the stream is not sent. */
   private stopped = false;
@@ -466,7 +482,7 @@ class OpenCodeSession implements EngineSession {
   private setRetry(r: Retry | undefined) {
     const was = this.retrying;
     if (!r && !was) return;
-    if (r && was && r.attempt === was.attempt && r.message === was.message && r.next === was.next) return;
+    if (r && was && r.attempt === was.attempt && r.message === was.message && r.next === was.next && r.action?.link === was.action?.link && r.action?.label === was.action?.label) return;
     this.retrying = r;
     if (r) this.lastAttempt = r.attempt;
     this.session.emit({ type: "model_retry", id: "model_retry", retry: r ?? null });
@@ -783,6 +799,7 @@ class OpenCodeSession implements EngineSession {
     this.turnAt = Date.now();
     this.aborted = false;
     this.failed = false;
+    this.limit = undefined;
     this.selfAbort = undefined;
     this.turnKey = ascending("msg");
     this.turnAssistant = undefined;
@@ -813,6 +830,11 @@ class OpenCodeSession implements EngineSession {
     if (this.turnStop < this.stops.count && !this.aborted) (this.aborted = true, this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` }));
     if (!this.aborted && !shell) this.session.emit({ type: "turn_result", id: `turn:${ascending("msg")}`, durationMs: Date.now() - this.turnAt, ...(cost > 0 && { costUsd: cost }), usage, isError: this.failed });
     this.toIdle();
+    const limit = this.limit;
+    this.limit = undefined;
+    // After idle, like claude-engine: the queue hold of onLimitStop lands before the queue's deferred kick. Never for a stopped turn.
+    if (limit && !this.aborted) this.opts.onLimitStop?.(this.id, limit.resetsAt, true);
+    else this.opts.onTurnEnded?.(this.id);
     void this.emitUsage();
     if (this.selfAbort) void this.explainAbort(this.selfAbort);
     void this.engine.folderIdle(this.cwd);
@@ -1210,6 +1232,7 @@ class OpenCodeSession implements EngineSession {
           return this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` });
         }
         this.failed = true;
+        this.limit = limitOfApiError(p.error, Date.now());
         // One warning per turn, in its own place: the id is the turn's assistant message (the history shows the same one after a restore), else the turn's.
         const key = errorKey(p.error);
         if (this.errorKeys.has(key)) return;

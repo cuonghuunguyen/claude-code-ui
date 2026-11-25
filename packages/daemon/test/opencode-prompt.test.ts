@@ -35,7 +35,7 @@ const cleanups: (() => void)[] = [];
 afterEach(() => cleanups.splice(0).forEach((c) => c()));
 
 type Boot = Awaited<ReturnType<typeof boot>>;
-async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object; root?: string; env?: Record<string, string> } = {}) {
+async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object; root?: string; env?: Record<string, string>; /** Settings patch (the OpenCode retry cases of GH-683 turn the usage-limit auto-continue off). */ settings?: object; autoContinue?: { graceMs?: number; gapMs?: number; retryMs?: number } } = {}) {
   const root = o.root ?? realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
@@ -45,7 +45,7 @@ async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object
   const env: Record<string, string> = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_DATA: dataFile, FAKE_OPENCODE_SCRIPT: (o.script ?? []).map(turn).join(","), ...o.env };
   // Terminal access (GH-709) attaches a second MCP server to every session: off here; "OpenCode claude-ui tools" turns it on.
   const appSettings = createSettings();
-  appSettings.set({ terminalAccess: { enabled: false }, inlineTask: { enabled: false }, fork: { enabled: false } } as never);
+  appSettings.set({ terminalAccess: { enabled: false }, inlineTask: { enabled: false }, fork: { enabled: false }, ...o.settings } as never);
   const http = createDaemon({
     webRoot: root,
     roots: [root],
@@ -61,6 +61,7 @@ async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object
     claudeDir: join(root, "claude"),
     projectsDir: join(root, "claude", "projects"),
     uploadSweepMs: 0,
+    autoContinue: o.autoContinue,
     // No transcript scan of the real ~/.claude (history defaults to the SDK's, which ignores projectsDir): on a machine with many projects every session.list scanned thousands of folders and the tests timed out under load.
     history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
     allowBypass: o.allowBypass,
@@ -2285,6 +2286,8 @@ const errorNotices = (s: { parts: () => Part[] }) => s.parts().filter((p) => p.t
 const status = (id: string, status: object) => ({ type: "session.status", properties: { sessionID: id, status } });
 const RETRY_3 = { type: "retry", attempt: 3, message: "Rate limit reached", next: 4102444800000 };
 
+const NO_AUTO = { usageLimit: { autoContinue: false } };
+
 describe("OpenCode retry and model errors (GH-683)", { timeout: 30_000 }, () => {
   it("a retry shows model_retry with attempt, reason and next; the next busy clears it; the reply ends the turn without a warning", async () => {
     const d = await boot({ script: ["retry"] });
@@ -2294,6 +2297,32 @@ describe("OpenCode retry and model errors (GH-683)", { timeout: 30_000 }, () => 
     expect(retries(s)).toEqual([{ attempt: 1, message: "Rate limit reached for m1", next: 4102444800000 }, null]);
     expect(s.parts().some((p) => p.type === "notice")).toBe(false);
     expect(s.find("turn_result")).toMatchObject({ isError: false });
+  });
+
+  it("a retry with an OpenCode action carries the https link as retry.action", async () => {
+    const d = await boot({ script: ["retry-action"] });
+    const s = await d.open();
+    await s.prompt("hi");
+    await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
+    expect(retries(s)[0]).toEqual({ attempt: 1, message: "Free usage exceeded, subscribe to Go", next: 4102444800000, action: { label: "subscribe", link: "https://opencode.ai/go", title: "Free limit reached" } });
+  });
+
+  it("the Go action drops the trailing link of the reason; an action without an https link is dropped", async () => {
+    const d = await boot();
+    const s = await d.open();
+    const go = "https://opencode.ai/workspace/wrk_test/go";
+    const msg = `5-hour usage limit reached. It will reset in 1 minute - ${go}`;
+    await d.fake("/__emit", { events: [status(s.id, { type: "busy" }), status(s.id, { ...RETRY_3, message: msg, action: { title: "Go limit reached", label: "open settings", link: go } })] });
+    await until(() => !!retries(s).at(-1));
+    expect(retries(s).at(-1)).toMatchObject({ message: "5-hour usage limit reached. It will reset in 1 minute", action: { label: "open settings", link: go, title: "Go limit reached" } });
+    const bad: { label: string; link?: string }[] = [{ label: "x", link: "javascript:alert(1)" }, { label: "x", link: "http://opencode.ai/go" }, { label: "x" }];
+    for (const [i, action] of bad.entries()) {
+      const attempt = 4 + i;
+      await d.fake("/__emit", { events: [status(s.id, { ...RETRY_3, attempt, message: `Limit - ${action.link ?? ""}`, action })] });
+      await until(() => retries(s).at(-1)?.attempt === attempt);
+      expect(retries(s).at(-1)).toMatchObject({ message: `Limit - ${action.link ?? ""}`.trim() });
+      expect(retries(s).at(-1)).not.toHaveProperty("action");
+    }
   });
 
   it("a turn that fails after its retries ends with one error notice of its own, after its prompt; a second failing turn has its own; retry state cleared", async () => {
@@ -2410,6 +2439,21 @@ describe("OpenCode retry and model errors (GH-683)", { timeout: 30_000 }, () => 
     expect(last).toMatchObject({ retry: { attempt: 2, message: "Rate limit reached" } });
   });
 
+  it("a session restored while OpenCode retries with an action shows the action link", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const row = { id: "ses_retry", slug: "r", projectID: "global", directory: project, title: "Retrying", version: "1.19.5", time: { created: 1, updated: 2 } };
+    const action = { reason: "free_tier_limit", title: "Free limit reached", label: "subscribe", link: "https://opencode.ai/go" };
+    const d = await boot({ root, data: { sessions: [row], messages: { ses_retry: [] }, statuses: { ses_retry: { type: "retry", attempt: 1, message: "Free usage exceeded, subscribe to Go", next: 4102444800000, action } } } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    await d.ok({ type: "session.subscribe", sessionId: "ses_retry", sinceSeq: 0 });
+    await until(() => d.inbox.some((m) => m.type === "event" && m.part.type === "model_retry"));
+    const last = d.inbox.filter((m): m is Extract<ServerMessage, { type: "event" }> => m.type === "event" && m.part.type === "model_retry").at(-1)!.part;
+    expect(last).toMatchObject({ retry: { action: { label: "subscribe", link: "https://opencode.ai/go", title: "Free limit reached" } } });
+  });
+
   it("a failed prompt has a notice id per turn, so a second failure does not update the first", async () => {
     const d = await boot();
     const s = await d.open();
@@ -2419,5 +2463,81 @@ describe("OpenCode retry and model errors (GH-683)", { timeout: 30_000 }, () => 
       await until(() => new Set(s.parts().filter((p) => p.type === "notice").map((p) => p.id)).size === n);
       await until(() => s.states().at(-1) === "idle");
     }
+  });
+});
+
+describe("OpenCode auto-continue after a provider limit (GH-973)", { timeout: 30_000 }, () => {
+  const prompts = (d: Boot, id: string) => d.requests("POST", `/session/${id}/prompt_async`).map((r) => (r.body.parts as { text?: string }[])?.[0]?.text);
+  const stops = (s: { parts: () => Part[] }) => s.parts().filter((p) => p.type === "limit_stop") as Extract<Part, { type: "limit_stop" }>[];
+  const acs = (s: { parts: () => Part[] }) => s.parts().filter((p) => p.type === "auto_continue") as Extract<Part, { type: "auto_continue" }>[];
+  const idle = (s: { find: (t: "turn_result") => unknown; states: () => string[] }) => until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
+
+  it("a 429 that ends the turn with a retry-after is a limit stop with the reset time, schedules a continue and sends it after the reset", async () => {
+    const d = await boot({ script: ["limit-fail", "text"], autoContinue: { graceMs: 0, gapMs: 100 } });
+    const s = await d.open();
+    const before = Date.now();
+    await s.prompt("hi");
+    await idle(s);
+    await until(() => stops(s).length > 0 && acs(s).some((a) => typeof a.at === "number"));
+    expect(stops(s)[0]).toMatchObject({ stopped: true, resetsAt: expect.any(Number) });
+    expect(stops(s)[0]!.resetsAt!).toBeGreaterThanOrEqual(before + 2000);
+    expect(stops(s)[0]!.resetsAt!).toBeLessThan(before + 10_000);
+    await until(() => prompts(d, s.id).length === 2, 12_000);
+    expect(prompts(d, s.id)).toEqual(["hi", "continue"]);
+  });
+
+  it("a usage limit without a reset time stops the turn for good: limit stop without resetsAt, nothing scheduled", async () => {
+    const d = await boot({ script: ["limit-free"] });
+    const s = await d.open();
+    await s.prompt("hi");
+    await idle(s);
+    await until(() => stops(s).length > 0);
+    expect(stops(s).at(-1)!.stopped).toBe(true);
+    expect(stops(s).at(-1)!.resetsAt).toBeUndefined();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(acs(s).some((a) => typeof a.at === "number")).toBe(false);
+  });
+
+  it("a plain 429 (no reset time, no usage-limit marker) is an error only: no limit stop", async () => {
+    const d = await boot({ script: ["limit-plain"] });
+    const s = await d.open();
+    await s.prompt("hi");
+    await idle(s);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(stops(s)).toEqual([]);
+    expect(errorNotices(s).length).toBeGreaterThan(0);
+  });
+
+  it("a 429 with a short retry-after (4 s) and no usage-limit marker is a per-minute rate limit: error only, no limit stop", async () => {
+    const d = await boot({ script: ["retry-fail"], autoContinue: { graceMs: 0, gapMs: 100 } });
+    const s = await d.open();
+    await s.prompt("hi");
+    await idle(s);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(stops(s)).toEqual([]);
+    expect(prompts(d, s.id)).toEqual(["hi"]);
+  });
+
+  it("setting off: the limit stop shows, no continue is scheduled or sent", async () => {
+    const d = await boot({ script: ["limit-fail", "text"], settings: NO_AUTO, autoContinue: { graceMs: 0, gapMs: 100 } });
+    const s = await d.open();
+    await s.prompt("hi");
+    await idle(s);
+    await until(() => stops(s).length > 0);
+    await new Promise((r) => setTimeout(r, 2800));
+    expect(acs(s).some((a) => typeof a.at === "number")).toBe(false);
+    expect(prompts(d, s.id)).toEqual(["hi"]);
+  });
+
+  it("Stop during the retry wait never schedules a continue", async () => {
+    const d = await boot({ autoContinue: { graceMs: 0, gapMs: 100 } });
+    const s = await d.open();
+    await d.fake("/__emit", { events: [status(s.id, { type: "busy" }), status(s.id, RETRY_3)] });
+    await d.fake("/__status", { sessionId: s.id, status: RETRY_3 });
+    await until(() => !!retries(s).at(-1));
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => s.states().at(-1) === "idle");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(stops(s)).toEqual([]);
   });
 });

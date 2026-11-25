@@ -216,7 +216,7 @@ export type Part = { parentId?: string } & (
   /** The last turn ended at the plan usage limit (docs/spec.md "Focus"), whether or not a continue is scheduled; the next turn clears it. `resetsAt` ms when known. */
   | { type: "limit_stop"; id: "limit_stop"; stopped: boolean; resetsAt?: number }
   /** OpenCode is retrying the model call (`session.status retry`, docs/spec.md "OpenCode engine"): the attempt, why the last one failed and when the next starts (`next`: epoch ms of the daemon host); null = not retrying. A head, not persisted. */
-  | { type: "model_retry"; id: "model_retry"; retry: { attempt: number; message: string; next?: number } | null }
+  | { type: "model_retry"; id: "model_retry"; retry: { attempt: number; message: string; next?: number; /** OpenCode's retry action (upsell link, https only). */ action?: { label: string; link: string; title?: string } } | null }
   /** "Next for you" (docs/spec.md "Focus"): the CLI's prediction of the user's next prompt after a turn (SDK `promptSuggestions`); null when the next turn starts. Not in the transcript, so not restored. */
   | { type: "prompt_suggestion"; id: "prompt_suggestion"; text: string | null }
   /** The session's queued messages (docs/spec.md "Queued messages"), sent one per turn when it is idle; `held`: sending is paused (usage limit until `until` ms, or the session cannot take prompts). */

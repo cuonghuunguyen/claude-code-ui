@@ -755,6 +755,7 @@ export default {
   "app.timeline.thinking": "Thinking",
   "app.timeline.retryIn": "Retrying in {time} · attempt {attempt}",
   "app.timeline.retryNow": "Retrying now · attempt {attempt}",
+  "app.timeline.retryAction": "{label} (opens in a new tab)",
   "app.timeline.retrySr": "Retrying, attempt {attempt}: {message}",
   "app.timeline.file": "File",
   "app.timeline.interrupted": "Interrupted by user",

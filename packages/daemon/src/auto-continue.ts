@@ -22,8 +22,9 @@ export function createAutoContinue(o: {
   const gap = o.gapMs ?? CONTINUE_GAP_MS;
   const retry = o.retryMs ?? RETRY_MS;
   const entries = new Map<string, number>(); // id -> at (ms); insertion order = stop order
-  const pending = new Map<string, number>(); // id -> the reset time the schedule is for
-  const sent = new Map<string, { resetsAt: number; n: number; at: number }>(); // continues sent per reset time
+  const pending = new Map<string, { resetsAt: number; relative: boolean }>(); // id -> the reset time the schedule is for
+  // Continues sent: Claude per reset time; OpenCode (relative) per session until a turn ends without a limit stop or the user acts.
+  const sent = new Map<string, { resetsAt: number; n: number; at: number; relative: boolean }>();
   const inflight = new Set<string>(); // taken off the schedule, send running
   let timer: NodeJS.Timeout | undefined;
 
@@ -50,10 +51,10 @@ export function createAutoContinue(o: {
       arm(); // the others must not wait for the send
       if (o.enabled()) {
         // A try counts when its continue goes out, not when it is scheduled.
-        const resetsAt = pending.get(id)!;
+        const { resetsAt, relative } = pending.get(id)!;
         pending.delete(id);
         const prev = sent.get(id);
-        sent.set(id, { resetsAt, n: (prev?.resetsAt === resetsAt ? prev.n : 0) + 1, at: now });
+        sent.set(id, { resetsAt, n: (prev && sameLimit(prev, resetsAt, relative) ? prev.n : 0) + 1, at: now, relative });
         inflight.add(id);
         if (!(await o.send(id, () => inflight.has(id)).catch(() => false))) console.log(`session ${id}: continue after the usage limit not sent (session not idle, gone or cancelled)`);
         inflight.delete(id);
@@ -62,24 +63,40 @@ export function createAutoContinue(o: {
     arm();
   }
 
+  /**
+   * The hit repeats the limit of the last continue: the same reset time, or any relative hit. A relative count is not bounded by time:
+   * OpenCode waits retry-after before each of its 5 retries, so the next stop can come far later than any window; turnEnded/cancel end it.
+   */
+  const sameLimit = (prev: { resetsAt: number }, resetsAt: number, relative: boolean) => prev.resetsAt === resetsAt || relative;
+
   return {
-    /** `resetsAt` ms; undefined: the reset time of a continue sent a moment ago, else nothing. Setting off: nothing. */
-    schedule(id: string, resetsAt: number | undefined) {
+    /**
+     * `resetsAt` ms; undefined: the reset time of a continue sent a moment ago, else nothing. Setting off: nothing.
+     * `relative`: the reset time is computed from the hit (OpenCode: now + retry-after), so it differs at every hit of one limit:
+     * every relative hit after a continue counts as a repeat, until turnEnded or cancel.
+     */
+    schedule(id: string, resetsAt: number | undefined, relative = false) {
       if (!o.enabled()) return;
       const prev = sent.get(id);
       if (!resetsAt && prev && Date.now() - prev.at < REPEAT_WINDOW_MS) resetsAt = prev.resetsAt;
       if (!resetsAt) return void console.log(`session ${id}: stopped by the usage limit; no reset time known, not scheduled`);
-      const repeat = prev?.resetsAt === resetsAt;
-      if (repeat && prev.n >= MAX_TRIES) return void console.log(`session ${id}: usage limit still hit after ${MAX_TRIES} continues; giving up`);
       const now = Date.now();
+      const repeat = !!prev && sameLimit(prev, resetsAt, relative);
+      if (repeat && prev.n >= MAX_TRIES) {
+        return void console.log(`session ${id}: usage limit still hit after ${MAX_TRIES} continues; giving up`);
+      }
       let at = resetsAt + grace;
       if (repeat) at = Math.max(at, now + retry);
       else if (at <= now) at = now + grace;
-      pending.set(id, resetsAt);
+      pending.set(id, { resetsAt, relative });
       entries.set(id, at);
       o.show(id, at);
       arm();
       console.log(`session ${id}: stopped by the usage limit; continue at ${new Date(at).toISOString()}`);
+    },
+    /** A turn ended without a limit stop (OpenCode engines): the limit is over, a later relative hit starts the count over. Claude's count is per reset time: kept. */
+    turnEnded(id: string) {
+      if (sent.get(id)?.relative) sent.delete(id);
     },
     /** The user acted (message, Cancel, delete, rewind): drop the schedule, a send still running, and the retry count. */
     cancel(id: string) {

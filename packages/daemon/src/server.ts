@@ -369,12 +369,13 @@ export function createDaemon(opts: {
     claudeEnv: (cwd: string) => claudeEnvFor(cwd),
     visualizePlugin: () => (appSettings.get().chat.visualize ? visualizePluginDir() : undefined),
     // `resetsAt`: the event's, else the plan fallback of the Session's own account (claude-engine.ts).
-    onLimitStop: (id: string, at: number | undefined) => {
+    onLimitStop: (id: string, at: number | undefined, relative?: boolean) => {
       sessions.get(id)?.setLimitStop(at);
-      autoContinue.schedule(id, at);
+      autoContinue.schedule(id, at, relative);
       // Queued messages wait for the reset (after an automatic continue), else for the user: sending into the limit would burn them one by one.
       queue.hold(id, at ? at + (opts.autoContinue?.graceMs ?? RESET_GRACE_MS) + (opts.autoContinue?.gapMs ?? CONTINUE_GAP_MS) : undefined);
     },
+    onTurnEnded: (id: string) => autoContinue.turnEnded(id),
     allowBypass: opts.allowBypass,
     onFileEdit: (path: string, original: string) => localHistory.before(path, "agent", original),
     // `live` of the session list changed (CLI started or dropped).

@@ -315,6 +315,35 @@ describe("OpenCode 2 sessions", { timeout: TEST_MS }, () => {
     expect(s.find("turn_result")).toMatchObject({ isError: true });
   });
 
+  it("a turn that fails with a 429 and a retry delay is a limit stop with its reset time (GH-973)", async () => {
+    const d = await boot({ script: ["limit"] });
+    const s = await d.open();
+    const before = Date.now();
+    await s.prompt("go");
+    await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
+    await until(() => !!s.find("limit_stop"));
+    expect(s.find("limit_stop")).toMatchObject({ stopped: true, resetsAt: expect.any(Number) });
+    expect(s.find("limit_stop")!.resetsAt!).toBeGreaterThanOrEqual(before + 300_000);
+  });
+
+  it("an execution failure without status keeps the limit its step failure showed (GH-973)", async () => {
+    const d = await boot({ script: ["limit-step"] });
+    const s = await d.open();
+    await s.prompt("go");
+    await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
+    await until(() => !!s.find("limit_stop"));
+    expect(s.find("limit_stop")).toMatchObject({ stopped: true, resetsAt: expect.any(Number) });
+  });
+
+  it("a failure that is not a 429 is no limit stop (GH-973)", async () => {
+    const d = await boot({ script: ["fail"] });
+    const s = await d.open();
+    await s.prompt("go");
+    await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
+    await new Promise((r) => setTimeout(r, 200));
+    expect(s.find("limit_stop")).toBeUndefined();
+  });
+
   it("a mode change replaces the session's rules in OpenCode before the next prompt; the model and effort go as a model switch before the prompt", async () => {
     const d = await boot();
     const s = await d.open();
