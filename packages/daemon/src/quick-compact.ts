@@ -37,6 +37,18 @@ export const SUMMARY_CHUNK_TOKENS = 100_000;
 const SUMMARY_MAX_TOKENS = 4_000;
 const SUMMARY_HEADING = "## Summary of the oldest part (model-written; exact text in the full transcript)";
 
+/** The system text of the small model that condenses the oldest part (every Engine's summariser uses it). */
+export const summarySystem = (maxTokens: number) => `You condense the oldest part of a coding conversation. Keep decisions, facts, file paths, names, numbers and open tasks. Reply with the summary only, at most ${maxTokens} tokens.`;
+
+/** A quick-compact digest that is itself in the history (a compact of a compact) becomes `earlier`; the events before it are dropped. */
+export function foldDigest(r: { earlier?: string; events: DigestEvent[] }): { earlier?: string; events: DigestEvent[] } {
+  for (let i = r.events.length - 1; i >= 0; i--) {
+    const e = r.events[i]!;
+    if (e.kind === "user" && e.text.startsWith(QUICK_COMPACT_MARKER)) return { earlier: e.text, events: r.events.slice(i + 1) };
+  }
+  return r;
+}
+
 export const tokensOf = (s: string) => Math.ceil(s.length / 4);
 export const capOf = (contextWindow: number) => Math.floor(contextWindow * CAP_SHARE);
 
@@ -233,7 +245,14 @@ export async function fitCap(src: DigestSource, capTokens: number, summarise: Su
   const over = tokensOf(rebuilt(summary)) - capTokens;
   // A summary that still overflows is cut to its budget.
   if (over > 0) summary = summary.slice(0, Math.max(0, summary.length - over * 4));
-  return finish(l, rebuilt(summary), true);
+  let text = rebuilt(summary);
+  // Only a carried-over digest is left to cut: its tail goes (the header stays, the full text is in the earlier session).
+  const left = tokensOf(text) - capTokens;
+  if (left > 0 && src.earlier && summary === "") {
+    const cutAt = Math.max(0, src.earlier.length - left * 4);
+    text = assemble({ ...l, src: { ...src, earlier: src.earlier.slice(0, cutAt) } }, rest, summary);
+  }
+  return finish(l, text, true);
 }
 
 /** Writes the digest's files (the folder is created; 0600 like the uploads). */

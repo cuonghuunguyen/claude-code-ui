@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { query as sdkQuery, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { claudeEnv } from "./claude-env.ts";
-import { stripText, type DigestEvent, type Summarise } from "./quick-compact.ts";
+import { foldDigest, stripText, summarySystem, type DigestEvent, type Summarise } from "./quick-compact.ts";
 
 type Block = { type?: string; text?: string; id?: string; name?: string; input?: Record<string, unknown>; tool_use_id?: string; content?: unknown; is_error?: boolean };
 const resultText = (c: unknown): string =>
@@ -42,7 +42,7 @@ export function claudeDigestEvents(main: SessionMessage[]): { earlier?: string; 
       }
     }
   }
-  return { ...(earlier && { earlier }), events };
+  return foldDigest({ ...(earlier && { earlier }), events });
 }
 
 /** The two rows of the new session's transcript: the digest as the user's message and an assistant ack in the CLI's own `<synthetic>` shape (a file ending on a user row gets such a reply appended by the CLI). Two JSONL lines. */
@@ -71,7 +71,6 @@ export function syntheticTranscript(o: { id: string; cwd: string; digest: string
   return `${JSON.stringify(user)}\n${JSON.stringify(assistant)}\n`;
 }
 
-const SYSTEM = (n: number) => `You condense the oldest part of a coding conversation. Keep decisions, facts, file paths, names, numbers and open tasks. Reply with the summary only, at most ${n} tokens.`;
 export const SUMMARY_TIMEOUT_MS = 120_000;
 
 /** One tool-less Haiku turn per call (no warm spare: a quick compact over the cap is rare). `env`: the Project's Claude account. */
@@ -83,7 +82,7 @@ export function claudeSummarise(o: { cwd: string; env?: NodeJS.ProcessEnv; query
     try {
       const q = (o.query ?? sdkQuery)({
         prompt: text,
-        options: { systemPrompt: SYSTEM(maxTokens), thinking: { type: "disabled" }, tools: [], maxTurns: 1, persistSession: false, model: "haiku", cwd: o.cwd, env: o.env ?? claudeEnv(), settingSources: [], mcpServers: {}, strictMcpConfig: true, settings: { disableAllHooks: true }, abortController: ctl } as never,
+        options: { systemPrompt: summarySystem(maxTokens), thinking: { type: "disabled" }, tools: [], maxTurns: 1, persistSession: false, model: "haiku", cwd: o.cwd, env: o.env ?? claudeEnv(), settingSources: [], mcpServers: {}, strictMcpConfig: true, settings: { disableAllHooks: true }, abortController: ctl } as never,
       });
       for await (const m of q) {
         if (m.type !== "result") continue;

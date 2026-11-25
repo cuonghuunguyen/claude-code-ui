@@ -402,6 +402,14 @@ const server = createServer(async (req, res) => {
     if (file) play(JSON.parse(readFileSync(resolve(file), "utf8")), s.id, dir, body.messageID);
     return json(200, {});
   }
+  // POST /session/:id/message: `noReply` stores the user message only (quick compact's digest); else the synchronous reply, canned text (its summariser).
+  if (m && s && m[2] === "/message" && req.method === "POST") {
+    const id = `msg_posted_${++counter}`;
+    const info = { id, sessionID: s.id, role: body.noReply ? "user" : "assistant", time: { created: Date.now(), completed: Date.now() } };
+    const parts = body.noReply ? (body.parts ?? []).map((p, i) => ({ ...p, id: `${id}_p${i}`, sessionID: s.id, messageID: id })) : [{ id: `${id}_p0`, sessionID: s.id, messageID: id, type: "text", text: "FAKE SUMMARY" }];
+    if (body.noReply) (data.messages[s.id] ??= []).push({ info, parts });
+    return json(200, { info, parts });
+  }
   // Compaction: POST /session/:id/summarize {providerID, modelID} plays the next script (turn-compact.json) and answers at once (the real server answers when the loop ends).
   if (m && s && m[2] === "/summarize" && req.method === "POST") {
     const file = scripts.shift();
