@@ -383,6 +383,21 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     expect(d.requests("POST", `/question/${q.requestId}/reject`)).toHaveLength(0);
   });
 
+  it("a prompt sent after Stop that waited 10 s for a stopped turn OpenCode has not ended yet is a turn of its own: its ask shows", async () => {
+    const d = await boot({ script: ["abort", "question"], env: { FAKE_OPENCODE_ABORT_DELAY_MS: "14000" } });
+    const s = await d.open();
+    await s.prompt("long essay");
+    await until(() => s.parts().some((p) => p.type === "thinking"));
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await s.prompt("ask me");
+    // The prompt goes out after TURN_END_WAIT_MS (10 s); the stopped turn ends in OpenCode at 14 s.
+    await until(() => !!s.find("question"), 13_000);
+    const q = s.find("question")!;
+    expect(q).toMatchObject({ requestId: "que_1b7edd2ad001vvGXsFVXVXH1oa", settled: false });
+    expect(s.states().at(-1)).toBe("needs_input");
+    expect(d.requests("POST", `/question/${q.requestId}/reject`)).toHaveLength(0);
+  });
+
   it("a message sent right after Stop starts the next turn after the aborted one ended", async () => {
     const d = await boot({ script: ["abort", "text"] });
     const s = await d.open();

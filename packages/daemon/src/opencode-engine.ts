@@ -702,7 +702,8 @@ class OpenCodeSession implements EngineSession {
 
   /** Sends a prompt: it joins the running turn (steering: the model sees it at the next step; the turn still ends at one session.idle) or starts one. */
   private start(messageID: string, text: string, images: string[]) {
-    const steer = this.session.currentState() !== "idle";
+    // A prompt that waited TURN_END_WAIT_MS for a stopped turn OpenCode has not ended yet: its own turn (as opencode2-engine.ts), never the stopped one's (afterStop() would reject its asks).
+    const steer = this.session.currentState() !== "idle" && this.turnStop >= this.stops.count;
     this.stopped = false;
     if (!steer) {
       this.sentAt = Infinity;
