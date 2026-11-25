@@ -44,12 +44,16 @@ describe("isActive", () => {
     expect(isActive(where, { Deploy: "No" }, all)).toBe(false);
     expect(isActive({ ...where, when: [{ question: "Deploy", op: "neq", value: "Yes" }] }, { Deploy: "No" }, all)).toBe(true);
     expect(isActive(deploy, {}, all)).toBe(true);
+    // OpenCode 2: no answer to the controlling field fails the condition, also neq.
+    expect(isActive({ ...where, when: [{ question: "Deploy", op: "neq", value: "Yes" }] }, {}, all)).toBe(false);
   });
   it("multi-select membership and a chained inactive condition", () => {
     const m = q("M", { multiSelect: true, options: [{ label: "A", description: "" }, { label: "B", description: "" }] });
     const onB = q("OnB", { when: [{ question: "M", op: "eq", value: "B" }] });
     expect(isActive(onB, { M: "A, B" }, [m, onB])).toBe(true);
     expect(isActive(onB, { M: "A" }, [m, onB])).toBe(false);
+    expect(isActive({ ...onB, when: [{ question: "M", op: "neq", value: "B" }] }, { M: "A" }, [m, onB])).toBe(true);
+    expect(isActive({ ...onB, when: [{ question: "M", op: "neq", value: "B" }] }, { M: "A, B" }, [m, onB])).toBe(false);
     const deep = q("Deep", { when: [{ question: "Where", op: "eq", value: "x" }] });
     expect(isActive(deep, { Deploy: "No", Where: "x" }, [deploy, where, deep])).toBe(false);
     expect(isActive(deep, { Deploy: "Yes", Where: "x" }, [deploy, where, deep])).toBe(true);

@@ -57,16 +57,19 @@ const PREVIEW_CONTROLS = { code: false, table: false, image: false, mermaid: { f
 export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: QuestionRequest; onAnswer: (answers: Record<string, string>, choices: Record<string, string[]>) => void; onDismiss?: () => void; mode?: ReactNode }) {
   const t = useT();
   const [choices, setChoices] = useState<Choice[]>(() => part.questions.map(initial));
-  const [page, setPage] = useState(0);
+  const [pageAt, setPage] = useState(0);
   const [touched, setTouched] = useState<Set<number>>(new Set());
   const answers = part.questions.map((q, i) => answerText(q, choices[i]!));
   const byText = Object.fromEntries(part.questions.map((q, i) => [q.question, answers[i]!]));
   // A question whose `when` fails is not a page and not sent; its answer stays in state.
   const active = part.questions.map((q) => isActive(q, byText, part.questions));
   const activeIdx = part.questions.flatMap((_, i) => (active[i] ? [i] : []));
+  // The page shown: the one asked for while it is active, else the next active one (the first answer may make the first page inactive), else the last active.
+  const page = active[pageAt] ? pageAt : (activeIdx.find((i) => i > pageAt) ?? activeIdx.at(-1) ?? pageAt);
   const problem = (i: number): InputError | undefined => {
     const q = part.questions[i]!;
-    return q.input && answers[i] ? checkAnswer(q.input, answers[i]!) : undefined;
+    // A free text next to options is checked; an option's label is not.
+    return q.input && answers[i] && !q.options.some((o) => o.label === answers[i]) ? checkAnswer(q.input, answers[i]!) : undefined;
   };
   const ready = (i: number) => (answers[i] ? !problem(i) : !!part.questions[i]!.optional);
   const set = (i: number, c: Choice) => setChoices((all) => all.map((x, j) => (j === i ? c : x)));
@@ -185,11 +188,19 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
               aria-label={t("session.question.otherLabel", { question: q.question })}
               placeholder={t("session.question.otherPlaceholder")}
               value={c.other ?? ""}
+              aria-invalid={!!bad}
+              aria-describedby={bad ? `${part.id}-err${page}` : undefined}
+              onBlur={() => setTouched((all) => new Set(all).add(page))}
               // Typing chooses Other; for a single-select question it replaces the chosen option.
               onChange={(e) => set(page, q.multiSelect ? { ...c, other: e.target.value } : { chosen: [], other: e.target.value })}
             />
           </span>
         </label>
+        )}
+        {!typed && bad && (
+          <p id={`${part.id}-err${page}`} className="text-destructive text-xs" role="alert">
+            {errorText}
+          </p>
         )}
       </fieldset>
       </VisualizeAnswerContext>

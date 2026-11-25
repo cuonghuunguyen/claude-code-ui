@@ -85,3 +85,19 @@ it("a date-time is sent as RFC 3339 UTC", () => {
   expect(sent).toBe(new Date("2026-12-01T10:00:00").toISOString().replace(".000Z", "Z"));
   expect(sent).toMatch(/Z$/);
 });
+
+it("a question that depends on a later one is not the first page: the panel opens on the controlling question", () => {
+  const onAnswer = mount([text("Why", { input: { type: "text" }, when: [{ question: "Kind", op: "eq", value: "Other" }] }), text("Kind", { options: [{ label: "Other", description: "" }, { label: "Bug", description: "" }] })]);
+  expect(el.textContent).toContain("Kind");
+  expect(el.textContent).toContain("1 of 1 questions");
+  click(el.querySelector<HTMLInputElement>("input[type=radio]")!);
+  expect(el.textContent).toContain("1 of 2 questions");
+});
+
+it("a free text next to options is checked with the field's rules, an option is not", () => {
+  mount([text("Due", { input: { type: "date" }, options: [{ label: "Today", description: "" }] })]);
+  click(el.querySelector<HTMLInputElement>("input[type=radio]")!);
+  expect(button("Submit")!.disabled).toBe(false);
+  type(el.querySelector<HTMLInputElement>("input:not([type=radio])")!, "soon");
+  expect(button("Submit")!.disabled).toBe(true);
+});
