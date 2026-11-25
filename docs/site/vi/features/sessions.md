@@ -29,11 +29,22 @@ Rê chuột lên dòng phiên và bấm `⋯`:
 | --- | --- |
 | Đổi tên | Đổi tiêu đề. |
 | Lưu trữ / Bỏ lưu trữ | Ẩn phiên khỏi danh sách mà không xóa. |
+| Nén nhanh | Cô đọng phiên thành một phiên mới ([Nén nhanh](#quick-compact)). Tắt cho đến khi phiên có nội dung. |
 | Sao chép ID phiên | Sao chép ID. |
 | Đóng tab | Đóng tab của phiên, khi tab đang mở. |
 | Xóa… | Xóa vĩnh viễn phiên và lịch sử của nó (có hỏi trước). |
 
 Cùng menu này mở bằng bấm chuột phải. Xem [Menu ngữ cảnh](/vi/features/context-menus).
+
+## Nén nhanh {#quick-compact}
+
+Thu gọn một phiên dài thành phiên mới mà không nhờ model viết lại (`/compact` của Engine làm việc đó). Dùng được với Claude Code, OpenCode 1 và OpenCode 2. Chọn **Nén nhanh** trong menu phiên, hoặc gõ riêng `/quick-compact` trong ô nhập (không bao giờ gửi đến Engine).
+
+- Phiên mới mở ngay, cùng Engine, thư mục, model, effort và chế độ quyền. Phiên gốc giữ nguyên, kể cả khi đang chạy.
+- Tin nhắn đầu là một **bản tóm tắt (digest)**, hiện thành thẻ gập có kích thước (số token ước tính) và liên kết về phiên gốc. **Xem bản tóm tắt** mở thẻ ra.
+- Bản tóm tắt giữ văn bản của người dùng và trợ lý, và một dòng cho mỗi lần gọi công cụ cùng input. Kết quả công cụ và input dài được lưu thành tệp để phiên mới đọc; dòng đó ghi tên tệp. Phần gần nhất giữ nguyên văn.
+- Digest giới hạn ở 30 % cửa sổ ngữ cảnh của model. Vượt giới hạn, các dòng công cụ cũ gộp thành số đếm; vẫn vượt thì một model nhỏ chỉ cô đọng phần cũ nhất (thẻ ghi **phần cũ nhất đã được tóm tắt**). Dưới giới hạn thì không model nào chạy.
+- Toast tiến trình hiện khi digest đang được tạo và kết thúc cùng lúc với tác vụ, cả với dự án nằm trong đường dẫn thư mục sâu. Khi lỗi, hiện **Nén nhanh thất bại** kèm lý do, và không để lại phiên tạo dở.
 
 ## Tab {#tabs}
 

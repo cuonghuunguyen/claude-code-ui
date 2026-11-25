@@ -70,6 +70,10 @@ Menu của dòng dự án và của dòng worktree có **Sao chép đường d�
 | Mở rộng tất cả / Thu gọn tất cả | Mở hoặc đóng mọi dự án (desktop). |
 | Tùy chọn thanh bên (`⋯`) | Bố cục, chỉ hiện phiên đang hoạt động, và nhiều hơn nữa. |
 
+## Lựa chọn gần nhất của dự án {#lua-chon-gan-nhat-cua-du-an}
+
+Dự án nhớ Engine, model và effort của phiên bạn tạo gần nhất trong đó, và phiên mới bắt đầu với các giá trị này. Thứ tự, khớp đầu tiên thắng: giá trị bạn chọn trong phiên mới, ghi đè của Dự án (Project settings), lựa chọn gần nhất của dự án, Engine bạn dùng gần nhất ở bất kỳ đâu. Model hoặc effort chỉ áp dụng cho đúng Engine của nó. Lựa chọn gần nhất không bao giờ được ghi vào ghi đè của Dự án, và worktree tính cho checkout chính của nó. Daemon giữ tối đa 200 dự án cho mỗi 20 Side, và bỏ cái dùng lâu nhất.
+
 ## Cần biết {#good-to-know}
 
 - Bạn chỉ mở được các thư mục nằm trong **roots** cho phép (mặc định: thư mục home của bạn). Xem [`--roots`](/vi/reference/cli).

@@ -14,13 +14,14 @@ Addon nằm trên Hub (máy chạy claude-ui) và hoạt động ở mọi trìn
 
 ## Duyệt quyền của addon {#approval}
 
-Thẻ liệt kê addon xin quyền gì, mỗi quyền một dòng dễ hiểu, cùng giao diện màu, khung hiển thị, lệnh và bộ vẽ nó thêm vào. **Duyệt và bật** để bật addon. Trước đó không có gì chạy. Addon chỉ làm được những gì bạn duyệt, và không bao giờ tự gửi prompt.
+Thẻ liệt kê addon xin quyền gì, mỗi quyền một dòng dễ hiểu, cùng giao diện màu, khung hiển thị, lệnh và bộ vẽ nó thêm vào. Addon có hiệu ứng thì có thêm dòng **Vẽ lên** ghi các phần của ứng dụng nó vẽ lên (hoặc **toàn cửa sổ**). **Duyệt và bật** để bật addon. Trước đó không có gì chạy. Addon chỉ làm được những gì bạn duyệt, và không bao giờ tự gửi prompt.
 
 ## Cập nhật, tắt, gỡ {#update}
 
 - **Kiểm tra cập nhật** (addon git) hiện commit mới và các quyền được thêm hoặc bỏ. **Cập nhật** áp dụng đúng phiên bản đó.
 - Phiên bản xin quyền chưa được duyệt sẽ tắt đến khi bạn duyệt. Thư mục cục bộ được đọc lại mỗi khi bạn mở hộp thoại: sửa thêm quyền cũng cần duyệt.
 - Công tắc tắt addon mà không gỡ: giao diện màu, pane, băng, lệnh và bộ vẽ biến mất ngay. **Gỡ** xóa addon, và bản checkout với addon git.
+- Trong hộp thoại, mỗi dòng có công tắc **Bật** và công tắc **Chế độ dev**, đều có nhãn chữ. Mô tả dài chỉ hiện hai dòng; **Xem thêm** và **Thu gọn** mở và gập phần còn lại.
 - Dòng **Lỗi** cho biết vì sao addon không nạp được (thư mục mất, manifest hỏng).
 - URL kho hiện không kèm tên người dùng hay mật khẩu.
 

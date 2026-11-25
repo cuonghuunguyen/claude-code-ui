@@ -29,11 +29,22 @@ Hover a session row and click `⋯`:
 | --- | --- |
 | Rename | Changes the title. |
 | Archive / Unarchive | Hides the session from the list without deleting it. |
+| Quick compact | Digests the session into a new one ([Quick compact](#quick-compact)). Off until the session has a transcript. |
 | Copy session ID | Copies the ID. |
 | Close tab | Closes its tab, while one is open. |
 | Delete… | Deletes the session and its history for good (asks first). |
 
 The same menu opens with a right click. See [Context menus](context-menus).
+
+## Quick compact {#quick-compact}
+
+Shrinks a long session into a new one without asking a model to rewrite it (the Engine's own `/compact` does that). Works for Claude Code, OpenCode 1 and OpenCode 2. Choose **Quick compact** in the session menu, or type `/quick-compact` alone in the prompt box (it is never sent to the Engine).
+
+- The new session opens at once, with the same Engine, folder, model, effort and permission mode. The source session stays as it is, also while it runs.
+- Its first message is a **digest**, shown as a folded card with the size (about tokens) and a link to the source. **Show digest** unfolds it.
+- The digest keeps the user and assistant text and one line per tool call with its input. Tool outputs and long inputs are saved as files that the new session can read; the line names the file. The most recent part stays word for word.
+- The digest is limited to 30 % of the model's context window. Over the limit, old tool lines collapse into counts; if still over, a small model condenses only the oldest part (the card says **oldest part summarised**). Under the limit no model runs.
+- A progress toast shows while the digest is built and ends with the run, also for a project in a deep folder path. A failure shows **Quick compact failed** with the reason, and no half-made session stays.
 
 ## Tabs
 
