@@ -38,7 +38,7 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
   const openCodeMeta = new Map<string, { cwd: string; title: string }>();
   const openCodeFail = (err: unknown) => (err instanceof OpenCodeError ? { code: err.code, message: err.message } : { code: "opencode_failed", message: (err as Error).message });
   /** The inline task sessions of session `id` (sessions.json `inlineOf`). */
-  const inlinesOf = (id: string): InlineLink[] => settings.entries().flatMap(([inlineId, l]) => (l.inlineOf?.sessionId === id ? [{ inlineId, callId: l.inlineOf.callId }] : []));
+  const inlinesOf = (id: string): InlineLink[] => settings.entries().flatMap(([inlineId, l]) => (l.inlineOf?.sessionId === id ? [{ inlineId, callId: l.inlineOf.callId, ...(l.inlineOf.denied && { denied: l.inlineOf.denied }) }] : []));
   /** The forks of the Fork runs of session `id` (sessions.json). */
   const forksOf = (id: string): ForkLink[] => settings.entries().flatMap(([forkId, l]) => (l.forkOf?.sessionId === id ? [{ forkId, callId: l.forkOf.callId, prefix: l.forkOf.prefix }] : []));
   const openCodeEngine = createOpenCodeEngine(openCode, {

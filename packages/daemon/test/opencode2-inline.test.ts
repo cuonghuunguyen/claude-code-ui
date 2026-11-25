@@ -311,4 +311,19 @@ describe("OpenCode 2 inline task", () => {
     r.child("session.execution.succeeded");
     expect(await running).toMatchObject({ status: "done", text: "foo is in a.txt" });
   });
+
+  it("a Deny in OpenCode 2's real event order (reply reject, tool aborted, step failed, execution interrupted) ends denied with the turn counted, not stopped; the denied call ids are saved with the link", async () => {
+    let child!: (type: string, d?: Json) => void;
+    const r = rig({ script: (c) => ((child = c), c("session.execution.started"), c("session.step.started", { model: { providerID: "fake", id: "small" }, assistantMessageID: "msg_a1" }), c("session.tool.input.started", { assistantMessageID: "msg_a1", id: "c1", name: "shell" }), c("session.tool.called", { assistantMessageID: "msg_a1", id: "c1", input: { command: "echo blocked" } }), c("permission.asked", { id: "per_1", action: "shell", resources: ["echo blocked"], source: { type: "tool", messageID: "msg_a1", id: "c1" } })) });
+    r.callRunning();
+    const done = r.run.inlineTask(spec({ tools: ["Bash"] }), hooks());
+    for (let i = 0; i < 200 && !r.asks.length; i++) await sleep(20);
+    r.asks[0]!.reply({ kind: "deny" });
+    child("permission.replied", { requestID: "per_1", reply: "reject" });
+    child("session.tool.failed", { assistantMessageID: "msg_a1", id: "c1", error: { type: "aborted" } });
+    child("session.step.failed", { assistantMessageID: "msg_a1", error: { type: "aborted" } });
+    child("session.execution.interrupted", { reason: "shutdown" });
+    expect(await done).toMatchObject({ status: "denied", turns: 1, denied: ["Bash: echo blocked"], error: "The user denied Bash: echo blocked." });
+    expect(r.links.at(-1)).toEqual(["ses_child", { sessionId: "ses_parent", callId: "call_1", denied: ["c1"] }]);
+  });
 });

@@ -135,7 +135,7 @@ type Payload = { type: string; properties: Record<string, any> };
 /** A Fork run's fork session (sessions.json `forkOf`): its messages after `prefix` show under the call `callId`. */
 export type ForkLink = { forkId: string; callId: string; prefix: number };
 /** An inline task's session (sessions.json `inlineOf`): its messages show under the call `callId`. */
-export type InlineLink = { inlineId: string; callId: string };
+export type InlineLink = { inlineId: string; callId: string; /** The inline session's call ids the user denied (its stored states carry no denial). */ denied?: string[] };
 export type OpenCodeHistory = { messages: OpenCodeMessage[]; children: Record<string, OpenCodeMessage[]>; /** The fork sessions of the Fork runs of this session with their messages. */ forks: (ForkLink & { messages: OpenCodeMessage[] })[]; /** The inline task sessions of this session with their messages. */ inlines: (InlineLink & { messages: OpenCodeMessage[] })[]; busy: boolean; /** OpenCode is waiting to retry the model call (its status `retry`: counts as busy). */ retry?: Retry; /** The message OpenCode's `revert` cuts the conversation at (it and everything after are hidden). */ revert?: string; permission: Rule[]; permissions: PermissionAsked[]; questions: QuestionAsked[] };
 
 /** The `model_retry` state of a `retry` status: the first line of the reason (OpenCode may append more). */
@@ -1447,7 +1447,7 @@ class OpenCodeEngineImpl implements Engine {
     readonly onFork?: (forkId: string, link: { sessionId: string; callId: string; prefix: number }) => void,
     readonly forksOf?: (id: string) => ForkLink[],
     /** An inline task matched its call: its link is saved (sessions.json `inlineOf`). */
-    readonly onInline?: (inlineId: string, link: { sessionId: string; callId: string }) => void,
+    readonly onInline?: (inlineId: string, link: { sessionId: string; callId: string; denied?: string[] }) => void,
     readonly inlinesOf?: (id: string) => InlineLink[],
   ) {}
 
@@ -1653,4 +1653,4 @@ class OpenCodeEngineImpl implements Engine {
 /** The daemon's `/opencode-mcp` route (server.ts): its URL (undefined while the daemon does not listen), the bearer token of a session (made on first use), dropped at close. */
 export type OpenCodeMcpRoute = { url: () => string | undefined; token: (id: string, server: McpServerKey) => string; drop: (id: string) => void };
 export type OpenCodeEngine = OpenCodeEngineImpl;
-export const createOpenCodeEngine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; mcp?: OpenCodeMcpRoute; visualizeOn?: () => boolean; onFork?: (forkId: string, link: { sessionId: string; callId: string; prefix: number }) => void; forksOf?: (id: string) => ForkLink[]; onInline?: (inlineId: string, link: { sessionId: string; callId: string }) => void; inlinesOf?: (id: string) => InlineLink[] } = {}): OpenCodeEngine => new OpenCodeEngineImpl(server, o.onTitle, o.mcp, o.visualizeOn, o.onFork, o.forksOf, o.onInline, o.inlinesOf);
+export const createOpenCodeEngine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; mcp?: OpenCodeMcpRoute; visualizeOn?: () => boolean; onFork?: (forkId: string, link: { sessionId: string; callId: string; prefix: number }) => void; forksOf?: (id: string) => ForkLink[]; onInline?: (inlineId: string, link: { sessionId: string; callId: string; denied?: string[] }) => void; inlinesOf?: (id: string) => InlineLink[] } = {}): OpenCodeEngine => new OpenCodeEngineImpl(server, o.onTitle, o.mcp, o.visualizeOn, o.onFork, o.forksOf, o.onInline, o.inlinesOf);
