@@ -751,7 +751,7 @@ export function SessionList({
                   const rowOpen = isOpen(rowKey(r.path));
                   const kind = t(r.main ? "sidebar.kindMain" : "sidebar.kindWorktreeCap");
                   const branch = r.branch ?? lastSegment(r.path);
-                  // The project the row belongs to; in a merged group with several Sides the row names its Side first (title or short label), the kind moves to the tooltip.
+                  // The project the row belongs to; in a merged group with several Sides the row has its Side icon; the Side title and the kind are in the accessible name and the tooltip.
                   const project = r.project ?? g.cwd;
                   const rowSide = g.repo && g.sides!.length > 1 ? sideOf(project) : undefined;
                   const clone = g.repo && r.clone ? ` · ${r.clone}` : "";
@@ -770,7 +770,7 @@ export function SessionList({
                         className={cn("flex h-7 w-full items-center gap-2 rounded-md pl-6 text-left text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11 max-md:pr-26 pointer-coarse:pr-26", r.outsideRoots ? "pr-8" : "pr-1.5", "text-muted-foreground")}
                         aria-expanded={compact ? undefined : rowOpen}
                         onClick={() => (compact ? onNew(r.path) : toggle(rowKey(r.path)))}
-                        aria-label={`${label}${r.outsideRoots ? ` ${t("sidebar.outsideRoots")}` : ""}`}
+                        aria-label={`${label}${r.outsideRoots ? ` ${t("sidebar.outsideRoots")}` : ""}${busy ? `, ${t("sidebar.removing")}` : ""}`}
                         aria-describedby={compact ? emptyId : undefined}
                         data-testid="worktree-toggle"
                         data-empty={compact || undefined}
@@ -783,15 +783,14 @@ export function SessionList({
                             {t("sidebar.removing")}
                           </span>
                         )}
-                        {!narrow && r.outsideRoots && <span className="sr-only">{t("sidebar.outsideRoots")}</span>}
                         {!compact && <ChevronRightIcon className={cn("ml-auto size-4 shrink-0 text-faint transition-transform motion-reduce:transition-none", rowOpen && "rotate-90")} aria-hidden />}
                       </button>
                   );
                   return (
                     <div key={r.path} data-testid="worktree-row" data-path={r.path}>
-                      {/* OpenCode WorkspaceHeader: branch icon, "local : <branch>" / "worktree : <branch>", chevron; New session on hover. */}
+                      {/* OpenCode WorkspaceHeader: house or branch icon, <branch>, chevron; New session on hover. */}
                       <RowContextMenu testId="worktree-context-menu" entries={rowMenu(g, r, label, "worktree-context-")}>
-                      <div className={cn("group/worktree relative", busy && "pointer-events-none opacity-50")} data-removing={busy || undefined} aria-busy={busy || undefined}>
+                      <div className={cn("group/worktree relative", busy && "*:pointer-events-none opacity-50")} data-removing={busy || undefined} aria-busy={busy || undefined}>
                         <Tip
                           trigger={rowButton}
                           tip={

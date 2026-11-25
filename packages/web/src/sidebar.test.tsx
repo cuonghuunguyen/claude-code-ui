@@ -349,7 +349,7 @@ describe("worktrees", () => {
     const { el, groups } = await render(props);
     expect(groups().map((g) => g.dataset.cwd)).toEqual(["/home/u/web"]);
     const rows = worktreeRows(el);
-    expect(rows.map((r) => r.querySelector('[data-testid="worktree-toggle"]')!.textContent)).toEqual(["main", "far(outside the allowed roots)", "fix-login"]);
+    expect(rows.map((r) => r.querySelector('[data-testid="worktree-toggle"]')!.textContent)).toEqual(["main", "far", "fix-login"]);
     expect(rows.map(titles)).toEqual([["Fix login"], [], ["Worktree job"]]);
     expect(await tip(rowToggle(el, "/home/u/orca/web/fix"))).toContain("/home/u/orca/web/fix");
     expect(rows[1]!.textContent).toContain("No sessions yet");
@@ -461,7 +461,7 @@ describe("worktrees", () => {
     expect(action("/srv/web-far")).toBeNull();
     expect(await tip(rowToggle(el, "/srv/web-far"))).toContain("/srv/web-far: Outside the allowed roots (--roots)");
     expect(el.querySelector('[data-path="/srv/web-far"] [data-testid="worktree-outside"]')).not.toBeNull();
-    expect(rowToggle(el, "/srv/web-far").textContent).toBe("far(outside the allowed roots)");
+    expect(rowToggle(el, "/srv/web-far").textContent).toBe("far");
     expect(el.querySelector('[data-path="/home/u/orca/web/fix"] [data-testid="worktree-outside"]')).toBeNull();
   });
 
