@@ -54,7 +54,8 @@ function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; sto
     pendingRequest: (id: string) => asks.find((a) => a.part.id === id),
     cancel: () => {},
   } as unknown as Session;
-  const run = createOpenCode2Engine(server).open(session, { permissionMode: "default", model: o.model ?? "fake/m" } as SessionOpts);
+  const links: [string, { sessionId: string; callId: string }][] = [];
+  const run = createOpenCode2Engine(server, { onInline: (id, l) => links.push([id, l]) }).open(session, { permissionMode: "default", model: o.model ?? "fake/m" } as SessionOpts);
   run.begin();
   /** The running inline_task call of the parent, as OpenCode reports it. */
   const callRunning = (id = "call_1", input: Json = INPUT) => {
@@ -64,7 +65,7 @@ function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; sto
   const called = (name: string) => calls.filter((c) => c.name === name).map((c) => c.input);
   /** The event stream reconnected (events may have been lost). */
   const reconnect = () => handlers.forEach((h) => h.resync());
-  return { run, emit, child, emitted, asks, callRunning, called, reconnect };
+  return { run, emit, child, emitted, asks, callRunning, called, reconnect, links };
 }
 const hooks = (signal = new AbortController().signal, settings?: { openCodeModel?: string }) => ({ signal, input: INPUT, ...(settings && { settings }) });
 
@@ -106,7 +107,9 @@ describe("OpenCode 2 inline task", () => {
     const steps = r.emitted.filter((p) => p.parentId === "call_1");
     expect(steps.map((p) => `${p.type}:${p.id}`)).toEqual(expect.arrayContaining(["tool_call:c1", "tool_result:c1:result", "assistant_text:msg_a2:text:0"]));
     await sleep(0);
-    expect(r.called("session.remove")).toEqual([{ sessionID: "ses_child" }]);
+    // A run with a call keeps its session (hidden) and saves the link: its steps show again after a reload.
+    expect(r.called("session.remove")).toEqual([]);
+    expect(r.links).toEqual([["ses_child", { sessionId: "ses_parent", callId: "call_1" }]]);
     expect(r.called("session.interrupt")).toEqual([]);
   });
 
@@ -122,7 +125,8 @@ describe("OpenCode 2 inline task", () => {
     expect(r.called("permission.reply")).toEqual([{ sessionID: "ses_child", requestID: "per_1", decision: "reject", message: "no" }]);
     expect(r.emitted.filter((p) => p.id === "c1").at(-1)).toMatchObject({ type: "tool_call", status: "denied", parentId: "call_1" });
     child("session.execution.succeeded");
-    expect(await done).toMatchObject({ status: "done" });
+    // Done with no answer after a denial: the run could not do its task.
+    expect(await done).toMatchObject({ status: "denied", denied: ["Bash: rm x"], error: "The user denied Bash: rm x." });
   });
 
   it("the turn cap interrupts it with limit turns; Stop from the card and the abort signal end it as stopped; a failed execution is an error", async () => {
@@ -250,6 +254,45 @@ describe("OpenCode 2 inline task", () => {
     await sleep(0);
     expect(r.emitted.filter((p) => p.id === "c1").at(-1)).toMatchObject({ type: "tool_call", status: "denied", parentId: "call_1" });
     child("session.execution.succeeded");
-    expect(await done).toMatchObject({ status: "done" });
+    expect(await done).toMatchObject({ status: "denied", denied: ["Bash: rm x"] });
+  });
+
+  it("a denial the run worked around stays done with the denied list; a rule denial (permission.rejected) is listed once and its card is denied under the call", async () => {
+    const r = rig({
+      script: (c) => {
+        c("session.tool.input.started", { assistantMessageID: "msg_a1", id: "c1", name: "shell" });
+        c("session.tool.called", { assistantMessageID: "msg_a1", id: "c1", input: { command: "rm x" } });
+        c("session.tool.failed", { assistantMessageID: "msg_a1", id: "c1", error: { type: "permission.rejected" } });
+        c("session.tool.failed", { assistantMessageID: "msg_a1", id: "c1", error: { type: "permission.rejected" } });
+        c("session.text.ended", { assistantMessageID: "msg_a1", ordinal: 0, text: "could not remove it" });
+        c("session.execution.succeeded");
+      },
+    });
+    r.callRunning();
+    expect(await r.run.inlineTask(spec({ tools: ["Bash"] }), hooks())).toMatchObject({ status: "done", text: "could not remove it", denied: ["Bash: rm x"] });
+    expect(r.emitted.filter((p) => p.id === "c1").at(-1)).toMatchObject({ type: "tool_call", status: "denied", parentId: "call_1" });
+  });
+
+  it("a call that matches no running call by input still takes the only running inline_task call; a call that comes after the run started takes the steps seen before it", async () => {
+    const steps = (c: (type: string, d?: Json) => void) => (c("session.tool.input.started", { assistantMessageID: "msg_a1", id: "c1", name: "grep" }), c("session.tool.called", { assistantMessageID: "msg_a1", id: "c1", input: { pattern: "foo" } }), c("session.text.ended", { assistantMessageID: "msg_a1", ordinal: 0, text: "ok" }));
+    const script = (c: (type: string, d?: Json) => void) => (steps(c), c("session.execution.succeeded"));
+    // The model's call carries a key the tool's schema dropped and an empty one.
+    const r = rig({ script });
+    r.callRunning("call_1", { ...INPUT, extra: "x", files: [] });
+    await r.run.inlineTask(spec(), hooks());
+    expect(r.emitted.some((p) => p.id === "c1" && p.parentId === "call_1")).toBe(true);
+    expect(r.links).toEqual([["ses_child", { sessionId: "ses_parent", callId: "call_1" }]]);
+    // The call's event comes while the run already works: its steps wait for it.
+    const late = rig({ script: steps });
+    const done = late.run.inlineTask(spec(), hooks());
+    // The run looks for its call for a second first.
+    for (let i = 0; i < 200 && !late.called("session.prompt").length; i++) await sleep(20);
+    await sleep(20);
+    expect(late.emitted.filter((p) => p.parentId)).toEqual([]);
+    late.callRunning();
+    expect(late.emitted.some((p) => p.id === "c1" && p.parentId === "call_1")).toBe(true);
+    late.child("session.execution.succeeded");
+    await done;
+    expect(late.links).toEqual([["ses_child", { sessionId: "ses_parent", callId: "call_1" }]]);
   });
 });

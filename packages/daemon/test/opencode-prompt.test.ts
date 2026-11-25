@@ -1174,6 +1174,33 @@ describe("OpenCode Aside and session management", { timeout: TEST_MS }, () => {
     expect(link(d, "ses_forked")).toBeUndefined();
   });
 
+  it("an inline task's session link stays after a list (a child session OpenCode may list); the parent restores the call's steps from it; deleting the parent deletes it", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const text = (id: string, mid: string, t: string, sid = "ses_own") => ({ id, type: "text", messageID: mid, sessionID: sid, text: t, time: { start: 1, end: 2 } });
+    const call = { id: "prt_c", type: "tool", messageID: "msg_a1", callID: "call_inline", tool: "claude-ui-abcdefghij_inline_task", state: { status: "completed", input: { prompt: "find foo" }, output: "{}", time: { start: 1, end: 2 } } };
+    const messages = {
+      ses_own: [{ info: { id: "msg_u1", sessionID: "ses_own", role: "user" }, parts: [text("prt_u1", "msg_u1", "go")] }, { info: { id: "msg_a1", sessionID: "ses_own", ...done }, parts: [call] }],
+      ses_inline: [{ info: { id: "msg_i1", sessionID: "ses_inline", role: "user" }, parts: [text("prt_i1", "msg_i1", "find foo", "ses_inline")] }, { info: { id: "msg_i2", sessionID: "ses_inline", ...done }, parts: [text("prt_i2", "msg_i2", "foo is in a.txt", "ses_inline")] }],
+    };
+    writeFileSync(join(root, "sessions.json"), JSON.stringify({ ses_inline: { inlineOf: { sessionId: "ses_own", callId: "call_inline" }, saved: 1 } }));
+    const d = await boot({ root, script: ["text"], data: { sessions: [row(project), row(project, "ses_inline")], messages } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    for (let i = 0; i < 2400; i++) {
+      if ((await d.ok({ type: "session.list" })).sessions.some((x: { id: string }) => x.id === "ses_own")) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect((await d.ok({ type: "session.list" })).sessions.map((s: any) => s.id)).toEqual(["ses_own"]);
+    expect(link(d, "ses_inline")).toMatchObject({ inlineOf: { sessionId: "ses_own", callId: "call_inline" } });
+    await d.ok({ type: "session.subscribe", sessionId: "ses_own", sinceSeq: 0 });
+    const parts = d.inbox.filter((m): m is Extract<ServerMessage, { type: "event" }> => m.type === "event" && m.sessionId === "ses_own").map((m) => m.part);
+    expect(new Set(parts.filter((p) => p.parentId === "call_inline").map((p) => `${p.id}:${p.type === "assistant_text" && p.text}`))).toEqual(new Set(["prt_i2:foo is in a.txt"]));
+    await d.ok({ type: "session.delete", sessionId: "ses_own" });
+    expect(d.requests("DELETE", "/session/ses_inline")).toHaveLength(1);
+    expect(link(d, "ses_inline")).toBeUndefined();
+  });
+
   it("rename, archive, unarchive and delete go to OpenCode", async () => {
     const d = await owned([msg("msg_u1", { role: "user" })]);
     await d.ok({ type: "session.rename", sessionId: "ses_own", title: " New name " });

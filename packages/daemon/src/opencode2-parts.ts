@@ -2,7 +2,7 @@
 // ids. User message = one `user_text` (id = message id); text and reasoning = `<assistant message id>:<text|reasoning>:<ordinal>` (the ordinal counts per kind inside
 // the message, as the `session.text.*` events do); a tool call's id = its call id. Shapes recorded in development-docs (planner-spike/v2-events.json).
 import type { Part, ToolStatus } from "@claude-ui/protocol";
-import { canon, mapTool } from "./opencode-parts.ts";
+import { canon, mapTool, pickCall } from "./opencode-parts.ts";
 import { FORK_TOOL } from "./opencode-fork.ts";
 
 /** `SessionStructuredError` of OpenCode 2. */
@@ -191,8 +191,7 @@ export class OpenCode2Mapper {
   }
   /** The newest running call of `tool` (its card name) whose input equals `input` and is not in `skip` (the call an inline run belongs to). */
   runningCall(tool: string, input: Record<string, unknown> | undefined, skip: ReadonlySet<string>): string | undefined {
-    const want = JSON.stringify(canon(input ?? {}));
-    return [...this.calls.values()].reverse().find((c) => c.type === "tool_call" && c.tool === tool && (c.status === "running" || c.status === "pending") && !skip.has(c.id) && JSON.stringify(canon(c.input)) === want)?.id;
+    return pickCall([...this.calls.values()].flatMap((c) => (c.type === "tool_call" && c.tool === tool && (c.status === "running" || c.status === "pending") && !skip.has(c.id) ? [{ id: c.id, input: c.input as Record<string, unknown> }] : [])), input);
   }
   /** Usage and cost summed over the steps since the last `resetTurn`. */
   turn() {

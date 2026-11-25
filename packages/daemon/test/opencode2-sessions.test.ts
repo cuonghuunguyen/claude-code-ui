@@ -715,6 +715,28 @@ describe("OpenCode 2 sessions: rename, archive, delete and Aside", { timeout: TE
     await until(() => !link(d, "ses_fork"));
   });
 
+  it("an inline task's kept session is hidden from the list, restores under its call with its assistant steps only (its prompt is no step), and is deleted with its parent", async () => {
+    const call = { type: "tool", id: "call_inline", name: "claude-ui-ownxxxxxxx_inline_task", state: { status: "completed", input: { prompt: "find foo" }, content: [{ type: "text", text: "{}" }] }, time: { ran: 2, completed: 3 } };
+    const parent = [msg("msg_u1", "user"), msg("msg_a1", "assistant", { ...done, content: [call] })];
+    const own = [msg("msg_i_u", "user", { text: "find foo" }), msg("msg_i_a", "assistant", { ...done, content: [{ type: "text", text: "foo is in a.txt" }] })];
+    const d = await boot({ sessionsJson: { ses_inl: { inlineOf: { sessionId: "ses_own", callId: "call_inline" } } }, projectDirInData: true, adapters: { ses_own: 2, ses_inl: 2 }, data: { sessions: [row("ses_own", "PROJECT", "Owner", 5000), row("ses_inl", "PROJECT", "Inline: find foo", 6000, { metadata: { "claude-ui.inlineOf": "ses_own" } })], messages: { ses_own: parent, ses_inl: own } } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    await until(() => d.log().some((l) => l.type === "start"));
+    for (let i = 0; i < 80 && !(await d.ok({ type: "session.list" })).sessions.some((x: any) => x.id === "ses_own"); i++) await sleep(50);
+    expect((await d.ok({ type: "session.list" })).sessions.map((x: any) => x.id)).toEqual(["ses_own"]);
+    await d.ok({ type: "session.subscribe", sessionId: "ses_own", sinceSeq: 0 });
+    const s = d.view("ses_own");
+    await until(() => !!s.parts().find((p) => p.parentId === "call_inline"));
+    const steps = s.parts().filter((p) => p.parentId === "call_inline");
+    expect([...new Set(steps.map((p) => `${p.type}:${p.id}`))]).toEqual(["assistant_text:msg_i_a:text:0"]);
+    expect(s.parts().some((p) => p.type === "user_text" && p.text === "find foo")).toBe(false);
+    await until(() => (s.states().at(-1) === "idle"));
+    await d.ok({ type: "session.delete", sessionId: "ses_own" });
+    await until(() => d.requests("DELETE", "/api/session/ses_inl").length === 1);
+    await until(() => !link(d, "ses_inl"));
+  });
+
   it("a mode change of an Aside drops the edit denial at its next prompt", async () => {
     const d = await owned([msg("msg_u1", "user"), msg("msg_a1", "assistant", done)]);
     const { session } = await d.ok({ type: "aside.open", sessionId: "ses_own", text: "q" });
