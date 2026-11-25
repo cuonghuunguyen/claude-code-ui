@@ -360,6 +360,44 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
   });
 
+  it("a question or permission OpenCode asks after Stop, before its abort ended the turn, is rejected at once: no card, nothing left pending; the next turn's ask shows", async () => {
+    const d = await boot({ script: ["abort", "question"], env: { FAKE_OPENCODE_ABORT_DELAY_MS: "1500" } });
+    const s = await d.open();
+    await s.prompt("long essay");
+    await until(() => s.parts().some((p) => p.type === "thinking"));
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    // OpenCode's loop unwinds after the abort answered: its asks on the way still arrive.
+    await d.fake("/__emit", { directory: d.project, events: [{ type: "question.asked", properties: { id: "que_late", sessionID: s.id, questions: [{ question: "Q", header: "H", options: [{ label: "A", description: "" }] }] } }, { type: "permission.asked", properties: { id: "per_late", sessionID: s.id, permission: "bash", patterns: ["ls"] } }] });
+    await until(() => d.requests("POST", "/question/que_late/reject").length === 1 && d.requests("POST", "/permission/per_late/reply").length === 1);
+    expect(d.requests("POST", "/permission/per_late/reply")[0]!.body).toEqual({ reply: "reject" });
+    // A prompt sent at once, while the aborted turn still runs: it starts the next turn when that one ended; that turn's ask is the user's.
+    await s.prompt("ask me");
+    await until(() => !!s.find("question"));
+    // The stopped turn showed no card and never waited for input.
+    const stopped = s.parts().slice(0, s.parts().findIndex((p) => p.type === "turn_interrupted"));
+    expect(stopped.length).toBeGreaterThan(0);
+    expect(stopped.some((p) => p.type === "question" || p.type === "permission_request" || (p.type === "session_state" && (p as { state: string }).state === "needs_input"))).toBe(false);
+    const q = s.find("question")!;
+    expect(q).toMatchObject({ requestId: "que_1b7edd2ad001vvGXsFVXVXH1oa", settled: false });
+    expect(s.states().at(-1)).toBe("needs_input");
+    expect(d.requests("POST", `/question/${q.requestId}/reject`)).toHaveLength(0);
+  });
+
+  it("a prompt sent after Stop that waited 10 s for a stopped turn OpenCode has not ended yet is a turn of its own: its ask shows", async () => {
+    const d = await boot({ script: ["abort", "question"], env: { FAKE_OPENCODE_ABORT_DELAY_MS: "14000" } });
+    const s = await d.open();
+    await s.prompt("long essay");
+    await until(() => s.parts().some((p) => p.type === "thinking"));
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await s.prompt("ask me");
+    // The prompt goes out after TURN_END_WAIT_MS (10 s); the stopped turn ends in OpenCode at 14 s.
+    await until(() => !!s.find("question"), 13_000);
+    const q = s.find("question")!;
+    expect(q).toMatchObject({ requestId: "que_1b7edd2ad001vvGXsFVXVXH1oa", settled: false });
+    expect(s.states().at(-1)).toBe("needs_input");
+    expect(d.requests("POST", `/question/${q.requestId}/reject`)).toHaveLength(0);
+  });
+
   it("a message sent right after Stop starts the next turn after the aborted one ended", async () => {
     const d = await boot({ script: ["abort", "text"] });
     const s = await d.open();

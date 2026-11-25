@@ -702,7 +702,8 @@ class OpenCodeSession implements EngineSession {
 
   /** Sends a prompt: it joins the running turn (steering: the model sees it at the next step; the turn still ends at one session.idle) or starts one. */
   private start(messageID: string, text: string, images: string[]) {
-    const steer = this.session.currentState() !== "idle";
+    // A prompt that waited TURN_END_WAIT_MS for a stopped turn OpenCode has not ended yet: its own turn (as opencode2-engine.ts), never the stopped one's (afterStop() would reject its asks).
+    const steer = this.session.currentState() !== "idle" && this.turnStop >= this.stops.count;
     this.stopped = false;
     if (!steer) {
       this.sentAt = Infinity;
@@ -1100,6 +1101,14 @@ class OpenCodeSession implements EngineSession {
     return this.session.currentState() !== "idle" && this.turnStop < this.stops.count;
   }
 
+  /**
+   * An ask of a stopped turn (OpenCode's loop unwinds after the abort answered) or of a stopped prompt that reached OpenCode late: rejected at once like the asks
+   * the Stop found (interrupt()). A card would stay pending after the turn ended, nobody could answer it, and it would hold every restart of OpenCode (openCodeHeld()).
+   */
+  private afterStop() {
+    return this.stoppedShows() || this.hiding();
+  }
+
   /** OpenCode's events of the session are a stopped prompt's (quiet), not a turn shown here. */
   private hiding() {
     return !!this.quiet && !this.stoppedShows();
@@ -1290,6 +1299,7 @@ class OpenCodeSession implements EngineSession {
   private askPermission(e: PermissionAsked) {
     // `reqs` without a pending request: the worker_start card is being made.
     if (this.session.pendingRequest(e.id) || this.reqs.has(e.id)) return;
+    if (this.afterStop()) return (this.reqs.set(e.id, { kind: "permission", permission: e.permission, callId: e.tool?.callID }), this.answerPermission(e.id, { kind: "interrupt" }));
     // Don't ask: the block has no ask rule, so a request is one the rules missed (a tool OpenCode asks for by default, a subagent's session): refused at once, no card.
     if (this.permissionMode === "dontAsk") {
       const card = e.tool?.callID && this.mapper.deny(e.tool.callID);
@@ -1345,6 +1355,7 @@ class OpenCodeSession implements EngineSession {
     if (this.session.pendingRequest(e.id)) return;
     const questions: Question[] = e.questions.map((q) => ({ question: q.question, header: q.header, options: q.options.map((o) => ({ label: o.label, description: o.description })), multiSelect: q.multiple ?? false }));
     this.reqs.set(e.id, { kind: "question", questions });
+    if (this.afterStop()) return this.answerQuestion(e.id, { kind: "interrupt" });
     this.session.request({ part: { type: "question", id: e.id, requestId: e.id, toolUseId: e.tool?.callID ?? e.id, questions, settled: false, at: Date.now() }, reply: (r) => this.answerQuestion(e.id, r) });
   }
 
