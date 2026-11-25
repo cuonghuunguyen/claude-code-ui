@@ -363,7 +363,7 @@ class OpenCode2Session implements EngineSession {
     for (const [childId, c] of Object.entries(h.children ?? {})) this.children.link(childId, c.callId);
     for (const [childId, c] of Object.entries(h.children ?? {})) {
       const child = this.children.get(childId);
-      if (child) for (const part of child.mapper.history(c.messages)) this.session.emit({ ...part, parentId: child.callId });
+      if (child) for (const part of child.mapper.history(c.messages.filter((m) => m.type !== "user"))) this.session.emit({ ...part, parentId: child.callId });
     }
     for (const m of h.messages) this.noteUsage(m);
     void this.emitUsage();

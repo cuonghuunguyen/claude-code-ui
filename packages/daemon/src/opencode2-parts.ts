@@ -161,8 +161,9 @@ export class OpenCode2Mapper {
     return this.subagentCard(childId);
   }
   /** The end notice of a subagent (live inbox item or stored message). `running` is no end. */
-  private subagentNotice(m: Json, at: number | undefined): Part[] {
-    const status = SUBAGENT_STATES[String(m?.state)];
+  private subagentNotice(m: Json, text: string, at: number | undefined): Part[] {
+    // The state is the notice text's attribute: OpenCode 2.3.0 puts `completed` in `metadata.state` also when the text says `running` (the child went idle with work left).
+    const status = SUBAGENT_STATES[/^<subagent\b[^>]*\sstate="(\w+)"/.exec(text)?.[1] ?? String(m?.state)];
     return typeof m?.childID === "string" && status ? this.subagentEnded(m.childID, status, at) : [];
   }
   /** The card of the call whose child is `childId`, in its ended state. */
@@ -228,7 +229,7 @@ export class OpenCode2Mapper {
     // The end notices of background shells come after the calls: read first, so each call shows its shell's end.
     for (const m of messages) if (m.type === "synthetic" && m.metadata?.source === "shell") this.shellNotice({ ...m.metadata, output: noticeOutput(m.text ?? "") }, m.time?.created);
     // The subagent notices too: a call that returned (the child runs on) ends with the notice.
-    for (const m of messages) if (m.type === "synthetic" && m.metadata?.source === "subagent") this.subagentNotice(m.metadata, m.time?.created);
+    for (const m of messages) if (m.type === "synthetic" && m.metadata?.source === "subagent") this.subagentNotice(m.metadata, m.text ?? "", m.time?.created);
     return messages.flatMap((m) => {
       if (m.type === "user") return this.user(m);
       if (m.type === "shell" && m.shellID) return [bashPart({ id: m.shellID, command: m.command ?? "", status: m.status ?? "exited", exit: m.exit }, m.output?.output ?? "")];
@@ -260,7 +261,7 @@ export class OpenCode2Mapper {
     const item = data.item as Json | undefined;
     // A background shell's end notice starts OpenCode's next execution: no bubble, the call's card ends.
     if (item?.type === "synthetic" && item.payload?.metadata?.source === "shell") return this.shellNotice({ ...item.payload.metadata, output: noticeOutput(String(item.payload.text ?? "")) }, Date.now());
-    if (item?.type === "synthetic" && item.payload?.metadata?.source === "subagent") return this.subagentNotice(item.payload.metadata, Date.now());
+    if (item?.type === "synthetic" && item.payload?.metadata?.source === "subagent") return this.subagentNotice(item.payload.metadata, String(item.payload.text ?? ""), Date.now());
     if (item?.type !== "user" || this.own.has(data.inboxID)) return [];
     return [{ type: "user_text", id: data.inboxID, text: String(item.payload?.text ?? ""), images: [] }];
   }

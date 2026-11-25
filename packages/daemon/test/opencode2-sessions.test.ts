@@ -1565,6 +1565,7 @@ describe("OpenCode 2 sessions: a subagent's run timeline", { timeout: TEST_MS },
         { id: "msg_n", type: "synthetic", time: { created: 9 }, text: '<subagent sessionID="ses_child" state="completed" description="Look around">\ndone\n</subagent>', metadata: { source: "subagent", childID: "ses_child", state: "completed" } },
       ],
       ses_child: [
+        { id: "msg_cu", type: "user", text: "You are a subagent spawned by another session.\nRun echo sub", time: { created: 4 } },
         { id: "msg_c1", type: "assistant", agent: "general", model: { id: "m", providerID: "fake" }, time: { created: 5 }, content: [tool("call_child", "shell", { command: "echo sub" }), sub("call_inner", "ses_inner", "Dig")] },
         { id: "msg_cn", type: "synthetic", time: { created: 8 }, text: "n", metadata: { source: "subagent", childID: "ses_inner", state: "error" } },
       ],
@@ -1582,5 +1583,7 @@ describe("OpenCode 2 sessions: a subagent's run timeline", { timeout: TEST_MS },
     // A nested subagent: its card shows under the outer call, its steps under its own call; its notice says error.
     expect(s.last("call_inner")).toMatchObject({ type: "subagent", parentId: "call_sub", status: "error" });
     expect(s.last("call_deep")).toMatchObject({ parentId: "call_inner", tool: "Read" });
+    // The prompt that started the child is no bubble after a restart either (not shown live).
+    expect([...new Set(s.parts().filter((p) => p.type === "user_text").map((p) => p.type === "user_text" && p.text))]).toEqual(["Run a subagent"]);
   });
 });
