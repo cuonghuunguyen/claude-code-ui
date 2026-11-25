@@ -73,10 +73,12 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
   }
   /** OpenCode sessions being created (POST /session in flight): a restart of OpenCode's server would lose them. */
   let openCodeCreating = 0;
+  /** MCP sign-ins in flight in OpenCode (opencode-config-mcp.ts): their state lives in OpenCode's memory, so they hold a restart too. */
+  const mcpAuth = new Set<string>();
   let openCodeRestarts = 0;
   let openCodeRestart: Promise<void> | undefined;
   /** A restart of OpenCode's server now would lose a turn, an OAuth login or a session creation. */
-  const openCodeHeld = () => openCodeBusy() || oauthWaits.size > 0 || openCodeCreating > 0;
+  const openCodeHeld = () => openCodeBusy() || oauthWaits.size > 0 || openCodeCreating > 0 || mcpAuth.size > 0;
   /** Stops OpenCode's server (the next request starts it again; open sessions resync on the new event stream) and drops its cached limits. One at a time. */
   const restartOpenCode = () =>
     (openCodeRestart ??= (async () => {
@@ -84,6 +86,12 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
       openCodeEngine.dropLimits();
       openCodeRestarts++;
     })().finally(() => (openCodeRestart = undefined)));
+  /**
+   * A change of the user's global config (~/.config/opencode): OpenCode 1.19.5 caches the global config for the process life (`/instance/dispose` and `/global/dispose` keep it;
+   * a `PATCH /global/config` would rewrite the user's file and lose its comments), so only a restart of its server makes every folder read the new file. It waits for idle like
+   * the other reloads: the change stays pending and is retried when a turn ends and every 30 s (folder-reload.ts). A stopped server reads the files when it starts.
+   */
+  const globalReloads = createFolderReloads({ all: true, reload: async () => !openCode.running() || (!openCodeHeld() && (await restartOpenCode(), true)), changed: (kind, cwd) => ctx.broadcast({ type: "config.changed", kind, cwd }) });
   /**
    * OpenCode's model list. Only a read that still answers 499 after the folder's instance was disposed means the provider state is broken server-wide
    * (nothing else clears it): then OpenCode's server restarts, unless a turn, an OAuth login or a session creation would be lost. A refused or failed
@@ -305,9 +313,9 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
   return {
     engine: openCodeEngine,
     config: {
-      mcp: createOpenCodeMcpConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), reload: (cwd) => reloads.request(cwd, ["mcp"]), hidden: (name) => openCodeEngine.attached.has(name), waitMs: o.server?.mcpWaitMs }),
+      mcp: createOpenCodeMcpConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), reload: (cwd) => reloads.request(cwd, ["mcp"]), reloadGlobal: (cwd) => globalReloads.request(cwd, ["mcp"]), signingIn: mcpAuth, hidden: (name) => openCodeEngine.attached.has(name), waitMs: o.server?.mcpWaitMs }),
       skills: createOpenCodeSkillsConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), reload: (cwd) => reloads.request(cwd, ["skills"]), waitMs: o.server?.mcpWaitMs }),
-      plugins: createOpenCodePluginsConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), reload: (cwd) => reloads.request(cwd, ["plugins"]), waitMs: o.server?.mcpWaitMs }),
+      plugins: createOpenCodePluginsConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), reload: (cwd) => reloads.request(cwd, ["plugins"]), reloadGlobal: (cwd) => globalReloads.request(cwd, ["plugins"]), waitMs: o.server?.mcpWaitMs }),
     },
     listScope: "folders",
     ownsId,
@@ -383,12 +391,12 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     },
     models: (cwd) => openCodeModelsRepaired(cwd),
     // A model refresh held back by a running OpenCode session no longer waits for it.
-    settled: () => (void flushProviders(), reloads.settled()),
+    settled: () => (void flushProviders(), reloads.settled(), globalReloads.settled()),
     settingsChanged: (before: Settings, next: Settings) => {
       if (next.opencode.path === before.opencode.path) return;
       void restartOpenCode().then(() => ctx.broadcast({ type: "opencode.providersChanged" }));
     },
     requests,
-    close: () => (reloads.close(), openCode.close()),
+    close: () => (reloads.close(), globalReloads.close(), openCode.close()),
   };
 }

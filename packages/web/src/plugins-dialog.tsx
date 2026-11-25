@@ -81,6 +81,8 @@ export function PluginsDialog({
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<string>();
   const [confirmRemove, setConfirmRemove] = useState<string>();
+  /** A global plugin of an Engine with its own dialog (OpenCode): its removal cannot be undone here (install writes the project), so it asks first. */
+  const [confirmUninstall, setConfirmUninstall] = useState<InstalledPlugin>();
   const [spec, setSpec] = useState("");
   const [typing, setTyping] = useState(false);
   const eng = engine && { engine };
@@ -285,7 +287,7 @@ export function PluginsDialog({
   };
 
   /** An Engine with its own dialog removes only the rows of the scope its Uninstall writes (the project's plugin list). */
-  const removable = (p: InstalledPlugin) => !config || p.scope === "project";
+  const removable = (p: InstalledPlugin) => !config || (config.pluginRemoveScopes ?? ["project"]).some((x) => x === p.scope);
   const shown = filterAvailable(available, search);
   // Install and update clone from git and can take minutes: the dialog says what it waits for and holds the other writes.
   const working = !!(installing || updating || typing);
@@ -386,7 +388,7 @@ export function PluginsDialog({
                       <RefreshCwIcon className={cn(updating === p.id && "motion-safe:animate-spin")} />
                     </IconButton>
                   )}
-                  {removable(p) && <IconButton label={pendingOf(p.id) === "uninstalling" ? t("session.pluginsDialog.uninstalling") : t("session.pluginsDialog.uninstallLabel", { name: p.id })} title={pendingOf(p.id) === "uninstalling" ? t("session.pluginsDialog.uninstalling") : t("session.pluginsDialog.uninstall")} disabled={working || !!pendingOf(p.id)} onClick={() => void uninstall(p)}>
+                  {removable(p) && <IconButton label={pendingOf(p.id) === "uninstalling" ? t("session.pluginsDialog.uninstalling") : t("session.pluginsDialog.uninstallLabel", { name: p.id })} title={pendingOf(p.id) === "uninstalling" ? t("session.pluginsDialog.uninstalling") : t("session.pluginsDialog.uninstall")} disabled={working || !!pendingOf(p.id)} onClick={() => (config && p.scope === "user" ? setConfirmUninstall(p) : void uninstall(p))}>
                     <Trash2Icon />
                   </IconButton>}
                 </div>
@@ -566,6 +568,13 @@ export function PluginsDialog({
       <div role="tabpanel" className="flex flex-col gap-3">
         {tab === "plugins" || gaps.marketplaces ? pluginsTab() : marketplacesTab()}
       </div>
+      {confirmUninstall && (
+        <SmallDialog title={t("session.pluginsDialog.uninstallGlobalTitle", { name: confirmUninstall.id })} message={t("session.pluginsDialog.uninstallGlobalMessage")} close={t("session.pluginsDialog.cancel")} onClose={() => setConfirmUninstall(undefined)} testId="plugin-uninstall-confirm">
+          <Button className="max-md:h-11" onClick={() => (setConfirmUninstall(undefined), void uninstall(confirmUninstall))}>
+            {t("session.pluginsDialog.uninstall")}
+          </Button>
+        </SmallDialog>
+      )}
       {failure && failureView && (
         <SmallDialog title={failureView.title} message={failureView.message} close={failureView.close} closePrimary={!failureView.actions.length} onClose={() => setFailure(undefined)} testId="plugins-update-failure">
           {failureView.actions.map((a, i) => (
@@ -633,7 +642,7 @@ function SmallDialog({ title, message, close, closePrimary, onClose, children, t
           data-testid={testId}
         >
           <Dialog.Title className="font-medium text-[15px]">{title}</Dialog.Title>
-          <Dialog.Description className="text-muted-foreground text-sm">{message}</Dialog.Description>
+          <Dialog.Description className="text-muted-foreground text-sm [overflow-wrap:anywhere]">{message}</Dialog.Description>
           <div className="mt-2 flex flex-wrap justify-end gap-2">
             {children}
             <Dialog.Close render={<Button variant={closePrimary ? "default" : "secondary"} className="max-md:h-11" />}>{close}</Dialog.Close>

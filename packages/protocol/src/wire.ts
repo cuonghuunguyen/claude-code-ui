@@ -36,6 +36,8 @@ export type ConfigGap = "mcpTools" | "mcpAuth" | "mcpRemoveScope" | "skillTokens
 export type ConfigCapabilities = {
   /** Scopes `mcp.add` and `mcp.remove` write. */
   mcpScopes: ConfigScope[];
+  /** Scopes `plugins.uninstall` writes. Absent with `config` present = `["project"]` (an older daemon or Side bundle). */
+  pluginRemoveScopes?: ConfigScope[];
   /** Transports `mcp.add` takes. */
   mcpTransports: ("stdio" | "http" | "sse")[];
   /** States the skill button cycles through. */

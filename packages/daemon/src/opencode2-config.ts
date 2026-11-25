@@ -1,13 +1,12 @@
 // The config dialogs on OpenCode 2 (docs/spec.md "Config dialogs", GH-864): MCP servers, skills and plugins. Reads go to OpenCode 2's routes; saved changes are written by the
 // daemon into the project config file (opencode-config-file.ts: OpenCode 2 reads the OpenCode 1 shape too, and a file that already uses its own keys keeps them).
-import { homedir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { OpenCodeClient } from "@opencode/client";
 import type { InstalledPlugin, McpAddConfig, McpAuthResult, McpListResult, McpServerInfo, PluginsListResult, PluginUpdateResult, PluginWriteResult, SkillRow, SkillsResult, SkillsSetStateResult, SkillState } from "@claude-ui/protocol";
 import { DAEMON_SERVER } from "./daemon-mcp.ts";
 import { EngineError, type EngineConfig } from "./engine-catalogue.ts";
-import { ConfigFileError, editFileAt, editProjectFile, editProjectList, fileShape, projectDocs, readProjectValue, shapeOf, writeTarget } from "./opencode-config-file.ts";
+import { ConfigFileError, displayPath, docsOf, editFileAt, editFiles, editLists, editProjectFile, editProjectList, fileShape, globalDir, globalFiles, globalWriteTarget, projectDocs, readProjectValue, shapeOf, writeTarget } from "./opencode-config-file.ts";
 import { MCP_WAIT_MS, NAME, mapStatus, pairs } from "./opencode-config-mcp.ts";
 import { canon, inPluginFolder, normalize, REMOVE_GAP, specOf } from "./opencode-config-plugins.ts";
 import { matches } from "./opencode-config-skills.ts";
@@ -17,7 +16,7 @@ import type { OpenCodeServer } from "./opencode-server.ts";
 export const fail = (code: string, message: string) => new EngineError(code, message);
 const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 /** OpenCode's folder of the user's own config. */
-export const userConfigDir = () => join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "opencode");
+export const userConfigDir = globalDir;
 export const inside = (file: string, dir: string) => file.startsWith(dir.endsWith(sep) ? dir : dir + sep);
 
 /** The agent lists of the OpenCode 2 engine (the skills' states are the default agent's rules). */
@@ -26,7 +25,7 @@ export type AgentSource = { agents(cwd: string): Promise<Agent2[]>; defaultAgent
 export type Config2Deps = {
   server: OpenCodeServer;
   /** Reloads the folder after a saved change: true when done, false when it waits for the folder's sessions to be idle (folder-reload.ts). */
-  reload(cwd: string, kind: "skills" | "plugins"): Promise<boolean>;
+  reload(cwd: string, kind: "skills" | "plugins" | "mcp"): Promise<boolean>;
   waitMs?: number;
 };
 
@@ -51,9 +50,18 @@ const raced = async <T>(p: Promise<T>, ms: number): Promise<{ value: T } | "late
 };
 
 /** The names of the servers the project's config files define (OpenCode 1 keys `mcp.<n>` or OpenCode 2 keys `mcp.servers.<n>` per file), with the files that hold each. */
-function projectServers(cwd: string): Map<string, { file: string; shape: "v1" | "v2" }[]> {
+const projectServers = (cwd: string) => serversIn(projectDocs(cwd));
+/** The same for the user's global config files (`$OPENCODE_CONFIG` included). A file that does not parse shows no servers. */
+function globalServers(): Map<string, { file: string; shape: "v1" | "v2" }[]> {
+  try {
+    return serversIn(docsOf(globalFiles()));
+  } catch {
+    return new Map();
+  }
+}
+function serversIn(docs: { file: string; data: Record<string, unknown> }[]): Map<string, { file: string; shape: "v1" | "v2" }[]> {
   const out = new Map<string, { file: string; shape: "v1" | "v2" }[]>();
-  for (const { file, data } of projectDocs(cwd)) {
+  for (const { file, data } of docs) {
     const shape = shapeOf(data);
     const mcp = data.mcp;
     const servers = isObject(mcp) ? (shape === "v2" ? mcp.servers : mcp) : undefined;
@@ -66,6 +74,14 @@ function projectServers(cwd: string): Map<string, { file: string; shape: "v1" | 
 function fileEntry(cwd: string, project: Map<string, { file: string; shape: "v1" | "v2" }[]>, name: string): { type?: string; command?: string[]; url?: string } | undefined {
   const shape = project.get(name)?.at(-1)?.shape;
   const v = shape && readProjectValue(cwd, shape === "v2" ? ["mcp", "servers", name] : ["mcp", name]);
+  return isObject(v) ? (v as { type?: string; command?: string[]; url?: string }) : undefined;
+}
+/** The entry of server `name` in the highest global file that defines it. */
+function globalEntry(user: Map<string, { file: string; shape: "v1" | "v2" }[]>, name: string): { type?: string; command?: string[]; url?: string } | undefined {
+  const at = user.get(name)?.at(-1);
+  if (!at) return undefined;
+  const mcp = docsOf([at.file])[0]!.data.mcp;
+  const v = isObject(mcp) ? (at.shape === "v2" ? (isObject(mcp.servers) ? mcp.servers[name] : undefined) : mcp[name]) : undefined;
   return isObject(v) ? (v as { type?: string; command?: string[]; url?: string }) : undefined;
 }
 
@@ -166,11 +182,12 @@ export function createOpenCode2McpConfig(o: Config2Deps): EngineConfig["mcp"] {
     // A failed read of the documents gives no type, command or scope; never an unhandled rejection.
     const docs = doc(cwd).then((d) => d, () => undefined);
     const project = projectServers(cwd);
+    const user = globalServers();
     const first = await raced(read(cwd), waitMs);
     let rows: Row[];
     if (first === "late") {
       // Without OpenCode's answer in time: the project's servers as pending (the dialog polls).
-      rows = [...project.keys()].map((name) => ({ name, status: { status: "pending" } }));
+      rows = [...new Set([...project.keys(), ...user.keys()])].map((name) => ({ name, status: { status: "pending" } }));
     } else rows = first.value;
     const d = await raced(docs, waitMs);
     const documented = d === "late" || !d.value ? [] : d.value;
@@ -181,8 +198,8 @@ export function createOpenCode2McpConfig(o: Config2Deps): EngineConfig["mcp"] {
       .map((r) => {
         const owner = defined(r.name);
         // OpenCode's documents are read again only by a reload: a server just added is taken from the project's own file.
-        const c = owner?.info.mcp?.servers?.[r.name] ?? fileEntry(cwd, project, r.name);
-        const scope = project.has(r.name) ? "project" : owner ? (owner.path ? "user" : "dynamic") : "dynamic";
+        const c = owner?.info.mcp?.servers?.[r.name] ?? fileEntry(cwd, project, r.name) ?? globalEntry(user, r.name);
+        const scope = project.has(r.name) ? "project" : user.has(r.name) ? "user" : owner ? (owner.path ? "user" : "dynamic") : "dynamic";
         const s = r.status.status;
         return {
           name: r.name,
@@ -202,19 +219,27 @@ export function createOpenCode2McpConfig(o: Config2Deps): EngineConfig["mcp"] {
     return name;
   };
 
-  async function add(cwd: string, name: string, config: McpAddConfig) {
+  async function add(cwd: string, name: string, config: McpAddConfig, scope: "project" | "user") {
     named(name);
     if (config.transport === "sse") throw fail("unsupported", "OpenCode has no SSE transport. Use HTTP.");
     // The keys of `mcp` that are no server in an OpenCode 2 file.
     if (name === "servers" || name === "timeout") throw fail("invalid_input", `${name} is a reserved name in OpenCode 2. Choose another server name.`);
-    if (projectServers(cwd).has(name)) throw fail("already_exists", `A server named ${name} already exists in this project's opencode.json.`);
+    if (scope === "project" && projectServers(cwd).has(name)) throw fail("already_exists", `A server named ${name} already exists in this project's opencode.json.`);
+    if (scope === "user" && globalServers().has(name)) throw fail("already_exists", `A server named ${name} already exists in ${displayPath(globalWriteTarget())}.`);
     const entry =
       config.transport === "stdio"
         ? { type: "local", command: [config.command, ...config.args], ...(config.env.length && { environment: pairs(config.env, "=") }) }
         : { type: "remote", url: config.url, ...(config.headers.length && { headers: pairs(config.headers, ":") }) };
-    const target = writeTarget(cwd);
-    editProjectFile(cwd, fileShape(target) === "v2" ? ["mcp", "servers", name] : ["mcp", name], entry);
+    if (scope === "user") {
+      const target = globalWriteTarget();
+      editFiles(globalFiles(), target, fileShape(target) === "v2" ? ["mcp", "servers", name] : ["mcp", name], entry);
+    } else {
+      const target = writeTarget(cwd);
+      editProjectFile(cwd, fileShape(target) === "v2" ? ["mcp", "servers", name] : ["mcp", name], entry);
+    }
     await call((c) => c.experimental.mcp.add({ server: name, location: location(cwd), config: entry as never }));
+    // Other locations read the global file at the next reload (pending while a session runs).
+    if (scope === "user") await o.reload(cwd, "mcp");
   }
 
   return async (msg, cwd) => {
@@ -239,16 +264,17 @@ export function createOpenCode2McpConfig(o: Config2Deps): EngineConfig["mcp"] {
           return await list(cwd);
         }
         case "mcp.add":
-          if (msg.scope !== "project") throw fail("invalid_input", "OpenCode servers are saved in the project's opencode.json: use the Project scope.");
-          await add(cwd, msg.name, msg.config);
+          if (msg.scope !== "project" && msg.scope !== "user") throw fail("invalid_input", "OpenCode servers are saved in the project's opencode.json or in ~/.config/opencode/opencode.json: use the Project or User scope.");
+          await add(cwd, msg.name, msg.config, msg.scope);
           return await list(cwd);
         case "mcp.remove": {
           named(msg.name);
-          const files = projectServers(cwd).get(msg.name);
-          if (msg.scope !== "project" || !files) throw fail("invalid_input", `${msg.name} is not defined in this project's opencode.json. Remove it where it is defined.`);
+          const files = msg.scope === "user" ? globalServers().get(msg.name) : projectServers(cwd).get(msg.name);
+          if ((msg.scope !== "project" && msg.scope !== "user") || !files) throw fail("invalid_input", msg.scope === "user" ? `${msg.name} is not defined in ${displayPath(globalWriteTarget())}.` : `${msg.name} is not defined in this project's opencode.json. Remove it where it is defined.`);
           for (const f of files) editFileAt(f.file, f.shape === "v2" ? ["mcp", "servers", msg.name] : ["mcp", msg.name], undefined);
           // A server that is not running (disabled, failed) answers 404: it is gone either way.
           await call((c) => c.experimental.mcp.remove({ server: msg.name, location: location(cwd) }).catch(() => undefined));
+          if (msg.scope === "user") await o.reload(cwd, "mcp");
           return await list(cwd);
         }
         case "mcp.authenticate":
@@ -417,9 +443,9 @@ export function createOpenCode2PluginsConfig(o: Config2Deps): EngineConfig["plug
   }
 
   async function uninstall(cwd: string, id: string, scope: string | undefined): Promise<PluginWriteResult> {
-    if (scope !== undefined && scope !== "project") throw fail("invalid_input", REMOVE_GAP);
+    if (scope !== undefined && scope !== "project" && scope !== "user") throw fail("invalid_input", REMOVE_GAP);
     const drop = (item: unknown, file: string) => canon(specOf2(item) ?? "", dirname(file)) === id || specOf2(item) === id;
-    const done = [...editProjectList(cwd, ["plugin"], { drop }), ...editProjectList(cwd, ["plugins"], { drop })];
+    const done = scope === "user" ? [...editLists(globalFiles(), globalWriteTarget(), ["plugin"], { drop }), ...editLists(globalFiles(), globalWriteTarget(), ["plugins"], { drop })] : [...editProjectList(cwd, ["plugin"], { drop }), ...editProjectList(cwd, ["plugins"], { drop })];
     if (!done.length) throw fail("invalid_input", REMOVE_GAP);
     if (!(await o.reload(cwd, "plugins"))) return { ...WRITTEN, applied: false };
     await settle(cwd, (ids) => !ids.includes(id));

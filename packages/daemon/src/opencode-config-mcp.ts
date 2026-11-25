@@ -1,12 +1,8 @@
 // The MCP servers dialog on OpenCode 1 (docs/spec.md "Config dialogs"): reads and runtime actions go to OpenCode's `/mcp` routes, saved changes are written
 // into the project config file by the daemon (opencode-config-file.ts; `PATCH /config` writes a file OpenCode does not read).
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { parse } from "jsonc-parser";
 import type { McpAddConfig, McpAuthResult, McpListResult, McpServerInfo } from "@claude-ui/protocol";
 import { EngineError, type EngineConfig } from "./engine-catalogue.ts";
-import { ConfigFileError, editProjectFile, projectKeys } from "./opencode-config-file.ts";
+import { ConfigFileError, displayPath, docsOf, editFiles, editProjectFile, globalFiles, globalWriteTarget, keysOf, projectKeys } from "./opencode-config-file.ts";
 import { brokenState } from "./opencode-engine.ts";
 import type { OpenCodeServer } from "./opencode-server.ts";
 
@@ -14,28 +10,34 @@ import type { OpenCodeServer } from "./opencode-server.ts";
 export const MCP_WAIT_MS = 3000;
 /** The longest `mcp.authenticate` waits for OpenCode on the local flow: it answers when the sign-in redirect arrived, which the dialog polls for. */
 const AUTH_WAIT_MS = 1500;
+/** How long a sign-in that waits for the pasted redirect holds a restart of OpenCode. */
+const SIGN_IN_HOLD_MS = 10 * 60_000;
 export const NAME = /^[a-zA-Z0-9_-]+$/;
 
 type McpConfig = { type?: string; command?: string[]; url?: string; enabled?: boolean };
 type Status = Record<string, { status: string; error?: string }>;
 
 const fail = (code: string, message: string) => new EngineError(code, message);
+const USER_OR_PROJECT = "OpenCode servers are saved in the project's opencode.json or in ~/.config/opencode/opencode.json: use the Project or User scope.";
 
 /** Names of the servers the user's global OpenCode config defines (scope `user`). */
 function globalNames(): Set<string> {
-  const dir = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "opencode");
-  const names = new Set<string>();
-  // OpenCode 1.19.5 also reads the global config.json and the file OPENCODE_CONFIG names.
-  for (const file of [join(dir, "config.json"), join(dir, "opencode.json"), join(dir, "opencode.jsonc"), ...(process.env.OPENCODE_CONFIG ? [process.env.OPENCODE_CONFIG] : [])]) {
-    if (!existsSync(file)) continue;
-    try {
-      const mcp = (parse(readFileSync(file, "utf8"), [], { allowTrailingComma: true }) as { mcp?: Record<string, unknown> } | undefined)?.mcp;
-      if (mcp && typeof mcp === "object") for (const n of Object.keys(mcp)) names.add(n);
-    } catch {
-      // An unreadable global file: its servers show as dynamic.
-    }
+  try {
+    return keysOf(globalFiles(), ["mcp"]);
+  } catch {
+    // An unreadable global file: its servers show as dynamic.
+    return new Set();
   }
-  return names;
+}
+/** The entry of server `name` in the highest global file that defines it (OpenCode's `GET /config` keeps the old global config until it restarts). */
+function globalEntry(name: string): McpConfig | undefined {
+  try {
+    const hit = docsOf(globalFiles()).filter((d) => d.data.mcp && typeof d.data.mcp === "object" && name in (d.data.mcp as object)).at(-1);
+    const v = (hit?.data.mcp as Record<string, unknown> | undefined)?.[name];
+    return v && typeof v === "object" ? (v as McpConfig) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export const mapStatus = (s: string) => (s === "needs_auth" || s === "needs_client_registration" ? "needs-auth" : s);
@@ -49,7 +51,7 @@ export const pairs = (lines: string[], sep: string) =>
     }),
   );
 
-export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd: string): Promise<boolean>; /** As the skills config's `reload`. */ reload?(cwd: string): Promise<boolean>; hidden(name: string): boolean; waitMs?: number }): EngineConfig["mcp"] {
+export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd: string): Promise<boolean>; /** As the skills config's `reload`. */ reload?(cwd: string): Promise<boolean>; /** A change of the user's global config: true = OpenCode's server read it now, false = waits for idle (opencode-catalogue.ts `globalReloads`). */ reloadGlobal?(cwd: string): Promise<boolean>; /** MCP sign-ins in flight: a restart of OpenCode waits for them. */ signingIn?: Set<string>; hidden(name: string): boolean; waitMs?: number }): EngineConfig["mcp"] {
   const { server } = o;
   const waitMs = o.waitMs ?? MCP_WAIT_MS;
   /** `GET /mcp` of a folder in flight: concurrent reads share it (the request is never aborted, so they would pile up on a slow OpenCode). */
@@ -111,7 +113,7 @@ export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd:
     const servers: McpServerInfo[] = Object.entries(status)
       .filter(([name]) => !o.hidden(name) && !gone?.has(name))
       .map(([name, s]) => {
-        const c = defined[name];
+        const c = defined[name] ?? (user.has(name) && !project.has(name) ? globalEntry(name) : undefined);
         return {
           name,
           status: mapStatus(s.status),
@@ -128,17 +130,21 @@ export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd:
 
   const ownProject = (cwd: string, name: string) => projectKeys(cwd, ["mcp"]).has(name);
 
-  async function add(cwd: string, name: string, config: McpAddConfig) {
+  async function add(cwd: string, name: string, config: McpAddConfig, scope: "project" | "user") {
     if (!NAME.test(name)) throw fail("invalid_input", `Not a server name: ${name}`);
     if (config.transport === "sse") throw fail("unsupported", "OpenCode has no SSE transport. Use HTTP.");
-    if (ownProject(cwd, name)) throw fail("already_exists", `A server named ${name} already exists in this project's opencode.json.`);
+    if (scope === "project" && ownProject(cwd, name)) throw fail("already_exists", `A server named ${name} already exists in this project's opencode.json.`);
+    if (scope === "user" && globalNames().has(name)) throw fail("already_exists", `A server named ${name} already exists in ${displayPath(globalWriteTarget())}.`);
     const entry =
       config.transport === "stdio"
         ? { type: "local", command: [config.command, ...config.args], ...(config.env.length && { environment: pairs(config.env, "=") }) }
         : { type: "remote", url: config.url, ...(config.headers.length && { headers: pairs(config.headers, ":") }) };
-    editProjectFile(cwd, ["mcp", name], entry);
+    if (scope === "user") editFiles(globalFiles(), globalWriteTarget(), ["mcp", name], entry);
+    else editProjectFile(cwd, ["mcp", name], entry);
     removed.get(cwd)?.delete(name);
     await raced(call(cwd, "/mcp", "POST", { name, config: entry }));
+    // The folder runs it now; the restart makes the other folders and new instances read the global file.
+    if (scope === "user") await o.reloadGlobal?.(cwd);
   }
 
   const handler: EngineConfig["mcp"] = async (msg, cwd, ctx) => {
@@ -158,10 +164,18 @@ export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd:
           return await list(cwd);
         }
         case "mcp.add":
-          if (msg.scope !== "project") throw fail("invalid_input", "OpenCode servers are saved in the project's opencode.json: use the Project scope.");
-          await add(cwd, msg.name, msg.config);
+          if (msg.scope !== "project" && msg.scope !== "user") throw fail("invalid_input", USER_OR_PROJECT);
+          await add(cwd, msg.name, msg.config, msg.scope);
           return await list(cwd);
         case "mcp.remove": {
+          if (msg.scope === "user") {
+            if (!globalNames().has(msg.name)) throw fail("invalid_input", `${msg.name} is not defined in ${displayPath(globalWriteTarget())}.`);
+            editFiles(globalFiles(), globalWriteTarget(), ["mcp", msg.name], undefined);
+            removed.set(cwd, (removed.get(cwd) ?? new Set()).add(msg.name));
+            await raced(call(cwd, mcpPath(msg.name, "/disconnect")).catch(() => {}));
+            await o.reloadGlobal?.(cwd);
+            return await list(cwd);
+          }
           if (msg.scope !== "project" || !ownProject(cwd, msg.name)) throw fail("invalid_input", `${msg.name} is not defined in this project's opencode.json. Remove it where it is defined.`);
           editProjectFile(cwd, ["mcp", msg.name], undefined);
           removed.set(cwd, (removed.get(cwd) ?? new Set()).add(msg.name));
@@ -171,11 +185,19 @@ export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd:
         case "mcp.authenticate": {
           if (ctx.local) {
             // A browser on this machine: OpenCode opens the sign-in tab itself and its redirect completes the flow (the dialog polls).
-            const done = await raced(call(cwd, mcpPath(msg.name, "/auth/authenticate")), AUTH_WAIT_MS);
+            const flow = call(cwd, mcpPath(msg.name, "/auth/authenticate"));
+            const key = `${cwd}\0${msg.name}`;
+            o.signingIn?.add(key);
+            void flow.then(() => undefined, () => undefined).then(() => o.signingIn?.delete(key));
+            const done = await raced(flow, AUTH_WAIT_MS);
             return done === "late" ? ({ requiresUserAction: true, opened: true } satisfies McpAuthResult) : ({ requiresUserAction: false } satisfies McpAuthResult);
           }
           // Another machine: the redirect cannot reach OpenCode's port, so the dialog opens the page and the user pastes the redirect URL.
           const done = await raced(call(cwd, mcpPath(msg.name, "/auth")));
+          // OpenCode keeps the flow in memory until the pasted redirect arrives (or this long): a restart would lose it.
+          const key = `${cwd}\0${msg.name}`;
+          o.signingIn?.add(key);
+          setTimeout(() => o.signingIn?.delete(key), SIGN_IN_HOLD_MS).unref();
           if (done === "late") throw fail("opencode_loading", "OpenCode is still loading this folder. Try again in a moment.");
           const r = done.value as { authorizationUrl?: string };
           return { requiresUserAction: true, ...(r.authorizationUrl && { authUrl: r.authorizationUrl }) } satisfies McpAuthResult;
@@ -189,6 +211,7 @@ export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd:
           }
           if (!code) throw fail("invalid_input", "The pasted address has no code. Paste the address of the page that opened after you signed in.");
           const sent = await raced(call(cwd, mcpPath(msg.name, "/auth/callback"), "POST", { code }));
+          o.signingIn?.delete(`${cwd}\0${msg.name}`);
           if (sent === "late") throw fail("opencode_loading", "OpenCode is still loading this folder. Try again in a moment.");
           return {};
         }

@@ -311,6 +311,28 @@ it("with OpenCode flags the add form offers only Project scope, a user server sh
   expect(group("Transport")).toHaveLength(2);
 });
 
+it("with OpenCode flags that write the user scope, a user server has Remove with no reason and the add form offers Project (selected) then User with its file", { timeout: 20_000 }, async () => {
+  const caps: ConfigCapabilities = { mcpScopes: ["project", "user"], mcpTransports: ["stdio", "http"], skillStates: ["on", "off"], gaps: { mcpTools: OPENCODE.gaps.mcpTools } };
+  const servers: McpServerInfo[] = [{ name: "global", status: "connected", scope: "user", config: { type: "http", url: "https://x/mcp" } }];
+  const d = await render({}, { engine: "opencode", config: caps, servers });
+  await d.click(d.all("mcp-row").find((r) => r.textContent?.startsWith("global")));
+  expect(d.q("mcp-remove")).not.toBeNull();
+  expect(d.q("mcp-remove-gap")).toBeNull();
+  await d.click(d.button("Remove"));
+  expect(d.q("mcp-remove-confirm")!.textContent).toContain("Remove global from user config?");
+  await d.click(d.button("Cancel"));
+  await d.click(d.button("← Back to list"));
+  await d.click(d.q("mcp-add"));
+  const scope = [...document.querySelectorAll<HTMLElement>('[role="group"][aria-label="Scope"] button')];
+  expect(scope.map((b) => b.textContent)).toEqual(["ProjectEveryone on this project, via opencode.json", "UserYou, in every project, via ~/.config/opencode/opencode.json"]);
+  expect(scope.map((b) => b.getAttribute("aria-pressed"))).toEqual(["true", "false"]);
+  await d.type(document.getElementById("mcp-add-name")!, "gnew");
+  await d.click(scope[1]!);
+  await d.type(document.getElementById("mcp-add-command")!, "node");
+  await d.click(d.button("Add server"));
+  expect(d.calls.find((c) => c.type === "mcp.add")).toMatchObject({ type: "mcp.add", name: "gnew", scope: "user" });
+});
+
 it("with the mcpAuth gap (OpenCode 2) a server that needs sign-in shows the reason and no Authenticate, and a connected remote server no Clear authentication", { timeout: 20_000 }, async () => {
   const gap = "OpenCode 2 signs MCP servers in through its integrations. Sign in with OpenCode's own app.";
   const caps: ConfigCapabilities = { ...OPENCODE, gaps: { ...OPENCODE.gaps, mcpAuth: gap } };

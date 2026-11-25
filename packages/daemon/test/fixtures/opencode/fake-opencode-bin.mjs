@@ -53,7 +53,17 @@ const failNext = new Set(data.fail ?? []);
 /** GET /agent answers this when set (POST /__agents {agents}). */
 let agents = data.agents;
 /** GET /config answers this (data.config, or POST /__config {config}: `default_agent`, `small_model`); a path in data.fail or no route answers as before. */
-let config = data.config ?? {};
+// The user's global config files ($XDG_CONFIG_HOME/opencode/{config.json,opencode.json,opencode.jsonc}, lowest first) are read ONCE at process start, like OpenCode 1.19.5 (it caches the global
+// config for the process life: a hand edit shows only after a restart). Their `mcp` objects and `plugin` lists are merged under data.config.
+const globalFile = { mcp: {}, plugin: [] };
+for (const n of ["config.json", "opencode.json", "opencode.jsonc"]) {
+  const file = join(process.env.XDG_CONFIG_HOME ?? "/nonexistent", "opencode", n);
+  if (!existsSync(file)) continue;
+  const cfg = JSON.parse(readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""));
+  Object.assign(globalFile.mcp, cfg.mcp ?? {});
+  globalFile.plugin = [...new Set([...globalFile.plugin, ...(cfg.plugin ?? []).map((x) => (typeof x === "string" ? x : x[0]))])];
+}
+let config = { ...(data.config ?? {}), ...(Object.keys(globalFile.mcp).length && { mcp: { ...globalFile.mcp, ...(data.config?.mcp ?? {}) } }), ...(globalFile.plugin.length && { plugin: [...new Set([...globalFile.plugin, ...(data.config?.plugin ?? [])])] }) };
 /** path -> ms: the next request to that path answers that much later (POST /__delay {path, ms}), like a folder whose state is still loading. */
 const delays = new Map(Object.entries(data.delays ?? {}));
 const scripts = (process.env.FAKE_OPENCODE_SCRIPT ?? "").split(",").filter(Boolean);
@@ -126,7 +136,7 @@ function mcpMap(dir) {
   const key = dir ?? "";
   if (mcp[key]) return mcp[key];
   const seed = {};
-  for (const [name, c] of Object.entries(projectConfig(dir).mcp ?? {}))
+  for (const [name, c] of Object.entries({ ...globalFile.mcp, ...(projectConfig(dir).mcp ?? {}) }))
     seed[name] = c.enabled === false ? { status: "disabled" } : c.type === "remote" && /oauth/.test(c.url ?? "") ? { status: "needs_auth" } : c.type === "local" && /nonexistent/.test(c.command?.[0] ?? "") ? { status: "failed", error: "spawn failed" } : { status: "connected" };
   return (mcp[key] = seed);
 }
