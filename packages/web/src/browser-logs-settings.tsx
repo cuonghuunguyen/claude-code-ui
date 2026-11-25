@@ -5,7 +5,7 @@ import { BUTTON } from "./about-settings.tsx";
 import { browserLogs, logFileName, saveKeepLogs, useKeepLogs, type BrowserLogger } from "./browser-logs.ts";
 import { downloadText } from "./download.ts";
 import { useLocale, useT } from "./i18n.ts";
-import { Switch } from "./plugins-dialog.tsx";
+import { Switch } from "./switch.tsx";
 
 type Status = { count: number; oldest?: number; unavailable: boolean };
 

@@ -13,7 +13,7 @@ import { saveApp, useAppIcon, useAppName } from "./app-icon.ts";
 import type { Request } from "./client.ts";
 import { Banner, ConfigDialog } from "./config-dialog.tsx";
 import { isImeKey } from "./ime.ts";
-import { Switch } from "./plugins-dialog.tsx";
+import { Switch } from "./switch.tsx";
 import { saveKeepAwake, useKeepAwakeSetting, wakeLockReason, wakeLockSupported } from "./keep-awake.ts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TERMINAL_DOCKS, saveTerminalDock, useTerminalDock, type Area } from "./layout.ts";
