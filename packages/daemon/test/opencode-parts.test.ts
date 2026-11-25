@@ -236,3 +236,15 @@ describe("openCodeParts: a Fork run (docs/spec.md \"Fork runs\")", () => {
     expect(parts.some((p) => p.type === "user_text" && p.text === "find foo")).toBe(false);
   });
 });
+
+
+describe("runningCall: the fallback to the only running call", () => {
+  const m = new OpenCodeMapper();
+  m.part({ id: "prt_i", type: "tool", messageID: "msg_a", callID: "call_i", tool: "claude-ui-abcdefghij_inline_task", state: { status: "running", input: { prompt: "other" } } });
+  it("takes the only running call of another input when no other run waits; with one waiting it takes an equal-input call only", () => {
+    const tool = "mcp__claude-ui__inline_task";
+    expect(m.runningCall(tool, { prompt: "mine" }, new Set())).toBe("call_i");
+    expect(m.runningCall(tool, { prompt: "mine" }, new Set(), false)).toBeUndefined();
+    expect(m.runningCall(tool, { prompt: "other" }, new Set(), false)).toBe("call_i");
+  });
+});

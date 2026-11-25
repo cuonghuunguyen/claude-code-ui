@@ -71,15 +71,15 @@ const trimmed = (i: Record<string, unknown> | undefined) => JSON.stringify(canon
 
 /**
  * The running call (oldest first in `running`) an inline run belongs to, in order: the newest with an input equal to `input`; else the newest equal once keys with no
- * value are dropped on both sides (the model's call may carry what the tool's schema dropped, or the other way round); else the only candidate.
+ * value are dropped on both sides (the model's call may carry what the tool's schema dropped, or the other way round); else the only candidate (`lone`: no other run waits for a call, or the call could be another run's).
  */
-export function pickCall(running: readonly { id: string; input: Record<string, unknown> }[], input: Record<string, unknown> | undefined): string | undefined {
+export function pickCall(running: readonly { id: string; input: Record<string, unknown> }[], input: Record<string, unknown> | undefined, lone = true): string | undefined {
   const newest = [...running].reverse();
   const want = JSON.stringify(canon(input ?? {}));
   const exact = newest.find((c) => JSON.stringify(canon(c.input)) === want);
   if (exact) return exact.id;
   const lean = trimmed(input);
-  return newest.find((c) => trimmed(c.input) === lean)?.id ?? (running.length === 1 ? running[0]!.id : undefined);
+  return newest.find((c) => trimmed(c.input) === lean)?.id ?? (lone && running.length === 1 ? running[0]!.id : undefined);
 }
 
 const sumTokens = (parts: Iterable<OpenCodePart>) => {
@@ -126,8 +126,8 @@ export class OpenCodeMapper {
     return !!c && c.type === "tool_call" && (c.status === "running" || c.status === "pending");
   };
   /** The newest running call of `tool` whose input equals `input` and is not in `skip` (the call an inline run belongs to). */
-  runningCall(tool: string, input: Record<string, unknown> | undefined, skip: ReadonlySet<string>): string | undefined {
-    return pickCall([...this.calls.values()].flatMap((c) => (c.type === "tool_call" && c.tool === tool && (c.status === "running" || c.status === "pending") && !skip.has(c.id) ? [{ id: c.id, input: c.input as Record<string, unknown> }] : [])), input);
+  runningCall(tool: string, input: Record<string, unknown> | undefined, skip: ReadonlySet<string>, lone = true): string | undefined {
+    return pickCall([...this.calls.values()].flatMap((c) => (c.type === "tool_call" && c.tool === tool && (c.status === "running" || c.status === "pending") && !skip.has(c.id) ? [{ id: c.id, input: c.input as Record<string, unknown> }] : [])), input, lone);
   }
   /** The newest running Fork run call (`fork` tool) whose input equals `input` and is not in `skip`. */
   runningFork(input: Record<string, unknown> | undefined, skip: ReadonlySet<string>): string | undefined {

@@ -299,6 +299,8 @@ class OpenCode2Session implements EngineSession {
   private readonly inlineRuns = new Map<string, InlineRun>();
   /** The `inline_task` calls an inline run already took. */
   private readonly inlineClaimed = new Set<string>();
+  /** Inline runs that have no call yet (looking for it, or waiting for its event): a lone one may take any running call, else only an equal-input one. */
+  private readonly inlineWaiting = new Set<symbol>();
   /** Stop per running inline call id (the card's Stop agent): ends the run as stopped. */
   private readonly inlineStops = new Map<string, () => void>();
   private retrying: { attempt: number; message: string; next?: number } | undefined;
@@ -367,8 +369,10 @@ class OpenCode2Session implements EngineSession {
     }
     // A subagent's session: its stored parts show under its call (the web groups by `parentId`, the order here does not matter).
     this.linkFrom(this.mapper);
-    for (const [childId, c] of Object.entries(h.children ?? {})) this.children.link(childId, c.callId, c.kind);
-    for (const [childId, c] of Object.entries(h.children ?? {})) {
+    // A running inline run (its link is saved while it works) is no restored child: its events and result go to the run.
+    const children = Object.entries(h.children ?? {}).filter(([childId]) => !this.inlineRuns.has(childId));
+    for (const [childId, c] of children) this.children.link(childId, c.callId, c.kind);
+    for (const [childId, c] of children) {
       const child = this.children.get(childId);
       // An inline task's session starts with its prompt, which is the call's input: not a step.
       if (child) for (const part of child.mapper.history(c.kind === "inline" ? c.messages.filter((m) => m.type !== "user") : c.messages)) this.session.emit({ ...part, parentId: child.callId });
@@ -1221,10 +1225,12 @@ class OpenCode2Session implements EngineSession {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let onAbort: (() => void) | undefined;
     let callId: string | undefined;
+    const waiting = Symbol("inline");
     let client: OpenCodeClient | undefined;
     try {
-      callId = await findCall(() => this.mapper.runningCall(INLINE_TOOL, hooks.input, this.inlineClaimed));
-      if (callId) this.inlineClaimed.add(callId);
+      this.inlineWaiting.add(waiting);
+      callId = await findCall(() => this.mapper.runningCall(INLINE_TOOL, hooks.input, this.inlineClaimed, this.inlineWaiting.size === 1));
+      if (callId) (this.inlineClaimed.add(callId), this.inlineWaiting.delete(waiting));
       client = await this.server.client();
       const agent = await this.agentName();
       const own = (await this.engine.agents(this.cwd)).find((a) => a.id === agent)?.permissions ?? [];
@@ -1253,6 +1259,7 @@ class OpenCode2Session implements EngineSession {
           early: new Map(),
           attach: (cid) => {
             run.callId = callId = cid;
+            this.inlineWaiting.delete(waiting);
             this.inlineClaimed.add(cid);
             if (onAbort) this.inlineStops.set(cid, onAbort);
             this.engine.onInline?.(id, { sessionId: this.id, callId: cid });
@@ -1287,6 +1294,7 @@ class OpenCode2Session implements EngineSession {
     } catch (err) {
       return withDenials(result({ status: "error", error: (err as Error).message, ...(col && clip(col.text())) }, col), col?.denials.list() ?? []);
     } finally {
+      this.inlineWaiting.delete(waiting);
       if (timer) clearTimeout(timer);
       if (onAbort) hooks.signal.removeEventListener("abort", onAbort);
       if (childId) {
@@ -1308,7 +1316,7 @@ class OpenCode2Session implements EngineSession {
   private lateClaims() {
     for (const run of this.inlineRuns.values()) {
       if (run.callId || !run.attach) continue;
-      const id = this.mapper.runningCall(INLINE_TOOL, run.input, this.inlineClaimed);
+      const id = this.mapper.runningCall(INLINE_TOOL, run.input, this.inlineClaimed, this.inlineWaiting.size === 1);
       if (id) run.attach(id);
     }
   }
@@ -1742,9 +1750,10 @@ class OpenCode2EngineImpl implements Engine {
           if (typeof sid !== "string") return;
           const own = this.sessions.get(sid);
           if (own) return own.event(payload.type, payload.properties);
-          for (const s of this.sessions.values()) if (s.ownsChild(sid)) return s.childEvent(sid, payload.type, payload.properties);
+          // A running inline run first: a saved link may have made its session a restored child too.
           const inline = this.inlineOwners.get(sid);
           if (inline) return inline.inlineEvent(sid, payload.type, payload.properties);
+          for (const s of this.sessions.values()) if (s.ownsChild(sid)) return s.childEvent(sid, payload.type, payload.properties);
           // A subagent's session its call has not named yet: its events wait for the link.
           if (payload.type.startsWith("session.") && [...this.sessions.values()].some((o) => o.awaitsChild())) this.early.add(sid, payload.type, payload.properties);
           // A subagent's session: only its permission requests and questions are shown (the user must be able to answer them, or the turn waits for ever).

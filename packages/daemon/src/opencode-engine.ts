@@ -299,6 +299,8 @@ class OpenCodeSession implements EngineSession {
   private readonly inlines = new Map<string, InlineRun1>();
   /** The `inline_task` calls an inline run already took. */
   private readonly inlineClaimed = new Set<string>();
+  /** Inline runs that have no call yet (looking for it, or waiting for its event): a lone one may take any running call, else only an equal-input one. */
+  private readonly inlineWaiting = new Set<symbol>();
   /** Stop per running inline call id (the card's Stop agent): ends the run as stopped. */
   private readonly inlineStops = new Map<string, () => void>();
 
@@ -818,10 +820,12 @@ class OpenCodeSession implements EngineSession {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let onAbort: (() => void) | undefined;
     let callId: string | undefined;
+    const waiting = Symbol("inline");
     let messageID: string | undefined;
     try {
-      callId = await findCall(() => this.mapper.runningCall(INLINE_TOOL, hooks.input, this.inlineClaimed));
-      if (callId) this.inlineClaimed.add(callId);
+      this.inlineWaiting.add(waiting);
+      callId = await findCall(() => this.mapper.runningCall(INLINE_TOOL, hooks.input, this.inlineClaimed, this.inlineWaiting.size === 1));
+      if (callId) (this.inlineClaimed.add(callId), this.inlineWaiting.delete(waiting));
       const model = await this.inlineModel(spec, hooks);
       const agent = await this.agentName();
       const own = await this.agentPermission(agent).catch(() => [] as Rule[]);
@@ -848,6 +852,7 @@ class OpenCodeSession implements EngineSession {
           early: [],
           attach: (c) => {
             callId = c;
+            this.inlineWaiting.delete(waiting);
             run.ui = true;
             this.inlineClaimed.add(c);
             this.mapper.adopt(cid, c);
@@ -880,6 +885,7 @@ class OpenCodeSession implements EngineSession {
     } catch (err) {
       return withDenials(result({ status: "error", error: (err as Error).message, ...(col && clip(col.text())) }, col), col?.denials.list() ?? []);
     } finally {
+      this.inlineWaiting.delete(waiting);
       if (timer) clearTimeout(timer);
       if (onAbort) hooks.signal.removeEventListener("abort", onAbort);
       if (childId) {
@@ -1192,7 +1198,7 @@ class OpenCodeSession implements EngineSession {
   private lateClaims() {
     for (const run of this.inlines.values()) {
       if (run.ui || !run.attach) continue;
-      const id = this.mapper.runningCall(INLINE_TOOL, run.input, this.inlineClaimed);
+      const id = this.mapper.runningCall(INLINE_TOOL, run.input, this.inlineClaimed, this.inlineWaiting.size === 1);
       if (id) run.attach(id);
     }
   }
