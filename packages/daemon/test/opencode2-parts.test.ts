@@ -91,3 +91,31 @@ it("a Fork card that ends live keeps the start time of its running card (the end
     vi.useRealTimers();
   }
 });
+
+it("a subagent call links its child session live and stored; the card runs after the call returned until an end notice says completed, error or cancelled (running is no end)", () => {
+  const meta = { sessionID: "ses_c", status: "running", truncated: false };
+  const live = new OpenCode2Mapper();
+  live.event("session.tool.input.started", { ...base, id: "call_s", name: "subagent" });
+  live.event("session.tool.called", { ...base, id: "call_s", input: { description: "Look", prompt: "p" } });
+  live.event("session.tool.progress", { ...base, id: "call_s", metadata: { sessionID: "ses_c", status: "running" } });
+  expect(live.takeLinks()).toEqual([{ childId: "ses_c", callId: "call_s" }]);
+  expect(live.takeLinks()).toEqual([]);
+  const back = live.event("session.tool.success", { ...base, id: "call_s", content: [], metadata: meta });
+  expect(back[0]).toMatchObject({ type: "subagent", id: "call_s", status: "running" });
+  const notice = (state: string) => ({ item: { type: "synthetic", payload: { text: "n", metadata: { source: "subagent", childID: "ses_c", state } } } });
+  expect(live.inbox(notice("running"))).toEqual([]);
+  expect(live.inbox(notice("cancelled"))[0]).toMatchObject({ id: "call_s", status: "stopped" });
+  // The first end stays: a later notice of the same child changes nothing.
+  expect(live.inbox(notice("completed"))[0]).toMatchObject({ status: "stopped" });
+
+  // Stored: the call's own `state.metadata.sessionID` is the link, the notice is read before the calls.
+  const stored = new OpenCode2Mapper();
+  const parts = stored.history([
+    { id: A, type: "assistant", content: [{ type: "tool", id: "call_s", name: "subagent", state: { status: "completed", input: { description: "Look", prompt: "p" }, metadata: meta, content: [] }, time: { created: 1, completed: 2 } }] },
+    { id: "msg_n", type: "synthetic", metadata: { source: "subagent", childID: "ses_c", state: "error" }, time: { created: 9 } },
+  ]);
+  expect(stored.takeLinks()).toEqual([{ childId: "ses_c", callId: "call_s" }]);
+  expect(parts[0]).toMatchObject({ type: "subagent", id: "call_s", status: "error", endedAt: 9 });
+  // No notice yet: the child still runs.
+  expect(new OpenCode2Mapper().history([{ id: A, type: "assistant", content: [{ type: "tool", id: "call_s", name: "subagent", state: { status: "completed", input: { description: "Look" }, metadata: meta, content: [] } }] }])[0]).toMatchObject({ status: "running" });
+});

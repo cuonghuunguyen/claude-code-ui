@@ -6,19 +6,40 @@ import type { AddressInfo } from "node:net";
 type Message = { role: string; content?: unknown };
 const textOf = (m?: Message) => (typeof m?.content === "string" ? m.content : Array.isArray(m?.content) ? (m.content as { text?: string }[]).map((c) => c.text ?? "").join("") : "");
 
+/** The system text OpenCode 2 gives a subagent's session. */
+const SUBAGENT_MARK = "You are a subagent spawned by another session.";
 /**
- * The model's turn for one request: after a tool result "done"; an inline task's own session (its system text) answers "inline answer"; a prompt naming
- * "inline task" calls claude-ui's `inline_task` (as OpenCode names it: `claude-ui-<id>_inline_task`); one naming "echo" runs `echo hi` with the shell tool;
- * anything else "OK". A request without tools (a title) answers "Scratch".
+ * The model's turn for one request, by the last user prompt:
+ * - a request without tools (a title): "Scratch";
+ * - an inline task's own session (its system text): "echo blocked" runs `echo blocked` with the shell tool, after a tool result or anything else "inline answer";
+ * - a subagent's own session (its marker): "sleep in background" starts `sleep 20; echo bg` as a background shell, "echo sub" runs `echo sub`;
+ * - after a tool result: "done";
+ * - "Run a subagent with a background shell" / "Run a subagent" call the `subagent` tool; "Run an inline task with a command" / "inline task" call claude-ui's
+ *   `inline_task` (as OpenCode names it: `claude-ui-<id>_inline_task`); "echo" runs `echo hi`;
+ * - anything else "OK".
  */
 export function fakeTurn(body: { messages?: Message[]; tools?: { function?: { name?: string } }[] }): { text: string } | { tool: string; args: Record<string, unknown> } {
   const tools = (body.tools ?? []).map((t) => t.function?.name ?? "");
   const messages = body.messages ?? [];
   const user = textOf([...messages].reverse().find((m) => m.role === "user"));
-  if (messages.at(-1)?.role === "tool") return { text: "done" };
+  const after = messages.at(-1)?.role === "tool";
   if (!tools.length) return { text: "Scratch" };
-  if (messages.some((m) => textOf(m).includes("You run one delegated task"))) return { text: "inline answer" };
+  if (messages.some((m) => textOf(m).includes("You run one delegated task"))) {
+    if (!after && /echo blocked/i.test(user) && tools.includes("shell")) return { tool: "shell", args: { command: "echo blocked", description: "Print blocked" } };
+    return { text: "inline answer" };
+  }
+  if (after) return { text: "done" };
+  // The end notice of a subagent or a background shell reaches the model as a user message: it answers with a plain text.
+  if (/^<(subagent|shell) /.test(user)) return { text: "OK" };
+  if (messages.some((m) => textOf(m).includes(SUBAGENT_MARK))) {
+    if (/sleep in background/i.test(user) && tools.includes("shell")) return { tool: "shell", args: { command: "sleep 20; echo bg", description: "Sleep bg", background: true } };
+    if (/echo sub/i.test(user) && tools.includes("shell")) return { tool: "shell", args: { command: "echo sub", description: "Print sub" } };
+    return { text: "sub answer" };
+  }
   const inline = tools.find((t) => /^claude-ui-.+_inline_task$/.test(t));
+  if (/run a subagent with a background shell/i.test(user)) return tools.includes("subagent") ? { tool: "subagent", args: { description: "Background work", prompt: "Run sleep in background", agent: "general" } } : { text: "no subagent tool" };
+  if (/run a subagent/i.test(user)) return tools.includes("subagent") ? { tool: "subagent", args: { description: "Look around", prompt: "Run echo sub", agent: "general" } } : { text: "no subagent tool" };
+  if (/run an inline task with a command/i.test(user)) return inline ? { tool: inline, args: { prompt: "Run echo blocked", tools: ["Bash"] } } : { text: "no inline_task tool" };
   if (/inline task/i.test(user)) return inline ? { tool: inline, args: { prompt: "Say hi", tools: ["Read"] } } : { text: "no inline_task tool" };
   if (/echo/i.test(user) && tools.includes("shell")) return { tool: "shell", args: { command: "echo hi", description: "Print hi" } };
   return { text: "OK" };

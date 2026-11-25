@@ -20,6 +20,7 @@ import { mapLimit } from "./session-scan.ts";
 import { INLINE_META, InlineCollector2, inlineRules, storedEnd, type StoredEnd } from "./opencode2-inline.ts";
 import { contentBefore, type PatchPart, type SnapshotSource } from "./opencode-snapshot.ts";
 import { visualizeSystem } from "./visualize.ts";
+import { ChildRuns, EarlyEvents } from "./opencode2-children.ts";
 import { OpenCode2Mapper, bashPart, failureText, mapTool2, type Failure, type OpenCode2Message, type Shell2 } from "./opencode2-parts.ts";
 import type { OpenCodeServer } from "./opencode-server.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
@@ -144,7 +145,24 @@ export type OpenCode2History = {
   agent?: string;
   /** The fork sessions of the Fork runs of this session with their stored messages (none: the fork is gone from OpenCode). */
   forks?: (ForkLink & { messages?: OpenCode2Message[] })[];
+  /** The child sessions of the `subagent` calls (stored `state.metadata.sessionID`), nested ones included, with their stored messages and the call each runs for. */
+  children?: Record<string, { callId: string; messages: OpenCode2Message[] }>;
 };
+/** How deep the subagents of subagents are followed at a restore. */
+const CHILD_DEPTH = 5;
+/** The `subagent` calls of stored messages that name their child session: `[child id, call id]`. */
+const childLinksOf = (messages: readonly OpenCode2Message[]): [string, string][] =>
+  messages.flatMap((m) => (m.content ?? []).flatMap((c): [string, string][] => (c.type === "tool" && c.name === "subagent" && c.id && typeof c.state?.metadata?.sessionID === "string" ? [[c.state.metadata.sessionID, c.id]] : [])));
+/** The stored messages of every child session under `messages`, each child once. A session that cannot be read has none. */
+async function loadChildren(client: OpenCodeClient, messages: readonly OpenCode2Message[], seen = new Set<string>(), depth = 0): Promise<NonNullable<OpenCode2History["children"]>> {
+  const links = childLinksOf(messages).filter(([child]) => !seen.has(child));
+  for (const [child] of links) seen.add(child);
+  const out: NonNullable<OpenCode2History["children"]> = {};
+  const loaded = await mapLimit(links, 4, async ([child, callId]) => ({ child, callId, messages: await loadMessages(client, child).catch(() => [] as OpenCode2Message[]) }));
+  for (const l of loaded) out[l.child] = { callId: l.callId, messages: l.messages };
+  if (depth + 1 < CHILD_DEPTH) for (const l of loaded) Object.assign(out, await loadChildren(client, l.messages, seen, depth + 1));
+  return out;
+}
 const PAGE = 100;
 
 /** The stored messages of a session, oldest first (all pages). */
@@ -173,7 +191,9 @@ export async function loadOpenCode2History(client: OpenCodeClient, id: string, c
   const cut = revert ? all.findIndex((m) => m.id === revert) : -1;
   // A fork whose session is gone (deleted in OpenCode) shows as its call only.
   const forks = await mapLimit([...forkLinks], 4, async (f) => ({ ...f, messages: await loadMessages(client, f.forkId).catch(() => undefined) }));
-  return { messages: cut < 0 ? all : all.slice(0, cut), forks, busy: id in active, permissions: await ours(requests), forms: await ours(forms), rules: (info.permissions ?? []) as Rule2[], ...(revert && { revert }), ...(info.agent && { agent: info.agent }) };
+  const messages = cut < 0 ? all : all.slice(0, cut);
+  const children = await loadChildren(client, messages);
+  return { messages, forks, children, busy: id in active, permissions: await ours(requests), forms: await ours(forms), rules: (info.permissions ?? []) as Rule2[], ...(revert && { revert }), ...(info.agent && { agent: info.agent }) };
 }
 
 type TurnEnd = { done: Promise<void>; resolve: () => void };
@@ -206,6 +226,8 @@ class OpenCode2Session implements EngineSession {
   private effort: Effort;
   staleLogin = false;
   private readonly mapper = new OpenCode2Mapper();
+  /** The child sessions of this session's `subagent` calls (nested ones too): their parts show under the call. */
+  private readonly children = new ChildRuns();
   /** The rules OpenCode has for this session, as JSON. */
   private written: string;
   /** The model or effort changed here since it was last sent to OpenCode (or the session was made with one). */
@@ -336,6 +358,13 @@ class OpenCode2Session implements EngineSession {
       if (!f.messages || !this.mapper.call(f.callId)) continue;
       for (const part of new OpenCode2Mapper().history(f.messages.slice(f.prefix).filter((m) => m.type === "assistant"))) this.session.emit({ ...part, parentId: f.callId });
     }
+    // A subagent's session: its stored parts show under its call (the web groups by `parentId`, the order here does not matter).
+    this.linkFrom(this.mapper);
+    for (const [childId, c] of Object.entries(h.children ?? {})) this.children.link(childId, c.callId);
+    for (const [childId, c] of Object.entries(h.children ?? {})) {
+      const child = this.children.get(childId);
+      if (child) for (const part of child.mapper.history(c.messages)) this.session.emit({ ...part, parentId: child.callId });
+    }
     for (const m of h.messages) this.noteUsage(m);
     void this.emitUsage();
     void this.reconcileShells();
@@ -374,6 +403,53 @@ class OpenCode2Session implements EngineSession {
     const part: PatchPart = { id: key, hash, files: files.filter((f): f is string => typeof f === "string") };
     void contentBefore(this.engine.snapshots, this.cwd, sessionID, part).then((list) => list.forEach(([path, before]) => onEdit(path, before)), () => {});
   }
+  /** Registers the child sessions a mapper learned of (`subagent` calls) and replays their events that came before the link. */
+  private linkFrom(mapper: OpenCode2Mapper) {
+    for (const { childId, callId } of mapper.takeLinks()) {
+      if (this.children.get(childId)) continue;
+      this.children.link(childId, callId);
+      for (const e of this.engine.takeEarly(childId)) this.childEvent(childId, e.type, e.d);
+    }
+  }
+  /** The session is the owner of child session `sid`. */
+  ownsChild = (sid: string) => !!this.children.get(sid);
+  /** A running subagent call has no child session yet: the engine keeps the events of unknown sessions for a moment. */
+  awaitsChild = () => this.mapper.unlinkedSubagents() > 0 || [...this.children.mappers()].some((m) => m.unlinkedSubagents() > 0);
+  /** One event of a child session: its parts under its call, its asks as steps of the card. Its end is OpenCode's notice (a child that goes idle with work left is not ended). */
+  childEvent(sid: string, type: string, d: Json) {
+    const child = this.children.get(sid);
+    if (!child) return;
+    const show = (parts: ReturnType<OpenCode2Mapper["event"]>) => {
+      this.linkFrom(child.mapper);
+      for (const part of parts) this.session.emit({ ...part, parentId: child.callId });
+    };
+    switch (type) {
+      case "permission.asked":
+        return this.askPermission(d, child.mapper, child.callId);
+      case "permission.replied":
+      case "form.replied":
+      case "form.cancelled":
+        return this.session.pendingRequest(d.requestID ?? d.id) ? this.session.cancel(d.requestID ?? d.id, ANSWERED) : undefined;
+      case "form.created":
+        return this.askForm(d.form);
+      case "session.step.started":
+        return this.stepStart(sid, d);
+      case "session.step.ended":
+        this.stepPatch(sid, d);
+        return child.mapper.step(d.assistantMessageID, d.tokens, d.cost);
+      case "session.inbox.enqueued":
+        // The prompt that started the child is no bubble; only the end notices (of its shells, of its own subagents) count.
+        return d.item?.type === "synthetic" ? show(child.mapper.inbox(d)) : undefined;
+      case "session.execution.started":
+      case "session.execution.succeeded":
+      case "session.execution.failed":
+      case "session.execution.interrupted":
+        return;
+      default:
+        return show(child.mapper.event(type, d));
+    }
+  }
+
   /** `shell.exited` of any shell: the card of the call that started it ends. */
   shellExited(d: Json) {
     this.emitAll(this.mapper.shellExited(d.id, d.status, typeof d.exit === "number" ? d.exit : undefined));
@@ -400,7 +476,9 @@ class OpenCode2Session implements EngineSession {
       live.add(p.id);
       // An inline run's ask keeps its own call data (its denied card shows under the inline task).
       const run = this.inlineRuns.get(p.sessionID);
+      const child = this.children.get(p.sessionID);
       if (run) this.askPermission(p, run.mapper, run.callId);
+      else if (child) this.askPermission(p, child.mapper, child.callId);
       else this.askPermission(p);
     }
     for (const f of h.forms ?? []) (live.add(f.id), this.askForm(f));
@@ -1043,6 +1121,7 @@ class OpenCode2Session implements EngineSession {
     this.session.emit({ type: "notice", id: `error:${this.turnAssistant ?? this.turnKey}`, level: "warning", text });
   }
   private emitAll(parts: ReturnType<OpenCode2Mapper["event"]>) {
+    this.linkFrom(this.mapper);
     for (const part of parts) this.session.emit(part);
   }
 
@@ -1466,9 +1545,21 @@ class OpenCode2Session implements EngineSession {
   /** Stop agent of a running inline task's card: the run ends as stopped (its session is interrupted). */
   stopSubagent = async (callId: string) => {
     const stop = this.inlineStops.get(callId);
-    if (!stop) return false;
-    this.inlineStops.delete(callId);
-    stop();
+    if (stop) {
+      this.inlineStops.delete(callId);
+      stop();
+      return true;
+    }
+    // A subagent of the model: its child session is interrupted (OpenCode's end notice then says `cancelled`). A child that is idle (it left a background shell running) has nothing to interrupt: the card stops here.
+    const childId = this.children.childOf(callId) ?? this.mapper.childOf(callId);
+    if (!childId) return false;
+    const client = await this.server.client();
+    const r = await client.session.interrupt({ sessionID: childId });
+    if (r?.interrupted === false) {
+      // The card of a nested subagent is in its parent child's mapper and shows under that child's call.
+      const owner = [...this.children.entries()].find(([, c]) => c.mapper.childOf(callId) === childId);
+      for (const part of (owner?.[1].mapper ?? this.mapper).subagentEnded(childId, "stopped", Date.now())) this.session.emit(owner ? { ...part, parentId: owner[1].callId } : part);
+    }
     return true;
   };
   /** Run in background: the session is free at once; OpenCode runs the command on (its request answers at the end, the card then shows the result). */
@@ -1605,8 +1696,11 @@ class OpenCode2EngineImpl implements Engine {
           if (typeof sid !== "string") return;
           const own = this.sessions.get(sid);
           if (own) return own.event(payload.type, payload.properties);
+          for (const s of this.sessions.values()) if (s.ownsChild(sid)) return s.childEvent(sid, payload.type, payload.properties);
           const inline = this.inlineOwners.get(sid);
           if (inline) return inline.inlineEvent(sid, payload.type, payload.properties);
+          // A subagent's session its call has not named yet: its events wait for the link.
+          if (payload.type.startsWith("session.") && [...this.sessions.values()].some((o) => o.awaitsChild())) this.early.add(sid, payload.type, payload.properties);
           // A subagent's session: only its permission requests and questions are shown (the user must be able to answer them, or the turn waits for ever).
           if (payload.type === "permission.asked" || payload.type === "form.created")
             void this.ownerOf(sid).then((owner) => owner && this.sessions.get(owner)?.event(payload.type, payload.properties));
@@ -1625,6 +1719,10 @@ class OpenCode2EngineImpl implements Engine {
     this.sessions.delete(s.id);
     if (!this.sessions.size) (this.unsubscribe?.(), (this.unsubscribe = undefined));
   }
+
+  /** Events of sessions no call has named yet (a subagent's, announced by its call a moment later). */
+  private readonly early = new EarlyEvents();
+  takeEarly = (sid: string) => this.early.take(sid);
 
   /** The session of ours a session belongs to (itself, or the root of its parent chain), undefined when none is ours. Read once per session id. */
   private readonly owners = new Map<string, Promise<string | undefined>>();
