@@ -1371,6 +1371,16 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
     await s.prompt("hi");
     await until(() => s.parts().some((p) => p.type === "turn_result"));
     expect(d.requests("POST", `/api/session/${s.id}/agent`)).toHaveLength(1);
+    // A subagent is mentioned with `@name`: the prompt carries `agents` with the offsets, the session's agent stays; a prompt without a mention has no `agents` key.
+    expect(names(s.find("agents")?.subagents)).toEqual(["general", "mine"]);
+    expect((await d.ok({ type: "session.agents", cwd: d.project, engine: "opencode" })).subagents.map((a: { name: string }) => a.name)).toEqual(["general", "mine"]);
+    await s.prompt("ask @general now");
+    await until(() => d.requests("POST", `/api/session/${s.id}/prompt`).length === 2);
+    const [plain, mention] = d.requests("POST", `/api/session/${s.id}/prompt`).map((r) => r.body);
+    expect(plain).not.toHaveProperty("agents");
+    expect(mention.agents).toEqual([{ name: "general", mention: { start: 4, end: 12, text: "@general" } }]);
+    expect(d.requests("POST", `/api/session/${s.id}/agent`)).toHaveLength(1);
+    await until(() => s.parts().filter((p) => p.type === "turn_result").length === 2);
     // Plan mode is the plan agent: chosen back to build, then plan again by the mode.
     await d.ok({ type: "session.setAgent", sessionId: s.id, agent: "mine" });
     await d.ok({ type: "session.setPermissionMode", sessionId: s.id, mode: "plan" });

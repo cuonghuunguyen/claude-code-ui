@@ -210,7 +210,7 @@ The session setting that decides what happens before a tool runs: ask (default),
 _Avoid_: approval mode, auto-approve
 
 **Agent** (OpenCode only):
-The primary agent a session's prompts run as (build, plan, or a custom one from the OpenCode config). Chosen separately from the Permission mode; for OpenCode, plan is the `plan` agent, not a Permission mode. Claude's subagents are a different thing.
+The primary agent a session's prompts run as (build, plan, or a custom one from the OpenCode config). Chosen separately from the Permission mode; for OpenCode, plan is the `plan` agent, not a Permission mode. Claude's subagents are a different thing. An OpenCode subagent (mode subagent or all) is mentioned in a prompt with `@name`; the mention does not change the Agent.
 _Avoid_: persona, mode (for the agent)
 
 **Coordinator**:

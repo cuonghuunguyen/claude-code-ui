@@ -259,7 +259,7 @@ export function createClaudeCatalogue(ctx: CatalogueContext, d: ClaudeDeps): Eng
       return { id: (await history.forkSession(owner.id, { dir, upToMessageId: at, title: name })).sessionId };
     },
     commands: (cwd) => d.commandsOf(cwd),
-    agents: async () => [],
+    agents: async () => ({ agents: [] }),
     models: (cwd) => d.modelList(cwd),
     forget: (id) => void hadTranscript.delete(id),
     close: async () => {},

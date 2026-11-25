@@ -1273,7 +1273,7 @@ export function createDaemon(opts: {
     createWorktree: (repo, o) => createIn(repo, o),
     port: () => (http.address() as AddressInfo | null)?.port,
     heldElsewhere: (id) => cliTurnRunning(claudeDir, id, true),
-    openCodeAgents: async (cwd) => (await openCodeCatalogue().agents(cwd)).map((a) => a.name),
+    openCodeAgents: async (cwd) => (await openCodeCatalogue().agents(cwd)).agents.map((a) => a.name),
     agents: (cwd) => queuedQuery((q) => q.supportedAgents(), opts.query, { cwd, persistSession: false, env: claudeEnvFor(cwd) }).then((l) => l.map((a) => a.name)),
     models: () => knownModels(),
     openCodeModels: () => openCodeCatalogue().models(),

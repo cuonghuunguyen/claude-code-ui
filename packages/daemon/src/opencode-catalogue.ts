@@ -376,7 +376,11 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
       }
     },
     commands: (cwd) => openCodeEngine.commands(cwd),
-    agents: async (cwd) => (await openCodeEngine.primaryFirst(cwd)).map(({ name, description }) => ({ name, ...(description && { description }) })),
+    agents: async (cwd) => {
+      const info = ({ name, description }: { name: string; description?: string }) => ({ name, ...(description && { description }) });
+      const both = await openCodeEngine.agentSets(cwd);
+      return { agents: both.primary.map(info), subagents: both.subagents.map(info) };
+    },
     models: (cwd) => openCodeModelsRepaired(cwd),
     // A model refresh held back by a running OpenCode session no longer waits for it.
     settled: () => (void flushProviders(), reloads.settled()),

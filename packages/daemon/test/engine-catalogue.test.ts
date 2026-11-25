@@ -55,7 +55,7 @@ function fake(ctx: CatalogueContext, o: { name: EngineName; id: RegExp; scope: "
     delete: async (id) => void calls.push(`delete ${id}`),
     forkForAside: async () => ({ unavailable: "no fork" }),
     commands: async () => [],
-    agents: async () => [],
+    agents: async () => ({ agents: [] }),
     models: async () => [],
     close: async () => {},
   };
