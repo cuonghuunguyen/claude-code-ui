@@ -142,6 +142,15 @@ describe("side session ownership (GH-279)", () => {
     expect(t.sides.sessionSide.has(LOCAL)).toBe(false);
   });
 
+  it("a session a side created is reported to onCreated (the Hub records the Project's last choice); a refused or failed create is not", async () => {
+    const created: unknown[] = [];
+    const a = fakeSide((m) => (m.type === "session.create" ? (m.cwd === "/ct" ? { session: { id: A1, cwd: "/ct", engine: "opencode" } } : { session: { id: LOCAL, cwd: m.cwd } }) : null));
+    const t = await setup(a, undefined, undefined, { router: { onCreated: (side, msg, engine) => void created.push([side, msg.cwd, msg.model, msg.effort, engine]) } });
+    await t.req({ type: "session.create", cwd: "/ct", side: "docker:a", model: "p/m", effort: "high", engine: "opencode" });
+    await t.req({ type: "session.create", cwd: "/other", side: "docker:a" });
+    expect(created).toEqual([["docker:a", "/ct", "p/m", "high", "opencode"]]);
+  });
+
   it("a side's list leaves out local session ids and ids another side lists too", async () => {
     const a = fakeSide((m) => (m.type === "session.list" ? { sessions: [{ id: A1, cwd: "/a", lastActivity: 2 }], projects: ["/a"], recentProjects: [] } : null));
     const b = fakeSide((m) => (m.type === "session.list" ? { sessions: [{ id: LOCAL, cwd: "/host", lastActivity: 3 }, { id: A1, cwd: "/b", lastActivity: 3 }, { id: B1, cwd: "/b", lastActivity: 1 }], projects: [], recentProjects: [] } : null));

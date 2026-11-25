@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { join, posix } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { perf, type PerfSpanHandle } from "./perf.ts";
-import { LOCAL_SIDE, NODE_MIN, NODE_MIN_MAJOR, type ClientMessage, type PushPayload, type ServerMessage, type SettingsResult, type Settings, type SideCheck, type SideCheckFacts, type SideCheckReason, type SshAddResult, type DockerState, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
+import { DEFAULT_ENGINE, ENGINES, LOCAL_SIDE, NODE_MIN, type Engine, NODE_MIN_MAJOR, type ClientMessage, type PushPayload, type ServerMessage, type SettingsResult, type Settings, type SideCheck, type SideCheckFacts, type SideCheckReason, type SshAddResult, type DockerState, type SideInfo, type SidePhase, type SideSetup } from "@claude-ui/protocol";
 import type { BundleSource, Exec } from "./docker-side.ts";
 import type { GitRunOptions, GitRunOutput, GitRunner } from "./git-runner.ts";
 import { SideGone } from "./wsl-git.ts";
@@ -1386,6 +1386,8 @@ export function createRouter(opts: {
   media?: (id: string, msg: Extract<ClientMessage, { type: "fs.media" }>, call: (m: ClientMessage) => Promise<ServerMessage>) => Promise<ServerMessage>;
   /** The browser's list reply: a delta against the `since` version when the daemon holds it (server.ts listVersions, GH-767). Absent: the whole list. Only for a request with `since` (a string, empty for the first one). The lists the router asks of the sides and of the local daemon carry no `since`. */
   encodeList?: (result: ListLike & object, since: unknown) => object;
+  /** A side created a session for a forwarded session.create (`engine`: the session's): the Hub records the Project's last choice (server.ts rememberLastUsed). */
+  onCreated?: (side: string, msg: Extract<ClientMessage, { type: "session.create" }>, engine: Engine) => void;
 }) {
   const { sides, send } = opts;
   const conns = new Map<string, Conn>();
@@ -1396,6 +1398,8 @@ export function createRouter(opts: {
   let nextReq = 1;
   /** Requests forwarded to each side, by the browser's reqId: only a reply or error to one of these is accepted from that side (GH-279). */
   const forwarded = new Map<string, Map<string, string>>();
+  /** session.create requests forwarded to a side (`<side>\0<reqId>`), until its answer: a reply calls `onCreated`. */
+  const creates = new Map<string, Extract<ClientMessage, { type: "session.create" }>>();
   const { noteRequest, requestSide, forgetRequest } = sides;
   /**
    * A side owns a session ID only when it was told so by a reply to a request it was sent (or by its own /clear heir): never an
@@ -1446,7 +1450,13 @@ export function createRouter(opts: {
         // A search streams results before its reply.
         if (m.type !== "sessions.search.result") f.delete(reqId);
       }
+      const create = kind === "session.create" && reqId ? creates.get(`${id}\0${reqId}`) : undefined;
+      if (create) creates.delete(`${id}\0${reqId}`);
       if (m.type === "reply" && !(await noteReply(id, m, kind))) return send(conflict(m));
+      if (create && m.type === "reply") {
+        const engine = (m.result as { session?: { engine?: unknown } } | null)?.session?.engine ?? create.engine ?? DEFAULT_ENGINE;
+        if ((ENGINES as readonly unknown[]).includes(engine)) opts.onCreated!(id, create, engine as Engine);
+      }
       return send(m);
     }
     if (m.type === "event") {
@@ -1481,6 +1491,7 @@ export function createRouter(opts: {
     detach(id) {
       if (!conns.delete(id)) return;
       forwarded.delete(id);
+      for (const key of creates.keys()) if (key.startsWith(`${id}\0`)) creates.delete(key);
       // A call the side can no longer answer ends with side_not_ready (a GET /media waiting for a piece ends).
       for (const [reqId, pend] of pending) if (pend.id === id) pend.settle({ type: "error", reqId, code: "side_not_ready", message: `${id} stopped` });
       send({ type: "sessions.changed" });
@@ -1510,6 +1521,7 @@ export function createRouter(opts: {
     const c = conns.get(id);
     if (!c) return send({ type: "error", reqId: msg.reqId, code: "side_not_ready", message: `${sides.list().find((s) => s.id === id)?.label ?? id} is not running. Open it in the project picker to start it.` });
     forwarded.get(id)?.set(msg.reqId, msg.type);
+    if (msg.type === "session.create" && opts.onCreated) creates.set(`${id}\0${msg.reqId}`, msg);
     c.send(msg);
   };
   const all = () => [LOCAL_SIDE, ...conns.keys()];

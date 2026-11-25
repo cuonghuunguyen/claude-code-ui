@@ -21,6 +21,9 @@ function mainCheckoutOf(cwd: string): string | undefined {
   }
 }
 
+/** The folder that keys the Project of `cwd`: the main checkout when `cwd` is a linked Worktree, else `cwd`. */
+export const projectFolderOf = (cwd: string) => mainCheckoutOf(cwd) ?? cwd;
+
 /** The overrides of the Project at `cwd`: its own entry, else the one of its main checkout when `cwd` is a linked Worktree, else none. */
 export function projectOverrides(settings: Settings, cwd: string): ProjectOverrides {
   const m = own(settings);

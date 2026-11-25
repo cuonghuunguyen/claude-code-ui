@@ -9,7 +9,7 @@ const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, reposito
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
-  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, launcher: DEFAULTS.launcher, labels: { projects: {}, sides: {} }, projects: { overrides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } });
+  expect(createSettings({ file: file() }).get()).toEqual({ orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: GIT, launcher: DEFAULTS.launcher, labels: { projects: {}, sides: {} }, projects: { overrides: {}, lastUsed: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } });
 });
 
 it("set persists; a new store (daemon process) reads the same values", () => {
@@ -480,7 +480,7 @@ it("projects.overrides: one invalid stored entry is dropped, the others stay", (
   const stored = createSettings({ file: f }).get();
   expect(stored.projects.overrides).toEqual({ local: { "/ok": { mode: "plan" } }, "ssh:box": { "/b": { effort: "high" } } });
   // What is kept is always a valid patch: a Hub sync and every later whole-map write pass.
-  expect(checkPatch({ projects: stored.projects })).toBeUndefined();
+  expect(checkPatch({ projects: { overrides: stored.projects.overrides } })).toBeUndefined();
   expect(checkPatch(sideSettings(stored, "ssh:box"))).toBeUndefined();
 });
 
@@ -532,6 +532,25 @@ it("refuses a 201st Project of a Side and a 21st Side, a change of an existing P
   const sides = createSettings();
   for (let i = 0; i < 20; i++) sides.setProject(`ssh:h${i}`, "/p", { mode: "plan" });
   expect(() => sides.setProject("ssh:h20", "/p", { mode: "plan" })).toThrow(/at most/);
+});
+
+it("projects.lastUsed: written only by setLastUsed (a patch is refused), the least recently used Project and Side dropped at the bound", () => {
+  const settings = createSettings();
+  expect(checkPatch({ projects: { lastUsed: {} } })).toMatch(/recorded by the daemon/);
+  for (let i = 0; i < 200; i++) settings.setLastUsed("local", `/p${i}`, { engine: "claude" });
+  expect(settings.setLastUsed("local", "/p0", { engine: "claude" })).toBeUndefined(); // unchanged: nothing written
+  settings.setLastUsed("local", "/p1", { engine: "opencode", model: "p/m", effort: "high" });
+  settings.setLastUsed("local", "/extra", { engine: "claude" });
+  const local = settings.get().projects.lastUsed!.local!;
+  expect(Object.keys(local)).toHaveLength(200);
+  expect(local["/p0"]).toBeUndefined();
+  expect(local["/p1"]).toEqual({ engine: "opencode", model: "p/m", effort: "high" });
+  expect(() => settings.setLastUsed("local", "/bad", { engine: "nope" as never })).toThrow();
+  for (let i = 0; i < 21; i++) settings.setLastUsed(`ssh:h${i}`, "/p", { engine: "claude" });
+  expect(Object.keys(settings.get().projects.lastUsed!)).toHaveLength(20);
+  expect(settings.get().projects.lastUsed!.local).toBeUndefined();
+  expect(sideSettings(settings.get(), "ssh:h20")).toMatchObject({ projects: { overrides: {} } });
+  expect(JSON.stringify(sideSettings(settings.get(), "ssh:h20"))).not.toContain("lastUsed");
 });
 
 it("a key like __proto__ is a plain key", () => {

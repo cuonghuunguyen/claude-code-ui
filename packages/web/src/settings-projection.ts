@@ -12,6 +12,8 @@ export type SettingsView = {
   lastEngine: Engine;
   /** Settings projects.overrides: Project overrides by Side id, then cwd; none on an older daemon. */
   projectOverrides?: Settings["projects"]["overrides"];
+  /** Settings projects.lastUsed: the last Engine, model and effort per Project, by Side id, then cwd; none on an older daemon. */
+  projectLastUsed?: Settings["projects"]["lastUsed"];
   sessionsMode?: PermissionMode;
   workerNotices: boolean;
   ignoreSubmodules: boolean;
@@ -44,6 +46,7 @@ function project(s: Settings, accounts: ClaudeAccountInfo[] | undefined, f: Fact
   return {
     lastEngine: s.sessions?.engine ?? DEFAULT_ENGINE,
     projectOverrides: s.projects?.overrides,
+    projectLastUsed: s.projects?.lastUsed,
     sessionsMode: s.sessions?.defaultMode,
     workerNotices: s.orchestration.workerNotifications !== false,
     ignoreSubmodules: s.git?.ignoreSubmodules === true,

@@ -3,7 +3,7 @@
 // Per-connection state: the session subscriptions and feeds and the running transcript search; `close` releases them.
 import { existsSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
-import { DEFAULT_ENGINE, ENGINES, EFFORTS, imageBlock, KNOWN_HASH_MAX, KNOWN_ID_MAX, KNOWN_MAX, MAX_SEARCH_CHARS, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, BACK_MARKS_MAX, type AsideOpenResult, type PromptResult, type RewindMode, type SessionIdsResult } from "@claude-ui/protocol";
+import { DEFAULT_ENGINE, ENGINES, EFFORTS, imageBlock, KNOWN_HASH_MAX, LOCAL_SIDE, KNOWN_ID_MAX, KNOWN_MAX, MAX_SEARCH_CHARS, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, BACK_MARKS_MAX, type AsideOpenResult, type PromptResult, type RewindMode, type SessionIdsResult } from "@claude-ui/protocol";
 import type { SessionsTypes } from "./areas.ts";
 import type { DaemonContext } from "./daemon-context.ts";
 import type { Area, Connection, Handlers, Msg, Respond } from "./dispatch.ts";
@@ -46,10 +46,10 @@ function parseKnown(v: unknown): Map<string, string> | undefined | null {
   return out;
 }
 
-export type SessionsAreaContext = Pick<DaemonContext, "sessions" | "findSession" | "restoreRefusal" | "locate" | "titleOf" | "list" | "listVersions" | "sessionIds" | "catalogues" | "rememberEngine" | "addProject" | "projects" | "allowed" | "inside" | "refused" | "isRemoving" | "deleting" | "uploads" | "firstSend" | "localFiles" | "localFilesCache" | "mirror" | "holds" | "unhold" | "queue" | "sendPrompt" | "runBash" | "autoContinue" | "briefDropped" | "briefFailed" | "startBrief" | "dropQueuedBrief" | "asideOf" | "settings" | "saveSettings" | "orchestration" | "deleteSessionById" | "appSettings" | "broadcast" | "broadcastSettings" | "clock" | "perfMon" | "logEpoch" | "media" | "checkArtifact" | "scratchpadRoot" | "within" | "transcripts" | "transcriptCwd" | "sessionCwd" | "projectsDir" | "port"> & { opts: Pick<DaemonContext["opts"], "attached" | "replayMaxEvents"> };
+export type SessionsAreaContext = Pick<DaemonContext, "sessions" | "findSession" | "restoreRefusal" | "locate" | "titleOf" | "list" | "listVersions" | "sessionIds" | "catalogues" | "rememberEngine" | "rememberLastUsed" | "addProject" | "projects" | "allowed" | "inside" | "refused" | "isRemoving" | "deleting" | "uploads" | "firstSend" | "localFiles" | "localFilesCache" | "mirror" | "holds" | "unhold" | "queue" | "sendPrompt" | "runBash" | "autoContinue" | "briefDropped" | "briefFailed" | "startBrief" | "dropQueuedBrief" | "asideOf" | "settings" | "saveSettings" | "orchestration" | "deleteSessionById" | "appSettings" | "broadcast" | "broadcastSettings" | "clock" | "perfMon" | "logEpoch" | "media" | "checkArtifact" | "scratchpadRoot" | "within" | "transcripts" | "transcriptCwd" | "sessionCwd" | "projectsDir" | "port"> & { opts: Pick<DaemonContext["opts"], "attached" | "replayMaxEvents"> };
 
 export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): Area<SessionsTypes> {
-  const { sessions, findSession, restoreRefusal, locate, titleOf, list, listVersions, sessionIds, catalogues, rememberEngine, addProject, projects, allowed, inside, refused, isRemoving, deleting, uploads, firstSend, localFiles, localFilesCache, mirror, holds, unhold, queue, sendPrompt, runBash, autoContinue, briefDropped, briefFailed, startBrief, dropQueuedBrief, asideOf, settings, saveSettings, orchestration, deleteSessionById, appSettings, broadcast, broadcastSettings, clock, perfMon, logEpoch, media, checkArtifact, scratchpadRoot, within, transcripts, transcriptCwd, sessionCwd, projectsDir, port, opts } = ctx;
+  const { sessions, findSession, restoreRefusal, locate, titleOf, list, listVersions, sessionIds, catalogues, rememberEngine, rememberLastUsed, addProject, projects, allowed, inside, refused, isRemoving, deleting, uploads, firstSend, localFiles, localFilesCache, mirror, holds, unhold, queue, sendPrompt, runBash, autoContinue, briefDropped, briefFailed, startBrief, dropQueuedBrief, asideOf, settings, saveSettings, orchestration, deleteSessionById, appSettings, broadcast, broadcastSettings, clock, perfMon, logEpoch, media, checkArtifact, scratchpadRoot, within, transcripts, transcriptCwd, sessionCwd, projectsDir, port, opts } = ctx;
   const unsubscribes = new Map<string, () => void>();
   /** This connection's session feeds: events go to the socket while its buffer allows, else from the log later (feed.ts). */
   const feeds = createFeeds(conn.ws, (e) => conn.send(e));
@@ -98,6 +98,8 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     if (!s) return r.fail("worktree_removing", "This worktree is being removed");
     if (draft) remember(firstSend.byDraft, draft, s.id);
     rememberEngine(catalogue.engine.name, cwd);
+    // On a Side the Hub records it (sides.ts `onCreated`): the web reads the Hub's settings only.
+    if (!conn.fromHub) rememberLastUsed(LOCAL_SIDE, cwd, catalogue.engine.name, msg.model, msg.effort);
     return r.reply({ session: s.info() });
   };
   const defaultMode = async (msg: Msg<"session.defaultMode">, r: Respond) => {

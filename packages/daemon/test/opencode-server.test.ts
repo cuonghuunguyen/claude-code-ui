@@ -133,9 +133,10 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     expect(JSON.parse(readFileSync(join(v2.root, "sessions.json"), "utf8"))).toHaveProperty("ses_hist");
   });
 
-  it("session.create with engine opencode starts one authenticated local server, tags the session, remembers the engine and lists it", async () => {
+  it("session.create with engine opencode starts one authenticated local server, tags the session, remembers the engine (globally and as the Project's last choice, overrides untouched) and lists it", async () => {
     const d = await boot();
-    const created = await d.ok({ type: "session.create", cwd: d.project, engine: "opencode" });
+    d.appSettings.setProject("local", d.project, { mode: "plan" });
+    const created = await d.ok({ type: "session.create", cwd: d.project, engine: "opencode", model: "p/m", effort: "high" });
     const id: string = created.result.session.id;
     expect(id).toMatch(/^ses_/);
     expect(created.result.session).toMatchObject({ engine: "opencode", capabilities: OPENCODE_CAPABILITIES, cwd: d.project });
@@ -146,6 +147,7 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     expect(requests.length).toBeGreaterThan(0);
     expect(requests.every((r) => r.authed)).toBe(true);
     expect(d.appSettings.get().sessions.engine).toBe("opencode");
+    expect(d.appSettings.get().projects).toEqual({ overrides: { local: { [d.project]: { mode: "plan" } } }, lastUsed: { local: { [d.project]: { engine: "opencode", model: "p/m", effort: "high" } } } });
     await until(() => id in JSON.parse(readFileSync(join(d.root, "sessions.json"), "utf8")));
     const listed = (await d.ok({ type: "session.list" })).result;
     expect(listed.sessions.find((s: any) => s.id === id)).toMatchObject({ engine: "opencode", cwd: d.project });
