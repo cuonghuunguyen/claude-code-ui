@@ -1491,3 +1491,85 @@ describe("OpenCode 2 sessions: the daemon's MCP servers (orchestration, claude-u
     expect(s.find("notice", (n) => n.id.startsWith(`${s.id}:mcp_failed:`))).toMatchObject({ level: "warning", text: expect.stringMatching(/^Could not attach the orchestration tools to OpenCode: /) });
   });
 });
+
+describe("OpenCode 2 sessions: a subagent's run timeline", { timeout: TEST_MS }, () => {
+  /** The session row of the subagent's child session (its parent is not ours to name: the link comes from the call). */
+  const withChild = { projectDirInData: true, data: { sessions: [row("ses_child", "PROJECT", "Look around", 9000, { parentID: "ses_parent" })] } };
+  const statuses = (s: ReturnType<Awaited<ReturnType<typeof boot>>["view"]>, id: string) => s.parts().filter((p) => p.id === id).map((p) => (p as { status?: string }).status);
+
+  it("the parts of the child session show under the call; the card runs on after the call returned and only the end notice ends it", async () => {
+    const d = await boot({ script: ["subagent"], ...withChild });
+    const s = await d.open();
+    await s.prompt("Run a subagent");
+    await until(() => s.find("subagent", (p) => p.id === "call_sub")?.status === "done");
+    expect(s.find("tool_call", (p) => p.id === "call_child")).toMatchObject({ parentId: "call_sub", tool: "Bash", status: "done", input: { command: "echo sub" } });
+    expect(s.last("call_child:result")).toMatchObject({ parentId: "call_sub", output: "sub\n", isError: false });
+    expect(s.last("msg_c2:text:0")).toMatchObject({ parentId: "call_sub", text: "done" });
+    // The call returned with status running and the child went idle with work left (state running): neither ended the card.
+    expect(statuses(s, "call_sub").slice(0, -1)).not.toContain("done");
+    expect(statuses(s, "call_sub")).toContain("running");
+    // The prompt that started the child and the notices are no bubbles.
+    expect(s.parts().filter((p) => p.type === "user_text").map((p) => p.type === "user_text" && p.text)).toEqual(["Run a subagent"]);
+  });
+
+  it("an early event of the child, before its call names it, shows in order once the link comes", async () => {
+    const d = await boot({ script: ["subagent-early"], ...withChild });
+    const s = await d.open();
+    await s.prompt("Run a subagent");
+    await until(() => !!s.last("msg_c1:text:0"));
+    expect(s.last("msg_c1:text:0")).toMatchObject({ parentId: "call_sub", text: "early words" });
+  });
+
+  it("a permission ask of the child is a step of the card: Deny marks it denied under the call and answers under the child's id", async () => {
+    const d = await boot({ script: ["subagent-permission"], ...withChild });
+    const s = await d.open();
+    await s.prompt("Run a subagent");
+    await until(() => !!s.find("permission_request"));
+    const req = s.find("permission_request")!;
+    expect(req).toMatchObject({ tool: "Bash", toolUseId: "call_child", input: { command: "echo sub" } });
+    await d.ok({ type: "permission.respond", requestId: req.requestId, decision: "deny", message: "no" });
+    await until(() => s.find("tool_call", (p) => p.id === "call_child")?.status === "denied");
+    expect(s.find("tool_call", (p) => p.id === "call_child")).toMatchObject({ parentId: "call_sub" });
+    expect(d.requests("POST", `/api/session/ses_child/permission/${req.requestId}/reply`)[0]!.body).toMatchObject({ decision: "reject" });
+  });
+
+  it("Stop agent interrupts the child session; an idle child has nothing to interrupt, the card stops at once", async () => {
+    const d = await boot({ script: ["subagent"], ...withChild });
+    const s = await d.open();
+    await s.prompt("Run a subagent");
+    await until(() => s.find("subagent", (p) => p.id === "call_sub")?.status === "done");
+    // A second notice would end it again: Stop on a finished card still reaches the child (OpenCode answers it is not running).
+    await d.ok({ type: "session.stopSubagent", sessionId: s.id, subagentId: "call_sub" });
+    expect(d.requests("POST", "/api/session/ses_child/interrupt")).toHaveLength(1);
+    expect((await d.request({ type: "session.stopSubagent", sessionId: s.id, subagentId: "call_unknown" })).type).toBe("error");
+  });
+
+  it("restore: the stored subagent call, its child's messages (nested subagents too) and its end notice give the parts and ids of the live run", async () => {
+    const tool = (id: string, name: string, input: object, extra: object = {}) => ({ type: "tool", id, name, state: { status: "completed", input, content: [{ type: "text", text: "ok" }], ...extra }, time: { created: 2, ran: 3, completed: 4 } });
+    const sub = (id: string, child: string, description: string) => tool(id, "subagent", { description, prompt: "p" }, { metadata: { sessionID: child, status: "running" } });
+    const messages = {
+      ses_own: [
+        { id: "msg_u", type: "user", text: "Run a subagent", time: { created: 1 } },
+        { id: "msg_a", type: "assistant", agent: "build", model: { id: "m", providerID: "fake" }, time: { created: 2 }, content: [sub("call_sub", "ses_child", "Look around")] },
+        { id: "msg_n", type: "synthetic", time: { created: 9 }, text: '<subagent sessionID="ses_child" state="completed" description="Look around">\ndone\n</subagent>', metadata: { source: "subagent", childID: "ses_child", state: "completed" } },
+      ],
+      ses_child: [
+        { id: "msg_c1", type: "assistant", agent: "general", model: { id: "m", providerID: "fake" }, time: { created: 5 }, content: [tool("call_child", "shell", { command: "echo sub" }), sub("call_inner", "ses_inner", "Dig")] },
+        { id: "msg_cn", type: "synthetic", time: { created: 8 }, text: "n", metadata: { source: "subagent", childID: "ses_inner", state: "error" } },
+      ],
+      ses_inner: [{ id: "msg_i1", type: "assistant", agent: "general", model: { id: "m", providerID: "fake" }, time: { created: 6 }, content: [tool("call_deep", "read", { path: "a.txt" })] }],
+    };
+    const d = await boot({ projectDirInData: true, data: { sessions: [row("ses_own", "PROJECT", "Owner", 5000), row("ses_child", "PROJECT", "Look around", 4000, { parentID: "ses_own" }), row("ses_inner", "PROJECT", "Dig", 3000, { parentID: "ses_child" })], messages } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    for (let i = 0; i < 80 && !(await d.ok({ type: "session.list" })).sessions.some((x: any) => x.id === "ses_own"); i++) await sleep(50);
+    await d.ok({ type: "session.subscribe", sessionId: "ses_own", sinceSeq: 0 });
+    const s = d.view("ses_own");
+    await until(() => !!s.last("call_deep"));
+    expect(s.last("call_sub")).toMatchObject({ type: "subagent", status: "done", description: "Look around" });
+    expect(s.last("call_sub").parentId).toBeUndefined();
+    expect(s.last("call_child")).toMatchObject({ parentId: "call_sub", tool: "Bash", status: "done" });
+    // A nested subagent: its card shows under the outer call, its steps under its own call; its notice says error.
+    expect(s.last("call_inner")).toMatchObject({ type: "subagent", parentId: "call_sub", status: "error" });
+    expect(s.last("call_deep")).toMatchObject({ parentId: "call_inner", tool: "Read" });
+  });
+});

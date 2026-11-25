@@ -1,0 +1,277 @@
+[
+ {
+  "event": "session.execution.started",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "agent": "build",
+   "model": {
+    "id": "m",
+    "providerID": "fake"
+   },
+   "assistantMessageID": "$A1"
+  }
+ },
+ {
+  "event": "session.tool.input.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "call_sub",
+   "name": "subagent"
+  }
+ },
+ {
+  "event": "session.tool.called",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "call_sub",
+   "input": {
+    "description": "Look around",
+    "prompt": "Run echo sub",
+    "agent": "general"
+   },
+   "executed": false
+  }
+ },
+ {
+  "event": "session.tool.progress",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "call_sub",
+   "metadata": {
+    "sessionID": "ses_child",
+    "status": "running"
+   }
+  }
+ },
+ {
+  "event": "session.inbox.enqueued",
+  "data": {
+   "inboxID": "msg_cu",
+   "sessionID": "ses_child",
+   "item": {
+    "type": "user",
+    "payload": {
+     "text": "You are a subagent spawned by another session.\nRun echo sub"
+    },
+    "delivery": "steer"
+   }
+  }
+ },
+ {
+  "event": "session.tool.success",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "call_sub",
+   "content": [
+    {
+     "type": "text",
+     "text": "The subagent is working in the background (sessionID: ses_child)."
+    }
+   ],
+   "metadata": {
+    "sessionID": "ses_child",
+    "status": "running",
+    "truncated": false
+   },
+   "executed": false
+  }
+ },
+ {
+  "event": "session.step.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "finish": "tool-calls",
+   "tokens": {
+    "input": 1,
+    "output": 1,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   },
+   "cost": 0,
+   "files": []
+  }
+ },
+ {
+  "event": "session.execution.succeeded",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "ses_child",
+   "agent": "general",
+   "model": {
+    "id": "m",
+    "providerID": "fake"
+   },
+   "assistantMessageID": "msg_c1"
+  }
+ },
+ {
+  "event": "session.tool.input.started",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c1",
+   "id": "call_child",
+   "name": "shell"
+  }
+ },
+ {
+  "event": "session.tool.called",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c1",
+   "id": "call_child",
+   "input": {
+    "command": "echo sub",
+    "description": "Print sub"
+   },
+   "executed": false
+  }
+ },
+ {
+  "event": "session.tool.success",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c1",
+   "id": "call_child",
+   "content": [
+    {
+     "type": "text",
+     "text": "sub\n"
+    }
+   ],
+   "metadata": {
+    "status": "completed",
+    "truncated": false,
+    "exit": 0
+   },
+   "executed": false
+  }
+ },
+ {
+  "event": "session.step.ended",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c1",
+   "finish": "tool-calls",
+   "tokens": {
+    "input": 1,
+    "output": 1,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   },
+   "cost": 0,
+   "files": []
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "ses_child",
+   "agent": "general",
+   "model": {
+    "id": "m",
+    "providerID": "fake"
+   },
+   "assistantMessageID": "msg_c2"
+  }
+ },
+ {
+  "event": "session.text.started",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c2",
+   "ordinal": 0
+  }
+ },
+ {
+  "event": "session.text.ended",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c2",
+   "ordinal": 0,
+   "text": "done"
+  }
+ },
+ {
+  "event": "session.step.ended",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c2",
+   "finish": "stop",
+   "tokens": {
+    "input": 1,
+    "output": 1,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   },
+   "cost": 0,
+   "files": []
+  }
+ },
+ {
+  "event": "session.inbox.enqueued",
+  "data": {
+   "inboxID": "msg_notice",
+   "sessionID": "$SESSION",
+   "item": {
+    "type": "synthetic",
+    "payload": {
+     "text": "<subagent sessionID=\"ses_child\" state=\"running\" description=\"Look around\">\ndone\n\nBackground work still running:\n- shell (sh_x): sleep 20\n</subagent>",
+     "description": "Look around",
+     "metadata": {
+      "source": "subagent",
+      "childID": "ses_child",
+      "agent": "General",
+      "state": "running"
+     }
+    },
+    "delivery": "steer"
+   }
+  }
+ },
+ {
+  "event": "session.inbox.enqueued",
+  "data": {
+   "inboxID": "msg_notice",
+   "sessionID": "$SESSION",
+   "item": {
+    "type": "synthetic",
+    "payload": {
+     "text": "<subagent sessionID=\"ses_child\" state=\"completed\" description=\"Look around\">\ndone\n</subagent>",
+     "description": "Look around",
+     "metadata": {
+      "source": "subagent",
+      "childID": "ses_child",
+      "agent": "General",
+      "state": "completed"
+     }
+    },
+    "delivery": "steer"
+   }
+  }
+ }
+]
