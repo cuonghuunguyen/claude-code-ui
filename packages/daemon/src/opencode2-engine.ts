@@ -371,7 +371,7 @@ class OpenCode2Session implements EngineSession {
     for (const [childId, c] of Object.entries(h.children ?? {})) {
       const child = this.children.get(childId);
       // An inline task's session starts with its prompt, which is the call's input: not a step.
-      if (child) for (const part of child.mapper.history(c.kind === "inline" ? c.messages.filter((m) => m.type !== "user") : c.messages)) this.session.emit({ ...part, parentId: child.callId });
+      if (child) for (const part of child.mapper.history(c.messages.filter((m) => m.type !== "user"))) this.session.emit({ ...part, parentId: child.callId });
     }
     for (const m of h.messages) this.noteUsage(m);
     void this.emitUsage();
@@ -1626,8 +1626,10 @@ class OpenCode2Session implements EngineSession {
     const childId = this.children.childOf(callId) ?? this.mapper.childOf(callId);
     if (!childId) return false;
     const client = await this.server.client();
-    const r = await client.session.interrupt({ sessionID: childId });
-    if (r?.interrupted === false) {
+    // A child session OpenCode no longer has (deleted) cannot be stopped: no running run, as for an unknown id.
+    const r = await client.session.interrupt({ sessionID: childId }).catch(() => undefined);
+    if (!r) return false;
+    if (r.interrupted === false) {
       // The idle child left background shells running: they are killed with it (their end notices then arrive as usual).
       const child = this.children.get(childId);
       if (child)

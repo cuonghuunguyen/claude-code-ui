@@ -119,3 +119,18 @@ it("a subagent call links its child session live and stored; the card runs after
   // No notice yet: the child still runs.
   expect(new OpenCode2Mapper().history([{ id: A, type: "assistant", content: [{ type: "tool", id: "call_s", name: "subagent", state: { status: "completed", input: { description: "Look" }, metadata: meta, content: [] } }] }])[0]).toMatchObject({ status: "running" });
 });
+
+it("a subagent notice's state is its text's: the recorded notice of an idle child with a shell left says running in the text and completed in the metadata, and is no end", () => {
+  const m = new OpenCode2Mapper();
+  m.event("session.tool.input.started", { ...base, id: "call_s", name: "subagent" });
+  m.event("session.tool.called", { ...base, id: "call_s", input: { description: "Look", prompt: "p" } });
+  m.event("session.tool.success", { ...base, id: "call_s", content: [], metadata: { sessionID: "ses_c", status: "running" } });
+  const notice = (state: string) => ({ item: { type: "synthetic", payload: { text: `<subagent sessionID="ses_c" state="${state}" description="Look">\ndone\n</subagent>`, metadata: { source: "subagent", childID: "ses_c", state: "completed" } } } });
+  expect(m.inbox(notice("running"))).toEqual([]);
+  expect(m.inbox(notice("completed"))[0]).toMatchObject({ id: "call_s", status: "done" });
+  // Stored: the same two notices; the last real end closes the card.
+  const call = { id: A, type: "assistant", content: [{ type: "tool", id: "call_s", name: "subagent", state: { status: "completed", input: { description: "Look" }, metadata: { sessionID: "ses_c", status: "running" }, content: [] } }] } as OpenCode2Message;
+  const syn = (state: string, at: number): OpenCode2Message => ({ id: `msg_${state}`, type: "synthetic", text: notice(state).item.payload.text, metadata: notice(state).item.payload.metadata, time: { created: at } });
+  expect(new OpenCode2Mapper().history([call, syn("running", 5)])[0]).toMatchObject({ status: "running" });
+  expect(new OpenCode2Mapper().history([call, syn("running", 5), syn("completed", 9)])[0]).toMatchObject({ status: "done", endedAt: 9 });
+});

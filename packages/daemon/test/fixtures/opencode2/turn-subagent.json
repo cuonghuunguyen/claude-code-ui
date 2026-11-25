@@ -246,7 +246,7 @@
       "source": "subagent",
       "childID": "ses_child",
       "agent": "General",
-      "state": "running"
+      "state": "completed"
      }
     },
     "delivery": "steer"

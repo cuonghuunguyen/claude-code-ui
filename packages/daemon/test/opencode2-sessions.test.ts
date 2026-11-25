@@ -1598,6 +1598,17 @@ describe("OpenCode 2 sessions: a subagent's run timeline", { timeout: TEST_MS },
     expect((await d.request({ type: "session.stopSubagent", sessionId: s.id, subagentId: "call_unknown" })).type).toBe("error");
   });
 
+  it("Stop agent on a subagent whose session is gone answers unknown_subagent, not a failure", async () => {
+    // No session row for the child: OpenCode answers the interrupt 404.
+    const d = await boot({ script: ["subagent"] });
+    const s = await d.open();
+    await s.prompt("Run a subagent");
+    await until(() => s.find("subagent", (p) => p.id === "call_sub")?.status === "done");
+    const r = await d.request({ type: "session.stopSubagent", sessionId: s.id, subagentId: "call_sub" });
+    expect(r).toMatchObject({ type: "error", code: "unknown_subagent" });
+    expect(d.requests("POST", "/api/session/ses_child/interrupt")).toHaveLength(1);
+  });
+
   it("restore: the stored subagent call, its child's messages (nested subagents too) and its end notice give the parts and ids of the live run", async () => {
     const tool = (id: string, name: string, input: object, extra: object = {}) => ({ type: "tool", id, name, state: { status: "completed", input, content: [{ type: "text", text: "ok" }], ...extra }, time: { created: 2, ran: 3, completed: 4 } });
     const sub = (id: string, child: string, description: string) => tool(id, "subagent", { description, prompt: "p" }, { metadata: { sessionID: child, status: "running" } });
@@ -1608,6 +1619,7 @@ describe("OpenCode 2 sessions: a subagent's run timeline", { timeout: TEST_MS },
         { id: "msg_n", type: "synthetic", time: { created: 9 }, text: '<subagent sessionID="ses_child" state="completed" description="Look around">\ndone\n</subagent>', metadata: { source: "subagent", childID: "ses_child", state: "completed" } },
       ],
       ses_child: [
+        { id: "msg_cu", type: "user", text: "You are a subagent spawned by another session.\nRun echo sub", time: { created: 4 } },
         { id: "msg_c1", type: "assistant", agent: "general", model: { id: "m", providerID: "fake" }, time: { created: 5 }, content: [tool("call_child", "shell", { command: "echo sub" }), sub("call_inner", "ses_inner", "Dig")] },
         { id: "msg_cn", type: "synthetic", time: { created: 8 }, text: "n", metadata: { source: "subagent", childID: "ses_inner", state: "error" } },
       ],
@@ -1625,6 +1637,8 @@ describe("OpenCode 2 sessions: a subagent's run timeline", { timeout: TEST_MS },
     // A nested subagent: its card shows under the outer call, its steps under its own call; its notice says error.
     expect(s.last("call_inner")).toMatchObject({ type: "subagent", parentId: "call_sub", status: "error" });
     expect(s.last("call_deep")).toMatchObject({ parentId: "call_inner", tool: "Read" });
+    // The prompt that started the child is no bubble after a restart either (not shown live).
+    expect([...new Set(s.parts().filter((p) => p.type === "user_text").map((p) => p.type === "user_text" && p.text))]).toEqual(["Run a subagent"]);
   });
 
   it("a background shell of a subagent: restored cards end like the session's own, Kill and output reach it, a live exit ends its card under the call", async () => {
