@@ -2,6 +2,7 @@
 // (`GET /api/event`, opencode-server.ts) feeds every open session; prompts, Stop and permission replies go back as client calls.
 // Has: create, list, prompt, stream, stop, permissions, models, the read-only rules of an Aside, rewind, /undo /redo /compact, bash mode, questions, agents, OpenCode's
 // slash commands, inline tasks, Fork runs and the daemon's MCP servers (orchestration, claude-ui).
+import { limitOfFailure, type LimitStop } from "./opencode-limit.ts";
 import { randomUUID } from "node:crypto";
 import type { OpenCodeClient } from "@opencode/client";
 import { permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
@@ -238,6 +239,8 @@ class OpenCode2Session implements EngineSession {
   private turnAt = 0;
   private aborted = false;
   private failed = false;
+  /** The turn ended on a provider usage / rate limit (GH-973): `finish()` tells the auto-continue scheduler. */
+  private limit: LimitStop | undefined;
   private resyncing: Promise<void> | undefined;
   /** Counts Stops: a prompt that was preparing when one came is not sent; a turn begun after the last one has the current count. */
   private stops = 0;
@@ -883,6 +886,7 @@ class OpenCode2Session implements EngineSession {
     this.turnAt = Date.now();
     this.aborted = false;
     this.failed = false;
+    this.limit = undefined;
     this.turnKey = ascending("msg");
     this.turnAssistant = undefined;
     this.errorKeys = new Set();
@@ -896,6 +900,10 @@ class OpenCode2Session implements EngineSession {
     const { usage, cost } = this.mapper.turn();
     if (!this.aborted) this.session.emit({ type: "turn_result", id: `turn:${ascending("msg")}`, durationMs: Date.now() - this.turnAt, ...(cost > 0 && { costUsd: cost }), usage, isError: this.failed });
     this.toIdle();
+    const limit = this.limit;
+    this.limit = undefined;
+    // After idle, like claude-engine: the queue hold of onLimitStop lands before the queue's deferred kick. Never for a stopped turn.
+    if (limit && !this.aborted) this.opts.onLimitStop?.(this.id, limit.resetsAt);
     void this.emitUsage();
   }
 
@@ -956,6 +964,7 @@ class OpenCode2Session implements EngineSession {
       case "session.execution.failed":
         if (this.clear?.run) return void (this.clear = undefined);
         this.failed = true;
+        this.limit = limitOfFailure(d.error, Date.now());
         this.showError(d.error);
         return this.finish();
       case "session.execution.interrupted":
@@ -980,6 +989,7 @@ class OpenCode2Session implements EngineSession {
         // Interrupted steps are the Stop's: `execution.interrupted` shows it.
         if (d.error?.type === "aborted") return;
         this.failed = true;
+        this.limit ??= limitOfFailure(d.error, Date.now());
         return this.showError(d.error);
       case "session.retry.scheduled":
         return this.setRetry({ attempt: d.attempt ?? 1, message: failureText(d.error), ...(typeof d.at === "number" && { next: d.at }) });

@@ -1,5 +1,6 @@
 // The OpenCode Engine (ADR 0012, docs/spec.md "OpenCode engine"): sessions run on the daemon's OpenCode server (opencode-server.ts). One event
 // stream of the server feeds every open session; prompts, permissions and questions go back as HTTP calls.
+import { limitOfApiError, type LimitStop } from "./opencode-limit.ts";
 import { randomUUID } from "node:crypto";
 import { permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT } from "./aside.ts";
@@ -242,6 +243,8 @@ class OpenCodeSession implements EngineSession {
   private turnAt = 0;
   private aborted = false;
   private failed = false;
+  /** The turn ended on a provider usage / rate limit (GH-973): `finish()` tells the auto-continue scheduler. */
+  private limit: LimitStop | undefined;
   private resyncing: Promise<void> | undefined;
   /** Stop was pressed since the last prompt: a prompt still waiting for the stream is not sent. */
   private stopped = false;
@@ -738,6 +741,7 @@ class OpenCodeSession implements EngineSession {
     this.turnAt = Date.now();
     this.aborted = false;
     this.failed = false;
+    this.limit = undefined;
     this.selfAbort = undefined;
     this.turnKey = ascending("msg");
     this.turnAssistant = undefined;
@@ -768,6 +772,10 @@ class OpenCodeSession implements EngineSession {
     if (this.turnStop < this.stops.count && !this.aborted) (this.aborted = true, this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` }));
     if (!this.aborted && !shell) this.session.emit({ type: "turn_result", id: `turn:${ascending("msg")}`, durationMs: Date.now() - this.turnAt, ...(cost > 0 && { costUsd: cost }), usage, isError: this.failed });
     this.toIdle();
+    const limit = this.limit;
+    this.limit = undefined;
+    // After idle, like claude-engine: the queue hold of onLimitStop lands before the queue's deferred kick. Never for a stopped turn.
+    if (limit && !this.aborted) this.opts.onLimitStop?.(this.id, limit.resetsAt);
     void this.emitUsage();
     if (this.selfAbort) void this.explainAbort(this.selfAbort);
     void this.engine.folderIdle(this.cwd);
@@ -1144,6 +1152,7 @@ class OpenCodeSession implements EngineSession {
           return this.session.emit({ type: "turn_interrupted", id: `interrupted:${ascending("msg")}` });
         }
         this.failed = true;
+        this.limit = limitOfApiError(p.error, Date.now());
         // One warning per turn, in its own place: the id is the turn's assistant message (the history shows the same one after a restore), else the turn's.
         const key = errorKey(p.error);
         if (this.errorKeys.has(key)) return;
