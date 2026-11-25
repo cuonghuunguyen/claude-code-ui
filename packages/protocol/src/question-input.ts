@@ -55,7 +55,7 @@ export function checkAnswer(input: QuestionInput, text: string): InputError | un
   }
 }
 
-/** Whether `q` is shown: every condition of `q.when` holds on `answers` (by question text). A condition on an inactive question fails. */
+/** Whether `q` is shown (OpenCode 2's rule: no answer to the controlling field = not shown; a list answer holds a value when it includes it): every condition of `q.when` holds on `answers` (by question text). A condition on an inactive question fails. */
 export function isActive(q: Question, answers: Record<string, string>, questions: Question[], seen: Set<string> = new Set()): boolean {
   if (!q.when?.length) return true;
   if (seen.has(q.question)) return false;
@@ -64,6 +64,8 @@ export function isActive(q: Question, answers: Record<string, string>, questions
     const target = questions.find((x) => x.question === w.question);
     if (!target || !isActive(target, answers, questions, path)) return false;
     const text = answers[w.question] ?? "";
+    // OpenCode 2 (`when` filter of its form): a controlling field with no answer fails the condition, eq and neq alike.
+    if (text === "") return false;
     const holds = text === w.value || (target.multiSelect && text.split(", ").includes(w.value));
     return holds === (w.op !== "neq");
   });
