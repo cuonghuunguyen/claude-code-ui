@@ -2259,7 +2259,6 @@ const errorNotices = (s: { parts: () => Part[] }) => s.parts().filter((p) => p.t
 const status = (id: string, status: object) => ({ type: "session.status", properties: { sessionID: id, status } });
 const RETRY_3 = { type: "retry", attempt: 3, message: "Rate limit reached", next: 4102444800000 };
 
-/** The turn-retry-fail fixture is a 429 with a retry-after: a limit stop since GH-973. These cases are about the retry line, not the continue. */
 const NO_AUTO = { usageLimit: { autoContinue: false } };
 
 describe("OpenCode retry and model errors (GH-683)", { timeout: 30_000 }, () => {
@@ -2300,7 +2299,7 @@ describe("OpenCode retry and model errors (GH-683)", { timeout: 30_000 }, () => 
   });
 
   it("a turn that fails after its retries ends with one error notice of its own, after its prompt; a second failing turn has its own; retry state cleared", async () => {
-    const d = await boot({ script: ["retry-fail", "retry-fail"], settings: NO_AUTO });
+    const d = await boot({ script: ["retry-fail", "retry-fail"] });
     const s = await d.open();
     await s.prompt("first");
     await until(() => s.parts().filter((p) => p.type === "turn_result").length === 1 && s.states().at(-1) === "idle");
@@ -2320,7 +2319,7 @@ describe("OpenCode retry and model errors (GH-683)", { timeout: 30_000 }, () => 
   });
 
   it("a retry in a later turn shows model_retry again and clears it at the reply", async () => {
-    const d = await boot({ script: ["retry-fail", "retry"], settings: NO_AUTO });
+    const d = await boot({ script: ["retry-fail", "retry"] });
     const s = await d.open();
     await s.prompt("first");
     await until(() => s.parts().filter((p) => p.type === "turn_result").length === 1 && s.states().at(-1) === "idle");
@@ -2480,6 +2479,16 @@ describe("OpenCode auto-continue after a provider limit (GH-973)", { timeout: 30
     await new Promise((r) => setTimeout(r, 300));
     expect(stops(s)).toEqual([]);
     expect(errorNotices(s).length).toBeGreaterThan(0);
+  });
+
+  it("a 429 with a short retry-after (4 s) and no usage-limit marker is a per-minute rate limit: error only, no limit stop", async () => {
+    const d = await boot({ script: ["retry-fail"], autoContinue: { graceMs: 0, gapMs: 100 } });
+    const s = await d.open();
+    await s.prompt("hi");
+    await idle(s);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(stops(s)).toEqual([]);
+    expect(prompts(d, s.id)).toEqual(["hi"]);
   });
 
   it("setting off: the limit stop shows, no continue is scheduled or sent", async () => {

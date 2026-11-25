@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createAutoContinue } from "../src/auto-continue.ts";
+import { createAutoContinue, MAX_TRIES, REPEAT_WINDOW_MS } from "../src/auto-continue.ts";
 
 const T0 = Date.UTC(2026, 9, 8, 12, 0, 0);
 function setup(enabled = { on: true }, sendResult = true) {
@@ -151,5 +151,24 @@ describe("auto-continue", () => {
     const { ac } = setup();
     ac.schedule("a", T0 - 20_000);
     expect(ac.scheduled().get("a")).toBe(T0 + 10_000);
+  });
+
+  it("a relative reset time (OpenCode: now + retry-after, new at every hit) counts tries per session within the repeat window: at most MAX_TRIES continues (GH-973)", async () => {
+    const { ac, send } = setup();
+    for (let i = 0; i < 8; i++) {
+      await vi.advanceTimersByTimeAsync(100_000);
+      ac.schedule("a", Date.now() + 20_000, true);
+      await vi.advanceTimersByTimeAsync(120_000);
+    }
+    expect(send).toHaveBeenCalledTimes(MAX_TRIES);
+  });
+
+  it("a relative hit later than the repeat window after the last continue starts the count over", async () => {
+    const { ac, send } = setup();
+    for (let i = 0; i < 4; i++) {
+      ac.schedule("a", Date.now() + 20_000, true);
+      await vi.advanceTimersByTimeAsync(REPEAT_WINDOW_MS + 60_000);
+    }
+    expect(send).toHaveBeenCalledTimes(4);
   });
 });

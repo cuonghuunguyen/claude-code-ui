@@ -3,8 +3,10 @@
  * "limit stop" for the auto-continue scheduler, and when the limit resets. Pure: the engines call it at the failure of a turn.
  *
  * Reset time, in OpenCode's own order (opencode/src/session/retry.ts): `retry-after-ms`, then `retry-after` (seconds or an HTTP date).
- * A 429 without a reset time is a limit stop only when the body names a usage limit (no reset time then); else a plain error.
+ * A 429 is a limit stop when the reset wait is at least MIN_WAIT_MS (a per-minute rate limit sends a short retry-after too), or when the body
+ * names a usage limit (FreeUsageLimitError / GoUsageLimitError; with its reset time when known, else without). Else a plain error.
  */
+export const MIN_WAIT_MS = 5 * 60_000;
 export type LimitStop = { resetsAt?: number };
 
 const USAGE_LIMIT = /FreeUsageLimitError|GoUsageLimitError/;
@@ -31,13 +33,16 @@ export function resetOfHeaders(h: Record<string, unknown> | undefined, now: numb
   return at !== undefined && Number.isFinite(at) && at > now ? Math.round(at) : undefined;
 }
 
-const result = (resetsAt: number | undefined, body: unknown): LimitStop | undefined =>
-  resetsAt !== undefined ? { resetsAt } : typeof body === "string" && USAGE_LIMIT.test(body) ? {} : undefined;
+const result = (resetsAt: number | undefined, body: unknown, now: number): LimitStop | undefined => {
+  const marked = typeof body === "string" && USAGE_LIMIT.test(body);
+  if (resetsAt !== undefined && (marked || resetsAt - now >= MIN_WAIT_MS)) return { resetsAt };
+  return marked ? {} : undefined;
+};
 
 /** OpenCode 1: the `error` of `session.error`. */
 export function limitOfApiError(error: { name?: string; data?: Record<string, any> } | undefined, now: number): LimitStop | undefined {
   if (error?.name !== "APIError" || error.data?.statusCode !== 429) return undefined;
-  return result(resetOfHeaders(error.data.responseHeaders, now), error.data.responseBody);
+  return result(resetOfHeaders(error.data.responseHeaders, now), error.data.responseBody, now);
 }
 
 /** OpenCode 2: the `error` of `session.execution.failed` (`{type, message, status?, response?: {body}, retryAfterMs?}`). */
@@ -46,5 +51,5 @@ export function limitOfFailure(error: { type?: string; status?: number; response
   if (error.status !== 429 && !/rate_limit/i.test(error.type ?? "")) return undefined;
   const ms = typeof error.retryAfterMs === "number" && error.retryAfterMs > 0 ? now + error.retryAfterMs : undefined;
   const body = error.response?.body;
-  return result(ms === undefined ? undefined : Math.round(ms), typeof body === "string" ? body : body === undefined ? undefined : JSON.stringify(body));
+  return result(ms === undefined ? undefined : Math.round(ms), typeof body === "string" ? body : body === undefined ? undefined : JSON.stringify(body), now);
 }
