@@ -501,7 +501,7 @@ const server = createServer((req, res) => {
       if (m[2] && req.method === "PUT") return (entries.set(m[2], body.value), res.writeHead(204), res.end());
       if (m[2] && req.method === "DELETE") return (entries.delete(m[2]), res.writeHead(204), res.end());
     }
-    if (p === "/api/form") return json(res, 200, { location: { directory: dir }, data: [...forms.values()].map((f) => f.form).filter((f) => sessions.get(f.sessionID)?.directory === dir || !dir) });
+    if (p === "/api/form") return json(res, 200, { location: { directory: dir }, data: [...forms.values()].map((f) => f.form).filter((f) => sessions.get(f.sessionID)?.directory === dir || !dir || (f.sessionID === "global" && forms.get(f.id)?.dir === dir)) });
     if (p === "/api/project") return json(res, 200, [...new Set([...sessions.values()].map((x) => x.projectID))].map((pid) => ({ id: pid, canonical: [...sessions.values()].find((x) => x.projectID === pid).directory, vcs: "git", time: { created: 1, updated: 1 }, sandboxes: [] })));
     if (p === "/api/shell" && req.method === "GET") return json(res, 200, { location: { directory: dir }, data: [...shells.values()].filter((x) => x.info && x.info.cwd === dir).map((x) => x.info) });
     if ((m = /^\/api\/shell\/([^/]+)(\/output)?$/.exec(p))) {

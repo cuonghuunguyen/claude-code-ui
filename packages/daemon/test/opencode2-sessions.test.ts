@@ -1118,8 +1118,8 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     await until(() => !!s.find("question"));
     const q = s.find("question")!;
     expect(q.questions).toEqual([
-      { question: "Pick a color?", header: "Color", options: [{ label: "Red", description: "r" }, { label: "Blue", description: "b" }], multiSelect: false, optional: true },
-      { question: "Which?", header: "Pick", options: [{ label: "A", description: "a" }, { label: "B", description: "b" }], multiSelect: true, optional: true },
+      { question: "Pick a color?", header: "Color", options: [{ label: "Red", description: "r" }, { label: "Blue", description: "b" }], multiSelect: false },
+      { question: "Which?", header: "Pick", options: [{ label: "A", description: "a" }, { label: "B", description: "b" }], multiSelect: true },
     ]);
     expect(q.toolUseId).toBe(s.find("tool_call")!.toolUseId);
     // A reconnect reads the session again: the question OpenCode still waits for stays open.
@@ -1146,6 +1146,13 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     writeFileSync(file, JSON.stringify([step("session.execution.started", {}), step("session.step.started", { agent: "build", model: { id: "m", providerID: "fake" }, assistantMessageID: "$A1" }), { form: { fields, ...(kind && { kind }), ...(sessionID && { sessionID }) } }, { wait: "form" }, step("session.step.ended", { assistantMessageID: "$A1", finish: "stop", tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0, files: [] }), step("session.execution.succeeded", {})]));
     return file;
   };
+  // The same turn, running 1.5 s before its form (both sessions run when the form comes).
+  const slow = (file: string) => {
+    const steps = JSON.parse(readFileSync(file, "utf8")) as object[];
+    const out = join(mkdtempSync(join(tmpdir(), "oc2-form-")), "slow.json");
+    writeFileSync(out, JSON.stringify([...steps.slice(0, 2), { sleep: 1500 }, ...steps.slice(2)]));
+    return out;
+  };
   const opts = [{ value: "v1", label: "One", description: "first" }, { value: "v2", label: "Two" }];
   it.each([
     ["a string with options answers with the option's value", [{ key: "a", type: "string", title: "A", description: "Pick", options: opts, custom: true }], undefined, [{ question: "Pick", header: "A", options: [{ label: "One", description: "first" }, { label: "Two", description: "" }], multiSelect: false }], { Pick: "Two" }, { a: "v2" }],
@@ -1155,13 +1162,13 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     ["a hidden field is not shown and answers with its default", [{ key: "h", type: "string", title: "H", hidden: true, default: "dflt" }, { key: "a", type: "string", title: "A" }], undefined, [{ question: "A", header: "A", options: [], multiSelect: false, input: { type: "text" } }], { A: "x" }, { h: "dflt", a: "x" }],
     ["a field with a condition carries it and is left out of the answer when the condition fails", [{ key: "b", type: "boolean", title: "Deploy" }, { key: "w", type: "string", title: "Where", when: [{ key: "b", op: "eq", value: true }] }], undefined, [{ question: "Deploy", header: "Deploy", options: [{ label: "Yes", description: "" }, { label: "No", description: "" }], multiSelect: false }, { question: "Where", header: "Where", options: [], multiSelect: false, input: { type: "text" }, when: [{ question: "Deploy", op: "eq", value: "Yes" }] }], { Deploy: "No", Where: "prod" }, { b: false }],
     ["a field whose condition fails on a hidden field's default is not asked", [{ key: "h", type: "boolean", title: "H", hidden: true, default: false }, { key: "w", type: "string", title: "W", when: [{ key: "h", op: "eq", value: true }] }, { key: "a", type: "string", title: "A" }], undefined, [{ question: "A", header: "A", options: [], multiSelect: false, input: { type: "text" } }], { A: "x" }, { h: false, a: "x" }],
-    ["a field with required: true needs an answer: not optional", [{ key: "r", type: "string", title: "R", required: true }], undefined, [{ question: "R", header: "R", options: [], multiSelect: false, input: { type: "text" }, optional: false }], { R: "x" }, { r: "x" }],
     ["a field that depends on a later one comes after it", [{ key: "w", type: "string", title: "Why", when: [{ key: "k", op: "eq", value: "x" }] }, { key: "k", type: "string", title: "Kind", options: [{ value: "x", label: "X" }, { value: "y", label: "Y" }] }], undefined, [{ question: "Kind", header: "Kind", options: [{ label: "X", description: "" }, { label: "Y", description: "" }], multiSelect: false }, { question: "Why", header: "Why", options: [], multiSelect: false, input: { type: "text" }, when: [{ question: "Kind", op: "eq", value: "X" }] }], { Kind: "X", Why: "b" }, { k: "x", w: "b" }],
     ["a condition on a multi-select holds when the list includes the value (OpenCode 2's rule)", [{ key: "m", type: "multiselect", title: "M", options: opts }, { key: "w", type: "string", title: "W", when: [{ key: "m", op: "eq", value: "v1" }] }], undefined, [{ question: "M", header: "M", options: [{ label: "One", description: "first" }, { label: "Two", description: "" }], multiSelect: true }, { question: "W", header: "W", options: [], multiSelect: false, input: { type: "text" }, when: [{ question: "M", op: "eq", value: "One" }] }], { M: "One, Two", W: "k" }, { m: ["v1", "v2"], w: "k" }],
     ["a free text next to options carries the format; an infinite number default is no default", [{ key: "d", type: "string", title: "D", description: "When?", format: "date", custom: true, options: [{ value: "t", label: "Today" }] }, { key: "n", type: "number", title: "N", default: "Infinity" }], undefined, [{ question: "When?", header: "D", options: [{ label: "Today", description: "" }], multiSelect: false, input: { type: "date" } }, { question: "N", header: "N", options: [], multiSelect: false, input: { type: "number" } }], { "When?": "Today", N: "1" }, { d: "t", n: 1 }],
     ["a date field is a typed question and answers with the text", [{ key: "d", type: "string", title: "Due", format: "date", placeholder: "pick" }], undefined, [{ question: "Due", header: "Due", options: [], multiSelect: false, input: { type: "date", placeholder: "pick" } }], { Due: "2026-12-01" }, { d: "2026-12-01" }],
     ["length and pattern go to the question", [{ key: "c", type: "string", title: "Code", pattern: "^[A-Z]+$", minLength: 2, maxLength: 5 }], undefined, [{ question: "Code", header: "Code", options: [], multiSelect: false, input: { type: "text", minLength: 2, maxLength: 5, pattern: "^[A-Z]+$" } }], { Code: "ABC" }, { c: "ABC" }],
-    ["a field that is not required may stay empty: no key in the answer", [{ key: "o", type: "string", title: "Note", required: false }, { key: "a", type: "string", title: "A" }], undefined, [{ question: "Note", header: "Note", options: [], multiSelect: false, input: { type: "text" }, optional: true }, { question: "A", header: "A", options: [], multiSelect: false, input: { type: "text" } }], { Note: "", A: "x" }, { a: "x" }],
+    ["an MCP elicitation field without required: true may stay empty: no key in the answer", [{ key: "o", type: "string", title: "Note" }, { key: "a", type: "string", title: "A", required: true }], "mcp-elicitation", [{ question: "Note", header: "Questions", options: [], multiSelect: false, input: { type: "text" }, optional: true }, { question: "A", header: "A", options: [], multiSelect: false, input: { type: "text" } }], { Note: "", A: "x" }, { a: "x" }],
+    ["a field of the question tool stays required even without required: true", [{ key: "q", type: "string", title: "Q", description: "Which?" }], undefined, [{ question: "Which?", header: "Q", options: [], multiSelect: false, input: { type: "text" } }], { "Which?": "x" }, { q: "x" }],
     ["a default is the pre-filled answer, an option by its label", [{ key: "o", type: "string", title: "O", description: "Pick", options: opts, default: "v2" }, { key: "n", type: "number", title: "N", default: 3 }], undefined, [{ question: "Pick", header: "O", options: [{ label: "One", description: "first" }, { label: "Two", description: "" }], multiSelect: false, default: "Two" }, { question: "N", header: "N", options: [], multiSelect: false, input: { type: "number" }, default: "3" }], { Pick: "Two", N: "3" }, { o: "v2", n: 3 }],
     ["two fields with the same question text get a number", [{ key: "a", type: "string", title: "A", description: "Same?" }, { key: "b", type: "string", title: "B", description: "Same?" }], undefined, [{ question: "Same?", header: "A", options: [], multiSelect: false, input: { type: "text" } }, { question: "Same? (2)", header: "B", options: [], multiSelect: false, input: { type: "text" } }], { "Same?": "one", "Same? (2)": "two" }, { a: "one", b: "two" }],
     ["a multi-select answers with the values of the chosen options", [{ key: "m", type: "multiselect", title: "M", description: "Which?", options: opts }], undefined, [{ question: "Which?", header: "M", options: [{ label: "One", description: "first" }, { label: "Two", description: "" }], multiSelect: true }], { "Which?": "One, Two" }, { m: ["v1", "v2"] }],
@@ -1173,8 +1180,7 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     await s.prompt("ask");
     await until(() => !!s.find("question"));
     const q = s.find("question")!;
-    // OpenCode 2 enforces only `required: true`: every other field is optional (a row marks a required one with `optional: false`).
-    expect(q.questions).toEqual((questions as { optional?: boolean }[]).map(({ optional, ...x }) => ({ ...x, ...(optional === false ? {} : { optional: true }) })));
+    expect(q.questions).toEqual(questions);
     if (kind) expect(q.toolUseId).toBe(q.requestId);
     await d.ok({ type: "question.respond", requestId: q.requestId, answers });
     await until(() => s.parts().some((p) => p.type === "turn_result"));
@@ -1191,6 +1197,33 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     await d.ok({ type: "question.respond", requestId: q.requestId, answers: { Due: "2026-12-01", Note: "" } });
     await until(() => s.parts().some((p) => p.type === "turn_result"));
     expect(d.requests("POST", /\/session\/global\/form\/[^/]+\/reply$/)[0]!.body).toEqual({ answer: { due: "2026-12-01" } });
+  });
+
+  it("a global form stays open after a reconnect and is answered afterwards", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_SCRIPT: formTurn([{ key: "due", type: "string", title: "Due", required: true }], "mcp-elicitation", "global") } });
+    const s = await d.open();
+    await s.prompt("ask");
+    await until(() => !!s.find("question"));
+    const q = s.find("question")!;
+    await d.fake("/__drop");
+    await until(() => d.requests("GET", "/api/form").length > 0);
+    await sleep(300);
+    expect(s.find("question")!.settled).toBe(false);
+    await d.ok({ type: "question.respond", requestId: q.requestId, answers: { Due: "x" } });
+    await until(() => s.parts().some((p) => p.type === "turn_result"));
+    expect(d.requests("POST", /\/session\/global\/form\/[^/]+\/reply$/)[0]!.body).toEqual({ answer: { due: "x" } });
+  });
+
+  it("a global form that two running sessions of the folder could own is shown in neither: both get a notice", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_SCRIPT: [1, 2].map(() => slow(formTurn([{ key: "due", type: "string", title: "Due" }], "mcp-elicitation", "global"))).join(",") } });
+    const a = await d.open();
+    const b = await d.open();
+    await a.prompt("ask");
+    await b.prompt("ask");
+    await until(() => !!a.find("notice", (n) => /MCP server asks for input/.test(n.text)) && !!b.find("notice", (n) => /MCP server asks for input/.test(n.text)));
+    await sleep(300);
+    expect(a.find("question")).toBeUndefined();
+    expect(b.find("question")).toBeUndefined();
   });
 
   it("a number or string that breaks its rule is not sent: a warning names the field and the question comes back", async () => {
