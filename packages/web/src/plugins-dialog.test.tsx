@@ -289,6 +289,37 @@ const OPENCODE: ConfigCapabilities = {
   },
 };
 
+it("with OpenCode flags that write the user scope a global plugin has Uninstall, which asks first (its removal cannot be undone here) and removes it only after Uninstall in the confirm", async () => {
+  const caps: ConfigCapabilities = { ...OPENCODE, pluginRemoveScopes: ["project", "user"] };
+  const list: PluginsListResult = {
+    installed: [
+      { id: "mine", scope: "project", enabled: true, updatable: false },
+      { id: "global-one", scope: "user", enabled: true, updatable: false },
+      { id: "file:///p/.opencode/plugins/auto.js", scope: "folder", enabled: true, updatable: false },
+    ],
+    available: [],
+    marketplaces: [],
+  };
+  const d = await render({ "plugins.list": () => structuredClone(list) }, { engine: "opencode", config: caps, sessionId: "s1" });
+  const [, global, folder] = d.all("plugin-installed");
+  expect(folder!.querySelector("button")).toBeNull();
+  await d.click(d.button("Uninstall global-one"));
+  const confirm = d.q("plugin-uninstall-confirm")!;
+  expect(confirm.textContent).toContain("Uninstall global-one?");
+  expect(confirm.textContent).toContain("Removes it from ~/.config/opencode/opencode.json. Every project loses it.");
+  expect(d.calls.some((c) => c.type === "plugins.uninstall")).toBe(false);
+  await d.click(d.button("Cancel"));
+  expect(d.q("plugin-uninstall-confirm")).toBeNull();
+  expect(d.calls.some((c) => c.type === "plugins.uninstall")).toBe(false);
+  await d.click(d.button("Uninstall global-one"));
+  await d.click(d.q("plugin-uninstall-confirm")!.querySelector("button:not([aria-label])") as HTMLElement);
+  expect(d.calls).toContainEqual({ type: "plugins.uninstall", cwd: "/p", engine: "opencode", pluginId: "global-one", scope: "user" });
+  // A project plugin is removed without asking.
+  await d.click(d.button("Uninstall mine"));
+  expect(d.calls).toContainEqual({ type: "plugins.uninstall", cwd: "/p", engine: "opencode", pluginId: "mine", scope: "project" });
+  expect(global).toBeDefined();
+});
+
 it("with OpenCode flags the dialog has no marketplaces tab, no switch, and an install box; only a project plugin has Uninstall", async () => {
   const list: PluginsListResult = {
     installed: [
