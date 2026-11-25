@@ -27,9 +27,10 @@ export async function oneShot1(server: Pick<OpenCodeServer, "request">, o: OneSh
     if (id) void server.request(`/session/${id}/abort`, { method: "POST", directory: o.cwd }).catch(() => undefined);
   };
   try {
-    const row = await server.request<{ id: string }>("/session", { method: "POST", directory: o.cwd, timeoutMs: 0, signal: o.signal, body: { title: "Commit message", permission: [{ permission: "*", pattern: "*", action: "deny" }] } });
+    const row = await server.request<{ id: string }>("/session", { method: "POST", directory: o.cwd, timeoutMs: 0, body: { title: "Commit message", permission: [{ permission: "*", pattern: "*", action: "deny" }] } });
     id = row.id;
     transient.add(id);
+    // The create runs to its end (no signal): an aborted create would leave a session nobody deletes.
     o.signal.addEventListener("abort", abort, { once: true });
     if (o.signal.aborted) abort();
     const answer = await server.request<Answer>(`/session/${id}/message`, { method: "POST", directory: o.cwd, timeoutMs: 0, signal: o.signal, body: { model, system: o.system, tools: { "*": false }, parts: [{ type: "text", text: o.text }] } });

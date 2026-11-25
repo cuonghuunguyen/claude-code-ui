@@ -1101,7 +1101,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
                 placeholder={row.placeholder}
                 value={draft[id] ?? String(value)}
                 onChange={(e) => setDraft((d) => ({ ...d, [id]: e.target.value }))}
-                onBlur={() => id in draft && void save(patch(draft[id]!.trim()), id)}
+                onBlur={() => id in draft && void save(patch(draft[id]!.trim() || (row.key === "commitMessageModel" ? row.placeholder : "")), id)}
                 onKeyDown={(e) => e.key === "Enter" && !isImeKey(e.nativeEvent) && (e.preventDefault(), e.currentTarget.blur())}
                 className="h-8 w-44 min-w-0 rounded-md border bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 max-md:w-36"
                 data-testid={id}
