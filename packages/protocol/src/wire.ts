@@ -151,7 +151,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.media"; sessionId: string; partId: string; index: number }
   /** URL of the local page an Artifact publish part of the session names (GH-175, GH-335); reply ArtifactPreviewResult. */
   | { type: "artifact.preview"; sessionId: string; partId: string }
-  // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp. Reply `{}`; `{ local: true }` (PromptResult) when the Engine ran the text as its own command (OpenCode `/compact`, `/undo`, `/redo`): no `user_text` echo follows, the client drops its pending bubble. `/undo` also sets `draft`: the undone prompt, which the client puts back into the prompt box.
+  // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp. Reply `{}`; `{ local: true }` (PromptResult) when the Engine ran the text as its own command (OpenCode `/compact`, `/undo`, `/redo`, `/clear`): no `user_text` echo follows, the client drops its pending bubble. `/undo` also sets `draft`: the undone prompt, which the client puts back into the prompt box.
   // once: a repeat with the same key on the same session is not sent again; it gets the first one's reply or error (a retry after a lost reply). Ignored by an older daemon.
   | { type: "session.prompt"; sessionId: string; text: string; images?: string[]; once?: string }
   /** Bash mode: runs `command` with the user's shell in the session cwd; output streams as a `bash` part; Claude sees it with the next prompt. `session.interrupt` kills it. Idle: runs, reply `{}`. Busy (turn, pending input, rewind, shell command, terminal CLI turn): queued as a bash item (`prompt_queue`), reply `{ itemId }`; error `queue_full`. */

@@ -12,7 +12,7 @@ import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 import { INLINE_TIMEOUT_MS, type ForkResult, type ForkSpec, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
 import { ascending } from "./opencode-id.ts";
 import { INLINE_SYSTEM, clip } from "./opencode-inline.ts";
-import { DONT_ASK, LOCAL_COMMANDS, OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels, withVisualize, type ForkLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
+import { CLEAR_ALIASES, clearSession, DONT_ASK, LOCAL_COMMANDS, OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels, withVisualize, type CreateHeir, type ForkLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { findCall, mcpKeys, mcpName, mcpTimeoutMs, showDaemonCard, WORKER_START, type McpServerKey } from "./opencode-shared.ts";
 import { FORK_PREAMBLE } from "./opencode-fork.ts";
 import { FORK_META, forkCut } from "./opencode2-fork.ts";
@@ -91,7 +91,7 @@ export const denialsOf2 = (rules: readonly Rule2[]): Rule2[] => {
   rules.forEach((r, i) => r.effect === "deny" && !first.has(r.action) && first.set(r.action, i));
   return rules.filter((r, i) => i >= (first.get(r.action) ?? Infinity));
 };
-const LOCAL_NAMES = LOCAL_COMMANDS.map((c) => c.name);
+const LOCAL_NAMES = [...LOCAL_COMMANDS.map((c) => c.name), ...CLEAR_ALIASES];
 /** How often, and how many times, an agent list is read again while OpenCode has not loaded the folder (2.3.0 lists no agent then). */
 const AGENT_POLL_MS = 250;
 const SETTLE_MS = 500;
@@ -585,6 +585,7 @@ class OpenCode2Session implements EngineSession {
   private attach(): Promise<void> {
     let attaching: McpServerKey = "orchestration";
     return (this.attaching ??= (async () => {
+      await this.released;
       const route = this.engine.mcp;
       const url = route?.url();
       const keys = url ? mcpKeys(this.opts, this.id) : [];
@@ -636,6 +637,13 @@ class OpenCode2Session implements EngineSession {
       void this.commandGate.then(() => this.stops === stops && this.prompt(text, images));
       return undefined;
     }
+    if (!images.length && /^\/(clear|new|reset)$/.test(text.trim())) {
+      // Nothing is posted to OpenCode; the reply waits for the hand-over (the spinner of the web client).
+      this.localRun = this.clearing ??= this.startOver().finally(() => (this.clearing = undefined));
+      return undefined;
+    }
+    // The heir is being made: a turn here would run on a session the tabs are about to leave.
+    if (this.clearing) return void ((this.localRun = undefined), this.notice(`local:${ascending("msg")}`, "Starting a new session; send again in a moment"));
     const local = !images.length && /^\/(compact|undo|redo)$/.exec(text.trim())?.[1];
     if (local) {
       // Only /undo is awaited by its reply (the undone prompt goes back to the box); /compact and /redo run on their own.
@@ -686,6 +694,22 @@ class OpenCode2Session implements EngineSession {
   }
 
   private localRun?: Promise<{ text: string; images: string[] } | undefined>;
+  private clearing?: Promise<undefined>;
+  private startOver = (): Promise<undefined> => clearSession(this.session, this.opts, this.settings(), this.engine.createHeir, (text) => this.notice(`local:${ascending("msg")}`, text), () => this.releaseTools()).then(() => undefined);
+  private released: Promise<unknown> | undefined;
+  /** After a /clear the orchestration binding of this session's live tools server went to the heir: the servers leave OpenCode and their routes are dropped; the next attach adds them again with a token and binding of this session's own. */
+  private releaseTools() {
+    this.engine.mcp?.drop(this.id);
+    const names = [...this.mcpOn].map((k) => mcpName(this.id, k));
+    this.mcpOn = new Set();
+    this.added.clear();
+    if (!names.length || !this.server.running()) return;
+    this.released = this.server
+      .client()
+      .then((c) => Promise.all(names.map((server) => c.experimental.mcp.remove({ server, location: { directory: this.cwd } }).catch(() => undefined))))
+      .catch(() => undefined)
+      .finally(() => (this.released = undefined));
+  }
   /** The run of the `/undo` just taken by prompt(): its undone prompt (no draft when nothing was undone). */
   localDraft = () => this.localRun ?? Promise.resolve(undefined);
 
@@ -1543,6 +1567,8 @@ class OpenCode2EngineImpl implements Engine {
   private readonly sessions = new Map<string, OpenCode2Session>();
   private unsubscribe: (() => void) | undefined;
   private readonly modelLists = new Map<string, Promise<Models>>();
+  /** Set by the catalogue: makes the session a /clear hands over to. */
+  createHeir?: CreateHeir;
 
   constructor(
     readonly server: OpenCodeServer,
@@ -1788,11 +1814,11 @@ class OpenCode2EngineImpl implements Engine {
     return list;
   }
   /** The rules and agent of a new session in `mode` (`plan` = agent plan in the default mode): the mode's rules with the agent's denials. Rejects when the agents cannot be read. */
-  async createRules(mode: PermissionMode, cwd: string): Promise<{ rules: Rule2[]; agent?: string }> {
+  async createRules(mode: PermissionMode, cwd: string, chosen?: string): Promise<{ rules: Rule2[]; agent?: string }> {
     const list = await this.agents(cwd);
-    const agent = mode === "plan" ? "plan" : await this.defaultAgent(cwd);
+    const agent = mode === "plan" ? "plan" : (chosen ?? (await this.defaultAgent(cwd)));
     const rules = rulesOf(mode === "plan" ? "default" : mode, false, denialsOf2(list.find((a) => a.id === agent)?.permissions ?? []));
-    return { rules, ...(mode === "plan" && { agent }) };
+    return { rules, ...((mode === "plan" || chosen) && { agent }) };
   }
   /** What each new session was created with, until its OpenCode2Session takes it. */
   private readonly created = new Map<string, { rules: Rule2[]; agent?: string }>();
