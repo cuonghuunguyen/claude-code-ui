@@ -1,10 +1,13 @@
 // Pure parts of the sidebar context menus (GH-358): menu entries, bulk worker targets, idle sessions to archive.
+import type { ReactNode } from "react";
 import type { SessionListItem, SessionState } from "@claude-ui/protocol";
 import type { SessionGroup, WorktreeRow } from "./sessions.ts";
 import { t } from "./i18n.ts";
 
 export type MenuEntry =
-  | { kind: "item"; id: string; label: string; onSelect: () => void; disabled?: boolean; destructive?: boolean }
+  | { kind: "item"; id: string; label: string; onSelect: () => void; disabled?: boolean; destructive?: boolean; icon?: ReactNode }
+  /** A line of text that is not an item: where the row is (merged group, touch has no tooltip). */
+  | { kind: "info"; label: string; icon?: ReactNode }
   | { kind: "check"; id: string; label: string; checked: boolean; onChange: (on: boolean) => void }
   | { kind: "label"; label: string }
   | { kind: "sep" };
@@ -81,8 +84,10 @@ export function groupEntries(o: {
   copyPath?: () => void;
   /** "Change name and icon…" (GH-515): the Label dialog of this project. */
   rename?: () => void;
-  /** "Project settings…" (GH-894): the Project settings dialog of this project. */
-  projectSettings?: () => void;
+  /** "Project settings…" (GH-894): the Project settings dialog of this project. A list (merged group): one item per Side project, "Project settings · <Side>…". */
+  projectSettings?: (() => void) | { label: string; icon?: ReactNode; onSelect: () => void }[];
+  /** First lines of the menu, not items: the Sides and paths a merged row or group stands for. */
+  info?: { label: string; icon?: ReactNode }[];
   /** "Clean up…" (GH-377): the Clean up dialog scoped to this project. */
   cleanUp?: () => void;
   /** Last section (Remove from list, Delete worktree…). */
@@ -90,6 +95,8 @@ export function groupEntries(o: {
 }): MenuEntry[] {
   const p = o.prefix;
   const e: MenuEntry[] = [];
+  for (const i of o.info ?? []) e.push({ kind: "info", ...i });
+  if (o.info?.length) e.push({ kind: "sep" });
   if (o.newSession) e.push({ kind: "item", id: `${p}new-session`, label: t("sidebar.menu.newSession"), onSelect: o.newSession });
   if (o.newWorktree) {
     const nw = o.newWorktree;
@@ -97,7 +104,10 @@ export function groupEntries(o: {
   }
   if (o.copyPath) e.push({ kind: "sep" }, { kind: "item", id: `${p}copy-path`, label: t("sidebar.menu.copyPath"), onSelect: o.copyPath });
   if (o.rename) e.push(...(o.copyPath ? [] : [{ kind: "sep" as const }]), { kind: "item", id: `${p}rename`, label: t("sidebar.menu.rename"), onSelect: o.rename });
-  if (o.projectSettings) e.push(...(o.copyPath || o.rename ? [] : [{ kind: "sep" as const }]), { kind: "item", id: `${p}project-settings`, label: t("sidebar.menu.projectSettings"), onSelect: o.projectSettings });
+  if (o.projectSettings) {
+    const own = typeof o.projectSettings === "function" ? [{ label: t("sidebar.menu.projectSettings"), onSelect: o.projectSettings, icon: undefined }] : o.projectSettings;
+    own.forEach((x, i) => e.push(...(i === 0 && !o.copyPath && !o.rename ? [{ kind: "sep" as const }] : []), { kind: "item", id: `${p}project-settings${own.length > 1 ? `-${i}` : ""}`, label: x.label, icon: x.icon, onSelect: x.onSelect }));
+  }
   if (!o.archivedView) {
     e.push({ kind: "sep" }, { kind: "check", id: `${p}hide-inactive`, label: t("sidebar.menu.hideInactive"), checked: o.onlyActive, onChange: o.setOnlyActive }, { kind: "label", label: t("sidebar.menu.archiveIdleOlder") });
     for (const d of ARCHIVE_DAYS) {

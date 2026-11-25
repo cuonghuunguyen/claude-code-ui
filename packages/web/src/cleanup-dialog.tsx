@@ -1,5 +1,5 @@
 // Clean up dialog (GH-377, docs/spec.md "Layout"): bulk removal of worktrees and workers with daemon-computed safety badges.
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { use, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import type { SessionListItem, SessionState, Worktree, WorktreeCachedResult, WorktreeStatusResult } from "@claude-ui/protocol";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,7 @@ import { stateName, timeAgo } from "./sessions.ts";
 import { ARCHIVE_DAYS, daysLabel } from "./sidebar-menus.ts";
 import { t, useT } from "./i18n.ts";
 import { projectName } from "./tabs.ts";
+import { SideIcon, SideLabel, SideState } from "./sides.tsx";
 
 type FetchState = { state: "fetching" } | { state: "done"; at: number } | { state: "failed"; reason: string };
 
@@ -37,7 +38,7 @@ export function CleanupDialog(p: Props) {
   );
 }
 
-const describe = (scope: CleanupScope) => (scope.kind === "all" ? t("sidebar.cl.allProjects") : scope.kind === "project" ? projectName(scope.cwd) : t("sidebar.cl.workersOf", { title: scope.title }));
+const describe = (scope: CleanupScope) => (scope.kind === "all" ? t("sidebar.cl.allProjects") : scope.kind === "project" ? projectName(scope.cwd) : scope.kind === "repository" ? scope.name : t("sidebar.cl.workersOf", { title: scope.title }));
 
 function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemoving }: Props & { scope: CleanupScope }) {
   const t = useT();
@@ -56,6 +57,15 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemov
   const now = useMemo(() => Date.now(), []);
 
   const repos = useMemo(() => [...new Set(cands.worktrees.map((w) => w.project))], [cands]);
+  // Several Sides in scope: rows show their Side icon; a fetch line names its Side when the repositories share a name.
+  const sideInfo = use(SideState).of;
+  const sideShort = use(SideLabel);
+  const multiSide = new Set(repos.map((r) => sideInfo(r)?.id)).size > 1;
+  const repoName = (repo: string) => {
+    const name = projectName(repo);
+    const short = sideShort(repo)?.short;
+    return short && repos.filter((r) => projectName(r) === name).length > 1 ? `${name} · ${short}` : name;
+  };
   const [fetches, setFetches] = useState<Record<string, FetchState>>({});
   const [clock, setClock] = useState(() => Date.now());
   const fetched = Object.values(fetches).some((f) => f.state === "done");
@@ -171,7 +181,7 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemov
             const text = f.state === "fetching" ? t("sidebar.cl.fetching") : f.state === "done" ? t("sidebar.cl.fetched", { time: secs < 60 ? `${secs} s` : timeAgo(f.at, clock) }) : t("sidebar.cl.fetchFailed", { reason: f.reason });
             return (
               <p key={repo} role="status" data-testid="cleanup-fetch" className={cn("text-xs", f.state === "failed" ? "text-destructive" : "text-muted-foreground")}>
-                {repos.length > 1 ? `${projectName(repo)}: ` : ""}
+                {repos.length > 1 ? `${repoName(repo)}: ` : ""}
                 {text}
               </p>
             );
@@ -239,6 +249,7 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemov
                           <RowItem
                             key={r.key}
                             r={r}
+                            sideIcon={multiSide}
                             ids={`${id}-${r.key}`}
                             now={now}
                             on={isOn(r)}
@@ -296,8 +307,10 @@ function Body({ scope, list, worktrees, state, request, onClose, onDone, onRemov
 
 const BADGE = { safe: "secondary", has_work: "outline", blocked: "destructive", checking: "ghost" } as const;
 
-function RowItem({ r, ids, now, on, busy, rows, safetyOf, isOn, shown, set, deleteBranch, setDeleteBranch }: {
+function RowItem({ r, sideIcon, ids, now, on, busy, rows, safetyOf, isOn, shown, set, deleteBranch, setDeleteBranch }: {
   r: Row;
+  /** The scope spans several Sides: a worktree row shows its Side icon. */
+  sideIcon: boolean;
   ids: string;
   now: number;
   on: boolean;
@@ -345,6 +358,7 @@ function RowItem({ r, ids, now, on, busy, rows, safetyOf, isOn, shown, set, dele
         />
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2">
+            {sideIcon && r.kind === "worktree" && <SideIcon cwd={r.project} />}
             <span className="truncate text-sm">{rowLabel(r)}</span>
             {r.kind === "worktree" && r.external && <Badge variant="outline">{t("sidebar.cl.external")}</Badge>}
             <Badge variant={BADGE[safety]} id={`${ids}-safety`} data-testid="cleanup-badge">

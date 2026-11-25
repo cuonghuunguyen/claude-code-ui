@@ -1,5 +1,6 @@
 // Sides (docs/spec.md "Sides"): each project and session belongs to this machine, a WSL distro, a Docker container or an SSH host.
 import { createContext, use, useState } from "react";
+import { ContainerIcon, MonitorIcon, ServerIcon, TerminalSquareIcon } from "lucide-react";
 import { LOCAL_SIDE, type DockerState, type SideInfo } from "@claude-ui/protocol";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
@@ -44,6 +45,18 @@ export function SideBadge({ cwd, short = false }: { cwd: string; short?: boolean
       <span className="min-w-0 truncate">{short ? b.short : b.label}</span>
     </span>
   );
+}
+
+const KIND_ICON = { local: MonitorIcon, wsl: TerminalSquareIcon, docker: ContainerIcon, ssh: ServerIcon } as const;
+
+/** The icon of a cwd's Side (merged group rows): its custom Label icon, else the icon of its kind (this machine, WSL, Docker, SSH). Decorative: the Side title is in the row's name. */
+export function SideIcon({ cwd, className }: { cwd: string; className?: string }) {
+  const icon = use(SideLabel)(cwd)?.icon;
+  const id = use(SideState).of(cwd)?.id ?? LOCAL_SIDE;
+  if (icon) return <LabelIcon icon={icon} className={cn("inline-grid size-4 text-[11px]", className)} />;
+  const kind = sideKind(id);
+  const Kind = KIND_ICON[kind];
+  return <Kind className={cn("size-4 shrink-0 text-faint", className)} aria-hidden data-testid="side-icon" data-kind={kind} />;
 }
 
 /** What the sidebar says under a project of a side that is not ready; `action`: Retry (side.start) or Update (side.start with setup needed). */
