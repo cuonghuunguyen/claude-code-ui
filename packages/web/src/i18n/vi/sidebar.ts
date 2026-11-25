@@ -84,6 +84,7 @@ export default {
   "sidebar.allArchived": "Tất cả phiên đã được lưu trữ.",
   "sidebar.idleCount": "+{count} rảnh",
   "sidebar.createWorktreeIn": "Tạo worktree trong {name} (Shift+nhấp: worktree mới với tên tự tạo)",
+  "sidebar.createWorktreeInSide": "Tạo worktree trong {name} trên {side} (Shift+nhấp: worktree mới với tên tự tạo)",
   "sidebar.newSessionIn": "Phiên mới trong {name}",
   "sidebar.removeNamedFromList": "Gỡ {name} khỏi danh sách (giữ tệp)",
   "sidebar.outsideRoots": "(ngoài thư mục gốc được phép)",
@@ -97,6 +98,7 @@ export default {
   // sidebar-menus.ts / sidebar.tsx menus
   "sidebar.menu.newSession": "Phiên mới",
   "sidebar.menu.createWorktree": "Tạo worktree…",
+  "sidebar.menu.createWorktreeSide": "Tạo worktree · {side}…",
   "label.name": "Tên",
   "label.icon": "Biểu tượng",
   "label.none": "Không",

@@ -30,7 +30,7 @@ afterEach(() => {
 });
 
 const LONG: BranchRow = { name: `${"a".repeat(60)}-PROJ-351-tail`, local: true };
-function mount(o: { long?: boolean; jira?: boolean; jql?: string; noTickets?: boolean; fetchError?: string; createError?: string; side?: string; overrides?: Record<string, Record<string, ProjectOverrides>>; tokens?: string[] } = {}) {
+function mount(o: { long?: boolean; jira?: boolean; jql?: string; noTickets?: boolean; fetchError?: string; createError?: string; side?: string; sideLabel?: string; overrides?: Record<string, Record<string, ProjectOverrides>>; tokens?: string[] } = {}) {
   const calls: Request[] = [];
   const request = vi.fn(async (m: Request) => {
     calls.push(m);
@@ -54,7 +54,7 @@ function mount(o: { long?: boolean; jira?: boolean; jql?: string; noTickets?: bo
   el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
-  act(() => root!.render(<CreateWorktreeDialog project={R} side={o.side} request={request as never} onClose={onClose} onCreated={onCreated} onJiraSettings={onJiraSettings} />));
+  act(() => root!.render(<CreateWorktreeDialog project={R} side={o.side} sideLabel={o.sideLabel} request={request as never} onClose={onClose} onCreated={onCreated} onJiraSettings={onJiraSettings} />));
   return { calls, onCreated, onClose, onJiraSettings };
 }
 const q = <T extends HTMLElement = HTMLElement>(id: string) => document.querySelector<T>(`[data-testid="${id}"]`);
@@ -355,4 +355,10 @@ it("Ticket: a Project with its own Jira URL but no token for it is not ready, th
   expect(q("create-worktree-jira-settings")!.textContent).toBe("Open Project settings › Jira");
   await click(q("create-worktree-jira-settings"));
   expect(onJiraSettings).toHaveBeenCalledWith(true);
+});
+
+it("names the Side after the project in the footer when the project sits on one of several Sides", async () => {
+  mount({ side: "ssh:dev", sideLabel: "SSH: dev" });
+  await flush();
+  expect(document.querySelector('[data-testid="create-worktree"]')!.textContent).toContain("SSH: dev");
 });

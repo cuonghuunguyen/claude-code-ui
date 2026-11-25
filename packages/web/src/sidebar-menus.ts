@@ -74,7 +74,7 @@ export function groupEntries(o: {
   prefix: string;
   newSession?: () => void;
   /** `quick`: "New worktree", at once with a generated name; else "Create worktree…", the modal. */
-  newWorktree?: (quick: boolean) => void;
+  newWorktree?: ((quick: boolean) => void) | { label: string; icon?: ReactNode; onSelect: () => void }[];
   archivedView: boolean;
   onlyActive: boolean;
   setOnlyActive: (on: boolean) => void;
@@ -100,7 +100,8 @@ export function groupEntries(o: {
   if (o.newSession) e.push({ kind: "item", id: `${p}new-session`, label: t("sidebar.menu.newSession"), onSelect: o.newSession });
   if (o.newWorktree) {
     const nw = o.newWorktree;
-    e.push({ kind: "item", id: `${p}create-worktree`, label: t("sidebar.menu.createWorktree"), onSelect: () => nw(false) });
+    const own = typeof nw === "function" ? [{ label: t("sidebar.menu.createWorktree"), onSelect: () => nw(false), icon: undefined }] : nw;
+    own.forEach((x, i) => e.push({ kind: "item", id: `${p}create-worktree${own.length > 1 ? `-${i}` : ""}`, label: x.label, icon: x.icon, onSelect: x.onSelect }));
   }
   if (o.copyPath) e.push({ kind: "sep" }, { kind: "item", id: `${p}copy-path`, label: t("sidebar.menu.copyPath"), onSelect: o.copyPath });
   if (o.rename) e.push(...(o.copyPath ? [] : [{ kind: "sep" as const }]), { kind: "item", id: `${p}rename`, label: t("sidebar.menu.rename"), onSelect: o.rename });

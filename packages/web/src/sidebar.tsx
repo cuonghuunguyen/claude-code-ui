@@ -370,13 +370,20 @@ export function SessionList({
       return { cwd, title: [sideOf(cwd)?.label, r.clone].filter(Boolean).join(" · ") || lastSegment(cwd) };
     });
   };
+  /** Whether a project's main checkout is inside the roots, so a worktree can be created there. */
+  const canWorktree = (cwd: string) => !!worktrees?.[cwd]?.some((w) => w.main && !w.outsideRoots);
   /** Menu of a project row: context menu (prefix group-menu-) and kebab below md (project-menu-). */
   const groupMenu = (g: SessionGroup, prefix: string) => () =>
     groupEntries({
       ...menuBase(() => groupSessions(baseGroup(g.cwd) ?? g), projectName(g.cwd), prefix),
       newSession: () => onNew(g.cwd),
       copyPath: onCopy && (() => (count("copyPath"), onCopy(g.cwd, "path"))),
-      newWorktree: onNewWorktree && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) ? (quick) => onNewWorktree(g.cwd, quick) : undefined,
+      newWorktree: onNewWorktree && (mergedProjects(g).length > 1
+        ? (() => {
+            const own = mergedProjects(g).filter((m) => canWorktree(m.cwd)).map((m) => ({ label: t("sidebar.menu.createWorktreeSide", { side: m.title }), icon: <SideIcon cwd={m.cwd} />, onSelect: () => onNewWorktree(m.cwd, false) }));
+            return own.length ? own : undefined;
+          })()
+        : canWorktree(g.cwd) ? (quick: boolean) => onNewWorktree(g.cwd, quick) : undefined),
       rename: onEditProject && (() => onEditProject(g.cwd)),
       projectSettings: onProjectSettings && (mergedProjects(g).length > 1 ? mergedProjects(g).map((m) => ({ label: t("sidebar.projectSettingsSide", { side: m.title }), icon: <SideIcon cwd={m.cwd} />, onSelect: () => onProjectSettings(m.cwd, m.title) })) : () => onProjectSettings(g.cwd, g.repo ? sideOf(g.cwd)?.label : undefined)),
       cleanUp: onCleanUp && (() => onCleanUp(g.repo ? { kind: "repository", cwds: g.members, name: projectName(g.cwd) } : { kind: "project", cwd: g.cwd })),
@@ -392,6 +399,7 @@ export function SessionList({
       ...menuBase(() => (baseGroup(g.cwd)?.worktrees.find((x) => x.path === r.path) ?? r).sessions, label, prefix),
       newSession: r.outsideRoots || isBusy(r) ? undefined : () => onNew(r.path),
       copyPath: onCopy && (() => (count("copyPath"), onCopy(r.path, "path"))),
+      newWorktree: member && onNewWorktree && canWorktree(project) ? (quick) => onNewWorktree(project, quick) : undefined,
       cleanUp: member && onCleanUp ? () => onCleanUp({ kind: "project", cwd: project }) : undefined,
       info: g.repo && g.sides!.length > 1 ? [{ icon: <SideIcon cwd={project} />, label: [sideOf(project)?.label, r.path].filter(Boolean).join(" · ") }] : undefined,
       projectSettings: member && onProjectSettings ? () => onProjectSettings(project, sideOf(project)?.label) : undefined,
@@ -724,8 +732,8 @@ export function SessionList({
                 />
                 {/* OpenCode project row actions: shown on hover or focus; always on touch screens (no hover there), any width. */}
                 <span className={cn("absolute inset-y-0 right-0.5 flex items-center gap-0.5 opacity-100 transition-opacity group-focus-within/project:opacity-100 group-hover/project:opacity-100 motion-reduce:transition-none md:opacity-0 max-md:gap-2 pointer-coarse:gap-2 pointer-coarse:opacity-100", OVERLAY)}>
-                  {onNewWorktree && !narrow && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) && (
-                    <IconButton label={t("sidebar.createWorktreeIn", { name: projectName(g.cwd) })} onClick={(e) => onNewWorktree(g.cwd, e.shiftKey)} testId="project-new-worktree" className="size-6">
+                  {onNewWorktree && !narrow && canWorktree(g.cwd) && (
+                    <IconButton label={sidesOf(g).length ? t("sidebar.createWorktreeInSide", { name: projectName(g.cwd), side: sideOf(g.cwd)?.label ?? lastSegment(g.cwd) }) : t("sidebar.createWorktreeIn", { name: projectName(g.cwd) })} onClick={(e) => onNewWorktree(g.cwd, e.shiftKey)} testId="project-new-worktree" className="size-6">
                       <GitBranchPlusIcon />
                     </IconButton>
                   )}
