@@ -340,6 +340,7 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
       await Promise.all(forks.map((forkId) => openCode.request(`/session/${forkId}`, { method: "DELETE", directory: at.cwd }).catch(() => undefined)));
       if (forks.length) ctx.saveSettings(() => settings.delete(forks));
     },
+    quickCompact: async () => ({ unavailable: "Quick compact is not available for OpenCode yet" }),
     forkForAside: async (owner, title) => {
       const at = await forkAt(openCode, owner, "An aside");
       if ("unavailable" in at) return at;

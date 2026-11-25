@@ -76,6 +76,13 @@ export const permissionModesFor = ({ allowBypass, supportsAuto, modes = PERMISSI
 export const EFFORTS: Effort[] = ["default", "low", "medium", "high", "xhigh", "max"];
 /** Prefix of the user message the daemon sends a coordinator on worker events; the web app shows it as a chip. */
 export const ORCHESTRATION_NOTICE = "[claude-ui orchestration notice]";
+/** First line prefix of the first message of a quick-compacted session (docs/spec.md "Quick compact"): `[claude-ui quick compact] source=<id>[ summarised]`. */
+export const QUICK_COMPACT_MARKER = "[claude-ui quick compact]";
+/** The source session id and summary flag of a quick-compact digest message; undefined for any other text. */
+export const quickCompactOf = (text: string): { sourceId: string; summarised: boolean } | undefined => {
+  const m = /^\[claude-ui quick compact\] source=(\S+)( summarised)?\r?(?:\n|$)/.exec(text);
+  return m ? { sourceId: m[1]!, summarised: !!m[2] } : undefined;
+};
 /** Prefix of the one-line message the daemon sends an idle coordinator to keep its prompt cache warm; shown like a notice. */
 export const ORCHESTRATION_KEEPWARM = "[claude-ui keep-warm]";
 
@@ -257,6 +264,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "worker.close"; sessionId: string }
   /** /btw (docs/spec.md "Aside"): forks the session into an Aside and sends `text` there. Reply AsideOpenResult; errors bad_prompt, unknown_session, aside_unavailable, aside_failed. */
   | { type: "aside.open"; sessionId: string; text: string }
+  /** Quick compact (docs/spec.md "Quick compact"): digests the session into a new one on the same Engine. Reply QuickCompactResult; errors unknown_session, quick_compact_unavailable, quick_compact_failed. */
+  | { type: "session.quickCompact"; sessionId: string }
   /** Closes the Aside popup: stops its CLI, deletes its transcript and link. Reply `{}`; errors not_an_aside. */
   | { type: "aside.close"; sessionId: string }
   /** Keep as session: the Aside becomes a listed Session (link to its owner dropped). Reply `{}`; errors unknown_session, not_an_aside. */
@@ -654,6 +663,8 @@ export type CreateResult = { session: SessionInfo };
 /** `draft`: the prompt `/undo` took back (its shown text and image URLs); only the client that sent `/undo` gets it. */
 export type PromptResult = { local?: true; draft?: { text: string; images: string[] } };
 export type AsideOpenResult = { session: SessionInfo; title: string; from: string };
+/** Reply of `session.quickCompact`: the new session, the digest's size (~chars/4) and whether a model condensed the oldest part. */
+export type QuickCompactResult = { session: SessionInfo; tokens: number; summarised: boolean };
 /**
  * `logEpoch` differs from the one the client sent: its store belongs to an earlier daemon run and the events are a full replay.
  * `seq`: the last event seq when `session` was read; the replayed events up to it are older than `session`.

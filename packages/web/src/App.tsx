@@ -54,7 +54,7 @@ import type {
   WorktreeStatusResult,
 } from "@claude-ui/protocol";
 import { rawItems } from "./transfer.ts";
-import { ALL_CAPABILITIES, capabilitiesOf, DEFAULT_ENGINE, engineCapabilities, engineOf, ENGINES, LOCAL_SIDE, isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_KEEPWARM, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, SESSION_MODES, type AsideOpenResult, type FsReadResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
+import { ALL_CAPABILITIES, capabilitiesOf, DEFAULT_ENGINE, engineCapabilities, engineOf, ENGINES, LOCAL_SIDE, isAttention, isPromptImage, MAX_UPLOAD_BYTES, ORCHESTRATION_KEEPWARM, ORCHESTRATION_NOTICE, PERMISSION_MODES, permissionModesFor, quickCompactOf, SESSION_MODES, type AsideOpenResult, type QuickCompactResult, type FsReadResult, type SearchHit, type SettingsResult, type ShellOutputResult, type UpdateCheckResult } from "@claude-ui/protocol";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -87,7 +87,7 @@ import { Toast, ToastRegion } from "./toast.tsx";
 import { count, offer, promptBusy, streak, seen as recSeen, setRecommendationHost } from "./recommendations.ts";
 import { createModelCatalogue, type ModelSource } from "./model-catalogue.ts";
 import { GHOST, MODE_LABEL, ModePicker, modesOf, nextAgent, nextMode, PromptToolbar, ROW, type ModelFooterProps, type SendState } from "./toolbar.tsx";
-import { activeCommand, asideOf, choose, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
+import { activeCommand, asideOf, choose, isQuickCompact, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
 import { checkError, nextUpdate, undismissUpdate, UpdateToast, type UpdateInfo } from "./update.tsx";
 import { StaleToast } from "./stale-toast.tsx";
 import { NotificationStack, useNotifications, type CardItem } from "./notifications.tsx";
@@ -97,6 +97,7 @@ import { addonCommandOf, commandRows, AddonApiContext, AddonCommandContext, Addo
 import { AddonBands, AddonFrame, type AddonHandle } from "./addon-frame.tsx";
 import { addonThemes } from "./themes.ts";
 import { Backdrop } from "./backdrop.tsx";
+import { QuickCompactCard, QuickCompactSourceContext } from "./quick-compact-card.tsx";
 import { SlotsProvider, useThinkingPhrase } from "./slots.tsx";
 import { isPreviewHash } from "./addon-preview-route.ts";
 import { saveGroup as saveSettingsGroup } from "./settings-group.ts";
@@ -1105,6 +1106,23 @@ export function App() {
     setAsideFocused(id);
     void follows.show(id, { startAt: r.from });
   }
+  const quickCompacting = useRef(new Set<string>());
+  /** Quick compact: the daemon digests `sourceId` into a new session on the same Engine; it opens like a created one. */
+  async function quickCompact(sourceId: string) {
+    if (statusRef.current !== "connected") throw new Error(`the daemon is ${statusRef.current}`);
+    // One at a time per source: a second click would make a second session (an over-cap run can take minutes).
+    if (quickCompacting.current.has(sourceId)) return;
+    quickCompacting.current.add(sourceId);
+    setToast(tr("app.quickCompact.opening"));
+    try {
+      const r = await client.current!.request<QuickCompactResult>({ type: "session.quickCompact", sessionId: sourceId }, { timeoutMs: 0 });
+      setInfos((i) => ({ ...i, [r.session.id]: r.session }));
+      await refreshList();
+      open(r.session.id);
+    } finally {
+      quickCompacting.current.delete(sourceId);
+    }
+  }
   function closeAside(id: string) {
     setAsides((a) => a.filter((x) => x.id !== id));
     setAsideFocused((f) => (f === id ? undefined : f));
@@ -1959,6 +1977,7 @@ export function App() {
       setError(undefined);
       if (a === "rename" || a === "rename-inline") return setRenaming({ id: sessionId, in: where, menu: a === "rename" });
       if (a === "delete") return setDeleting(sessionId);
+      if (a === "quick-compact") return void quickCompact(sessionId).catch((e: Error) => setError(tr("app.prompt.quickCompactFailed", { message: e.message })));
       if (a === "copy-id") return copyText(sessionId, "session ID");
       if (a === "close-tab") return close(sessionId);
       if (a === "close-worker") return void runWorkers([sessionId], "close");
@@ -2278,6 +2297,7 @@ export function App() {
                         onDialog={openDialog}
                         onShells={() => openShells(s.id)}
                         onAside={capabilitiesOf(s).fork ? (q) => openAside(s.id, q) : undefined}
+                        onQuickCompact={() => quickCompact(s.id)}
                         signalOnly={signalOnly}
                         onAnswer={answer}
                         connected={status === "connected"}
@@ -3375,7 +3395,7 @@ export function App() {
       modes: modesOf(shown.permissionModes, view?.model ?? shown.model, modelsOf(engineOf(shown), shown.cwd), capabilitiesOf(shown)),
       capabilities: capabilitiesOf(shown),
       running: view?.state === "running" || view?.state === "needs_input",
-      prompts: timeline(view!).flatMap((i) => (i.kind === "part" && i.part.type === "user_text" && !(isCoordinator(shown.id) && noticeMarker(i.part.text)) ? [{ id: i.part.id, text: summarizePasted(i.part.text) }] : [])),
+      prompts: timeline(view!).flatMap((i) => (i.kind === "part" && i.part.type === "user_text" && !(isCoordinator(shown.id) && noticeMarker(i.part.text)) && !quickCompactOf(i.part.text) ? [{ id: i.part.id, text: summarizePasted(i.part.text) }] : [])),
     } : undefined,
     runInBackground: shown && ownerOnScreen && !draftShown && view && foregroundShells(view).length
       ? () => {
@@ -3797,6 +3817,7 @@ export function App() {
     <AddonApiContext value={addonApi}>
     <AddonStatusContext value={addonStatus}>
     <AddonCommandContext value={runAddonCommand}>
+    <QuickCompactSourceContext value={{ open: (id) => open(id), title: (id) => list.find((s) => s.id === id)?.title }}>
     <SlotsProvider>
     <AvatarColors value={colors}>
     <SideLabel value={sideOf.badge}>
@@ -4261,6 +4282,7 @@ export function App() {
                         links: NO_LINKS,
                         onLoadOlder: () => Promise.resolve(),
                         onAside: notHere,
+                        onQuickCompact: undefined,
                         onMode: (mode) => (setAsides((l) => l.map((x) => (x.id === a.id ? { ...x, readOnly: false } : x))), configure({ type: "session.setPermissionMode", sessionId: a.id, mode })),
                         onPrompt: (text, images) => (isClearCommand(text) ? notHere() : sendPrompt(a.id, text, images)),
                       })
@@ -4793,6 +4815,7 @@ export function App() {
     </SideLabel>
     </AvatarColors>
     </SlotsProvider>
+    </QuickCompactSourceContext>
     </AddonCommandContext>
     </AddonStatusContext>
     </AddonApiContext>
@@ -5419,6 +5442,7 @@ export function SessionPane({
   onDialog,
   onShells,
   onAside,
+  onQuickCompact,
   aside = false,
   docked = false,
   signalOnly = false,
@@ -5515,6 +5539,8 @@ export function SessionPane({
   onShells?: () => void;
   /** /btw typed in the prompt box (docs/spec.md "Aside"): opens the Aside; rejects with the reason it did not. */
   onAside?: (question: string) => Promise<unknown>;
+  /** /quick-compact typed in the prompt box (docs/spec.md "Quick compact"): opens the new session; rejects with the reason it did not. */
+  onQuickCompact?: () => Promise<unknown>;
   /** This pane is an Aside popup's: Esc stops its turn only from inside the popup; an owner pane's only from outside. */
   aside?: boolean;
   /** GH-401: shown in a dock (side or bottom panel): Esc answers only from inside that dock. */
@@ -5778,6 +5804,8 @@ export function SessionPane({
                   <span className="min-w-0 [overflow-wrap:anywhere]">{item.part.text.slice(noticeMarker(item.part.text)!.length).trim()}</span>
                 </span>
               </div>
+            ) : item.part.type === "user_text" && quickCompactOf(item.part.text) ? (
+              <QuickCompactCard text={item.part.text} />
             ) : item.part.type === "user_text" && briefTag(item.part.text) ? (
               <BriefRow answer={folded.answers.get(item.part.id)} />
             ) : item.part.type === "user_text" ? (
@@ -5926,6 +5954,7 @@ export function SessionPane({
               commands={view.commands}
               onDialog={onDialog}
               onAside={onAside}
+              onQuickCompact={onQuickCompact}
               models={models}
               modelFooter={modelsError !== undefined || onModelsConnect ? { error: modelsError, onRetry: () => onModelsRetry?.(), onConnect: () => onModelsConnect?.() } : undefined}
               model={view.model ?? session.model}
@@ -6051,6 +6080,7 @@ function PromptBox({
   inputRef,
   onDialog,
   onAside,
+  onQuickCompact,
 }: {
   /** Changing it clears the send error. */
   cwd?: string;
@@ -6059,6 +6089,7 @@ function PromptBox({
   onDialog?: (dialog: DialogName, arg?: string) => void;
   /** /btw typed in the prompt box (docs/spec.md "Aside"): opens the Aside; rejects with the reason it did not. */
   onAside?: (question: string) => Promise<unknown>;
+  onQuickCompact?: () => Promise<unknown>;
   models: ModelInfo[];
   model: string;
   onModel: (model: string) => void;
@@ -6190,7 +6221,7 @@ function PromptBox({
   const addonRows = useMemo(() => (sessionKey ? commandRows(enabledAddons(addonsList), commands) : []), [addonsList, commands, sessionKey]);
   const listed = addonRows.length ? [...commands, ...addonRows] : commands;
   // Dialog commands are actions, not text: only when the slash is the whole prompt.
-  const matches = token && matchCommands((onDialog || onAside) && token.lead ? withDialogCommands(listed) : listed, text, caret);
+  const matches = token && matchCommands((onDialog || onAside || onQuickCompact) && token.lead ? withDialogCommands(listed) : listed, text, caret);
   const mention = dismissed || bash || matches ? undefined : activeMention(text, caret);
   // Only results for the query being typed, so Enter never picks a stale path.
   const paths = mention && found?.query === mention.query ? found.paths : [];
@@ -6334,6 +6365,11 @@ function PromptBox({
       if (!aside) return setSendError(tr("app.prompt.asideNeedsQuestion"));
       setSendError(undefined);
       onAside(aside).catch((e: Error) => setSendError(tr("app.prompt.asideNotOpened", { message: e.message })));
+      return setPastes({}), edit("");
+    }
+    if (onQuickCompact && isQuickCompact(t)) {
+      setSendError(undefined);
+      onQuickCompact().catch((e: Error) => setSendError(tr("app.prompt.quickCompactFailed", { message: e.message })));
       return setPastes({}), edit("");
     }
     const dialog = onDialog && dialogOf(t, commands);

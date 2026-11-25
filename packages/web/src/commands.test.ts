@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ASIDE_COMMAND, activeCommand, asideOf, choose, insertSlash, dialogArg, dialogOf, matchCommands, withDialogCommands } from "./commands.ts";
+import { ASIDE_COMMAND, QUICK_COMPACT_COMMAND, isQuickCompact, activeCommand, asideOf, choose, insertSlash, dialogArg, dialogOf, matchCommands, withDialogCommands } from "./commands.ts";
 
 const cmd = (name: string, argumentHint = "") => ({ name, description: `${name} desc`, argumentHint });
 const all = [cmd("review", "<pr>"), cmd("compact"), cmd("code-review"), cmd("init")];
@@ -88,7 +88,7 @@ describe("dialog commands", () => {
     expect(dialogOf("/mcp list")).toBeUndefined();
     expect(dialogOf("/mcpx")).toBeUndefined();
     const rows = withDialogCommands([cmd("mcp"), cmd("init")]);
-    expect(rows.map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"], ["skills", "List available skills"], ["plugins", "Install, enable, or disable plugins"], ["addons", "Install, enable, or disable addons"], ["tasks", "List and manage background shells"], ["resume", "Resume a previous session"], ["btw", ASIDE_COMMAND.description]]);
+    expect(rows.map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"], ["skills", "List available skills"], ["plugins", "Install, enable, or disable plugins"], ["addons", "Install, enable, or disable addons"], ["tasks", "List and manage background shells"], ["resume", "Resume a previous session"], ["btw", ASIDE_COMMAND.description], ["quick-compact", QUICK_COMPACT_COMMAND.description]]);
     expect(matchCommands(rows, "/mc")!.map((c) => c.name)).toEqual(["mcp"]);
   });
 
@@ -98,7 +98,9 @@ describe("dialog commands", () => {
     expect(dialogOf("/plugin", [cmd("plugin")])).toBeUndefined();
     expect(dialogOf("/plugins", [cmd("plugin")])).toBe("plugins");
     expect(dialogOf("/mcp", [cmd("mcp")])).toBe("mcp");
-    expect(withDialogCommands([cmd("init")]).map((r) => r.name)).toEqual(["init", "mcp", "skills", "plugins", "addons", "tasks", "resume", "btw"]);
+    expect(withDialogCommands([cmd("quick-compact")]).filter((r) => r.name === "quick-compact")).toEqual([QUICK_COMPACT_COMMAND]);
+    expect([isQuickCompact(" /quick-compact "), isQuickCompact("/quick-compact now")]).toEqual([true, false]);
+    expect(withDialogCommands([cmd("init")]).map((r) => r.name)).toEqual(["init", "mcp", "skills", "plugins", "addons", "tasks", "resume", "btw", "quick-compact"]);
     expect(withDialogCommands([cmd("plugins")]).filter((r) => r.name === "plugins").map((r) => r.description)).toEqual(["plugins desc"]);
     expect(matchCommands(withDialogCommands([]), "/market")!.map((c) => c.name)).toEqual(["plugins"]);
   });
@@ -115,8 +117,8 @@ describe("/skills and /help", () => {
     expect(dialogOf("/mcp", [cmd("mcp")])).toBe("mcp");
   });
   it("the picker lists /skills with the extension's description unless the CLI has it", () => {
-    expect(withDialogCommands([cmd("init")]).map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"], ["skills", "List available skills"], ["plugins", "Install, enable, or disable plugins"], ["addons", "Install, enable, or disable addons"], ["tasks", "List and manage background shells"], ["resume", "Resume a previous session"], ["btw", ASIDE_COMMAND.description]]);
-    expect(withDialogCommands([cmd("skills")]).map((r) => r.description)).toEqual(["skills desc", "Configure Model Context Protocol servers", "Install, enable, or disable plugins", "Install, enable, or disable addons", "List and manage background shells", "Resume a previous session", ASIDE_COMMAND.description]);
+    expect(withDialogCommands([cmd("init")]).map((r) => [r.name, r.description])).toEqual([["init", "init desc"], ["mcp", "Configure Model Context Protocol servers"], ["skills", "List available skills"], ["plugins", "Install, enable, or disable plugins"], ["addons", "Install, enable, or disable addons"], ["tasks", "List and manage background shells"], ["resume", "Resume a previous session"], ["btw", ASIDE_COMMAND.description], ["quick-compact", QUICK_COMPACT_COMMAND.description]]);
+    expect(withDialogCommands([cmd("skills")]).map((r) => r.description)).toEqual(["skills desc", "Configure Model Context Protocol servers", "Install, enable, or disable plugins", "Install, enable, or disable addons", "List and manage background shells", "Resume a previous session", ASIDE_COMMAND.description, QUICK_COMPACT_COMMAND.description]);
   });
 });
 

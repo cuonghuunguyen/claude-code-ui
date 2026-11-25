@@ -360,6 +360,14 @@ export function createDaemon(opts: {
     return files;
   };
   const cachedLocalFiles = (cwd: string) => localFilesCache.get(cwd) ?? [join(cwd, ".claude", "settings.local.json")];
+  const uploadDirOf = (id: string) => {
+    try {
+      return uploads.dirFor(id);
+    } catch (e) {
+      console.error(`session ${id}: upload folder failed:`, e);
+      return undefined;
+    }
+  };
   const sessionOpts = (initial: Partial<SessionSettings>) => ({
     ...initial,
     plan: (cwd: string) => plans.ensure(accountKeyOf(cwd)),
@@ -383,14 +391,7 @@ export function createDaemon(opts: {
       orchestration.liveChanged(id);
     },
     supportsAuto,
-    uploadDir: (id: string) => {
-      try {
-        return uploads.dirFor(id);
-      } catch (e) {
-        console.error(`session ${id}: upload folder failed:`, e);
-        return undefined;
-      }
-    },
+    uploadDir: uploadDirOf,
     subagentsDir: (id: string, cwd: string) => transcriptFile(projectsDir, transcriptCwd(id, cwd), id).replace(/\.jsonl$/, "/subagents"),
     query: opts.query,
     readTranscript,
@@ -1351,6 +1352,8 @@ export function createDaemon(opts: {
         transcriptCwd,
         sessionCwd,
         modelList: (cwd) => modelList(cwd),
+        uploadDir: uploadDirOf,
+        claudeEnvFor: (cwd) => claudeEnvFor(cwd),
         supportsAuto,
         localFiles,
         commandsOf,

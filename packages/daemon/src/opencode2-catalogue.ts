@@ -289,6 +289,7 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
       }
     },
     forkForAside: (owner, title) => forkForAside(owner, title).catch((err) => Promise.reject(failure(err))),
+    quickCompact: async () => ({ unavailable: "Quick compact is not available for OpenCode yet" }),
     commands: (cwd) => engine.commands(cwd),
     agents: async (cwd) => (await engine.primaryFirst(cwd)).map(({ id, description }) => ({ name: id, ...(description && { description }) })),
     models: (cwd) => engine.modelInfos(cwd),
