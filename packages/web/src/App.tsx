@@ -165,7 +165,7 @@ import { focusCommit } from "./graph-focus.ts";
 import { sessionDiffChoice } from "./diff-mode.ts";
 import { sessionChanges } from "./changes.ts";
 import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
-import { FindInFiles, type FindQuery, type FindReplace } from "./find-in-files.tsx";
+import type { FindQuery, FindReplace } from "./find-in-files.tsx";
 import { selectionQuery } from "./find-in-files.ts";
 import { CommandPalette } from "./palette.tsx";
 import { appCommands, shortcutFor } from "./app-commands.ts";
@@ -232,6 +232,7 @@ const SkillsDialog = lazy(() => import("./skills-dialog.tsx").then((x) => ({ def
 const ShellsDialog = lazy(() => import("./shells-dialog.tsx").then((x) => ({ default: x.ShellsDialog })));
 const ProjectSettingsDialog = lazy(() => import("./project-settings-dialog.tsx").then((x) => ({ default: x.ProjectSettingsDialog })));
 const SettingsDialog = lazy(() => import("./settings-dialog.tsx").then((x) => ({ default: x.SettingsDialog })));
+const FindInFiles = lazy(() => import("./find-in-files.tsx").then((x) => ({ default: x.FindInFiles })));
 const PluginsDialog = lazy(() => import("./plugins-dialog.tsx").then((x) => ({ default: x.PluginsDialog })));
 const AddonPreview = lazy(() => import("./addon-preview.tsx").then((x) => ({ default: x.AddonPreview })));
 const AddonsDialog = lazy(() => import("./addons-dialog.tsx").then((x) => ({ default: x.AddonsDialog })));
@@ -4576,7 +4577,7 @@ export function App() {
         />
       )}
       {findOpen && shown && (
-        <FindInFiles
+        <Suspense fallback={null}><FindInFiles
           connected={status === "connected"}
           initialQuery={findQuery}
           initialReplace={findReplace || undefined}
@@ -4589,7 +4590,7 @@ export function App() {
           }}
           onOpen={(p, line) => (hideFind(false), openInPanel(p, line))}
           onClose={() => hideFind(true)}
-        />
+        /></Suspense>
       )}
       {palette && (
         <CommandPalette

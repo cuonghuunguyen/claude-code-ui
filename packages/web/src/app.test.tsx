@@ -96,7 +96,7 @@ let el: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 // The dialogs and panels are lazy chunks (GH-775): load them once up front, so a test that opens one is not racing the first transform of its modules.
 beforeAll(() =>
-  Promise.all(["./file-dialog.tsx", "./files-panel.tsx", "./changes-panel.tsx", "./settings-dialog.tsx", "./viewer-dialog.tsx", "./artifacts-pane.tsx", "./mcp-dialog.tsx", "./skills-dialog.tsx", "./plugins-dialog.tsx", "./addons-dialog.tsx", "./shells-dialog.tsx", "./cleanup-dialog.tsx", "./create-worktree-dialog.tsx", "./pairing-form.tsx"].map((m) => import(/* @vite-ignore */ m))),
+  Promise.all(["./file-dialog.tsx", "./files-panel.tsx", "./changes-panel.tsx", "./settings-dialog.tsx", "./viewer-dialog.tsx", "./artifacts-pane.tsx", "./mcp-dialog.tsx", "./skills-dialog.tsx", "./plugins-dialog.tsx", "./addons-dialog.tsx", "./shells-dialog.tsx", "./cleanup-dialog.tsx", "./create-worktree-dialog.tsx", "./pairing-form.tsx", "./find-in-files.tsx"].map((m) => import(/* @vite-ignore */ m))),
   60_000,
 );
 

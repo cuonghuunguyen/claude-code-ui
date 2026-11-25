@@ -10,7 +10,7 @@ import { PREVIEW_HASH } from "./addon-preview-route.ts";
 import { isImeKey } from "./ime.ts";
 import { useT } from "./i18n.ts";
 import { capabilityDiff, capabilityLine, rendererConflicts, sourceText, type AddonCandidate, type AddonInfo, type AddonSource, type AddonLogEntry, type AddonUpdateCheck, type AddonsListResult } from "./addons.ts";
-import { Switch } from "./plugins-dialog.tsx";
+import { Switch } from "./switch.tsx";
 
 type GitSource = { kind: "git"; url: string; ref?: string };
 const withPath = (s: GitSource, path: string) => (path ? { ...s, path } : s);
