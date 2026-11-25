@@ -4,7 +4,7 @@
 // slash commands, inline tasks, Fork runs and the daemon's MCP servers (orchestration, claude-ui).
 import { randomUUID } from "node:crypto";
 import type { OpenCodeClient } from "@opencode/client";
-import { permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
+import { checkAnswer, permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type QuestionInput, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT } from "./aside.ts";
 import { DAEMON_SERVER } from "./daemon-mcp.ts";
 import { DeniedRetryError } from "./denied-retry.ts";
@@ -109,6 +109,23 @@ const INLINE_ENTRY = "claude-ui-inline";
 const VISUALIZE_ENTRY = "claude-ui-visualize";
 
 type Json = Record<string, any>;
+
+/** Why an answer is refused, as the warning says it (the rules are `checkAnswer`'s). */
+function inputReason(e: NonNullable<ReturnType<typeof checkAnswer>>, input: QuestionInput): string {
+  switch (e.code) {
+    case "number": return "needs a number";
+    case "integer": return "needs a whole number";
+    case "minimum":
+    case "maximum": return input.minimum !== undefined && input.maximum !== undefined ? `must be between ${input.minimum} and ${input.maximum}` : e.code === "minimum" ? `must be at least ${input.minimum}` : `must be at most ${input.maximum}`;
+    case "minLength": return `needs at least ${e.limit} characters`;
+    case "maxLength": return `needs at most ${e.limit} characters`;
+    case "pattern": return `must match ${e.limit}`;
+    case "date": return "must be a date (YYYY-MM-DD)";
+    case "date-time": return "must be a date and time (YYYY-MM-DDThh:mm:ssZ)";
+    case "email": return "must be an email address";
+    case "uri": return "must be a web address (https://...)";
+  }
+}
 /** A model of `GET /api/model` and its default. */
 type ModelRow = { id: string; providerID: string; name: string; enabled?: boolean; variants?: { id: string }[]; limit?: { context?: number } };
 type Models = { list: ModelRow[]; def: ModelRow | undefined };
@@ -1219,23 +1236,47 @@ class OpenCode2Session implements EngineSession {
   private askForm(form: Json) {
     if (this.session.pendingRequest(form.id) || this.reqs.has(form.id)) return;
     const all: Json[] = form.fields ?? [];
-    const shown = all.filter((f) => !f.hidden);
+    const labelOf = (f: Json | undefined, v: unknown): string =>
+      typeof v === "boolean" ? (v ? "Yes" : "No") : String((f?.options as Json[] | undefined)?.find((o) => o.value === v)?.label ?? v);
+    // A field whose condition fails on a hidden field's default (or on a field that is not shown) is not asked at all.
+    const gone = new Set<string>();
+    const holds = (w: Json) => {
+      const c = all.find((x) => x.key === w.key);
+      if (!c) return undefined;
+      return c.hidden || gone.has(c.key) ? ((c.hidden ? c.default : undefined) === w.value) === (w.op !== "neq") : undefined;
+    };
+    for (let again = true; again; ) {
+      again = false;
+      for (const f of all) if (!f.hidden && !gone.has(f.key) && ((f.when as Json[] | undefined) ?? []).some((w) => holds(w) === false)) (gone.add(f.key), (again = true));
+    }
+    const shown = all.filter((f) => !f.hidden && !gone.has(f.key));
     if (!shown.length) {
       if (!this.unshown.has(form.id)) this.notice(`form:${form.id}`, `OpenCode asks for input claude-ui cannot show yet (${form.title ?? "a form"}). Answer it in OpenCode.`);
       return void this.unshown.add(form.id);
     }
-    const titleOf = (key: string) => all.find((f) => f.key === key)?.title ?? key;
     const seen = new Map<string, number>();
-    const questions: Question[] = shown.map((f, i) => {
+    const texts = new Map<string, string>();
+    for (const f of shown) {
       const base = f.description ?? f.title ?? f.key;
       // Questions are answered by their text: an equal text gets a number.
       const n = (seen.get(base) ?? 0) + 1;
       seen.set(base, n);
-      const when = (f.when as Json[] | undefined)?.map((w) => `${titleOf(w.key)} ${w.op === "neq" ? "is not" : "is"} ${w.value}`).join(" and ");
-      const header = `${i === 0 && form.metadata?.kind !== "question" ? (form.title ?? "") : (f.title ?? "")}${when ? ` (if ${when})` : ""}`;
+      texts.set(f.key, n > 1 ? `${base} (${n})` : base);
+    }
+    const finite = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? n : undefined);
+    const questions: Question[] = shown.map((f, i) => {
+      const header = i === 0 && form.metadata?.kind !== "question" ? (form.title ?? "") : (f.title ?? "");
       const options: Question["options"] =
         f.type === "boolean" ? [{ label: "Yes", description: "" }, { label: "No", description: "" }] : f.type === "external" ? [{ label: "Done", description: f.url ?? "" }] : (f.options ?? []).map((o: Json) => ({ label: o.label, description: o.description ?? "" }));
-      return { question: n > 1 ? `${base} (${n})` : base, header, options, multiSelect: f.type === "multiselect" };
+      const q: Question = { question: texts.get(f.key)!, header, options, multiSelect: f.type === "multiselect" };
+      const keep = (o: object) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
+      if (f.type === "string" && !options.length) q.input = keep({ type: f.format ?? "text", minLength: finite(f.minLength), maxLength: finite(f.maxLength), pattern: typeof f.pattern === "string" ? f.pattern : undefined, placeholder: typeof f.placeholder === "string" ? f.placeholder : undefined }) as QuestionInput;
+      else if (f.type === "number" || f.type === "integer") q.input = keep({ type: f.type, minimum: finite(f.minimum), maximum: finite(f.maximum) }) as QuestionInput;
+      if (f.required === false) q.optional = true;
+      if (f.default !== undefined && f.type !== "external") q.default = Array.isArray(f.default) ? f.default.map((v: unknown) => labelOf(f, v)).join(", ") : labelOf(f, f.default);
+      const when = ((f.when as Json[] | undefined) ?? []).filter((w) => texts.has(w.key)).map((w) => ({ question: texts.get(w.key)!, op: w.op === "neq" ? ("neq" as const) : ("eq" as const), value: labelOf(all.find((x) => x.key === w.key), w.value) }));
+      if (when.length) q.when = when;
+      return q;
     });
     this.reqs.set(form.id, { kind: "question", sessionID: form.sessionID, form, questions, fields: shown });
     this.session.request({ part: { type: "question", id: form.id, requestId: form.id, toolUseId: form.metadata?.tool?.id ?? form.id, questions, settled: false, at: Date.now() }, reply: (r) => this.answerQuestion(form.id, r) });
@@ -1250,7 +1291,9 @@ class OpenCode2Session implements EngineSession {
     for (const [i, f] of req.fields.entries()) {
       const q = req.questions[i]!;
       const text = r.answers[q.question]?.trim();
-      if (text === undefined) continue;
+      if (text === undefined || (text === "" && q.optional)) continue;
+      const bad = q.input && f.type !== "external" ? checkAnswer(q.input, text) : undefined;
+      if (bad) return { error: `${f.title ?? f.key} ${inputReason(bad, q.input!)}` };
       const labels = r.choices?.[q.question] ?? (q.multiSelect ? splitLabels(text, q.options.map((o) => o.label)) : [text]);
       const value = (label: string) => (f.options as Json[] | undefined)?.find((o) => o.label === label)?.value ?? label;
       if (f.type === "multiselect") answer[f.key] = labels.map(value);
@@ -1258,13 +1301,8 @@ class OpenCode2Session implements EngineSession {
         const yes = /^(yes|true|y)$/i.test(text);
         if (!yes && !/^(no|false|n)$/i.test(text)) return { error: `${f.title ?? f.key} needs Yes or No` };
         answer[f.key] = yes;
-      } else if (f.type === "number" || f.type === "integer") {
-        const n = text === "" ? NaN : Number(text);
-        const bound = (b: unknown) => (typeof b === "number" ? b : undefined);
-        if (!Number.isFinite(n) || (f.type === "integer" && !Number.isInteger(n))) return { error: `${f.title ?? f.key} needs ${f.type === "integer" ? "a whole" : "a"} number` };
-        if ((bound(f.minimum) ?? -Infinity) > n || (bound(f.maximum) ?? Infinity) < n) return { error: `${f.title ?? f.key} must be ${bound(f.minimum) !== undefined && bound(f.maximum) !== undefined ? `between ${f.minimum} and ${f.maximum}` : bound(f.minimum) !== undefined ? `at least ${f.minimum}` : `at most ${f.maximum}`}` };
-        answer[f.key] = n;
-      } else if (f.type === "external") answer[f.key] = true;
+      } else if (f.type === "number" || f.type === "integer") answer[f.key] = Number(text);
+      else if (f.type === "external") answer[f.key] = true;
       else answer[f.key] = value(labels[0] ?? text);
     }
     // Hidden fields answer with their default, when they have one.

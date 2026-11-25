@@ -18,3 +18,4 @@ export * from "./node-min.ts";
 export * from "./ssh-command.ts";
 export * from "./editor-command.ts";
 export * from "./git-argv.ts";
+export * from "./question-input.ts";
