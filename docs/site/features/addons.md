@@ -14,13 +14,14 @@ Addons live on the Hub (the machine that runs claude-ui) and are active in every
 
 ## Approve what it can do {#approval}
 
-The card lists what the addon asks for, one plain line each, and the themes, views, commands and renderers it adds. **Approve and enable** turns it on. Nothing runs before that. An addon can do only what you approve, and it can never send a prompt by itself.
+The card lists what the addon asks for, one plain line each, and the themes, views, commands and renderers it adds. An addon with effects has a line **Draws on** with the parts of the app it draws on (or **the whole window**). **Approve and enable** turns it on. Nothing runs before that. An addon can do only what you approve, and it can never send a prompt by itself.
 
 ## Update, turn off, remove {#update}
 
 - **Check for updates** (git addons) shows the new commit and the capabilities that were added or removed. **Update** applies exactly that version.
 - A version that asks for a capability you have not approved stays off until you approve it. A local folder is read again whenever you open the dialog: an edit that adds a capability needs approval too.
 - The switch turns an addon off without removing it: its themes, panes, band, commands and renderers disappear at once. **Uninstall** removes it, and its checkout for a git addon.
+- In the dialog, each row has a labelled **Enabled** switch and a labelled **Dev mode** switch. A long description shows two lines; **Show more** and **Show less** toggle the rest.
 - A row in **Error** shows why the addon does not load (a folder that is gone, a broken manifest).
 - Repository URLs are shown without a user name or password.
 

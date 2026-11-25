@@ -70,6 +70,10 @@ The menu of a project row and of a worktree row has **Copy path**.
 | Expand all / Collapse all | Opens or closes every project (desktop). |
 | Sidebar options (`⋯`) | Layout, show only active sessions, and more. |
 
+## Last choice of a project {#last-choice-of-a-project}
+
+A project remembers the Engine, model and effort of the last session you created in it, and a new session starts with them. The order, first match wins: what you pick in the new session, the Project override (Project settings), the project's last choice, the last Engine you used anywhere. A model or effort applies only to its own Engine. The last choice is never written into the Project overrides, and a worktree counts for its main checkout. The daemon keeps up to 200 projects for each of 20 Sides, and drops the least recently used.
+
 ## Good to know
 
 - You can only open folders inside the allowed **roots** (default: your home folder). See [`--roots`](../reference/cli).

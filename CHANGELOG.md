@@ -2,6 +2,22 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
+## 1.7.0 - 2026-11-26
+
+### Added
+
+- Quick compact: **Quick compact** in the session menu, or `/quick-compact` alone in the prompt box, digests a session into a new one without a model call (Claude Code, OpenCode 1 and OpenCode 2). The new session keeps the Engine, model and effort; its first message is a folded digest card that links to the source. A small model condenses the oldest part only when the digest is over 30 % of the context window ([#987](https://github.com/cuonghuunguyen/claude-code-ui/issues/987)).
+- Addons: capability `ui.effect` draws an addon page in a sandboxed frame over a part of the app that does not scroll, or over the window; it gets the size, state and public attributes, never content. The approval card lists it as **Draws on** ([#1009](https://github.com/cuonghuunguyen/claude-code-ui/issues/1009)).
+- A project remembers the Engine, model and effort of its last session for the next new session. Order: your pick, the Project override, the project's last choice, the global last Engine.
+
+### Changed
+
+- Addons dialog: the **Enabled** and **Dev mode** switches have text labels, and a long description shows two lines with **Show more**.
+
+### Fixed
+
+- Quick compact works for projects in a deep folder path, and its progress toast ends with the run ([#987](https://github.com/cuonghuunguyen/claude-code-ui/issues/987)).
+
 ## 1.6.0 - 2026-11-25
 
 ### Added

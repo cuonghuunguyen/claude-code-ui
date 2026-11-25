@@ -111,6 +111,7 @@ Cho phép một phiên bắt đầu và điều khiển các phiên worker. Tắ
 | Cài đặt | Chức năng |
 | --- | --- |
 | Chế độ quyền mặc định | [Chế độ quyền](../features/permissions) của phiên Claude mới khi Claude settings (`permissions.defaultMode`) không đặt. Mặc định: **Tự động**, chạy như Mặc định trên model không hỗ trợ chế độ tự động. Phiên OpenCode bắt đầu ở **Theo cấu hình OpenCode**. Lưu trong daemon. |
+| Lựa chọn gần nhất của dự án | Không chỉnh được (daemon giữ, `projects.lastUsed`): Engine, model và effort của phiên tạo gần nhất trong dự án, phiên mới kế tiếp dùng khi không có ghi đè của Dự án hay lựa chọn tay ([Dự án](../features/projects#lua-chon-gan-nhat-cua-du-an)). |
 
 ## Giới hạn mức dùng {#usage-limits}
 

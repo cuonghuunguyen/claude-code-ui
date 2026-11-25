@@ -111,6 +111,7 @@ Lets a session start and steer worker sessions. Off by default. **Notifications 
 | Setting | Does |
 | --- | --- |
 | Default permission mode | The [permission mode](../features/permissions) of a new Claude session when the Claude settings (`permissions.defaultMode`) set none. Default: **Auto**, which runs as Default on a model without auto mode. OpenCode sessions start in **Use OpenCode config**. Saved in the daemon. |
+| Last choice of a project | Not editable (the daemon keeps it, `projects.lastUsed`): the Engine, model and effort of the last session created in a project, used by its next new session when no Project override or pick applies ([Projects](../features/projects#last-choice-of-a-project)). |
 
 ## Usage limits
 
