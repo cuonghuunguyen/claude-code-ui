@@ -121,9 +121,9 @@ export const modeOf = (rules: readonly Rule[]): PermissionMode | undefined => {
 
 type PermissionAsked = { id: string; sessionID: string; permission: string; patterns?: string[]; metadata?: Record<string, unknown>; always?: string[]; tool?: { callID?: string } };
 type QuestionAsked = { id: string; sessionID: string; questions: { question: string; header: string; options: { label: string; description: string }[]; multiple?: boolean }[]; tool?: { callID?: string } };
-type Status = { type: "idle" | "busy" | "retry"; attempt?: number; message?: string; /** `retry`: when the next attempt starts (epoch ms of OpenCode's clock). */ next?: number };
+type Status = { type: "idle" | "busy" | "retry"; attempt?: number; message?: string; /** `retry`: when the next attempt starts (epoch ms of OpenCode's clock). */ next?: number; /** `retry`: OpenCode's action for the failure (upsell link). */ action?: { title?: string; label?: string; link?: string } };
 /** What the `model_retry` part carries. */
-type Retry = { attempt: number; message: string; next?: number };
+type Retry = { attempt: number; message: string; next?: number; action?: { label: string; link: string; title?: string } };
 type Payload = { type: string; properties: Record<string, any> };
 
 /** What `begin()` and `resync()` read of a session: stored messages (and those of its subagents), busy state, pending requests of the folder. */
@@ -132,7 +132,20 @@ export type ForkLink = { forkId: string; callId: string; prefix: number };
 export type OpenCodeHistory = { messages: OpenCodeMessage[]; children: Record<string, OpenCodeMessage[]>; /** The fork sessions of the Fork runs of this session with their messages. */ forks: (ForkLink & { messages: OpenCodeMessage[] })[]; busy: boolean; /** OpenCode is waiting to retry the model call (its status `retry`: counts as busy). */ retry?: Retry; /** The message OpenCode's `revert` cuts the conversation at (it and everything after are hidden). */ revert?: string; permission: Rule[]; permissions: PermissionAsked[]; questions: QuestionAsked[] };
 
 /** The `model_retry` state of a `retry` status: the first line of the reason (OpenCode may append more). */
-const retryOf = (s: Status): Retry => ({ attempt: s.attempt ?? 1, message: firstLine(s.message ?? ""), ...(typeof s.next === "number" && { next: s.next }) });
+export const retryOf = (s: Status): Retry => {
+  let message = firstLine(s.message ?? "");
+  const a = s.action;
+  let link: string | undefined;
+  try {
+    // Only an https link with a label is actionable.
+    if (a && typeof a.link === "string" && new URL(a.link).protocol === "https:") link = a.link;
+  } catch {}
+  const label = typeof a?.label === "string" ? a.label.trim() : "";
+  const action = link && label ? { label, link, ...(typeof a?.title === "string" && a.title && { title: a.title }) } : undefined;
+  // The link shows as the action: cut the trailing " - <link>" of the reason.
+  if (action && message.endsWith(` - ${action.link}`)) message = message.slice(0, -` - ${action.link}`.length);
+  return { attempt: s.attempt ?? 1, message, ...(typeof s.next === "number" && { next: s.next }), ...(action && { action }) };
+};
 
 export async function loadOpenCodeHistory(server: OpenCodeServer, id: string, cwd: string, forkLinks: ForkLink[] = []): Promise<OpenCodeHistory> {
   // No timeout: reopening a session after a restart reads a cold folder, whose first answer takes more than 3 s; giving up would lose the session.
@@ -431,7 +444,7 @@ class OpenCodeSession implements EngineSession {
   private setRetry(r: Retry | undefined) {
     const was = this.retrying;
     if (!r && !was) return;
-    if (r && was && r.attempt === was.attempt && r.message === was.message && r.next === was.next) return;
+    if (r && was && r.attempt === was.attempt && r.message === was.message && r.next === was.next && r.action?.link === was.action?.link && r.action?.label === was.action?.label) return;
     this.retrying = r;
     if (r) this.lastAttempt = r.attempt;
     this.session.emit({ type: "model_retry", id: "model_retry", retry: r ?? null });

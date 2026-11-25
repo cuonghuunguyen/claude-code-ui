@@ -757,6 +757,7 @@ export default {
   "app.timeline.thinking": "Đang suy nghĩ",
   "app.timeline.retryIn": "Thử lại sau {time} · lần {attempt}",
   "app.timeline.retryNow": "Đang thử lại · lần {attempt}",
+  "app.timeline.retryAction": "{label} (mở trong tab mới)",
   "app.timeline.retrySr": "Đang thử lại, lần {attempt}: {message}",
   "app.timeline.file": "Tệp",
   "app.timeline.interrupted": "Bị người dùng ngắt",

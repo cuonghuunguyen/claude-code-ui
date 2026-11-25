@@ -2194,6 +2194,32 @@ describe("OpenCode retry and model errors (GH-683)", { timeout: 30_000 }, () => 
     expect(s.find("turn_result")).toMatchObject({ isError: false });
   });
 
+  it("a retry with an OpenCode action carries the https link as retry.action", async () => {
+    const d = await boot({ script: ["retry-action"] });
+    const s = await d.open();
+    await s.prompt("hi");
+    await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
+    expect(retries(s)[0]).toEqual({ attempt: 1, message: "Free usage exceeded, subscribe to Go", next: 4102444800000, action: { label: "subscribe", link: "https://opencode.ai/go", title: "Free limit reached" } });
+  });
+
+  it("the Go action drops the trailing link of the reason; an action without an https link is dropped", async () => {
+    const d = await boot();
+    const s = await d.open();
+    const go = "https://opencode.ai/workspace/wrk_test/go";
+    const msg = `5-hour usage limit reached. It will reset in 1 minute - ${go}`;
+    await d.fake("/__emit", { events: [status(s.id, { type: "busy" }), status(s.id, { ...RETRY_3, message: msg, action: { title: "Go limit reached", label: "open settings", link: go } })] });
+    await until(() => !!retries(s).at(-1));
+    expect(retries(s).at(-1)).toMatchObject({ message: "5-hour usage limit reached. It will reset in 1 minute", action: { label: "open settings", link: go, title: "Go limit reached" } });
+    const bad: { label: string; link?: string }[] = [{ label: "x", link: "javascript:alert(1)" }, { label: "x", link: "http://opencode.ai/go" }, { label: "x" }];
+    for (const [i, action] of bad.entries()) {
+      const attempt = 4 + i;
+      await d.fake("/__emit", { events: [status(s.id, { ...RETRY_3, attempt, message: `Limit - ${action.link ?? ""}`, action })] });
+      await until(() => retries(s).at(-1)?.attempt === attempt);
+      expect(retries(s).at(-1)).toMatchObject({ message: `Limit - ${action.link ?? ""}`.trim() });
+      expect(retries(s).at(-1)).not.toHaveProperty("action");
+    }
+  });
+
   it("a turn that fails after its retries ends with one error notice of its own, after its prompt; a second failing turn has its own; retry state cleared", async () => {
     const d = await boot({ script: ["retry-fail", "retry-fail"] });
     const s = await d.open();
@@ -2306,6 +2332,21 @@ describe("OpenCode retry and model errors (GH-683)", { timeout: 30_000 }, () => 
     await until(() => d.inbox.some((m) => m.type === "event" && m.part.type === "model_retry"));
     const last = d.inbox.filter((m): m is Extract<ServerMessage, { type: "event" }> => m.type === "event" && m.part.type === "model_retry").at(-1)!.part;
     expect(last).toMatchObject({ retry: { attempt: 2, message: "Rate limit reached" } });
+  });
+
+  it("a session restored while OpenCode retries with an action shows the action link", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const row = { id: "ses_retry", slug: "r", projectID: "global", directory: project, title: "Retrying", version: "1.19.5", time: { created: 1, updated: 2 } };
+    const action = { reason: "free_tier_limit", title: "Free limit reached", label: "subscribe", link: "https://opencode.ai/go" };
+    const d = await boot({ root, data: { sessions: [row], messages: { ses_retry: [] }, statuses: { ses_retry: { type: "retry", attempt: 1, message: "Free usage exceeded, subscribe to Go", next: 4102444800000, action } } } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    await d.ok({ type: "session.subscribe", sessionId: "ses_retry", sinceSeq: 0 });
+    await until(() => d.inbox.some((m) => m.type === "event" && m.part.type === "model_retry"));
+    const last = d.inbox.filter((m): m is Extract<ServerMessage, { type: "event" }> => m.type === "event" && m.part.type === "model_retry").at(-1)!.part;
+    expect(last).toMatchObject({ retry: { action: { label: "subscribe", link: "https://opencode.ai/go", title: "Free limit reached" } } });
   });
 
   it("a failed prompt has a notice id per turn, so a second failure does not update the first", async () => {

@@ -10,7 +10,7 @@ import { RetryRow, retryCountdown, retryTime } from "./retry-row.tsx";
 let el: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 const NOW = 1_700_000_000_000;
-const show = (retry: { attempt: number; message: string; next?: number }) => act(() => root.render(<RetryRow retry={retry} />));
+const show = (retry: { attempt: number; message: string; next?: number; action?: { label: string; link: string; title?: string } }) => act(() => root.render(<RetryRow retry={retry} />));
 const countdown = () => el.querySelector('[data-testid="retry-countdown"]')!.textContent;
 
 beforeEach(() => {
@@ -61,5 +61,20 @@ describe("RetryRow", () => {
     expect(status.querySelector('[data-testid="retry-reason"]')!.closest("[aria-hidden]")!.getAttribute("aria-hidden")).toBe("true");
     act(() => void vi.advanceTimersByTime(2000));
     expect(status.querySelector(".sr-only")!.textContent).toBe("Retrying, attempt 2: Rate limit reached for m1");
+  });
+
+  it("an action shows a safe new-tab link; without one there is no link", () => {
+    show({ attempt: 1, message: "Free usage exceeded", next: NOW + 3000, action: { label: "subscribe", link: "https://opencode.ai/go", title: "Free limit reached" } });
+    const a = el.querySelector("a")!;
+    expect(a.getAttribute("href")).toBe("https://opencode.ai/go");
+    expect(a.getAttribute("target")).toBe("_blank");
+    expect(a.getAttribute("rel")).toMatch(/noopener/);
+    expect(a.getAttribute("rel")).toMatch(/noreferrer/);
+    expect(a.textContent).toBe("Subscribe");
+    expect(a.getAttribute("title")).toBe("Free limit reached");
+    expect(a.getAttribute("aria-label")).toBe("Subscribe (opens in a new tab)");
+    expect(a.closest("[aria-hidden]")).toBeNull();
+    show({ attempt: 1, message: "Free usage exceeded", next: NOW + 3000 });
+    expect(el.querySelector("a")).toBeNull();
   });
 });
