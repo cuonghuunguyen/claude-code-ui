@@ -4,7 +4,7 @@
 // slash commands, inline tasks, Fork runs and the daemon's MCP servers (orchestration, claude-ui).
 import { randomUUID } from "node:crypto";
 import type { OpenCodeClient } from "@opencode/client";
-import { permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type Part, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
+import { checkAnswer, permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type Part, type PermissionMode, type PermissionUpdate, type Question, type QuestionInput, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT } from "./aside.ts";
 import { DAEMON_SERVER } from "./daemon-mcp.ts";
 import { DeniedRetryError } from "./denied-retry.ts";
@@ -113,6 +113,30 @@ const INLINE_TOOL = `mcp__${DAEMON_SERVER}__inline_task`;
 const VISUALIZE_ENTRY = "claude-ui-visualize";
 
 type Json = Record<string, any>;
+
+/** OpenCode 2's `when` rule (its form filter): no answer = not active, eq and neq alike; a list answer holds a value when it includes `String(value)`; `external` fields are always active. */
+function conditionHolds(answer: unknown, w: Json): boolean {
+  if (answer === undefined) return false;
+  const r = Array.isArray(answer) ? answer.includes(String(w.value)) : answer === w.value;
+  return w.op === "eq" ? r : !r;
+}
+
+/** Why an answer is refused, as the warning says it (the rules are `checkAnswer`'s). */
+function inputReason(e: NonNullable<ReturnType<typeof checkAnswer>>, input: QuestionInput): string {
+  switch (e.code) {
+    case "number": return "needs a number";
+    case "integer": return "needs a whole number";
+    case "minimum":
+    case "maximum": return input.minimum !== undefined && input.maximum !== undefined ? `must be between ${input.minimum} and ${input.maximum}` : e.code === "minimum" ? `must be at least ${input.minimum}` : `must be at most ${input.maximum}`;
+    case "minLength": return `needs at least ${e.limit} characters`;
+    case "maxLength": return `needs at most ${e.limit} characters`;
+    case "pattern": return `must match ${e.limit}`;
+    case "date": return "must be a date (YYYY-MM-DD)";
+    case "date-time": return "must be a date and time (YYYY-MM-DDThh:mm:ssZ)";
+    case "email": return "must be an email address";
+    case "uri": return "must be a web address (https://...)";
+  }
+}
 /** A model of `GET /api/model` and its default. */
 type ModelRow = { id: string; providerID: string; name: string; enabled?: boolean; variants?: { id: string }[]; limit?: { context?: number } };
 type Models = { list: ModelRow[]; def: ModelRow | undefined };
@@ -140,6 +164,8 @@ export type OpenCode2History = {
   permissions: Json[];
   /** The question forms OpenCode waits for (of the session and its subagents). */
   forms?: Json[];
+  /** The forms of the folder that belong to no session (OpenCode 2.3.0: an MCP elicitation has the session `global`). */
+  globalForms?: Json[];
   /** The session's own permission rules in OpenCode. */
   rules?: Rule2[];
   /** The message OpenCode's staged revert cuts at: it and everything after are hidden (OpenCode still lists them until a prompt commits the revert). */
@@ -200,7 +226,7 @@ export async function loadOpenCode2History(client: OpenCodeClient, id: string, c
   const calls = new Set(messages.flatMap((m) => (m.content ?? []).flatMap((c) => (c.type === "tool" && c.id ? [c.id] : []))));
   for (const l of await mapLimit(inlineLinks.filter((x) => calls.has(x.callId)), 4, async (x) => ({ ...x, messages: await loadMessages(client, x.inlineId).catch(() => undefined) })))
     if (l.messages) children[l.inlineId] = { callId: l.callId, messages: l.messages, kind: "inline", ...(l.denied && { denied: l.denied }) };
-  return { messages, forks, children, busy: id in active, permissions: await ours(requests), forms: await ours(forms), rules: (info.permissions ?? []) as Rule2[], ...(revert && { revert }), ...(info.agent && { agent: info.agent }) };
+  return { messages, forks, children, busy: id in active, permissions: await ours(requests), forms: await ours(forms.filter((f) => f.sessionID !== "global")), globalForms: forms.filter((f) => f.sessionID === "global"), rules: (info.permissions ?? []) as Rule2[], ...(revert && { revert }), ...(info.agent && { agent: info.agent }) };
 }
 
 type TurnEnd = { done: Promise<void>; resolve: () => void };
@@ -232,7 +258,7 @@ class OpenCode2Session implements EngineSession {
   private permissionMode: PermissionMode;
   private effort: Effort;
   staleLogin = false;
-  private readonly mapper = new OpenCode2Mapper();
+  private readonly mapper = new OpenCode2Mapper({ todos: true });
   /** The child sessions of this session's `subagent` calls (nested ones too): their parts show under the call. */
   private readonly children = new ChildRuns();
   /** The rules OpenCode has for this session, as JSON. */
@@ -338,6 +364,15 @@ class OpenCode2Session implements EngineSession {
   get id() {
     return this.session.id;
   }
+  /** A global form that no session could be chosen for: a notice, once. */
+  unroutedForm(form: Json) {
+    if (this.unshown.has(form.id)) return;
+    this.unshown.add(form.id);
+    this.notice(`form:${form.id}`, `An MCP server asks for input (${form.title ?? "a form"}) and claude-ui cannot tell which session it belongs to. Answer it in OpenCode.`);
+  }
+  /** Whether a turn runs. */
+  isRunning = () => this.session.currentState() === "running";
+  runningTools = () => this.mapper.runningTools();
   get cwd() {
     return this.session.cwd;
   }
@@ -502,6 +537,10 @@ class OpenCode2Session implements EngineSession {
       else this.askPermission(p);
     }
     for (const f of h.forms ?? []) (live.add(f.id), this.askForm(f));
+    // A global form shown here stays; one not shown yet (a restart of the daemon) goes to the session it belongs to.
+    for (const f of h.globalForms ?? []) {
+      if (this.reqs.has(f.id) || this.engine.globalFormOwner(this.cwd, f) === this) (live.add(f.id), this.askForm({ ...f, location: { directory: this.cwd } }));
+    }
     for (const id of [...this.reqs.keys()]) if (!live.has(id) && this.session.pendingRequest(id)) this.session.cancel(id, ANSWERED);
   }
 
@@ -1386,23 +1425,56 @@ class OpenCode2Session implements EngineSession {
   private askForm(form: Json) {
     if (this.session.pendingRequest(form.id) || this.reqs.has(form.id)) return;
     const all: Json[] = form.fields ?? [];
-    const shown = all.filter((f) => !f.hidden);
+    const labelOf = (f: Json | undefined, v: unknown): string =>
+      typeof v === "boolean" ? (v ? "Yes" : "No") : String((f?.options as Json[] | undefined)?.find((o) => o.value === v)?.label ?? v);
+    // A field whose condition fails on a hidden field's default (or on a field that is not shown) is not asked at all.
+    const gone = new Set<string>();
+    const holds = (w: Json) => {
+      const c = all.find((x) => x.key === w.key);
+      if (!c) return undefined;
+      return c.hidden || gone.has(c.key) ? conditionHolds(c.hidden ? c.default : undefined, w) : undefined;
+    };
+    for (let again = true; again; ) {
+      again = false;
+      for (const f of all) if (!f.hidden && !gone.has(f.key) && ((f.when as Json[] | undefined) ?? []).some((w) => holds(w) === false)) (gone.add(f.key), (again = true));
+    }
+    // A field comes after the fields its `when` names (stable), so the form asks the controlling answer first.
+    const shown: Json[] = [];
+    for (let rest = all.filter((f) => !f.hidden && !gone.has(f.key)); rest.length; ) {
+      const wait = (f: Json) => ((f.when as Json[] | undefined) ?? []).some((w) => w.key !== f.key && rest.some((x) => x.key === w.key));
+      const i = Math.max(0, rest.findIndex((f) => !wait(f)));
+      shown.push(...rest.splice(i, 1));
+    }
     if (!shown.length) {
       if (!this.unshown.has(form.id)) this.notice(`form:${form.id}`, `OpenCode asks for input claude-ui cannot show yet (${form.title ?? "a form"}). Answer it in OpenCode.`);
       return void this.unshown.add(form.id);
     }
-    const titleOf = (key: string) => all.find((f) => f.key === key)?.title ?? key;
     const seen = new Map<string, number>();
-    const questions: Question[] = shown.map((f, i) => {
+    const texts = new Map<string, string>();
+    for (const f of shown) {
       const base = f.description ?? f.title ?? f.key;
       // Questions are answered by their text: an equal text gets a number.
       const n = (seen.get(base) ?? 0) + 1;
       seen.set(base, n);
-      const when = (f.when as Json[] | undefined)?.map((w) => `${titleOf(w.key)} ${w.op === "neq" ? "is not" : "is"} ${w.value}`).join(" and ");
-      const header = `${i === 0 && form.metadata?.kind !== "question" ? (form.title ?? "") : (f.title ?? "")}${when ? ` (if ${when})` : ""}`;
+      texts.set(f.key, n > 1 ? `${base} (${n})` : base);
+    }
+    const finite = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? n : undefined);
+    const questions: Question[] = shown.map((f, i) => {
+      const header = i === 0 && form.metadata?.kind !== "question" ? (form.title ?? "") : (f.title ?? "");
       const options: Question["options"] =
         f.type === "boolean" ? [{ label: "Yes", description: "" }, { label: "No", description: "" }] : f.type === "external" ? [{ label: "Done", description: f.url ?? "" }] : (f.options ?? []).map((o: Json) => ({ label: o.label, description: o.description ?? "" }));
-      return { question: n > 1 ? `${base} (${n})` : base, header, options, multiSelect: f.type === "multiselect" };
+      const q: Question = { question: texts.get(f.key)!, header, options, multiSelect: f.type === "multiselect" };
+      const keep = (o: object) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
+      if (f.type === "string" && !options.length) q.input = keep({ type: f.format ?? "text", minLength: finite(f.minLength), maxLength: finite(f.maxLength), pattern: typeof f.pattern === "string" ? f.pattern : undefined, placeholder: typeof f.placeholder === "string" ? f.placeholder : undefined }) as QuestionInput;
+      else if (f.type === "string" && f.custom && (f.format || f.pattern !== undefined || finite(f.minLength) !== undefined || finite(f.maxLength) !== undefined)) q.input = keep({ type: f.format ?? "text", minLength: finite(f.minLength), maxLength: finite(f.maxLength), pattern: typeof f.pattern === "string" ? f.pattern : undefined }) as QuestionInput;
+      else if (f.type === "number" || f.type === "integer") q.input = keep({ type: f.type, minimum: finite(f.minimum), maximum: finite(f.maximum) }) as QuestionInput;
+      // An MCP elicitation field is optional unless `required: true` (what OpenCode 2.3.0 enforces); the `question` tool's fields stay required.
+      if (form.metadata?.kind === "mcp-elicitation" && f.required !== true) q.optional = true;
+      const dflt = f.type === "number" || f.type === "integer" ? finite(f.default) : f.default;
+      if (dflt !== undefined && f.type !== "external") q.default = Array.isArray(dflt) ? dflt.map((v: unknown) => labelOf(f, v)).join(", ") : labelOf(f, dflt);
+      const when = ((f.when as Json[] | undefined) ?? []).filter((w) => texts.has(w.key)).map((w) => ({ question: texts.get(w.key)!, op: w.op === "neq" ? ("neq" as const) : ("eq" as const), value: labelOf(all.find((x) => x.key === w.key), w.value) }));
+      if (when.length) q.when = when;
+      return q;
     });
     this.reqs.set(form.id, { kind: "question", sessionID: form.sessionID, form, questions, fields: shown });
     this.session.request({ part: { type: "question", id: form.id, requestId: form.id, toolUseId: form.metadata?.tool?.id ?? form.id, questions, settled: false, at: Date.now() }, reply: (r) => this.answerQuestion(form.id, r) });
@@ -1417,7 +1489,10 @@ class OpenCode2Session implements EngineSession {
     for (const [i, f] of req.fields.entries()) {
       const q = req.questions[i]!;
       const text = r.answers[q.question]?.trim();
-      if (text === undefined) continue;
+      if (text === undefined || (text === "" && q.optional)) continue;
+      // A free text next to options: an option's label is no text to check.
+      const bad = q.input && f.type !== "external" && !q.options.some((o) => o.label === text) ? checkAnswer(q.input, text) : undefined;
+      if (bad) return { error: `${f.title ?? f.key} ${inputReason(bad, q.input!)}` };
       const labels = r.choices?.[q.question] ?? (q.multiSelect ? splitLabels(text, q.options.map((o) => o.label)) : [text]);
       const value = (label: string) => (f.options as Json[] | undefined)?.find((o) => o.label === label)?.value ?? label;
       if (f.type === "multiselect") answer[f.key] = labels.map(value);
@@ -1425,19 +1500,14 @@ class OpenCode2Session implements EngineSession {
         const yes = /^(yes|true|y)$/i.test(text);
         if (!yes && !/^(no|false|n)$/i.test(text)) return { error: `${f.title ?? f.key} needs Yes or No` };
         answer[f.key] = yes;
-      } else if (f.type === "number" || f.type === "integer") {
-        const n = text === "" ? NaN : Number(text);
-        const bound = (b: unknown) => (typeof b === "number" ? b : undefined);
-        if (!Number.isFinite(n) || (f.type === "integer" && !Number.isInteger(n))) return { error: `${f.title ?? f.key} needs ${f.type === "integer" ? "a whole" : "a"} number` };
-        if ((bound(f.minimum) ?? -Infinity) > n || (bound(f.maximum) ?? Infinity) < n) return { error: `${f.title ?? f.key} must be ${bound(f.minimum) !== undefined && bound(f.maximum) !== undefined ? `between ${f.minimum} and ${f.maximum}` : bound(f.minimum) !== undefined ? `at least ${f.minimum}` : `at most ${f.maximum}`}` };
-        answer[f.key] = n;
-      } else if (f.type === "external") answer[f.key] = true;
+      } else if (f.type === "number" || f.type === "integer") answer[f.key] = Number(text);
+      else if (f.type === "external") answer[f.key] = true;
       else answer[f.key] = value(labels[0] ?? text);
     }
     // Hidden fields answer with their default, when they have one.
     for (const f of (req.form.fields ?? []) as Json[]) if (f.hidden && f.default !== undefined) answer[f.key] = f.default;
     // A field whose condition does not hold is not active: OpenCode refuses an answer for it.
-    const active = (f: Json) => ((f.when as Json[] | undefined) ?? []).every((w) => (answer[w.key] === w.value) === (w.op !== "neq"));
+    const active = (f: Json) => f.type === "external" || ((f.when as Json[] | undefined) ?? []).every((w) => conditionHolds(answer[w.key], w));
     let again = true;
     while (again) {
       again = false;
@@ -1456,6 +1526,9 @@ class OpenCode2Session implements EngineSession {
         .client()
         .then(f)
         .catch((err) => this.notice(`answer_failed:${ascending("msg")}`, `Could not answer OpenCode: ${(err as Error).message}`));
+    // A global form is answered with its folder in a header (as OpenCode's own app does).
+    const dir: unknown = req.form.location?.directory;
+    const where = req.sessionID === "global" && typeof dir === "string" ? { headers: { "x-opencode-directory": encodeURIComponent(dir) } } : undefined;
     if (r.kind === "answer") {
       const a = this.formAnswer(req, r);
       // A value OpenCode would refuse is not sent: the question comes back with the reason.
@@ -1463,9 +1536,9 @@ class OpenCode2Session implements EngineSession {
         this.notice(`form_invalid:${ascending("msg")}`, `${a.error}. Answer again.`);
         return void setTimeout(() => this.reqs.has(id) || this.askForm(req.form), 0);
       }
-      return call((c) => c.session.form.reply({ sessionID: req.sessionID, formID: id, answer: a.answer }));
+      return call((c) => c.session.form.reply({ sessionID: req.sessionID, formID: id, answer: a.answer }, where));
     }
-    if (r.kind !== "cancel" || r.message !== ANSWERED) call((c) => c.session.form.cancel({ sessionID: req.sessionID, formID: id }));
+    if (r.kind !== "cancel" || r.message !== ANSWERED) call((c) => c.session.form.cancel({ sessionID: req.sessionID, formID: id }, where));
   }
 
   /**
@@ -1801,6 +1874,13 @@ class OpenCode2EngineImpl implements Engine {
           // A form names its session inside the form.
           const sid: unknown = payload.properties.sessionID ?? payload.properties.form?.sessionID;
           if (typeof sid !== "string") return;
+          // OpenCode 2.3.0 creates an MCP elicitation with the session "global" (its folder is the event's location): the run waiting for that server's tool shows it.
+          if (sid === "global" && payload.type === "form.created" && dir) {
+            const owner = this.globalFormOwner(dir, payload.properties.form);
+            // Undecided: every run of the folder says so (the MCP tool waits for an answer OpenCode cannot get from here).
+            if (!owner) return this.sessions.forEach((o) => o.cwd.replace(/[\\/]+$/, "") === dir.replace(/[\\/]+$/, "") && o.isRunning() && o.unroutedForm(payload.properties.form));
+            return owner.event(payload.type, { ...payload.properties, form: { ...payload.properties.form, location: { directory: dir } } });
+          }
           const own = this.sessions.get(sid);
           if (own) return own.event(payload.type, payload.properties);
           // A running inline run first: a saved link may have made its session a restored child too.
@@ -1822,6 +1902,18 @@ class OpenCode2EngineImpl implements Engine {
     // OpenCode lists a folder's built-in agents and commands before its own ones, then says `agent.updated`: an event sent before this stream opened is lost, so the
     // lists read before (a session create or the chooser) are read again once it is open.
     if (first) void this.server.streamReady().then(() => this.listsChanged(undefined));
+  }
+  /**
+   * The session that shows a global form of `dir`: the only one running there, else the only one running there with a call of the form's MCP server
+   * (`metadata.server`, tool key `<server>_<tool>`). None when that is not decided: the form is not shown (a guess could answer for the wrong run).
+   */
+  globalFormOwner(dir: string, form: Json): OpenCode2Session | undefined {
+    const norm = (d: string) => d.replace(/[\\/]+$/, "");
+    const here = [...this.sessions.values()].filter((o) => norm(o.cwd) === norm(dir) && o.isRunning());
+    if (here.length === 1) return here[0];
+    const server = typeof form?.metadata?.server === "string" ? form.metadata.server.replace(/[^A-Za-z0-9_-]/g, "_") : undefined;
+    const waiting = server ? here.filter((o) => o.runningTools().some((n) => n.startsWith(`${server}_`))) : [];
+    return waiting.length === 1 ? waiting[0] : undefined;
   }
   remove(s: OpenCode2Session) {
     this.sessions.delete(s.id);

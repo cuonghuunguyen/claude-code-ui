@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
@@ -415,6 +415,28 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     const paths = d.log().filter((l) => l.type === "request").map((l) => l.path);
     expect(paths).toContain("/api/info");
     expect(paths).not.toContain("/global/health");
+  });
+
+  it("an OpenCode 2 server starts with experimental.todo on as the OPENCODE_CONFIG document; an OPENCODE_CONFIG of the user is kept; an OpenCode 1 server gets none", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "oc-todo-")));
+    const logFile = join(root, "fake.log");
+    const starts = () => readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((l) => l.type === "start");
+    const run = async (bin: string, env: NodeJS.ProcessEnv, major: 1 | 2) => {
+      const server = createOpenCodeServer({ path: () => "", command: [process.execPath, bin], env: () => ({ FAKE_OPENCODE_LOG: logFile, ...env }) });
+      try {
+        await server.ensure(major);
+      } finally {
+        await server.close();
+      }
+      return starts().at(-1);
+    };
+    expect((await run(BIN2, {}, 2)).config).toEqual({ experimental: { todo: true } });
+    // The temp document goes with the server that used it (stop and a crash alike): no folder is left per start.
+    const file = starts().at(-1).configFile as string;
+    await until(() => !existsSync(file));
+    expect(existsSync(dirname(file))).toBe(false);
+    expect((await run(BIN2, { OPENCODE_CONFIG: "/user/own.json" }, 2)).configFile).toBe("/user/own.json");
+    expect((await run(BIN, {}, 1)).configFile).toBeUndefined();
   });
 
   it("the OpenCode 2 client reaches the server through the authenticated node:http transport", async () => {

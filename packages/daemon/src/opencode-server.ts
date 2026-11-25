@@ -1,11 +1,11 @@
 // The OpenCode server of this daemon (docs/spec.md "OpenCode engine"): one `opencode serve` child, started on first use, stopped with the daemon.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { Readable } from "node:stream";
-import { homedir, release } from "node:os";
-import { posix, win32 } from "node:path";
+import { homedir, release, tmpdir } from "node:os";
+import { dirname, join, posix, win32 } from "node:path";
 import { OPENCODE_MIN, OPENCODE2_MIN, type OpenCodeStatus } from "@claude-ui/protocol";
 import { SERVE_WATCHER } from "./tailscale.ts";
 import { winQuote } from "./update.ts";
@@ -108,6 +108,22 @@ const windowsOnly = (file: string) =>
 export function invocation(binary: string, args: string[], platform: NodeJS.Platform = process.platform): { file: string; args: string[]; verbatim: boolean } {
   if (platform !== "win32" || !/\.(cmd|bat)$/i.test(binary)) return { file: binary, args, verbatim: false };
   return { file: "cmd.exe", args: ["/d", "/s", "/c", `"${[binary, ...args].map(winQuote).join(" ")}"`], verbatim: true };
+}
+
+/**
+ * The config document of an OpenCode 2 server of this daemon: `experimental.todo` on (the `todowrite` tool; docs/spec.md "OpenCode 2 adapter", Todos). It goes in
+ * as `OPENCODE_CONFIG` (checked on 2.3.0: the project's `opencode.json` and later documents beat it, so a user's `false` there wins; the global config and
+ * `OPENCODE_CONFIG_CONTENT` do not). Not set when the environment already names an `OPENCODE_CONFIG` file: that is the user's own.
+ */
+function defaultConfig(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (env.OPENCODE_CONFIG) return {};
+  try {
+    const file = join(mkdtempSync(join(tmpdir(), "claude-ui-oc2-")), "opencode.json");
+    writeFileSync(file, JSON.stringify({ experimental: { todo: true } }));
+    return { OPENCODE_CONFIG: file };
+  } catch {
+    return {};
+  }
 }
 
 /** A consumer of the server's event stream: `event` per payload of `GET /global/event` (version 2: `GET /api/event`, mapped to the same shape); `resync` after a reconnect (events may be lost). */
@@ -238,15 +254,19 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     let counted = false;
     const count = () => !counted && ((counted = true), fastExits.push(startedAt));
     const run = invocation(cmd[0]!, [...cmd.slice(1), "serve", "--hostname", "127.0.0.1", "--port", "0"]);
+    const config = major === 2 ? defaultConfig(env()) : {};
+    // The document belongs to this start: removed when the child ends (stop, crash) or never spawned.
+    const dropConfig = () => config.OPENCODE_CONFIG && rmSync(dirname(config.OPENCODE_CONFIG), { recursive: true, force: true });
     const proc = spawn(process.execPath, ["-e", SERVE_WATCHER, run.file, ...run.args], {
-      env: { ...env(), OPENCODE_SERVER_USERNAME: "opencode", OPENCODE_SERVER_PASSWORD: password },
+      env: { ...config, ...env(), OPENCODE_SERVER_USERNAME: "opencode", OPENCODE_SERVER_PASSWORD: password },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
     child = proc;
     const exited = new Promise<never>((_, reject) => {
-      proc.once("error", (err) => reject(failed(err.message)));
+      proc.once("error", (err) => (dropConfig(), reject(failed(err.message))));
       proc.once("exit", (code, signal) => {
+        dropConfig();
         if (child === proc) (child = undefined), (up = undefined);
         if (!stopRequested && now() - startedAt < FAST_MS) count();
         else if (!stopRequested) fastExits = [];

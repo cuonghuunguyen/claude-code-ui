@@ -1210,24 +1210,40 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
   });
 
   // A form of OpenCode with these fields, asked by the turn (`kind` other than question: no call of the question tool).
-  const formTurn = (fields: object[], kind?: string) => {
+  const formTurn = (fields: object[], kind?: string, sessionID?: string) => {
     const file = join(mkdtempSync(join(tmpdir(), "oc2-form-")), "turn.json");
     const step = (event: string, data: object) => ({ event, data: { sessionID: "$SESSION", ...data } });
-    writeFileSync(file, JSON.stringify([step("session.execution.started", {}), step("session.step.started", { agent: "build", model: { id: "m", providerID: "fake" }, assistantMessageID: "$A1" }), { form: { fields, ...(kind && { kind }) } }, { wait: "form" }, step("session.step.ended", { assistantMessageID: "$A1", finish: "stop", tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0, files: [] }), step("session.execution.succeeded", {})]));
+    writeFileSync(file, JSON.stringify([step("session.execution.started", {}), step("session.step.started", { agent: "build", model: { id: "m", providerID: "fake" }, assistantMessageID: "$A1" }), { form: { fields, ...(kind && { kind }), ...(sessionID && { sessionID }) } }, { wait: "form" }, step("session.step.ended", { assistantMessageID: "$A1", finish: "stop", tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0, files: [] }), step("session.execution.succeeded", {})]));
     return file;
+  };
+  // The same turn, running 1.5 s before its form (both sessions run when the form comes).
+  const slow = (file: string) => {
+    const steps = JSON.parse(readFileSync(file, "utf8")) as object[];
+    const out = join(mkdtempSync(join(tmpdir(), "oc2-form-")), "slow.json");
+    writeFileSync(out, JSON.stringify([...steps.slice(0, 2), { sleep: 1500 }, ...steps.slice(2)]));
+    return out;
   };
   const opts = [{ value: "v1", label: "One", description: "first" }, { value: "v2", label: "Two" }];
   it.each([
     ["a string with options answers with the option's value", [{ key: "a", type: "string", title: "A", description: "Pick", options: opts, custom: true }], undefined, [{ question: "Pick", header: "A", options: [{ label: "One", description: "first" }, { label: "Two", description: "" }], multiSelect: false }], { Pick: "Two" }, { a: "v2" }],
-    ["a string with no options is a question with the free text", [{ key: "a", type: "string", title: "Name", description: "Your name?" }], undefined, [{ question: "Your name?", header: "Name", options: [], multiSelect: false }], { "Your name?": "Ada" }, { a: "Ada" }],
+    ["a string with no options is a question with the free text", [{ key: "a", type: "string", title: "Name", description: "Your name?" }], undefined, [{ question: "Your name?", header: "Name", options: [], multiSelect: false, input: { type: "text" } }], { "Your name?": "Ada" }, { a: "Ada" }],
     ["a boolean offers Yes and No and answers true or false", [{ key: "b", type: "boolean", title: "Sure" }], undefined, [{ question: "Sure", header: "Sure", options: [{ label: "Yes", description: "" }, { label: "No", description: "" }], multiSelect: false }], { Sure: "No" }, { b: false }],
-    ["a number and an integer answer as numbers", [{ key: "n", type: "number", title: "Ratio" }, { key: "i", type: "integer", title: "Count", minimum: 1, maximum: 5 }], undefined, [{ question: "Ratio", header: "Ratio", options: [], multiSelect: false }, { question: "Count", header: "Count", options: [], multiSelect: false }], { Ratio: "0.5", Count: "3" }, { n: 0.5, i: 3 }],
-    ["a hidden field is not shown and answers with its default", [{ key: "h", type: "string", title: "H", hidden: true, default: "dflt" }, { key: "a", type: "string", title: "A" }], undefined, [{ question: "A", header: "A", options: [], multiSelect: false }], { A: "x" }, { h: "dflt", a: "x" }],
-    ["a field with a condition says so and is left out of the answer when the condition fails", [{ key: "b", type: "boolean", title: "Deploy" }, { key: "w", type: "string", title: "Where", when: [{ key: "b", op: "eq", value: true }] }], undefined, [{ question: "Deploy", header: "Deploy", options: [{ label: "Yes", description: "" }, { label: "No", description: "" }], multiSelect: false }, { question: "Where", header: "Where (if Deploy is true)", options: [], multiSelect: false }], { Deploy: "No", Where: "prod" }, { b: false }],
-    ["two fields with the same question text get a number", [{ key: "a", type: "string", title: "A", description: "Same?" }, { key: "b", type: "string", title: "B", description: "Same?" }], undefined, [{ question: "Same?", header: "A", options: [], multiSelect: false }, { question: "Same? (2)", header: "B", options: [], multiSelect: false }], { "Same?": "one", "Same? (2)": "two" }, { a: "one", b: "two" }],
+    ["a number and an integer answer as numbers", [{ key: "n", type: "number", title: "Ratio" }, { key: "i", type: "integer", title: "Count", minimum: 1, maximum: 5 }], undefined, [{ question: "Ratio", header: "Ratio", options: [], multiSelect: false, input: { type: "number" } }, { question: "Count", header: "Count", options: [], multiSelect: false, input: { type: "integer", minimum: 1, maximum: 5 } }], { Ratio: "0.5", Count: "3" }, { n: 0.5, i: 3 }],
+    ["a hidden field is not shown and answers with its default", [{ key: "h", type: "string", title: "H", hidden: true, default: "dflt" }, { key: "a", type: "string", title: "A" }], undefined, [{ question: "A", header: "A", options: [], multiSelect: false, input: { type: "text" } }], { A: "x" }, { h: "dflt", a: "x" }],
+    ["a field with a condition carries it and is left out of the answer when the condition fails", [{ key: "b", type: "boolean", title: "Deploy" }, { key: "w", type: "string", title: "Where", when: [{ key: "b", op: "eq", value: true }] }], undefined, [{ question: "Deploy", header: "Deploy", options: [{ label: "Yes", description: "" }, { label: "No", description: "" }], multiSelect: false }, { question: "Where", header: "Where", options: [], multiSelect: false, input: { type: "text" }, when: [{ question: "Deploy", op: "eq", value: "Yes" }] }], { Deploy: "No", Where: "prod" }, { b: false }],
+    ["a field whose condition fails on a hidden field's default is not asked", [{ key: "h", type: "boolean", title: "H", hidden: true, default: false }, { key: "w", type: "string", title: "W", when: [{ key: "h", op: "eq", value: true }] }, { key: "a", type: "string", title: "A" }], undefined, [{ question: "A", header: "A", options: [], multiSelect: false, input: { type: "text" } }], { A: "x" }, { h: false, a: "x" }],
+    ["a field that depends on a later one comes after it", [{ key: "w", type: "string", title: "Why", when: [{ key: "k", op: "eq", value: "x" }] }, { key: "k", type: "string", title: "Kind", options: [{ value: "x", label: "X" }, { value: "y", label: "Y" }] }], undefined, [{ question: "Kind", header: "Kind", options: [{ label: "X", description: "" }, { label: "Y", description: "" }], multiSelect: false }, { question: "Why", header: "Why", options: [], multiSelect: false, input: { type: "text" }, when: [{ question: "Kind", op: "eq", value: "X" }] }], { Kind: "X", Why: "b" }, { k: "x", w: "b" }],
+    ["a condition on a multi-select holds when the list includes the value (OpenCode 2's rule)", [{ key: "m", type: "multiselect", title: "M", options: opts }, { key: "w", type: "string", title: "W", when: [{ key: "m", op: "eq", value: "v1" }] }], undefined, [{ question: "M", header: "M", options: [{ label: "One", description: "first" }, { label: "Two", description: "" }], multiSelect: true }, { question: "W", header: "W", options: [], multiSelect: false, input: { type: "text" }, when: [{ question: "M", op: "eq", value: "One" }] }], { M: "One, Two", W: "k" }, { m: ["v1", "v2"], w: "k" }],
+    ["a free text next to options carries the format; an infinite number default is no default", [{ key: "d", type: "string", title: "D", description: "When?", format: "date", custom: true, options: [{ value: "t", label: "Today" }] }, { key: "n", type: "number", title: "N", default: "Infinity" }], undefined, [{ question: "When?", header: "D", options: [{ label: "Today", description: "" }], multiSelect: false, input: { type: "date" } }, { question: "N", header: "N", options: [], multiSelect: false, input: { type: "number" } }], { "When?": "Today", N: "1" }, { d: "t", n: 1 }],
+    ["a date field is a typed question and answers with the text", [{ key: "d", type: "string", title: "Due", format: "date", placeholder: "pick" }], undefined, [{ question: "Due", header: "Due", options: [], multiSelect: false, input: { type: "date", placeholder: "pick" } }], { Due: "2026-12-01" }, { d: "2026-12-01" }],
+    ["length and pattern go to the question", [{ key: "c", type: "string", title: "Code", pattern: "^[A-Z]+$", minLength: 2, maxLength: 5 }], undefined, [{ question: "Code", header: "Code", options: [], multiSelect: false, input: { type: "text", minLength: 2, maxLength: 5, pattern: "^[A-Z]+$" } }], { Code: "ABC" }, { c: "ABC" }],
+    ["an MCP elicitation field without required: true may stay empty: no key in the answer", [{ key: "o", type: "string", title: "Note" }, { key: "a", type: "string", title: "A", required: true }], "mcp-elicitation", [{ question: "Note", header: "Questions", options: [], multiSelect: false, input: { type: "text" }, optional: true }, { question: "A", header: "A", options: [], multiSelect: false, input: { type: "text" } }], { Note: "", A: "x" }, { a: "x" }],
+    ["a field of the question tool stays required even without required: true", [{ key: "q", type: "string", title: "Q", description: "Which?" }], undefined, [{ question: "Which?", header: "Q", options: [], multiSelect: false, input: { type: "text" } }], { "Which?": "x" }, { q: "x" }],
+    ["a default is the pre-filled answer, an option by its label", [{ key: "o", type: "string", title: "O", description: "Pick", options: opts, default: "v2" }, { key: "n", type: "number", title: "N", default: 3 }], undefined, [{ question: "Pick", header: "O", options: [{ label: "One", description: "first" }, { label: "Two", description: "" }], multiSelect: false, default: "Two" }, { question: "N", header: "N", options: [], multiSelect: false, input: { type: "number" }, default: "3" }], { Pick: "Two", N: "3" }, { o: "v2", n: 3 }],
+    ["two fields with the same question text get a number", [{ key: "a", type: "string", title: "A", description: "Same?" }, { key: "b", type: "string", title: "B", description: "Same?" }], undefined, [{ question: "Same?", header: "A", options: [], multiSelect: false, input: { type: "text" } }, { question: "Same? (2)", header: "B", options: [], multiSelect: false, input: { type: "text" } }], { "Same?": "one", "Same? (2)": "two" }, { a: "one", b: "two" }],
     ["a multi-select answers with the values of the chosen options", [{ key: "m", type: "multiselect", title: "M", description: "Which?", options: opts }], undefined, [{ question: "Which?", header: "M", options: [{ label: "One", description: "first" }, { label: "Two", description: "" }], multiSelect: true }], { "Which?": "One, Two" }, { m: ["v1", "v2"] }],
     ["an external field shows its address and is acknowledged with Done", [{ key: "e", type: "external", title: "Sign in", url: "https://example.com/x" }], undefined, [{ question: "Sign in", header: "Sign in", options: [{ label: "Done", description: "https://example.com/x" }], multiSelect: false }], { "Sign in": "Done" }, { e: true }],
-    ["a form of another kind shows as a question with the form's title", [{ key: "a", type: "string", title: "A", description: "Value?" }], "input", [{ question: "Value?", header: "Questions", options: [], multiSelect: false }], { "Value?": "z" }, { a: "z" }],
+    ["a form of another kind shows as a question with the form's title", [{ key: "a", type: "string", title: "A", description: "Value?" }], "input", [{ question: "Value?", header: "Questions", options: [], multiSelect: false, input: { type: "text" } }], { "Value?": "z" }, { a: "z" }],
   ])("OpenCode 2 form: %s", async (_name, fields, kind, questions, answers, body) => {
     const d = await boot({ env: { FAKE_OPENCODE2_SCRIPT: formTurn(fields, kind) } });
     const s = await d.open();
@@ -1241,21 +1257,60 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     expect(d.requests("POST", new RegExp(`/form/${q.requestId}/reply$`))[0]!.body).toEqual({ answer: body });
   });
 
-  it("a number that is not a whole number or out of range is not sent: a warning names the field and the question comes back", async () => {
-    const d = await boot({ env: { FAKE_OPENCODE2_SCRIPT: formTurn([{ key: "i", type: "integer", title: "Count", minimum: 1, maximum: 5 }]) } });
+  it("a global form of an MCP elicitation (session \"global\", 2.3.0) is shown by the run that waits and answered with its folder in a header", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_SCRIPT: formTurn([{ key: "due", type: "string", title: "Due", format: "date", required: true }, { key: "note", type: "string", title: "Note" }], "mcp-elicitation", "global") } });
     const s = await d.open();
     await s.prompt("ask");
     await until(() => !!s.find("question"));
     const q = s.find("question")!;
-    for (const [bad, text] of [["2.5", /Count needs a whole number/], ["9", /Count must be between 1 and 5/]] as const) {
-      await d.ok({ type: "question.respond", requestId: q.requestId, answers: { Count: bad } });
+    expect(q.questions.map((x) => [x.question, x.optional ?? false, x.input?.type])).toEqual([["Due", false, "date"], ["Note", true, "text"]]);
+    await d.ok({ type: "question.respond", requestId: q.requestId, answers: { Due: "2026-12-01", Note: "" } });
+    await until(() => s.parts().some((p) => p.type === "turn_result"));
+    expect(d.requests("POST", /\/session\/global\/form\/[^/]+\/reply$/)[0]!.body).toEqual({ answer: { due: "2026-12-01" } });
+  });
+
+  it("a global form stays open after a reconnect and is answered afterwards", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_SCRIPT: formTurn([{ key: "due", type: "string", title: "Due", required: true }], "mcp-elicitation", "global") } });
+    const s = await d.open();
+    await s.prompt("ask");
+    await until(() => !!s.find("question"));
+    const q = s.find("question")!;
+    await d.fake("/__drop");
+    await until(() => d.requests("GET", "/api/form").length > 0);
+    await sleep(300);
+    expect(s.find("question")!.settled).toBe(false);
+    await d.ok({ type: "question.respond", requestId: q.requestId, answers: { Due: "x" } });
+    await until(() => s.parts().some((p) => p.type === "turn_result"));
+    expect(d.requests("POST", /\/session\/global\/form\/[^/]+\/reply$/)[0]!.body).toEqual({ answer: { due: "x" } });
+  });
+
+  it("a global form that two running sessions of the folder could own is shown in neither: both get a notice", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_SCRIPT: [1, 2].map(() => slow(formTurn([{ key: "due", type: "string", title: "Due" }], "mcp-elicitation", "global"))).join(",") } });
+    const a = await d.open();
+    const b = await d.open();
+    await a.prompt("ask");
+    await b.prompt("ask");
+    await until(() => !!a.find("notice", (n) => /MCP server asks for input/.test(n.text)) && !!b.find("notice", (n) => /MCP server asks for input/.test(n.text)));
+    await sleep(300);
+    expect(a.find("question")).toBeUndefined();
+    expect(b.find("question")).toBeUndefined();
+  });
+
+  it("a number or string that breaks its rule is not sent: a warning names the field and the question comes back", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_SCRIPT: formTurn([{ key: "i", type: "integer", title: "Count", minimum: 1, maximum: 5 }, { key: "m", type: "string", title: "Mail", format: "email" }]) } });
+    const s = await d.open();
+    await s.prompt("ask");
+    await until(() => !!s.find("question"));
+    const q = s.find("question")!;
+    for (const [bad, mail, text] of [["2.5", "a@b.co", /Count needs a whole number/], ["9", "a@b.co", /Count must be between 1 and 5/], ["4", "nope", /Mail must be an email address/]] as const) {
+      await d.ok({ type: "question.respond", requestId: q.requestId, answers: { Count: bad, Mail: mail } });
       await until(() => !!s.find("notice", (n) => text.test(n.text)));
       await until(() => s.find("question")!.settled === false);
     }
     expect(d.requests("POST", /\/form\/[^/]+\/reply$/)).toHaveLength(0);
-    await d.ok({ type: "question.respond", requestId: q.requestId, answers: { Count: "4" } });
+    await d.ok({ type: "question.respond", requestId: q.requestId, answers: { Count: "4", Mail: "a@b.co" } });
     await until(() => s.parts().some((p) => p.type === "turn_result"));
-    expect(d.requests("POST", /\/form\/[^/]+\/reply$/).map((r) => r.body)).toEqual([{ answer: { i: 4 } }]);
+    expect(d.requests("POST", /\/form\/[^/]+\/reply$/).map((r) => r.body)).toEqual([{ answer: { i: 4, m: "a@b.co" } }]);
   });
 });
 
