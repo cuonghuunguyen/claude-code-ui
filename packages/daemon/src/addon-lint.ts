@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
-import { ASSET_LARGE_BYTES, extendsChain, PARTS, type AddonAssetState, type AddonLint, type AddonManifest, type AddonTheme } from "@claude-ui/protocol";
+import { ASSET_LARGE_BYTES, EFFECT_TARGETS, effectAttrs, extendsChain, PARTS, type AddonAssetState, type AddonLint, type AddonManifest, type AddonTheme } from "@claude-ui/protocol";
 import { CssScanError, MAX_THEME_CSS, scopeCss, skipToken, themeRoot } from "./addon-css.ts";
 
 const PART_BY_NAME = new Map(PARTS.map((p) => [p.name as string, p]));
@@ -270,12 +270,29 @@ function lintExtends(m: AddonManifest, find?: (addon: string, theme: string) => 
 }
 
 /** Findings of an addon: manifest rules (palette contrast), and its CSS files (top-level `css` and every `themes[].css`, each once). A missing or irregular file is skipped (the manifest check reports a missing one). A theme CSS that the daemon cannot scope (unclosed block, stray `}`, groups nested too deep) is served empty, so it gets `css-broken` too. Results are cached by the file content (a hash), so an edit that keeps size and mtime is seen. Assets: `asset-missing` (declared, no file yet: the user fills it; background and slot images alike) and `asset-large` (over 2 MB). `extends-missing`: see `lintExtends`. */
+/** `effect-target`: an effect whose target is not `window` nor a v1 effect target (never mounted; `suggest` = the nearest target name). `effect-attr`: an attribute in `when` or `watch` that the target does not publish (never read; `name` = attribute, `suggest` = target). */
+function lintEffects(m: AddonManifest): AddonLint[] {
+  const out: AddonLint[] = [];
+  for (const e of m.effects ?? []) {
+    if (!(EFFECT_TARGETS as readonly string[]).includes(e.target)) {
+      const near = PART_BY_NAME.has(e.target) ? undefined : nearestPart(e.target);
+      out.push({ level: "warning", code: "effect-target", name: e.target, ...(near && (EFFECT_TARGETS as readonly string[]).includes(near) && { suggest: near }) });
+      continue;
+    }
+    const pub = effectAttrs(e.target);
+    const named = [...Object.keys(e.when ?? {}).flatMap((k) => (k.startsWith("attr:") ? [k.slice(5)] : [])), ...(e.watch ?? [])];
+    for (const a of new Set(named)) if (!pub.includes(a)) out.push({ level: "warning", code: "effect-attr", name: a, suggest: e.target });
+  }
+  return out;
+}
+
 export function lintAddon(root: string, m: AddonManifest, find?: (addon: string, theme: string) => AddonTheme | undefined): AddonLint[] {
   const out: AddonLint[] = [];
   if (m.css && m.themes.length) out.push({ level: "warning", code: "top-level-css", file: m.css });
   out.push(...lintContrast(m));
   out.push(...lintAssets(root, m));
   out.push(...lintExtends(m, find));
+  out.push(...lintEffects(m));
   const files = [...new Set([m.css, ...m.themes.map((t) => t.css)].filter((f): f is string => !!f))];
   for (const f of files) {
     const r = readCss(join(root, f));

@@ -79,6 +79,38 @@ export type Events = {
   "command.run": { name: string; args: string };
   /** What a renderer draws. */
   render: FenceRender | ToolRender;
+  /** Effect frames only (`ui.effect`), on load. `rect`: the target box in CSS px; the frame is `bleed` px larger on each side. `dpr`: the pixel ratio to draw at (capped at 2, lower when the canvas would pass 1.2 megapixels). `motion`: false under reduced motion. */
+  "effect.init": { rect: EffectRect; bleed: number; dpr: number; theme: "dark" | "light"; colors: EffectColors; motion: boolean };
+  /** The target state changed. */
+  "effect.state": { state: EffectState };
+  /** `input`: an input event in the target (no key, no text); `focus`: focus moved into it; `state`: `effect.state` follows. */
+  "effect.pulse": { name: EffectPulse };
+  /** The target was resized; `dpr` follows the area cap. */
+  "effect.rect": { rect: EffectRect; dpr: number };
+  /** The target left the screen or the tab is hidden (`true`), or it is back. */
+  "effect.pause": { paused: boolean };
+  /** `when` turned false: finish and post `effect.done` (the host removes the frame after 1000 ms anyway). */
+  "effect.fade": {};
+};
+export type EffectRect = { w: number; h: number };
+/** Resolved CSS colours of the app theme: `primary`, `ink` (muted text), `bg` (page), `fg` (text), `card` (panels). */
+export type EffectColors = { primary: string; ink: string; bg: string; fg: string; card: string };
+/** `attrs`: the public `data-*` attributes the manifest names in `when` and `watch`; `null` when absent. */
+export type EffectState = { "focus-within": boolean; hover: boolean; attrs: Record<string, string | null> };
+export type EffectPulse = "input" | "focus" | "state";
+/** Effect frame to host: plain messages, no id and no reply. `frameCost`: mean ms per drawn frame over the last 2 s. */
+export type EffectMessages = { "effect.ready": {}; "effect.done": {}; "effect.frameCost": { ms: number } };
+/** What `frame` and the hooks of `defineEffect` see. `width` / `height`: the canvas in CSS px (target plus bleed). `time`: seconds since init; `dt`: seconds since the last frame (0 on the first, at most 0.1). */
+export type EffectInfo = { width: number; height: number; bleed: number; rect: EffectRect; dpr: number; theme: "dark" | "light"; colors: EffectColors; motion: boolean; state: EffectState; time: number; dt: number };
+export type EffectHooks = {
+  /** Draws one frame in CSS px; the canvas is cleared before. */
+  frame(ctx: CanvasRenderingContext2D, fx: EffectInfo): void;
+  init?(fx: EffectInfo): void;
+  state?(state: EffectState, fx: EffectInfo): void;
+  pulse?(name: EffectPulse, fx: EffectInfo): void;
+  rect?(fx: EffectInfo): void;
+  /** Before the host removes the frame; the default fades the canvas out in 300 ms. */
+  fade?(fx: EffectInfo): void | Promise<void>;
 };
 export type EventType = keyof Events;
 /** An event as posted: `{v: 1, type, ...fields}`. */
@@ -105,3 +137,5 @@ export declare function log(text: string, level?: LogLevel): Promise<{}>;
 export declare function autoHeight(): () => void;
 /** All parts after `init`, then the full list again on every change. Needs `session.read`. Returns a function that stops it. */
 export declare function watchSession(fn: (parts: Part[]) => void): () => void;
+/** Runs an effect (`ui.effect`): canvas sizing at the host's pixel ratio, the animation loop, pause, reduced motion, fade and cost reports. Returns a function that stops it. */
+export declare function defineEffect(hooks: EffectHooks): () => void;

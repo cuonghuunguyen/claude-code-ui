@@ -35,6 +35,7 @@ The card lists what the addon asks for, one plain line each, and the themes, vie
 | `ui.pane` | Show panes next to the conversation |
 | `ui.band` | Show a band above the prompt box |
 | `ui.command` | Add slash commands `/<addon>:<command>` |
+| `ui.effect` | Draw animated [canvas effects](#effects) over parts of the app or the window (it sees their size and state, never their content) |
 | `render.fence:<lang>` | Draw code blocks of that language |
 | `render.tool:<name>` | Draw the results of that tool |
 | `net:<origin>` | Connect to that origin (for example `https://api.github.com`) |
@@ -195,6 +196,23 @@ When the base cannot be used (no such theme, its addon is not installed or not e
 ## Drawing code blocks and tool results {#renderers}
 
 A `fence` renderer draws the code blocks of one language in assistant answers and in your own messages, before the built-in renderers (also the Mermaid diagram). A `tool` renderer draws the result of one tool. Each drawing has a **Show raw** button for the built-in view. The frame is created only when the block is near the screen. If two addons draw the same thing, the Addons dialog has a picker; until you pick, the first by name wins.
+
+## Canvas effects on parts of the app {#effects}
+
+Capability `ui.effect`. An effect is an HTML page of the addon that draws on its own canvas. The app places it over a part of the app (`target`: a part name) or over the whole window (`target: "window"`), sends it only the size, state flags and public `data-*` attribute values of that part, short pulses and the theme colours, never text or session data. The frame gets no pointer or keyboard events: clicks, scroll and typing go to the app below it.
+
+```json
+"capabilities": ["ui.effect"],
+"effects": [{ "id": "aura", "target": "prompt-box", "entry": "effects/aura.html", "bleed": 24, "when": { "focus-within": true } }]
+```
+
+- `target`: `window` or a part that does not scroll: `titlebar`, `sidebar`, `work-area`, `session-area`, `session-header`, `side-panel`, `files-panel`, `graph-panel`, `terminal`, `permission-panel`, `question-panel`, `prompt-box`, `prompt-toolbar`, `send`, `context-meter`, `status-bar`, `focus-page`, `scroll-to-bottom`. Any other name never shows (the Checks list says so).
+- `layer`: `above` (default) or `below`, only for `window`: drawn behind the app, visible where the panels let it through (the theme sets `--panel-alpha` in its `vars`, as with a background image).
+- `bleed`: pixels beyond the part on each side, 0 to 64.
+- `when`: shown while every key matches: `focus-within`, `hover` (booleans), `attr:<data-name>` (`true` present, `false` absent, or a value). Only the [public state attributes](./addon-parts.md) of the target are read: `data-state`, `data-phase`, `data-just-finished`, `data-focus-opened`, `data-active`, `data-status`, `data-level` where the part has them; for `window` the `data-phase` of the page.
+- `watch`: more of those attributes to receive in `effect.state`. `option`: a boolean theme option of the addon that turns the effect on and off.
+- Limits: one frame per part and addon, three per addon; the canvas at most 1.2 megapixels (pixel ratio at most 2); paused while the part is off screen or the tab hidden; one static frame under reduced motion. An effect that takes more than 8 ms per frame for 10 s is stopped with a toast until the page reloads.
+- The SDK runs it: `defineEffect({ frame(ctx, fx) { … }, pulse(name, fx) { … } })` sizes the canvas, runs the animation loop, pauses, fades out and reports the frame cost.
 
 ## Write and check an addon {#authoring}
 

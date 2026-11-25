@@ -97,6 +97,7 @@ import { addonCommandOf, commandRows, AddonApiContext, AddonCommandContext, Addo
 import { AddonBands, AddonFrame, type AddonHandle } from "./addon-frame.tsx";
 import { addonThemes } from "./themes.ts";
 import { Backdrop } from "./backdrop.tsx";
+import { AddonEffects } from "./addon-effects.tsx";
 import { SlotsProvider, useThinkingPhrase } from "./slots.tsx";
 import { isPreviewHash } from "./addon-preview-route.ts";
 import { OPEN_SETTINGS_EVENT, saveGroup as saveSettingsGroup } from "./settings-group.ts";
@@ -3816,6 +3817,7 @@ export function App() {
     ) : (
     <div className="flex h-dvh flex-col bg-background text-foreground">
       <Backdrop />
+      <AddonEffects />
       <header className="flex h-9 shrink-0 items-center gap-1.5 px-2 max-md:h-11 max-md:gap-2 md:pr-3 md:pl-4" data-testid="titlebar" data-part="titlebar">
         <IconButton className="md:hidden" label={tr("app.main.sessions")} onClick={() => setDrawer(true)} testId="open-drawer">
           <MenuIcon />

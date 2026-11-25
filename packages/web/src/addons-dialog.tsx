@@ -230,6 +230,12 @@ export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onCl
             <p className="text-sm">{m.renderers.map((r) => ("fence" in r ? `\`\`\`${r.fence}` : r.tool)).join(", ")}</p>
           </>
         )}
+        {!!m.effects?.length && (
+          <>
+            <Heading>{t("addons.effects")}</Heading>
+            <p className="text-sm" data-testid="addons-effects">{[...new Set(m.effects.map((e) => (e.target === "window" ? t("addons.effectWindow") : e.target)))].join(", ")}</p>
+          </>
+        )}
         <div className="mt-2 flex flex-wrap gap-2">
           <Button className="max-md:h-11" disabled={!!working} onClick={() => void approve(a)} data-testid="addons-approve">
             {t("addons.approve")}
@@ -272,7 +278,7 @@ export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onCl
                   {a.lint.map((l, i) => (
                     <li key={i} className="flex items-start gap-1.5 [overflow-wrap:anywhere]" data-testid="addons-check" data-code={l.code}>
                       <TriangleAlertIcon className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
-                      <span>{t(l.code === "unknown-part" && l.suggest ? "addons.lint.unknown-part-suggest" : `addons.lint.${l.code}`, { until: l.until ?? "", file: l.file ?? "", where: l.line ? t("addons.lint.where", { file: l.file ?? "", line: l.line }) : (l.file ?? ""), name: l.name ?? "", suggest: l.suggest ?? "", count: l.count ?? 0 })}</span>
+                      <span>{t((l.code === "unknown-part" || l.code === "effect-target") && l.suggest ? `addons.lint.${l.code}-suggest` : `addons.lint.${l.code}`, { until: l.until ?? "", file: l.file ?? "", where: l.line ? t("addons.lint.where", { file: l.file ?? "", line: l.line }) : (l.file ?? ""), name: l.name ?? "", suggest: l.suggest ?? "", count: l.count ?? 0 })}</span>
                     </li>
                   ))}
                 </ul>

@@ -106,7 +106,9 @@ it("a repository with several addons shows a picker and installs only the checke
 });
 
 it("installs from a git URL and shows the approval card with the declared capabilities", async () => {
-  const fresh = addon("example", { state: "needs_approval", approved: [] });
+  const m = addon("example").manifest!;
+  const effects = [{ id: "aura", target: "prompt-box", entry: "a.html", layer: "above", bleed: 0 }, { id: "rain", target: "window", entry: "r.html", layer: "below", bleed: 0 }] as const;
+  const fresh = addon("example", { state: "needs_approval", approved: [], manifest: { ...m, capabilities: [...CAPS, "ui.effect"], effects: [...effects] } });
   const d = await render({ addons: [], picks: {} }, { "addons.discover": () => [cand("", "example")], "addons.install": () => ((d.set({ addons: [fresh], picks: {} }), fresh)) });
   await d.type(d.q("addons-url")!, "https://example.com/r.git");
   await d.type(d.q("addons-ref")!, "v1");
@@ -119,7 +121,9 @@ it("installs from a git URL and shows the approval card with the declared capabi
     "Show panes next to the conversation",
     "Draw ```example code blocks",
     "Connect to https://api.github.com",
+    "Draw animated effects over parts of the app (sees their size and state, never their content)",
   ]);
+  expect(d.q("addons-effects")!.textContent).toBe("prompt-box, the whole window");
   expect(card.textContent).toContain("Dusk");
   expect(card.textContent).toContain("Stats (pane)");
   expect(card.textContent).toContain("/example:cmd");

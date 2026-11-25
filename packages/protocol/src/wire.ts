@@ -1340,6 +1340,24 @@ export type AddonCandidate = { path: string; name: string; version: string; desc
 export type AddonView = { id: string; title: string; entry: string; kind: "pane" | "band"; phone?: boolean };
 export type AddonCommand = { name: string; description: string; argumentHint?: string };
 export type AddonRenderer = ({ fence: string } | { tool: string }) & { entry: string };
+/** `when` of an effect: every key must match. `focus-within` / `hover`: booleans; `attr:<data-name>`: `true` present, `false` absent, a string equal. */
+export type AddonEffectWhen = Record<string, boolean | string>;
+/** An effect (capability `ui.effect`, docs/spec.md "Addon effects"): a sandboxed canvas frame the host places over a part or the window. */
+export type AddonEffect = {
+  id: string;
+  /** A part name of `EFFECT_TARGETS` or `"window"`; any other name is never mounted (lint `effect-target`). */
+  target: string;
+  entry: string;
+  /** `below`: only with target `window`. */
+  layer: "above" | "below";
+  /** Pixels beyond the target on each side, 0-64. */
+  bleed: number;
+  when?: AddonEffectWhen;
+  /** `data-*` attributes whose values are sent in `effect.state` (besides the ones `when` uses). */
+  watch?: string[];
+  /** A boolean theme option of this addon that toggles the effect. */
+  option?: string;
+};
 /** Colours per palette key (themes.ts KEYS); `graph`: 8 colours for the Git graph lanes (`--graph-1..8`, the first 6 also `--context-1..6`). A mode may be partial: the web drops incomplete modes. */
 export type AddonPalette = Record<string, string | string[]>;
 /** Custom properties an addon theme sets per mode (`--name` -> value, protocol addon-theme.ts rules); written into the theme's colour rule. */
@@ -1373,11 +1391,13 @@ export type AddonManifest = {
   commands: AddonCommand[];
   commandsEntry?: string;
   renderers: AddonRenderer[];
+  /** Absent when the manifest declares none. */
+  effects?: AddonEffect[];
 };
 /** needs_approval: declared capabilities not all approved (never enabled). error: the manifest does not load. */
 export type AddonState = "enabled" | "disabled" | "needs_approval" | "error";
 /** One finding of the addon lint (docs/spec.md "Addon lint"). Warnings only: a finding never blocks an install or an enable. `text` is built by the client from `code` and the fields. */
-export type AddonLintCode = "selects-testid" | "unknown-part" | "unprefixed-name" | "top-level-css" | "css-broken" | "css-too-large" | "css-large" | "deprecated-part" | "low-contrast" | "asset-missing" | "asset-large" | "extends-missing";
+export type AddonLintCode = "selects-testid" | "unknown-part" | "unprefixed-name" | "top-level-css" | "css-broken" | "css-too-large" | "css-large" | "deprecated-part" | "low-contrast" | "asset-missing" | "asset-large" | "extends-missing" | "effect-target" | "effect-attr";
 export type AddonLint = {
   level: "warning";
   code: AddonLintCode;

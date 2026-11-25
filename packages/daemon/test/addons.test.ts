@@ -888,3 +888,50 @@ describe("redaction and routing", () => {
     h.close();
   });
 });
+
+describe("effects (ui.effect)", () => {
+  const boolTheme = { id: "t", name: "T", options: [{ id: "aura", label: "Aura" }, { id: "size", label: "Size", type: "range", min: 0, max: 1, step: 0.1, default: 0.5 }] };
+  const fx = (effect: Record<string, unknown>, patch: Record<string, unknown> = {}) => ({ capabilities: ["ui.pane", "ui.effect"], themes: [boolTheme], effects: [{ id: "aura", target: "prompt-box", entry: "r.html", ...effect }], ...patch });
+  const parse = (patch: Record<string, unknown>) => parseManifest({ ...BASE, ...patch }, folder("fx", patch));
+
+  it("keeps a valid effect with its defaults and only known fields", () => {
+    expect(parse(fx({ when: { "focus-within": true, "attr:data-state": "running" }, watch: ["data-state"], option: "aura", bleed: 24, extra: 1 })).effects).toEqual([
+      { id: "aura", target: "prompt-box", entry: "r.html", layer: "above", bleed: 24, when: { "focus-within": true, "attr:data-state": "running" }, watch: ["data-state"], option: "aura" },
+    ]);
+    expect(parse(fx({ target: "window", layer: "below" })).effects![0]).toMatchObject({ target: "window", layer: "below", bleed: 0 });
+    // A target that never matches is no manifest error: the lint says so.
+    expect(parse(fx({ target: "user-message" })).effects![0]!.target).toBe("user-message");
+  });
+
+  it.each([
+    ["no ui.effect capability", fx({}, { capabilities: ["ui.pane"] }), /effects\[aura\] needs capability ui\.effect/],
+    ["bleed over 64", fx({ bleed: 65 }), /effects\[aura\]\.bleed/],
+    ["below on a part", fx({ layer: "below" }), /effects\[aura\]\.layer/],
+    ["an unknown when key", fx({ when: { active: true } }), /effects\[aura\]\.when/],
+    ["an attr that is no data- name", fx({ when: { "attr:value": "x" } }), /effects\[aura\]\.when/],
+    ["a watch that is no data- name", fx({ watch: ["aria-label"] }), /effects\[aura\]\.watch/],
+    ["an option that is no boolean option of a theme", fx({ option: "size" }), /effects\[aura\]\.option/],
+    ["an entry outside the addon", fx({ entry: "../x.html" }), /effects\[aura\]\.entry/],
+    ["a duplicate id", fx({}, { effects: [{ id: "a", target: "send", entry: "r.html" }, { id: "a", target: "send", entry: "r.html" }] }), /effects\[a\]: duplicate/],
+    ["more than 8 effects", fx({}, { effects: Array.from({ length: 9 }, (_, i) => ({ id: `e${i}`, target: "send", entry: "r.html" })) }), /effects: at most 8/],
+  ])("refuses %s", (_n, patch, msg) => {
+    expect(() => parse(patch)).toThrow(msg);
+  });
+
+  it("the effect test addon loads without lint findings", () => {
+    const d = join(import.meta.dirname, "../../addon-sdk/test/fixtures/effect-aura");
+    const m = parseManifest(JSON.parse(readFileSync(join(d, "addon.json"), "utf8")), d);
+    expect(m.effects!.map((e) => e.target)).toEqual(["prompt-box", "status-bar", "window"]);
+    expect(lintAddon(d, m)).toEqual([]);
+  });
+
+  it("lints a target that is no effect target and an attribute the target does not publish", () => {
+    const d = folder("fxlint", fx({}));
+    const m = parseManifest({ ...BASE, ...fx({}, { effects: [{ id: "a", target: "prompt-bx", entry: "r.html" }, { id: "b", target: "user-message", entry: "r.html" }, { id: "c", target: "send", entry: "r.html", when: { "attr:data-foo": true } }] }) }, d);
+    expect(lintAddon(d, m).filter((l) => l.code.startsWith("effect-"))).toEqual([
+      { level: "warning", code: "effect-target", name: "prompt-bx", suggest: "prompt-box" },
+      { level: "warning", code: "effect-target", name: "user-message" },
+      { level: "warning", code: "effect-attr", name: "data-foo", suggest: "send" },
+    ]);
+  });
+});
