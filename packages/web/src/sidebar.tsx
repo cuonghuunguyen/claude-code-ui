@@ -1,12 +1,13 @@
 // Sidebar session list (docs/spec.md "Layout"): one collapsible group per known project (per repository), its worktrees as collapsible rows; search by title, project name or branch.
 import { EngineTag } from "./engine-tag.tsx";
-import { SideBadge, SideLabel, SideState, SideStatusLine } from "./sides.tsx";
+import { SideBadge, SideIcon, SideLabel, SideState, SideStatusLine } from "./sides.tsx";
 import { LabelIcon } from "./label-icon.tsx";
-import { Fragment, memo, use, useEffect, useRef, useState, type UIEvent } from "react";
+import { Fragment, memo, use, useEffect, useRef, useState, type ReactElement, type ReactNode, type UIEvent } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
 import { Menu } from "@base-ui/react/menu";
-import { ArchiveIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, CircleAlertIcon, EllipsisVerticalIcon, LocateFixedIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, LoaderCircleIcon, LockIcon, SearchIcon, SquarePenIcon, Trash2Icon, UsersIcon, XIcon } from "lucide-react";
+import { ArchiveIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, CircleAlertIcon, EllipsisVerticalIcon, LocateFixedIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, HouseIcon, LoaderCircleIcon, LockIcon, SearchIcon, SquarePenIcon, Trash2Icon, UsersIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { LOCAL_SIDE, type SessionListItem, type SessionState, type Worktree } from "@claude-ui/protocol";
 import { cn, useStableProps } from "@/lib/utils";
 import { TitleSkeleton } from "@/components/ui/skeleton";
@@ -27,6 +28,18 @@ import { count, offer, scrolledFar } from "./recommendations.ts";
 
 /** What follows the last `/` or `\` (a branch tail, a folder name). */
 const lastSegment = (p: string) => p.split(/[\\/]/).pop()!;
+
+/** Hover and keyboard focus tooltip of a merged group's rows and header (the Side titles and paths the row text no longer carries); `trigger` is the button. */
+function Tip({ tip, trigger }: { tip: ReactNode; trigger: ReactElement }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger render={trigger} />
+      <TooltipContent side="right" align="start" className="max-w-sm flex-col items-start gap-0.5 break-all" data-testid="side-tooltip">
+        {tip}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 /** Only states that need attention get an indicator; idle, error and closed rows stay plain. */
 function StateIcon({ state }: { state: SessionState }) {
@@ -333,6 +346,23 @@ export function SessionList({
     archiveCount: (days: number) => idle(sessions(), days).length,
     onArchive: (days: number) => onArchiveIdle?.(idle(sessions(), days), where, days),
   });
+  /** The Side of each project of a merged group with several Sides, in the order of its rows; empty for any other group. */
+  const sidesOf = (g: SessionGroup) => (g.repo && g.sides!.length > 1 ? g.sides!.map((id) => ({ cwd: g.members.find((m) => (sideInfo(m)?.id ?? LOCAL_SIDE) === id) ?? g.cwd, title: "" })).map((x) => ({ ...x, title: sideOf(x.cwd)?.label ?? lastSegment(x.cwd) })) : []);
+  /** A Side's state in words for the Sides tooltip. */
+  const sideStateText = (cwd: string) => {
+    const st = sideInfo(cwd)?.state ?? "ready";
+    return t(st === "ready" ? "sidebar.sideState.ready" : st === "error" ? "sidebar.sideState.error" : st === "off" ? "sidebar.sideState.off" : "sidebar.sideState.starting");
+  };
+  /** The added projects of a merged group in the order of its main rows (one Project settings item each), titled by Side and clone folder. */
+  const mergedProjects = (g: SessionGroup) => {
+    if (!g.repo) return [];
+    const full = baseGroup(g.cwd) ?? g;
+    const rows = full.worktrees.filter((r) => r.main);
+    return rows.map((r) => {
+      const cwd = r.project ?? r.path;
+      return { cwd, title: [sideOf(cwd)?.label, r.clone].filter(Boolean).join(" · ") || lastSegment(cwd) };
+    });
+  };
   /** Menu of a project row: context menu (prefix group-menu-) and kebab below md (project-menu-). */
   const groupMenu = (g: SessionGroup, prefix: string) => () =>
     groupEntries({
@@ -341,8 +371,9 @@ export function SessionList({
       copyPath: onCopy && (() => (count("copyPath"), onCopy(g.cwd, "path"))),
       newWorktree: onNewWorktree && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) ? (quick) => onNewWorktree(g.cwd, quick) : undefined,
       rename: onEditProject && (() => onEditProject(g.cwd)),
-      projectSettings: onProjectSettings && (() => onProjectSettings(g.cwd, g.repo ? sideOf(g.cwd)?.label : undefined)),
-      cleanUp: onCleanUp && (() => onCleanUp({ kind: "project", cwd: g.cwd })),
+      projectSettings: onProjectSettings && (mergedProjects(g).length > 1 ? mergedProjects(g).map((m) => ({ label: t("sidebar.projectSettingsSide", { side: m.title }), icon: <SideIcon cwd={m.cwd} />, onSelect: () => onProjectSettings(m.cwd, m.title) })) : () => onProjectSettings(g.cwd, g.repo ? sideOf(g.cwd)?.label : undefined)),
+      cleanUp: onCleanUp && (() => onCleanUp(g.repo ? { kind: "repository", cwds: g.members, name: projectName(g.cwd) } : { kind: "project", cwd: g.cwd })),
+      info: sidesOf(g).map((x) => ({ icon: <SideIcon cwd={x.cwd} />, label: x.title })),
       tail: { id: `${prefix}remove`, label: t("sidebar.menu.removeFromList"), onSelect: () => (g.repo ? onRemove(g.cwd, g.members) : onRemove(g.cwd)) },
     });
   const isBusy = (r: WorktreeRow) => !!(r.removing || removing?.(r.path));
@@ -354,6 +385,8 @@ export function SessionList({
       ...menuBase(() => (baseGroup(g.cwd)?.worktrees.find((x) => x.path === r.path) ?? r).sessions, label, prefix),
       newSession: r.outsideRoots || isBusy(r) ? undefined : () => onNew(r.path),
       copyPath: onCopy && (() => (count("copyPath"), onCopy(r.path, "path"))),
+      cleanUp: member && onCleanUp ? () => onCleanUp({ kind: "project", cwd: project }) : undefined,
+      info: g.repo && g.sides!.length > 1 ? [{ icon: <SideIcon cwd={project} />, label: `${sideOf(project)?.label ?? ""} · ${r.path}` }] : undefined,
       projectSettings: member && onProjectSettings ? () => onProjectSettings(project, sideOf(project)?.label) : undefined,
       tail: member
         ? { id: `${prefix}remove`, label: t("sidebar.menu.removeFromList"), onSelect: () => onRemove(project) }
@@ -615,6 +648,9 @@ export function SessionList({
         </p>
       )}
       <nav className="-mx-1 flex min-h-0 flex-col gap-2 overflow-y-auto px-1" aria-label={t("sidebar.sessions")} data-testid="session-list" ref={listRef} onScroll={onListScroll}>
+        <span id="sidebar-empty-row" hidden>
+          {t("sidebar.emptyRow")}
+        </span>
         {archived && !!groups.length && (
           <p className="px-1.5 text-muted-foreground text-xs" data-testid="archived-caption">
             {t("sidebar.archivedSessions")}
@@ -634,22 +670,22 @@ export function SessionList({
         {groups.map((g) => {
           const open = isOpen(groupKey(g));
           const sidesLabel = g.repo && g.sides!.length > 1 ? t("sidebar.sidesCount", { count: g.sides!.length }) : undefined;
-          return (
-            <section key={groupKey(g)} data-testid="session-group" data-cwd={g.cwd}>
-              <RowContextMenu testId="group-menu" entries={groupMenu(g, "group-menu-")}>
-              <h3 className="group/project relative">
+          const groupSides = sidesOf(g);
+          const toggleButton = (
                 <button
                   className="flex h-7 w-full items-center gap-2 rounded-md pr-20 pl-1.5 text-left max-md:pr-26 pointer-coarse:pr-38 max-md:pointer-coarse:pr-26 text-muted-foreground text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11"
                   aria-expanded={open}
-                  aria-label={sidesLabel ? t("sidebar.mergedName", { name: projectName(g.cwd), sides: sidesLabel }) : sideOf(g.cwd) ? `${projectName(g.cwd)} (${sideOf(g.cwd)!.label})` : undefined}
+                  aria-label={sidesLabel ? t("sidebar.sidesNames", { name: projectName(g.cwd), count: g.sides!.length, sides: groupSides.map((x) => x.title).join(", ") }) : sideOf(g.cwd) ? `${projectName(g.cwd)} (${sideOf(g.cwd)!.label})` : undefined}
                   onClick={() => toggle(groupKey(g))}
-                  title={g.cwd}
+                  title={sidesLabel ? undefined : g.cwd}
                   data-testid="group-toggle" data-part="group-toggle"
                 >
                   <ProjectAvatar cwd={g.cwd} />
                   <span className="min-w-0 truncate font-medium">{projectName(g.cwd)}</span>
                   {sidesLabel ? (
-                    <span className="inline-flex h-4 shrink-0 select-none items-center whitespace-nowrap rounded-xs border-[0.5px] bg-muted px-1 font-[530] text-[11px] text-muted-foreground leading-none tabular-nums" data-testid="sides-chip">
+                    <span className="inline-flex h-4 shrink-0 select-none items-center gap-1 whitespace-nowrap rounded-xs border-[0.5px] bg-muted px-1 font-[530] text-[11px] text-muted-foreground leading-none tabular-nums" data-testid="sides-chip">
+                      {groupSides.slice(0, 3).map((x) => <SideIcon key={x.cwd} cwd={x.cwd} className="size-3" />)}
+                      {groupSides.length > 3 && <span>+{groupSides.length - 3}</span>}
                       {sidesLabel}
                     </span>
                   ) : (
@@ -658,6 +694,25 @@ export function SessionList({
                   {filtering && !!g.idle && <span className="shrink-0 font-normal text-faint text-xs" data-testid="idle-count">{t("sidebar.idleCount", { count: g.idle })}</span>}
                   <ChevronRightIcon className={cn("ml-auto size-4 shrink-0 text-faint transition-transform motion-reduce:transition-none", open && "rotate-90")} aria-hidden />
                 </button>
+          );
+          return (
+            <section key={groupKey(g)} data-testid="session-group" data-cwd={g.cwd}>
+              <RowContextMenu testId="group-menu" entries={groupMenu(g, "group-menu-")}>
+              <h3 className="group/project relative">
+{sidesLabel ? (
+                  <Tip
+                    trigger={toggleButton}
+                    tip={groupSides.map((x) => (
+                      <span key={x.cwd} className="flex items-center gap-1.5">
+                        <SideIcon cwd={x.cwd} className="text-background" />
+                        <span>{x.title}</span>
+                        <span className="opacity-70">· {sideStateText(x.cwd)}</span>
+                      </span>
+                    ))}
+                  />
+                ) : (
+                  toggleButton
+                )}
                 {/* OpenCode project row actions: shown on hover or focus; always on touch screens (no hover there), any width. */}
                 <span className="absolute inset-y-0 right-0.5 flex items-center gap-0.5 opacity-100 transition-opacity group-focus-within/project:opacity-100 group-hover/project:opacity-100 motion-reduce:transition-none md:opacity-0 max-md:gap-2 pointer-coarse:gap-2 pointer-coarse:opacity-100">
                   {onNewWorktree && !narrow && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) && (
@@ -696,32 +751,52 @@ export function SessionList({
                   const sameTail = (g.repo ? g.worktrees.filter((w) => w.side === r.side) : (worktrees?.[g.cwd] ?? g.worktrees)).filter((w) => lastSegment(w.branch ?? lastSegment(w.path)) === lastSegment(branch)).length > 1;
                   const shortBranch = sameTail ? branch : lastSegment(branch);
                   const label = `${rowSide ? `${rowSide.label} · ` : ""}${kind} : ${branch}${clone}`;
-                  const text = narrow ? `${rowSide ? `${rowSide.short} · ` : ""}${shortBranch}${clone}` : rowSide ? `${rowSide.label} · ${branch}${clone}` : label;
+                  // With several Sides the Side is an icon and a tooltip: the whole width goes to the branch.
+                  const text = rowSide || narrow ? `${narrow ? shortBranch : branch}${clone}` : label;
                   const busy = isBusy(r);
-                  return (
-                    <div key={r.path} data-testid="worktree-row" data-path={r.path}>
-                      {/* OpenCode WorkspaceHeader: branch icon, "local : <branch>" / "worktree : <branch>", chevron; New session on hover. */}
-                      <RowContextMenu testId="worktree-context-menu" entries={rowMenu(g, r, label, "worktree-context-")}>
-                      <div className={cn("group/worktree relative", busy && "pointer-events-none opacity-50")} data-removing={busy || undefined} aria-busy={busy || undefined}>
+                  // A linked worktree with no session at all is one line: no chevron, a click starts a session there.
+                  const compact = !r.main && !r.outsideRoots && !r.sessions.length && !(baseGroup(g.cwd)?.worktrees.find((x) => x.path === r.path)?.sessions.length);
+                  const rowButton = (
                         <button
-                          className="flex h-7 w-full items-center gap-2 rounded-md pr-14 pl-6 text-left text-muted-foreground text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11 max-md:pr-26 pointer-coarse:pr-26"
-                          aria-expanded={rowOpen}
-                          onClick={() => toggle(rowKey(r.path))}
+                          className={cn("flex h-7 w-full items-center gap-2 rounded-md pr-14 pl-6 text-left text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11 max-md:pr-26 pointer-coarse:pr-26", compact ? "text-muted-foreground/80" : "text-muted-foreground")}
+                          aria-expanded={compact ? undefined : rowOpen}
+                          onClick={() => (compact ? onNew(r.path) : toggle(rowKey(r.path)))}
                           aria-label={narrow || rowSide ? `${label}${r.outsideRoots ? ` ${t("sidebar.outsideRoots")}` : ""}` : undefined}
-                          title={`${narrow || rowSide ? `${label}\n` : ""}${r.outsideRoots ? t("sidebar.outsideRootsTitle", { path: r.path }) : r.path}`}
+                          aria-describedby={compact ? "sidebar-empty-row" : undefined}
+                          title={rowSide ? undefined : `${narrow ? `${label}\n` : ""}${r.outsideRoots ? t("sidebar.outsideRootsTitle", { path: r.path }) : r.path}`}
                           data-testid="worktree-toggle"
+                          data-empty={compact || undefined}
                         >
-                          {busy ? <LoaderCircleIcon className="size-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden /> : <GitBranchIcon className="size-4 shrink-0 text-faint" aria-hidden />}
-                          {rowSide?.icon && <LabelIcon icon={rowSide.icon} className="inline-grid size-4 shrink-0 text-[11px]" />}
-                          <span className="min-w-0 truncate font-medium">{text}</span>
+                          {busy ? <LoaderCircleIcon className="size-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden /> : r.main ? <HouseIcon className="size-4 shrink-0 text-foreground" aria-hidden data-testid="main-mark" /> : <GitBranchIcon className="size-4 shrink-0 text-faint" aria-hidden />}
+                          {rowSide && <SideIcon cwd={project} />}
+                          <span className={cn("min-w-0 truncate", r.main ? "font-medium text-foreground" : "font-medium")}>{text}</span>
                           {busy && (
                             <span className="shrink-0 text-xs" data-testid="worktree-removing">
                               {t("sidebar.removing")}
                             </span>
                           )}
                           {!narrow && r.outsideRoots && <span className="sr-only">{t("sidebar.outsideRoots")}</span>}
-                          <ChevronRightIcon className={cn("ml-auto size-4 shrink-0 text-faint transition-transform motion-reduce:transition-none", rowOpen && "rotate-90")} aria-hidden />
+                          {!compact && <ChevronRightIcon className={cn("ml-auto size-4 shrink-0 text-faint transition-transform motion-reduce:transition-none", rowOpen && "rotate-90")} aria-hidden />}
                         </button>
+                  );
+                  return (
+                    <div key={r.path} data-testid="worktree-row" data-path={r.path}>
+                      {/* OpenCode WorkspaceHeader: branch icon, "local : <branch>" / "worktree : <branch>", chevron; New session on hover. */}
+                      <RowContextMenu testId="worktree-context-menu" entries={rowMenu(g, r, label, "worktree-context-")}>
+                      <div className={cn("group/worktree relative", busy && "pointer-events-none opacity-50")} data-removing={busy || undefined} aria-busy={busy || undefined}>
+{rowSide ? (
+                          <Tip
+                            trigger={rowButton}
+                            tip={
+                              <>
+                                <span>{`${rowSide.label} · ${t(r.main ? "sidebar.kindMain" : "sidebar.kindWorktreeCap")}`}</span>
+                                <span className="opacity-70">{r.outsideRoots ? t("sidebar.outsideRootsTitle", { path: r.path }) : r.path}</span>
+                              </>
+                            }
+                          />
+                        ) : (
+                          rowButton
+                        )}
                         {/* Touch has no tooltip: outside the roots a lock takes New session's place (same slot, so the chevrons stay in one column). */}
                         {r.outsideRoots ? (
                           <span className="pointer-events-none absolute inset-y-0 right-0.5 flex items-center" aria-hidden>
@@ -749,8 +824,8 @@ export function SessionList({
                       </div>
                       </RowContextMenu>
                       {statusRows.has(r.path) && <SideStatusLine cwd={project} inset />}
-                      {rowOpen && !r.sessions.length && <p className="py-1 pl-12 text-muted-foreground text-sm">{emptyText}</p>}
-                      {rowOpen && days(r.sessions, 1, rowKey(r.path), label)}
+                      {rowOpen && !compact && !r.sessions.length && <p className="py-1 pl-12 text-muted-foreground text-sm">{emptyText}</p>}
+                      {rowOpen && !compact && days(r.sessions, 1, rowKey(r.path), label)}
                     </div>
                   );
                 })}

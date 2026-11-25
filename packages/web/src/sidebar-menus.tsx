@@ -26,9 +26,17 @@ export function MenuEntries({ kind, entries }: { kind: "menu" | "context"; entri
         );
       if (e.kind === "item")
         return (
-          <P.Item key={e.id} className={cn(ITEM, e.destructive && "text-destructive")} disabled={e.disabled} onClick={e.onSelect} data-testid={e.id}>
+          <P.Item key={e.id} className={cn(ITEM, e.icon && "gap-2", e.destructive && "text-destructive")} disabled={e.disabled} onClick={e.onSelect} data-testid={e.id}>
+            {e.icon}
             {e.label}
           </P.Item>
+        );
+      if (e.kind === "info")
+        return (
+          <div key={`info:${e.label}`} className="flex max-w-72 items-center gap-2 px-2 py-1 text-muted-foreground text-xs" data-testid="menu-info">
+            {e.icon}
+            <span className="min-w-0 truncate">{e.label}</span>
+          </div>
         );
       return null;
     });

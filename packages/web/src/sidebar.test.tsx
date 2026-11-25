@@ -703,18 +703,83 @@ describe("one repository on several Sides is one group (GH-591)", () => {
   const list = [item("m", mac, "Fix search", 5), item("f", `${mac}/.claude/worktrees/feat`, "Feature work", 8), item("w", wsl, "Linux run", 10), item("s", ssh, "Release", 20)];
   const props = { list, projects: [mac, wsl, ssh], worktrees, origins: { [mac]: KEY, [wsl]: KEY, [ssh]: KEY }, sideOrder: ["local", "wsl:Ubuntu", "ssh:dev"], side, sideState: info(), settings: true, activeId: null as null };
   const wtRows = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>('[data-testid="worktree-row"]')];
-  const label = (r: HTMLElement) => r.querySelector('[data-testid="worktree-toggle"]')!.textContent;
+  // The row's accessible name: with several Sides it carries the Side title the visible text leaves out.
+  const label = (r: HTMLElement) => r.querySelector('[data-testid="worktree-toggle"]')!.getAttribute("aria-label") ?? r.querySelector('[data-testid="worktree-toggle"]')!.textContent;
+  const text = (r: HTMLElement) => r.querySelector('[data-testid="worktree-toggle"]')!.textContent;
 
-  it("one group named after the primary with an N sides chip, and one row per Side and worktree that names its Side", async () => {
+  it("one group named after the primary with an N sides chip; the rows list every Side's main checkout first, show a Side icon and the branch only, and keep the Side title in the accessible name", async () => {
     const { groups, toggle, el } = await render(props);
     expect(groups().map((g) => g.dataset.cwd)).toEqual([mac]);
     expect(el.querySelector('[data-testid="sides-chip"]')!.textContent).toBe("3 sides");
-    expect(toggle(mac).getAttribute("aria-label")).toBe("app (3 sides)");
+    expect(el.querySelectorAll('[data-testid="sides-chip"] [data-testid="side-icon"]')).toHaveLength(3);
+    expect(toggle(mac).getAttribute("aria-label")).toBe("app (3 sides: macOS, WSL: Ubuntu, SSH: dev)");
     expect(el.querySelector('[data-testid="side-badge"]')).toBeNull();
-    expect(wtRows(el).map(label)).toEqual(["macOS · main", "macOS · feat/x", "WSL: Ubuntu · main", "SSH: dev · release"]);
-    // The kind (local / worktree) stays in the accessible name.
-    expect(wtRows(el).map((r) => r.querySelector('[data-testid="worktree-toggle"]')!.getAttribute("aria-label"))).toEqual(["macOS · local : main", "macOS · worktree : feat/x", "WSL: Ubuntu · local : main", "SSH: dev · local : release"]);
+    // Mains first (this machine, WSL, SSH), then the linked worktree; the text is the branch, no row starts with a Side title.
+    expect(wtRows(el).map(text)).toEqual(["main", "main", "release", "feat/x"]);
+    // The Side title and the kind (local / worktree) stay in the accessible name.
+    expect(wtRows(el).map(label)).toEqual(["macOS · local : main", "WSL: Ubuntu · local : main", "SSH: dev · local : release", "macOS · worktree : feat/x"]);
+    expect(wtRows(el).map((r) => r.querySelector('[data-testid="side-icon"]')?.getAttribute("data-kind"))).toEqual(["local", "wsl", "ssh", "local"]);
+    // The main checkout has the house mark, a worktree does not.
+    expect(wtRows(el).map((r) => !!r.querySelector('[data-testid="main-mark"]'))).toEqual([true, true, true, false]);
+    // The tooltip replaces the native title on a merged row.
+    expect(wtRows(el).every((r) => !r.querySelector('[data-testid="worktree-toggle"]')!.hasAttribute("title"))).toBe(true);
     expect(wtRows(el).map((r) => r.querySelectorAll('[data-testid="session-item"]').length)).toEqual([1, 1, 1, 1]);
+  });
+
+  it("focus on a merged row shows the Side title, the kind and the path; the group header lists every Side with its state", async () => {
+    const { el, toggle } = await render(props);
+    const btn = wtRows(el)[2]!.querySelector<HTMLElement>('[data-testid="worktree-toggle"]')!;
+    await act(async () => btn.focus());
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="side-tooltip"]')).not.toBeNull(), { timeout: 3000 });
+    expect(document.querySelector('[data-testid="side-tooltip"]')!.textContent).toBe("SSH: dev · Main checkout/srv/app");
+    await act(async () => toggle(mac).focus());
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="side-tooltip"]')!.textContent).toBe("macOS· ReadyWSL: Ubuntu· ReadySSH: dev· Ready"));
+  });
+
+  it("a linked worktree with no session is one compact line (no chevron, no empty text) whose click starts a session; a main checkout keeps its toggle", async () => {
+    const empty = { ...worktrees, [mac]: [...worktrees[mac]!, { path: `${mac}/.claude/worktrees/idle`, branch: "idle", main: false }] };
+    const { el, onNew } = await render({ ...props, worktrees: empty, list: list.filter((x) => x.id !== "w") });
+    const idle = wtRows(el).find((r) => text(r) === "idle")!;
+    const btn = idle.querySelector<HTMLElement>('[data-testid="worktree-toggle"]')!;
+    expect(btn.hasAttribute("aria-expanded")).toBe(false);
+    expect(idle.textContent).toBe("idle");
+    expect(btn.getAttribute("aria-describedby")).toBe("sidebar-empty-row");
+    expect(el.querySelector("#sidebar-empty-row")!.textContent).toBe("No sessions yet");
+    await act(async () => btn.click());
+    expect(onNew).toHaveBeenCalledWith(`${mac}/.claude/worktrees/idle`);
+    // The WSL main checkout has no session now and keeps its toggle and empty line.
+    const wslMain = wtRows(el).find((r) => label(r) === "WSL: Ubuntu · local : main")!;
+    expect(wslMain.querySelector('[data-testid="worktree-toggle"]')!.getAttribute("aria-expanded")).toBe("true");
+    expect(wslMain.textContent).toContain("No sessions yet");
+  });
+
+  it("Project mode lists a Project settings item per Side project in the group menu, each opening that Side's project", async () => {
+    saveSidebarView({ ...loadSidebarView(), layout: "classic" });
+    const { el, onProjectSettings } = await render(props);
+    expect(wtRows(el)).toEqual([]);
+    const header = el.querySelector<HTMLElement>('[data-testid="group-toggle"]')!;
+    await act(async () => header.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })));
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="group-menu-project-settings-2"]')).not.toBeNull());
+    const items = [0, 1, 2].map((i) => document.querySelector<HTMLElement>(`[data-testid="group-menu-project-settings-${i}"]`)!);
+    expect(items.map((i) => i.textContent)).toEqual(["Project settings · macOS…", "Project settings · WSL: Ubuntu…", "Project settings · SSH: dev…"]);
+    await act(async () => items[2]!.click());
+    expect(onProjectSettings).toHaveBeenCalledWith(ssh, "SSH: dev");
+    await closeMenu();
+  });
+
+  it("the group's Clean up covers the whole repository; a non-primary main row has its own Clean up for that project", async () => {
+    const { el, onCleanUp } = await render({ ...props, cleanUp: true });
+    const header = el.querySelector<HTMLElement>('[data-testid="group-toggle"]')!;
+    await act(async () => header.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })));
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="group-menu-cleanup"]')).not.toBeNull());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="group-menu-cleanup"]')!.click());
+    expect(onCleanUp).toHaveBeenLastCalledWith({ kind: "repository", cwds: [mac, wsl, ssh], name: "app" });
+    await closeMenu();
+    const row = wtRows(el).find((r) => label(r) === "SSH: dev · local : release")!;
+    await act(async () => row.querySelector<HTMLElement>('[data-testid="worktree-menu"]')!.click());
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="worktree-menu-cleanup"]')).not.toBeNull());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="worktree-menu-cleanup"]')!.click());
+    expect(onCleanUp).toHaveBeenLastCalledWith({ kind: "project", cwd: ssh });
   });
 
   it("a row is a button with aria-expanded; the group header collapses every row", async () => {
@@ -735,7 +800,7 @@ describe("one repository on several Sides is one group (GH-591)", () => {
     const { el, onNew } = await render({ ...props, sideState: sideState as never });
     const status = el.querySelectorAll('[data-testid="sidebar-side-status"]');
     expect(status).toHaveLength(1);
-    const row = wtRows(el).find((r) => label(r) === "SSH: dev · release")!;
+    const row = wtRows(el).find((r) => label(r) === "SSH: dev · local : release")!;
     expect(row.contains(status[0]!)).toBe(true);
     expect(el.querySelector("h3")!.contains(status[0]!)).toBe(false);
     expect(status[0]!.textContent).toContain("SSH: dev stopped");
@@ -801,15 +866,14 @@ describe("one repository on several Sides is one group (GH-591)", () => {
     expect(wtRows(el).map(label)).toEqual(["local : main", "local : main · app-2", "worktree : feat/x"]);
   });
 
-  it("below md the row shows the short Side label and the branch tail; the full label is the accessible name and tooltip", async () => {
+  it("below md the row shows the Side icon and the branch tail; the full label is the accessible name", async () => {
     const mm = window.matchMedia;
     window.matchMedia = ((q: string) => ({ matches: q.includes("48rem"), media: q, addEventListener() {}, removeEventListener() {} })) as never;
     try {
       const { el } = await render(props);
       const toggles = wtRows(el).map((r) => r.querySelector<HTMLElement>('[data-testid="worktree-toggle"]')!);
-      expect(toggles.map((b) => b.textContent)).toEqual(["Mac · main", "Mac · x", "WSL · main", "SSH · release"]);
-      expect(toggles[1]!.getAttribute("aria-label")).toBe("macOS · worktree : feat/x");
-      expect(toggles[1]!.title).toContain("macOS · worktree : feat/x");
+      expect(toggles.map((b) => b.textContent)).toEqual(["main", "main", "release", "x"]);
+      expect(toggles[3]!.getAttribute("aria-label")).toBe("macOS · worktree : feat/x");
       expect(el.querySelector('[data-testid="sides-chip"]')!.textContent).toBe("3 sides");
     } finally {
       window.matchMedia = mm;
@@ -831,7 +895,7 @@ describe("one repository on several Sides is one group (GH-591)", () => {
   // Last: it leaves a menu popup behind, which keeps the next test from opening another menu.
   it("the main row of a project has its own menu: Project settings for that Side and Remove from list for that project only", async () => {
     const { el, onProjectSettings, onRemove } = await render(props);
-    const row = wtRows(el).find((r) => label(r) === "WSL: Ubuntu · main")!;
+    const row = wtRows(el).find((r) => label(r) === "WSL: Ubuntu · local : main")!;
     await act(async () => row.querySelector<HTMLElement>('[data-testid="worktree-menu"]')!.click());
     await vi.waitFor(() => expect(document.querySelector('[data-testid="worktree-menu-project-settings"]')).not.toBeNull());
     await act(async () => document.querySelector<HTMLElement>('[data-testid="worktree-menu-project-settings"]')!.click());
