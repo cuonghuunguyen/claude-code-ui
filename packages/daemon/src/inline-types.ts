@@ -74,6 +74,8 @@ export class Denials {
   }
   has = (callId: string) => this.lines.has(callId);
   list = () => [...this.lines.values()];
+  /** The denied call ids. */
+  ids = () => [...this.lines.keys()];
 }
 
 /**

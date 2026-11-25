@@ -23,7 +23,7 @@ export type Link = { coordinatorId?: string; name?: string; cwd?: string; port?:
   /** OpenCode fork run (docs/spec.md "Fork runs"): the OpenCode session that is the fork of `callId` of session `sessionId`; `prefix` = the messages copied from the parent (not part of the run). The list hides it; it is deleted with its parent. */
   forkOf?: { sessionId: string; callId: string; prefix: number };
   /** OpenCode inline task (docs/spec.md "Inline tasks"): the OpenCode session that is the inline run of `callId` of session `sessionId`. The list hides it; it is deleted with its parent; its steps show under the call after a reload. */
-  inlineOf?: { sessionId: string; callId: string };
+  inlineOf?: { sessionId: string; callId: string; /** Call ids of the inline session the user denied (OpenCode stores them as aborted). */ denied?: string[] };
   /** GH-574: worker_start / worker_keep_open keepOpen: no auto-close after a turn. */
   keepOpen?: true;
 };

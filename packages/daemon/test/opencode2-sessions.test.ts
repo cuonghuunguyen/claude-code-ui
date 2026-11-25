@@ -737,6 +737,22 @@ describe("OpenCode 2 sessions: rename, archive, delete and Aside", { timeout: TE
     await until(() => !link(d, "ses_inl"));
   });
 
+  it("an inline task's step the user denied restores as Denied (its stored state is an aborted error; the link keeps the denied call ids)", async () => {
+    const call = { type: "tool", id: "call_inline", name: "claude-ui-ownxxxxxxx_inline_task", state: { status: "completed", input: { prompt: "run it" }, content: [{ type: "text", text: "{}" }] }, time: { ran: 2, completed: 3 } };
+    const parent = [msg("msg_u1", "user"), msg("msg_a1", "assistant", { ...done, content: [call] })];
+    const step = { type: "tool", id: "c1", name: "shell", state: { status: "error", input: { command: "echo blocked" }, error: { type: "aborted" } }, time: { ran: 2, completed: 3 } };
+    const own = [msg("msg_i_u", "user", { text: "run it" }), msg("msg_i_a", "assistant", { ...done, content: [step] })];
+    const d = await boot({ sessionsJson: { ses_inl: { inlineOf: { sessionId: "ses_own", callId: "call_inline", denied: ["c1"] } } }, projectDirInData: true, adapters: { ses_own: 2, ses_inl: 2 }, data: { sessions: [row("ses_own", "PROJECT", "Owner", 5000), row("ses_inl", "PROJECT", "Inline: run it", 6000, { metadata: { "claude-ui.inlineOf": "ses_own" } })], messages: { ses_own: parent, ses_inl: own } } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    await until(() => d.log().some((l) => l.type === "start"));
+    for (let i = 0; i < 80 && !(await d.ok({ type: "session.list" })).sessions.some((x: any) => x.id === "ses_own"); i++) await sleep(50);
+    await d.ok({ type: "session.subscribe", sessionId: "ses_own", sinceSeq: 0 });
+    const s = d.view("ses_own");
+    await until(() => !!s.parts().find((p) => p.id === "c1"));
+    expect(s.last("c1")).toMatchObject({ type: "tool_call", status: "denied", parentId: "call_inline" });
+  });
+
   it("a mode change of an Aside drops the edit denial at its next prompt", async () => {
     const d = await owned([msg("msg_u1", "user"), msg("msg_a1", "assistant", done)]);
     const { session } = await d.ok({ type: "aside.open", sessionId: "ses_own", text: "q" });

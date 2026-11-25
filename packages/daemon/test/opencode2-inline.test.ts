@@ -55,7 +55,7 @@ function rig(o: { script?: (emit: (type: string, d?: Json) => void) => void; sto
     cancel: () => {},
   } as unknown as Session;
   const links: [string, { sessionId: string; callId: string }][] = [];
-  const run = createOpenCode2Engine(server, { onInline: (id, l) => links.push([id, l]) }).open(session, { permissionMode: "default", model: o.model ?? "fake/m" } as SessionOpts);
+  const run = createOpenCode2Engine(server, { onInline: (id, l) => links.push([id, l]), inlinesOf: () => links.map(([inlineId, l]) => ({ inlineId, callId: l.callId })) }).open(session, { permissionMode: "default", model: o.model ?? "fake/m" } as SessionOpts);
   run.begin();
   /** The running inline_task call of the parent, as OpenCode reports it. */
   const callRunning = (id = "call_1", input: Json = INPUT) => {
@@ -294,5 +294,36 @@ describe("OpenCode 2 inline task", () => {
     late.child("session.execution.succeeded");
     await done;
     expect(late.links).toEqual([["ses_child", { sessionId: "ses_parent", callId: "call_1" }]]);
+  });
+
+  it("a live run still ends after a stream reconnect once its link is saved (the saved link does not make its session a restored child)", async () => {
+    const stored = [{ id: "msg_p", type: "assistant", content: [{ type: "tool", id: "call_1", name: "claude-ui-parentxxxx_inline_task", state: { status: "running", input: INPUT } }] }];
+    const r = rig({ stored, active: { ses_child: {} } });
+    r.callRunning();
+    const running = r.run.inlineTask(spec(), hooks());
+    for (let i = 0; i < 40 && !r.called("session.prompt").length; i++) await sleep(25);
+    await sleep(0);
+    expect(r.links.length).toBe(1);
+    r.reconnect();
+    await sleep(100);
+    r.child("session.execution.started");
+    r.child("session.text.ended", { assistantMessageID: "msg_a1", ordinal: 0, text: "foo is in a.txt" });
+    r.child("session.execution.succeeded");
+    expect(await running).toMatchObject({ status: "done", text: "foo is in a.txt" });
+  });
+
+  it("a Deny in OpenCode 2's real event order (reply reject, tool aborted, step failed, execution interrupted) ends denied with the turn counted, not stopped; the denied call ids are saved with the link", async () => {
+    let child!: (type: string, d?: Json) => void;
+    const r = rig({ script: (c) => ((child = c), c("session.execution.started"), c("session.step.started", { model: { providerID: "fake", id: "small" }, assistantMessageID: "msg_a1" }), c("session.tool.input.started", { assistantMessageID: "msg_a1", id: "c1", name: "shell" }), c("session.tool.called", { assistantMessageID: "msg_a1", id: "c1", input: { command: "echo blocked" } }), c("permission.asked", { id: "per_1", action: "shell", resources: ["echo blocked"], source: { type: "tool", messageID: "msg_a1", id: "c1" } })) });
+    r.callRunning();
+    const done = r.run.inlineTask(spec({ tools: ["Bash"] }), hooks());
+    for (let i = 0; i < 200 && !r.asks.length; i++) await sleep(20);
+    r.asks[0]!.reply({ kind: "deny" });
+    child("permission.replied", { requestID: "per_1", reply: "reject" });
+    child("session.tool.failed", { assistantMessageID: "msg_a1", id: "c1", error: { type: "aborted" } });
+    child("session.step.failed", { assistantMessageID: "msg_a1", error: { type: "aborted" } });
+    child("session.execution.interrupted", { reason: "shutdown" });
+    expect(await done).toMatchObject({ status: "denied", turns: 1, denied: ["Bash: echo blocked"], error: "The user denied Bash: echo blocked." });
+    expect(r.links.at(-1)).toEqual(["ses_child", { sessionId: "ses_parent", callId: "call_1", denied: ["c1"] }]);
   });
 });

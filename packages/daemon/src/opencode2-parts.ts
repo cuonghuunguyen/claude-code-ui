@@ -193,8 +193,8 @@ export class OpenCode2Mapper {
     return [...this.calls.values()].reverse().find((c) => c.type === "subagent" && c.agentType === "fork" && (c.status === "running" || c.status === "pending") && !skip.has(c.id) && JSON.stringify(canon(this.raw.get(c.id)?.input ?? {})) === want)?.id;
   }
   /** The newest running call of `tool` (its card name) whose input equals `input` and is not in `skip` (the call an inline run belongs to). */
-  runningCall(tool: string, input: Record<string, unknown> | undefined, skip: ReadonlySet<string>): string | undefined {
-    return pickCall([...this.calls.values()].flatMap((c) => (c.type === "tool_call" && c.tool === tool && (c.status === "running" || c.status === "pending") && !skip.has(c.id) ? [{ id: c.id, input: c.input as Record<string, unknown> }] : [])), input);
+  runningCall(tool: string, input: Record<string, unknown> | undefined, skip: ReadonlySet<string>, lone = true): string | undefined {
+    return pickCall([...this.calls.values()].flatMap((c) => (c.type === "tool_call" && c.tool === tool && (c.status === "running" || c.status === "pending") && !skip.has(c.id) ? [{ id: c.id, input: c.input as Record<string, unknown> }] : [])), input, lone);
   }
   /** Usage and cost summed over the steps since the last `resetTurn`. */
   turn() {

@@ -149,7 +149,7 @@ export type OpenCode2History = {
   /** The fork sessions of the Fork runs of this session with their stored messages (none: the fork is gone from OpenCode). */
   forks?: (ForkLink & { messages?: OpenCode2Message[] })[];
   /** The child sessions of the `subagent` calls (stored `state.metadata.sessionID`), nested ones included, with their stored messages and the call each runs for. */
-  children?: Record<string, { callId: string; messages: OpenCode2Message[]; /** An inline task's session (its prompt is no step); none = a subagent's. */ kind?: ChildKind }>;
+  children?: Record<string, { callId: string; messages: OpenCode2Message[]; /** An inline task's session (its prompt is no step); none = a subagent's. */ kind?: ChildKind; /** An inline task's call ids the user denied. */ denied?: string[] }>;
 };
 /** How deep the subagents of subagents are followed at a restore. */
 const CHILD_DEPTH = 5;
@@ -199,7 +199,7 @@ export async function loadOpenCode2History(client: OpenCodeClient, id: string, c
   // The sessions of linked inline tasks (one whose session is gone shows as its call only).
   const calls = new Set(messages.flatMap((m) => (m.content ?? []).flatMap((c) => (c.type === "tool" && c.id ? [c.id] : []))));
   for (const l of await mapLimit(inlineLinks.filter((x) => calls.has(x.callId)), 4, async (x) => ({ ...x, messages: await loadMessages(client, x.inlineId).catch(() => undefined) })))
-    if (l.messages) children[l.inlineId] = { callId: l.callId, messages: l.messages, kind: "inline" };
+    if (l.messages) children[l.inlineId] = { callId: l.callId, messages: l.messages, kind: "inline", ...(l.denied && { denied: l.denied }) };
   return { messages, forks, children, busy: id in active, permissions: await ours(requests), forms: await ours(forms), rules: (info.permissions ?? []) as Rule2[], ...(revert && { revert }), ...(info.agent && { agent: info.agent }) };
 }
 
@@ -299,6 +299,8 @@ class OpenCode2Session implements EngineSession {
   private readonly inlineRuns = new Map<string, InlineRun>();
   /** The `inline_task` calls an inline run already took. */
   private readonly inlineClaimed = new Set<string>();
+  /** Inline runs that have no call yet (looking for it, or waiting for its event): a lone one may take any running call, else only an equal-input one. */
+  private readonly inlineWaiting = new Set<symbol>();
   /** Stop per running inline call id (the card's Stop agent): ends the run as stopped. */
   private readonly inlineStops = new Map<string, () => void>();
   private retrying: { attempt: number; message: string; next?: number } | undefined;
@@ -367,9 +369,13 @@ class OpenCode2Session implements EngineSession {
     }
     // A subagent's session: its stored parts show under its call (the web groups by `parentId`, the order here does not matter).
     this.linkFrom(this.mapper);
-    for (const [childId, c] of Object.entries(h.children ?? {})) this.children.link(childId, c.callId, c.kind);
-    for (const [childId, c] of Object.entries(h.children ?? {})) {
+    // A running inline run (its link is saved while it works) is no restored child: its events and result go to the run.
+    const children = Object.entries(h.children ?? {}).filter(([childId]) => !this.inlineRuns.has(childId));
+    for (const [childId, c] of children) this.children.link(childId, c.callId, c.kind);
+    for (const [childId, c] of children) {
       const child = this.children.get(childId);
+      // The steps the user denied (stored as aborted errors) show Denied.
+      for (const id of c.denied ?? []) child?.mapper.deny(id);
       // An inline task's session starts with its prompt, which is the call's input: not a step.
       if (child) for (const part of child.mapper.history(c.messages.filter((m) => m.type !== "user"))) this.session.emit({ ...part, parentId: child.callId });
     }
@@ -1248,10 +1254,12 @@ class OpenCode2Session implements EngineSession {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let onAbort: (() => void) | undefined;
     let callId: string | undefined;
+    const waiting = Symbol("inline");
     let client: OpenCodeClient | undefined;
     try {
-      callId = await findCall(() => this.mapper.runningCall(INLINE_TOOL, hooks.input, this.inlineClaimed));
-      if (callId) this.inlineClaimed.add(callId);
+      this.inlineWaiting.add(waiting);
+      callId = await findCall(() => this.mapper.runningCall(INLINE_TOOL, hooks.input, this.inlineClaimed, this.inlineWaiting.size === 1));
+      if (callId) (this.inlineClaimed.add(callId), this.inlineWaiting.delete(waiting));
       client = await this.server.client();
       const agent = await this.agentName();
       const own = (await this.engine.agents(this.cwd)).find((a) => a.id === agent)?.permissions ?? [];
@@ -1263,6 +1271,11 @@ class OpenCode2Session implements EngineSession {
       const collector = (col = new InlineCollector2());
       const mapper = new OpenCode2Mapper();
       const outcome = new Promise<{ status: InlineResult["status"]; limit?: InlineResult["limit"]; error?: string }>((resolve) => {
+        /** The link (and the denied call ids, which the stored states do not carry) is saved with the matched call. */
+        const save = () => {
+          const ids = collector.denials.ids();
+          if (run.callId) this.engine.onInline?.(id, { sessionId: this.id, callId: run.callId, ...(ids.length && { denied: ids }) });
+        };
         const run: InlineRun = {
           ...(callId && { callId }),
           mapper,
@@ -1272,17 +1285,19 @@ class OpenCode2Session implements EngineSession {
             if (cap) resolve({ status: "limit", limit: cap });
             else if (collector.error) resolve({ status: "error", error: collector.error });
             else if (collector.idle) resolve({ status: "done" });
-            else if (collector.interrupted) resolve({ status: "stopped" });
+            // A Deny interrupts the run (reason "shutdown"): not a Stop, the run ends denied.
+            else if (collector.interrupted) resolve(collector.denials.list().length ? { status: "error", error: "The run was interrupted after a denial." } : { status: "stopped" });
           },
           settle: resolve,
-          deny: (cid) => collector.deny(cid),
+          deny: (cid) => (collector.deny(cid), save()),
           ...(hooks.input && { input: hooks.input }),
           early: new Map(),
           attach: (cid) => {
             run.callId = callId = cid;
+            this.inlineWaiting.delete(waiting);
             this.inlineClaimed.add(cid);
             if (onAbort) this.inlineStops.set(cid, onAbort);
-            this.engine.onInline?.(id, { sessionId: this.id, callId: cid });
+            save();
             for (const part of run.early!.values()) this.session.emit({ ...part, parentId: cid });
             run.early!.clear();
           },
@@ -1314,6 +1329,7 @@ class OpenCode2Session implements EngineSession {
     } catch (err) {
       return withDenials(result({ status: "error", error: (err as Error).message, ...(col && clip(col.text())) }, col), col?.denials.list() ?? []);
     } finally {
+      this.inlineWaiting.delete(waiting);
       if (timer) clearTimeout(timer);
       if (onAbort) hooks.signal.removeEventListener("abort", onAbort);
       if (childId) {
@@ -1335,7 +1351,7 @@ class OpenCode2Session implements EngineSession {
   private lateClaims() {
     for (const run of this.inlineRuns.values()) {
       if (run.callId || !run.attach) continue;
-      const id = this.mapper.runningCall(INLINE_TOOL, run.input, this.inlineClaimed);
+      const id = this.mapper.runningCall(INLINE_TOOL, run.input, this.inlineClaimed, this.inlineWaiting.size === 1);
       if (id) run.attach(id);
     }
   }
@@ -1734,7 +1750,7 @@ class OpenCode2EngineImpl implements Engine {
     /** The fork sessions of the Fork runs of a session. */
     readonly forksOf?: (id: string) => ForkLink[],
     /** An inline task matched its call: its link is saved (sessions.json `inlineOf`). */
-    readonly onInline?: (inlineId: string, link: { sessionId: string; callId: string }) => void,
+    readonly onInline?: (inlineId: string, link: { sessionId: string; callId: string; denied?: string[] }) => void,
     readonly inlinesOf?: (id: string) => InlineLink[],
   ) {}
 
@@ -1784,9 +1800,10 @@ class OpenCode2EngineImpl implements Engine {
           if (typeof sid !== "string") return;
           const own = this.sessions.get(sid);
           if (own) return own.event(payload.type, payload.properties);
-          for (const s of this.sessions.values()) if (s.ownsChild(sid)) return s.childEvent(sid, payload.type, payload.properties);
+          // A running inline run first: a saved link may have made its session a restored child too.
           const inline = this.inlineOwners.get(sid);
           if (inline) return inline.inlineEvent(sid, payload.type, payload.properties);
+          for (const s of this.sessions.values()) if (s.ownsChild(sid)) return s.childEvent(sid, payload.type, payload.properties);
           // A subagent's session its call has not named yet: its events wait for the link.
           if (payload.type.startsWith("session.") && [...this.sessions.values()].some((o) => o.awaitsChild())) this.early.add(sid, payload.type, payload.properties);
           // A subagent's session: only its permission requests and questions are shown (the user must be able to answer them, or the turn waits for ever).
@@ -2023,4 +2040,4 @@ class OpenCode2EngineImpl implements Engine {
 }
 
 export type OpenCode2Engine = OpenCode2EngineImpl;
-export const createOpenCode2Engine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; record?: (id: string) => void; mcp?: OpenCodeMcpRoute; visualizeOn?: () => boolean; onFork?: (forkId: string, link: { sessionId: string; callId: string; prefix: number }) => void; forksOf?: (id: string) => ForkLink[]; onInline?: (inlineId: string, link: { sessionId: string; callId: string }) => void; inlinesOf?: (id: string) => InlineLink[] } = {}): OpenCode2Engine => new OpenCode2EngineImpl(server, o.onTitle, o.record, o.mcp, o.visualizeOn, o.onFork, o.forksOf, o.onInline, o.inlinesOf);
+export const createOpenCode2Engine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; record?: (id: string) => void; mcp?: OpenCodeMcpRoute; visualizeOn?: () => boolean; onFork?: (forkId: string, link: { sessionId: string; callId: string; prefix: number }) => void; forksOf?: (id: string) => ForkLink[]; onInline?: (inlineId: string, link: { sessionId: string; callId: string; denied?: string[] }) => void; inlinesOf?: (id: string) => InlineLink[] } = {}): OpenCode2Engine => new OpenCode2EngineImpl(server, o.onTitle, o.record, o.mcp, o.visualizeOn, o.onFork, o.forksOf, o.onInline, o.inlinesOf);

@@ -99,6 +99,9 @@ export class InlineCollector2 {
       case "session.execution.interrupted":
         return void (this.interrupted = true);
       case "session.step.failed":
+        // The step ran (a Deny aborts it): it counts as a turn, with no usage.
+        this.steps.push({ finish: "failed" });
+      // falls through
       case "session.execution.failed":
         if (d.error && d.error.type !== "aborted") this.error ??= failureText(d.error);
         return;

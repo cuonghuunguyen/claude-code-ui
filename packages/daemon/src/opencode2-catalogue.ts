@@ -33,7 +33,7 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
   /** The fork sessions of the Fork runs of session `id` (sessions.json `forkOf`). */
   const forksOf = (id: string): ForkLink[] => settings.entries().flatMap(([forkId, l]) => (l.forkOf?.sessionId === id ? [{ forkId, callId: l.forkOf.callId, prefix: l.forkOf.prefix }] : []));
   /** The inline task sessions of session `id` (sessions.json `inlineOf`). */
-  const inlinesOf = (id: string): InlineLink[] => settings.entries().flatMap(([inlineId, l]) => (l.inlineOf?.sessionId === id ? [{ inlineId, callId: l.inlineOf.callId }] : []));
+  const inlinesOf = (id: string): InlineLink[] => settings.entries().flatMap(([inlineId, l]) => (l.inlineOf?.sessionId === id ? [{ inlineId, callId: l.inlineOf.callId, ...(l.inlineOf.denied && { denied: l.inlineOf.denied }) }] : []));
   const engine = createOpenCode2Engine(server, {
     onTitle: (id, title) => {
       const m = meta.get(id);
