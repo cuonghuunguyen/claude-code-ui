@@ -26,4 +26,5 @@ To close the idle tabs of one group, right-click its group chip and pick **Clean
 - The scan is fast, and it does not slow the status bar. A branch that was squash-merged counts as merged, so its worktree is **Safe**. The status of a worktree is cached for display; removing always checks again.
 - Removing a worktree runs in the background: every queued row shows **Removing…**.
 - Any linked worktree inside your roots can be removed, also one made by hand or by another tool. A locked or symlinked one is **Blocked**.
+- **Clean up…** of a merged repository group (one repository on several Sides) lists the worktrees and workers of every Side. The main row of each Side has its own **Clean up…**. See [Merged repository group](projects#merged-repository-group).
 - A worktree tagged **External** is not in `.claude/worktrees` and is not ticked for you.

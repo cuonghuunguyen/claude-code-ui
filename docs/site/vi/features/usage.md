@@ -26,6 +26,8 @@ Khi một phiên dừng vì giới hạn của gói, claude-code-ui có thể g�
 
 Tự gửi tin nhắn cũng hủy việc này. Nhiều phiên đã dừng sẽ tiếp tục lần lượt từng phiên.
 
+Phiên OpenCode tự tiếp tục sau khi dừng vì giới hạn mức dùng hoặc tốc độ của nhà cung cấp, khi giới hạn đặt lại (giới hạn tốc độ ngắn bị bỏ qua). Phiên thử tối đa 3 lần; tin nhắn của bạn hoặc một lượt kết thúc không do giới hạn sẽ đặt lại bộ đếm.
+
 ## Cửa sổ ngữ cảnh {#context-window}
 
 - Bấm vào vòng tròn cạnh nút gửi để xem thứ gì làm đầy ngữ cảnh: tin nhắn, system prompt, công cụ, công cụ MCP, tệp bộ nhớ và skill.

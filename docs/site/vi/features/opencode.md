@@ -15,11 +15,16 @@ Một phiên có thể chạy trên [OpenCode](https://opencode.ai) thay cho Cla
 
 ## Cần biết {#good-to-know}
 
-- Hoạt động như với Claude: prompt, điều hướng lượt đang chạy, câu hỏi, yêu cầu quyền, [Tua lại](timeline#rewind), [Aside](aside), lệnh slash (`/compact`, `/undo`, `/redo` và các lệnh trong cấu hình OpenCode), [hình minh họa](visualize) và [điều phối](orchestration). Coordinator và từng worker tự chọn engine.
+- Hoạt động như với Claude: prompt, điều hướng lượt đang chạy, câu hỏi, yêu cầu quyền, [Tua lại](timeline#rewind), [Aside](aside), lệnh slash (`/compact`, `/undo`, `/redo`, `/clear` và các lệnh trong cấu hình OpenCode), [hình minh họa](visualize) và [điều phối](orchestration). Coordinator và từng worker tự chọn engine.
 - Không có: vòng mức dùng gói và bộ chuyển tài khoản (thuộc về Claude), Reload plugins. Điều khiển mà phiên OpenCode không dùng được bị ẩn hoặc vô hiệu hóa, kèm tooltip "Engine của phiên này không hỗ trợ".
 - Tua lại khôi phục tệp và cuộc trò chuyện cùng lúc; OpenCode không có chế độ chỉ một trong hai. Thay đổi tệp do OpenCode thực hiện hiện trong [Lịch sử cục bộ](timeline#local-history-file-timeline) cùng nội dung trước khi sửa.
-- Hộp thoại MCP servers, Skills và Plugins sửa `opencode.json` của dự án, và Shells liệt kê các lệnh nền. Agent OpenCode có thể bắt đầu [Fork](fork-subagents) và [inline task](inline-tasks).
-- Khi OpenCode thử lại với model đang bận hoặc bị giới hạn tốc độ, cuối lượt hiện lý do và "Retrying in 12s · attempt 2" thay cho Thinking.
+- Hộp thoại MCP servers, Skills và Plugins sửa `opencode.json` của dự án, và Shells liệt kê các lệnh nền. Hộp thoại MCP còn có phạm vi **User** (`~/.config/opencode/opencode.json`): thêm và xóa máy chủ ở đó; hộp thoại Plugins gỡ plugin của cấu hình user, sau một bước xác nhận. Sau thay đổi như vậy OpenCode 1 khởi động lại server khi không có lượt, đăng nhập nhà cung cấp hay tạo phiên nào đang chạy. Agent OpenCode có thể bắt đầu [Fork](fork-subagents) và [inline task](inline-tasks).
+- `/clear`, `/new` và `/reset` bắt đầu một phiên OpenCode mới trong cùng tab, giữ model, agent, chế độ quyền và effort của phiên cũ. Phiên cũ vẫn nằm trong danh sách. Lệnh bị từ chối khi một lượt đang chạy.
+- Thẻ subagent hiện các bước của subagent (OpenCode 2) và các yêu cầu quyền của nó; **Stop agent** ngắt subagent. Các lệnh nền của nó hiện trong Shells (OpenCode 2). Các bước của inline task còn nguyên sau khi tải lại.
+- Với OpenCode 2, danh sách việc cần làm hiện trong todo dock. Biểu mẫu câu hỏi của OpenCode 2 có các trường có kiểu (ngày, ngày giờ, email, URL, số, khoảng giá trị) và **Gửi** bị chặn đến khi giá trị hợp lệ.
+- Gõ `@` trong ô prompt để liệt kê các subagent (ví dụ `explore`) phía trên danh sách tệp. Subagent được nhắc đến sẽ nhận việc; agent của phiên không đổi.
+- Khi OpenCode thử lại với model đang bận hoặc bị giới hạn tốc độ, cuối lượt hiện lý do và "Retrying in 12s · attempt 2" thay cho Thinking. Khi OpenCode 1 kèm một liên kết với lý do, dòng đó hiện liên kết.
+- Sau khi dừng vì giới hạn mức dùng hoặc tốc độ của nhà cung cấp, phiên tự tiếp tục khi giới hạn đặt lại, tối đa 3 lần thử. Tin nhắn của bạn đặt lại bộ đếm.
 - Lượt mà OpenCode tự kết thúc hiện cảnh báo kèm lý do.
 - OpenCode giữ lịch sử và thông tin đăng nhập nhà cung cấp của các phiên; claude-ui không giữ cái nào. Daemon khởi động một `opencode serve` khi có phiên OpenCode đầu tiên. Nó chỉ lắng nghe trên `127.0.0.1`, sau một mật khẩu ngẫu nhiên.
 - [Môi trường](wsl-docker) (side) chạy OpenCode riêng (PATH của nó, hoặc cài đặt đường dẫn riêng). Cài đặt › OpenCode chỉ sửa daemon cục bộ.

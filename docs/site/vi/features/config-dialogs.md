@@ -15,6 +15,7 @@ Ba hộp thoại quản lý máy chủ MCP, skill và plugin của Claude Code, 
 - Xem từng máy chủ và trạng thái của nó. Mở một máy chủ để xem các công cụ của nó.
 - Bật hoặc tắt máy chủ, kết nối lại, đăng nhập vào máy chủ, hoặc gỡ nó.
 - **Thêm máy chủ MCP:** đặt tên, chọn **Giao thức** (stdio, SSE hoặc HTTP) và **Phạm vi**, rồi bấm **Thêm máy chủ**.
+- Phiên OpenCode: hộp thoại còn có phạm vi **User**, cấu hình OpenCode toàn cục. Xem [Engine OpenCode](opencode).
 - Nếu máy chủ cần đăng nhập qua trình duyệt, hãy hoàn tất rồi dán **URL callback** vào hộp thoại khi được yêu cầu.
 
 ## Lệnh slash {#slash-commands}
