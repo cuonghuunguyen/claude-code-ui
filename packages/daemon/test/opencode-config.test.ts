@@ -201,6 +201,14 @@ describe("OpenCode MCP servers dialog", { timeout: TEST_MS }, () => {
     expect(await d.request({ type: "mcp.add", cwd: d.project, engine: "opencode", name: "x", scope: "local", config: { transport: "http", url: "http://127.0.0.1:1/m", headers: [] } })).toMatchObject({ type: "error", code: "invalid_input" });
   });
 
+  it("a global file that does not parse refuses a user-scope add and remove and is not written", async () => {
+    const d = await boot({ file: FILE, fileName: "opencode.json", global: "{ broken", globalName: "config.json" });
+    writeFileSync(join(d.root, "xdg", "opencode", "opencode.jsonc"), GLOBAL);
+    for (const msg of [{ type: "mcp.add", name: "gseed", scope: "user", config: { transport: "http", url: "http://127.0.0.1:1/m", headers: [] } }, { type: "mcp.remove", name: "gseed", scope: "user" }])
+      expect(await d.request({ cwd: d.project, engine: "opencode", ...msg })).toMatchObject({ type: "error", code: "config_invalid" });
+    expect(d.global("opencode.jsonc")).toBe(GLOBAL);
+  });
+
   it("mcp.add with scope user while a turn runs does not restart OpenCode (nothing is cancelled); it restarts when the turn ended and tells the dialogs", async () => {
     // The turn waits for the answer to a question: it runs until it is interrupted.
     const d = await boot({ file: FILE, fileName: "opencode.json", global: GLOBAL, env: { FAKE_OPENCODE_SCRIPT: QUESTION_TURN } });

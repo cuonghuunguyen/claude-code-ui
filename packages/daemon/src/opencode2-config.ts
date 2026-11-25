@@ -6,7 +6,7 @@ import type { OpenCodeClient } from "@opencode/client";
 import type { InstalledPlugin, McpAddConfig, McpAuthResult, McpListResult, McpServerInfo, PluginsListResult, PluginUpdateResult, PluginWriteResult, SkillRow, SkillsResult, SkillsSetStateResult, SkillState } from "@claude-ui/protocol";
 import { DAEMON_SERVER } from "./daemon-mcp.ts";
 import { EngineError, type EngineConfig } from "./engine-catalogue.ts";
-import { ConfigFileError, displayPath, docsOf, editFileAt, editFiles, editLists, editProjectFile, editProjectList, fileShape, globalDir, globalFiles, globalWriteTarget, projectDocs, readProjectValue, shapeOf, writeTarget } from "./opencode-config-file.ts";
+import { ConfigFileError, displayPath, docsOf, editFileAt, editFiles, editLists, editProjectFile, editProjectList, fileShape, globalDir, listsOf, globalFiles, globalWriteTarget, projectDocs, readProjectValue, shapeOf, writeTarget } from "./opencode-config-file.ts";
 import { MCP_WAIT_MS, NAME, mapStatus, pairs } from "./opencode-config-mcp.ts";
 import { canon, inPluginFolder, normalize, REMOVE_GAP, specOf } from "./opencode-config-plugins.ts";
 import { matches } from "./opencode-config-skills.ts";
@@ -52,10 +52,12 @@ const raced = async <T>(p: Promise<T>, ms: number): Promise<{ value: T } | "late
 /** The names of the servers the project's config files define (OpenCode 1 keys `mcp.<n>` or OpenCode 2 keys `mcp.servers.<n>` per file), with the files that hold each. */
 const projectServers = (cwd: string) => serversIn(projectDocs(cwd));
 /** The same for the user's global config files (`$OPENCODE_CONFIG` included). A file that does not parse shows no servers. */
-function globalServers(): Map<string, { file: string; shape: "v1" | "v2" }[]> {
+function globalServers(strict = false): Map<string, { file: string; shape: "v1" | "v2" }[]> {
   try {
     return serversIn(docsOf(globalFiles()));
-  } catch {
+  } catch (e) {
+    // The list shows nothing for an unreadable global file; a write refuses with the parse error.
+    if (strict) throw e;
     return new Map();
   }
 }
@@ -225,7 +227,7 @@ export function createOpenCode2McpConfig(o: Config2Deps): EngineConfig["mcp"] {
     // The keys of `mcp` that are no server in an OpenCode 2 file.
     if (name === "servers" || name === "timeout") throw fail("invalid_input", `${name} is a reserved name in OpenCode 2. Choose another server name.`);
     if (scope === "project" && projectServers(cwd).has(name)) throw fail("already_exists", `A server named ${name} already exists in this project's opencode.json.`);
-    if (scope === "user" && globalServers().has(name)) throw fail("already_exists", `A server named ${name} already exists in ${displayPath(globalWriteTarget())}.`);
+    if (scope === "user" && globalServers(true).has(name)) throw fail("already_exists", `A server named ${name} already exists in ${displayPath(globalWriteTarget())}.`);
     const entry =
       config.transport === "stdio"
         ? { type: "local", command: [config.command, ...config.args], ...(config.env.length && { environment: pairs(config.env, "=") }) }
@@ -269,7 +271,7 @@ export function createOpenCode2McpConfig(o: Config2Deps): EngineConfig["mcp"] {
           return await list(cwd);
         case "mcp.remove": {
           named(msg.name);
-          const files = msg.scope === "user" ? globalServers().get(msg.name) : projectServers(cwd).get(msg.name);
+          const files = msg.scope === "user" ? globalServers(true).get(msg.name) : projectServers(cwd).get(msg.name);
           if ((msg.scope !== "project" && msg.scope !== "user") || !files) throw fail("invalid_input", msg.scope === "user" ? `${msg.name} is not defined in ${displayPath(globalWriteTarget())}.` : `${msg.name} is not defined in this project's opencode.json. Remove it where it is defined.`);
           for (const f of files) editFileAt(f.file, f.shape === "v2" ? ["mcp", "servers", msg.name] : ["mcp", msg.name], undefined);
           // A server that is not running (disabled, failed) answers 404: it is gone either way.
@@ -445,6 +447,8 @@ export function createOpenCode2PluginsConfig(o: Config2Deps): EngineConfig["plug
   async function uninstall(cwd: string, id: string, scope: string | undefined): Promise<PluginWriteResult> {
     if (scope !== undefined && scope !== "project" && scope !== "user") throw fail("invalid_input", REMOVE_GAP);
     const drop = (item: unknown, file: string) => canon(specOf2(item) ?? "", dirname(file)) === id || specOf2(item) === id;
+    // Both lists are checked before the first write: a file with a broken list stays as it is.
+    if (scope === "user") for (const k of ["plugin", "plugins"]) listsOf(globalFiles(), [k]);
     const done = scope === "user" ? [...editLists(globalFiles(), globalWriteTarget(), ["plugin"], { drop }), ...editLists(globalFiles(), globalWriteTarget(), ["plugins"], { drop })] : [...editProjectList(cwd, ["plugin"], { drop }), ...editProjectList(cwd, ["plugins"], { drop })];
     if (!done.length) throw fail("invalid_input", REMOVE_GAP);
     if (!(await o.reload(cwd, "plugins"))) return { ...WRITTEN, applied: false };

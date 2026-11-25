@@ -11,7 +11,7 @@ export const MCP_WAIT_MS = 3000;
 /** The longest `mcp.authenticate` waits for OpenCode on the local flow: it answers when the sign-in redirect arrived, which the dialog polls for. */
 const AUTH_WAIT_MS = 1500;
 /** How long a sign-in that waits for the pasted redirect holds a restart of OpenCode. */
-const SIGN_IN_HOLD_MS = 10 * 60_000;
+const SIGN_IN_HOLD_MS = 5 * 60_000;
 export const NAME = /^[a-zA-Z0-9_-]+$/;
 
 type McpConfig = { type?: string; command?: string[]; url?: string; enabled?: boolean };
@@ -21,11 +21,12 @@ const fail = (code: string, message: string) => new EngineError(code, message);
 const USER_OR_PROJECT = "OpenCode servers are saved in the project's opencode.json or in ~/.config/opencode/opencode.json: use the Project or User scope.";
 
 /** Names of the servers the user's global OpenCode config defines (scope `user`). */
-function globalNames(): Set<string> {
+function globalNames(strict = false): Set<string> {
   try {
     return keysOf(globalFiles(), ["mcp"]);
-  } catch {
-    // An unreadable global file: its servers show as dynamic.
+  } catch (e) {
+    // The list shows the servers of an unreadable global file as dynamic; a write refuses with the parse error.
+    if (strict) throw e;
     return new Set();
   }
 }
@@ -134,7 +135,7 @@ export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd:
     if (!NAME.test(name)) throw fail("invalid_input", `Not a server name: ${name}`);
     if (config.transport === "sse") throw fail("unsupported", "OpenCode has no SSE transport. Use HTTP.");
     if (scope === "project" && ownProject(cwd, name)) throw fail("already_exists", `A server named ${name} already exists in this project's opencode.json.`);
-    if (scope === "user" && globalNames().has(name)) throw fail("already_exists", `A server named ${name} already exists in ${displayPath(globalWriteTarget())}.`);
+    if (scope === "user" && globalNames(true).has(name)) throw fail("already_exists", `A server named ${name} already exists in ${displayPath(globalWriteTarget())}.`);
     const entry =
       config.transport === "stdio"
         ? { type: "local", command: [config.command, ...config.args], ...(config.env.length && { environment: pairs(config.env, "=") }) }
@@ -169,7 +170,7 @@ export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd:
           return await list(cwd);
         case "mcp.remove": {
           if (msg.scope === "user") {
-            if (!globalNames().has(msg.name)) throw fail("invalid_input", `${msg.name} is not defined in ${displayPath(globalWriteTarget())}.`);
+            if (!globalNames(true).has(msg.name)) throw fail("invalid_input", `${msg.name} is not defined in ${displayPath(globalWriteTarget())}.`);
             editFiles(globalFiles(), globalWriteTarget(), ["mcp", msg.name], undefined);
             removed.set(cwd, (removed.get(cwd) ?? new Set()).add(msg.name));
             await raced(call(cwd, mcpPath(msg.name, "/disconnect")).catch(() => {}));
@@ -195,10 +196,10 @@ export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd:
           // Another machine: the redirect cannot reach OpenCode's port, so the dialog opens the page and the user pastes the redirect URL.
           const done = await raced(call(cwd, mcpPath(msg.name, "/auth")));
           // OpenCode keeps the flow in memory until the pasted redirect arrives (or this long): a restart would lose it.
+          if (done === "late") throw fail("opencode_loading", "OpenCode is still loading this folder. Try again in a moment.");
           const key = `${cwd}\0${msg.name}`;
           o.signingIn?.add(key);
           setTimeout(() => o.signingIn?.delete(key), SIGN_IN_HOLD_MS).unref();
-          if (done === "late") throw fail("opencode_loading", "OpenCode is still loading this folder. Try again in a moment.");
           const r = done.value as { authorizationUrl?: string };
           return { requiresUserAction: true, ...(r.authorizationUrl && { authUrl: r.authorizationUrl }) } satisfies McpAuthResult;
         }
@@ -210,12 +211,12 @@ export function createOpenCodeMcpConfig(o: { server: OpenCodeServer; repair(cwd:
             // Not a URL.
           }
           if (!code) throw fail("invalid_input", "The pasted address has no code. Paste the address of the page that opened after you signed in.");
-          const sent = await raced(call(cwd, mcpPath(msg.name, "/auth/callback"), "POST", { code }));
-          o.signingIn?.delete(`${cwd}\0${msg.name}`);
+          const sent = await raced(call(cwd, mcpPath(msg.name, "/auth/callback"), "POST", { code })).finally(() => o.signingIn?.delete(`${cwd}\0${msg.name}`));
           if (sent === "late") throw fail("opencode_loading", "OpenCode is still loading this folder. Try again in a moment.");
           return {};
         }
         case "mcp.clearAuth": {
+          o.signingIn?.delete(`${cwd}\0${msg.name}`);
           await raced(call(cwd, mcpPath(msg.name, "/auth"), "DELETE"));
           return await after(cwd, await (o.reload ?? o.repair)(cwd));
         }
