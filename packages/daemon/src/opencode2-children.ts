@@ -1,5 +1,6 @@
 // Child sessions of one OpenCode 2 session (docs/spec.md "OpenCode 2 adapter"): a `subagent` call's session (and, nested, its own subagents') shows its parts
 // under the call. One registry per session: child id -> the call it runs for and a mapper of its own, so turn usage, denials and shell maps stay per session.
+import type { Part } from "@claude-ui/protocol";
 import { OpenCode2Mapper } from "./opencode2-parts.ts";
 
 export type ChildKind = "subagent" | "inline";
@@ -24,6 +25,14 @@ export class ChildRuns {
   childOf = (callId: string) => this.byCall.get(callId);
   /** The mapper of every child (a child's own background shells live there). */
   mappers = (): Iterable<OpenCode2Mapper> => [...this.byChild.values()].map((c) => c.mapper);
+  /** `shell.exited` of shell `shellId`: only the child that owns the shell stores the exit; its card parts come back under that child's call. */
+  shellExited(shellId: string, status: string | undefined, exit: number | undefined): Part[] {
+    for (const child of this.byChild.values()) {
+      if (!child.mapper.hasShell(shellId)) continue;
+      return child.mapper.shellExited(shellId, status, exit).map((p) => ({ ...p, parentId: child.callId }));
+    }
+    return [];
+  }
   unlink(childId: string) {
     const child = this.byChild.get(childId);
     if (!child) return;

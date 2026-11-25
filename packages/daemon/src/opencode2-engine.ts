@@ -454,10 +454,8 @@ class OpenCode2Session implements EngineSession {
   shellExited(d: Json) {
     const exit = typeof d.exit === "number" ? d.exit : undefined;
     this.emitAll(this.mapper.shellExited(d.id, d.status, exit));
-    // A shell of a subagent lives in its child's mapper: its card shows under the child's call.
-    for (const [, child] of this.children.entries()) {
-      for (const part of child.mapper.shellExited(d.id, d.status, exit)) this.session.emit({ ...part, parentId: child.callId });
-    }
+    // A shell of a subagent lives in its child's mapper (only the owner stores the exit): its card shows under the child's call.
+    for (const part of this.children.shellExited(d.id, d.status, exit)) this.session.emit(part);
   }
 
   private noteUsage(m: { type?: string; tokens?: Json; model?: { id: string; providerID: string } }) {

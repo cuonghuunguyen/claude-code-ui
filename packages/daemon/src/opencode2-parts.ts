@@ -103,6 +103,8 @@ export class OpenCode2Mapper {
   /** The shell id of background call `callId`. */
   shellOf = (callId: string) => this.shellOfCall.get(callId);
   shellEnd = (shellId: string) => this.shellEnds.get(shellId);
+  /** A call of this session started shell `shellId`. */
+  hasShell = (shellId: string) => [...this.shellOfCall.values()].includes(shellId);
   /** `[call id, shell id]` of the background calls whose shell has not ended. */
   openShells = () => [...this.shellOfCall].filter(([callId, sh]) => !this.shellEnds.has(sh) && this.calls.has(callId));
   /** `shell.exited` (killed, or finished with `exit`): the call's card shows how it ended. Another session's shell changes nothing. */
