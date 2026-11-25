@@ -35,6 +35,7 @@ Thẻ liệt kê addon xin quyền gì, mỗi quyền một dòng dễ hiểu, c
 | `ui.pane` | Hiện pane cạnh cuộc trò chuyện |
 | `ui.band` | Hiện băng phía trên ô nhập |
 | `ui.command` | Thêm lệnh slash `/<addon>:<lệnh>` |
+| `ui.effect` | Vẽ [hiệu ứng canvas](#effects) động lên các phần của ứng dụng hoặc cửa sổ (thấy kích thước và trạng thái, không bao giờ thấy nội dung) |
 | `render.fence:<lang>` | Vẽ khối mã của ngôn ngữ đó |
 | `render.tool:<name>` | Vẽ kết quả của công cụ đó |
 | `net:<origin>` | Kết nối tới origin đó (ví dụ `https://api.github.com`) |
@@ -195,6 +196,23 @@ Khi không dùng được bản gốc (không có giao diện đó, addon của 
 ## Vẽ khối mã và kết quả công cụ {#renderers}
 
 Bộ vẽ `fence` vẽ khối mã của một ngôn ngữ trong câu trả lời và tin nhắn của bạn, trước các bộ vẽ có sẵn (cả sơ đồ Mermaid). Bộ vẽ `tool` vẽ kết quả của một công cụ. Mỗi bản vẽ có nút **Hiện bản gốc** để xem cách hiển thị có sẵn. Khung chỉ được tạo khi khối ở gần màn hình. Nếu hai addon vẽ cùng một thứ, hộp thoại Addon có bộ chọn; chưa chọn thì addon đứng đầu theo tên thắng.
+
+## Hiệu ứng canvas trên các phần của ứng dụng {#effects}
+
+Quyền `ui.effect`. Một hiệu ứng là một trang HTML của addon tự vẽ lên canvas của nó. Ứng dụng đặt nó lên một phần của ứng dụng (`target`: tên part) hoặc lên toàn cửa sổ (`target: "window"`), chỉ gửi kích thước, cờ trạng thái và giá trị các thuộc tính `data-*` công khai của part đó, các xung ngắn và màu của giao diện, không bao giờ gửi chữ hay dữ liệu phiên. Khung không nhận chuột hay bàn phím: nhấp, cuộn và gõ vẫn tới ứng dụng bên dưới.
+
+```json
+"capabilities": ["ui.effect"],
+"effects": [{ "id": "aura", "target": "prompt-box", "entry": "effects/aura.html", "bleed": 24, "when": { "focus-within": true } }]
+```
+
+- `target`: `window` hoặc một part không cuộn: `titlebar`, `sidebar`, `work-area`, `session-area`, `session-header`, `side-panel`, `files-panel`, `graph-panel`, `terminal`, `permission-panel`, `question-panel`, `prompt-box`, `prompt-toolbar`, `send`, `context-meter`, `status-bar`, `focus-page`, `scroll-to-bottom`. Tên khác không bao giờ hiện (danh sách Kiểm tra báo điều này).
+- `layer`: `above` (mặc định) hoặc `below`, chỉ cho `window`: vẽ phía sau ứng dụng, thấy được ở chỗ các panel trong suốt (giao diện đặt `--panel-alpha` trong `vars`, như với ảnh nền).
+- `bleed`: số pixel tràn ra mỗi phía của part, từ 0 đến 64.
+- `when`: hiện khi mọi khóa đều khớp: `focus-within`, `hover` (boolean), `attr:<tên data>` (`true` có, `false` không có, hoặc một giá trị). Chỉ đọc [thuộc tính trạng thái công khai](./addon-parts.md) của đích: `data-state`, `data-phase`, `data-just-finished`, `data-focus-opened`, `data-active`, `data-status`, `data-level` khi part có; với `window` là `data-phase` của trang.
+- `watch`: thêm các thuộc tính đó để nhận trong `effect.state`. `option`: một tùy chọn boolean của giao diện trong addon để bật tắt hiệu ứng.
+- Giới hạn: một khung cho mỗi part và addon, ba khung mỗi addon; canvas tối đa 1,2 megapixel (tỉ lệ điểm ảnh tối đa 2); tạm dừng khi part ra khỏi màn hình hoặc tab bị ẩn; một khung tĩnh khi giảm chuyển động. Hiệu ứng mất hơn 8 ms mỗi khung trong 10 giây bị dừng kèm thông báo đến khi tải lại trang.
+- SDK chạy nó: `defineEffect({ frame(ctx, fx) { … }, pulse(name, fx) { … } })` đặt kích thước canvas, chạy vòng lặp hoạt ảnh, tạm dừng, mờ dần và báo chi phí mỗi khung.
 
 ## Viết và kiểm tra addon {#authoring}
 

@@ -6,6 +6,7 @@ import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
   AddonCandidate,
   AddonAsset,
+  AddonEffect,
   AddonBackground,
   AddonInfo,
   AddonManifest,
@@ -19,7 +20,7 @@ import type {
   AddonsListResult,
   ClientMessage,
 } from "@claude-ui/protocol";
-import { ADDON_GRAPH_SIZE, ASSET_EXT, claudeUiError, claudeUiMessage, extendsChain, MAX_ADDON_ASSETS, MAX_THEME_OPTIONS, MAX_THEME_VARS, numberOk, optionError, parseExtends, phrasesError, satisfiesClaudeUi, SLOT_ASSETS, varNameError, varValueError } from "@claude-ui/protocol";
+import { ADDON_GRAPH_SIZE, ASSET_EXT, claudeUiError, EFFECT_ATTR, MAX_EFFECT_BLEED, MAX_EFFECTS, claudeUiMessage, extendsChain, MAX_ADDON_ASSETS, MAX_THEME_OPTIONS, MAX_THEME_VARS, numberOk, optionError, parseExtends, phrasesError, satisfiesClaudeUi, SLOT_ASSETS, varNameError, varValueError } from "@claude-ui/protocol";
 import { ConfigError } from "./config.ts";
 import { assetKey, assetType, ARTIFACT_ASSET_HEADERS } from "./artifact-preview.ts";
 import { BATCH_SSH, runGit, type GitRunner } from "./git-runner.ts";
@@ -31,7 +32,7 @@ import { assetStates, lintAddon } from "./addon-lint.ts";
 export type AddonsRequest = Extract<ClientMessage, { type: `addons.${string}` }>;
 
 const NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const FIXED = new Set(["session.read", "prompt.insert", "ui.status", "ui.toast", "ui.pane", "ui.band", "ui.command", "log"]);
+const FIXED = new Set(["session.read", "prompt.insert", "ui.status", "ui.toast", "ui.pane", "ui.band", "ui.command", "ui.effect", "log"]);
 /** Capability syntax; anything else is refused. */
 export const CAPABILITY = {
   fixed: FIXED,
@@ -206,14 +207,56 @@ function checkExtends(own: string, themes: AddonTheme[]) {
 }
 
 /** Missing capability per manifest entry, e.g. `views[stats] needs capability ui.pane`. */
-export function coverageErrors(m: Pick<AddonManifest, "capabilities" | "views" | "commands" | "renderers">): string[] {
+export function coverageErrors(m: Pick<AddonManifest, "capabilities" | "views" | "commands" | "renderers" | "effects">): string[] {
   const has = new Set(m.capabilities);
   const out: string[] = [];
   const need = (what: string, cap: string) => has.has(cap) || out.push(`${what} needs capability ${cap}`);
   for (const v of m.views) need(`views[${v.id}]`, v.kind === "pane" ? "ui.pane" : "ui.band");
   for (const c of m.commands) need(`commands[${c.name}]`, "ui.command");
   for (const r of m.renderers) "fence" in r ? need(`renderers[fence ${r.fence}]`, `render.fence:${r.fence}`) : need(`renderers[tool ${r.tool}]`, `render.tool:${r.tool}`);
+  for (const e of m.effects ?? []) need(`effects[${e.id}]`, "ui.effect");
   return out;
+}
+
+/** `effects` (capability `ui.effect`, docs/spec.md "Addon effects"): at most MAX_EFFECTS, known fields only. A target name is free text (lint `effect-target` when it never matches); `below` needs `window`; `option` names a boolean option of one of the addon's themes. */
+function parseEffects(raw: unknown, root: string, themes: AddonTheme[]): AddonEffect[] {
+  const items = list(raw, "effects");
+  if (items.length > MAX_EFFECTS) throw bad(`effects: at most ${MAX_EFFECTS}`);
+  const ids = new Set<string>();
+  const boolOptions = new Set(themes.flatMap((t) => (t.options ?? []).filter((o) => o.type === undefined || o.type === "boolean").map((o) => o.id)));
+  const attrOk = (v: unknown): v is string => typeof v === "string" && EFFECT_ATTR.test(v);
+  return items.map((e, i) => {
+    if (!isObj(e)) throw bad(`effects[${i}]: not an object`);
+    const eid = id(e.id, `effects[${i}].id`);
+    if (ids.has(eid)) throw bad(`effects[${eid}]: duplicate`);
+    ids.add(eid);
+    const w = `effects[${eid}]`;
+    const target = e.target === "window" ? "window" : id(e.target, `${w}.target`);
+    const layer = e.layer === undefined ? "above" : e.layer;
+    if (layer !== "above" && layer !== "below") throw bad(`${w}.layer: must be above or below`);
+    if (layer === "below" && target !== "window") throw bad(`${w}.layer: below needs target window`);
+    const bleed = e.bleed === undefined ? 0 : e.bleed;
+    if (typeof bleed !== "number" || !Number.isInteger(bleed) || bleed < 0 || bleed > MAX_EFFECT_BLEED) throw bad(`${w}.bleed: an integer from 0 to ${MAX_EFFECT_BLEED}`);
+    let when: AddonEffect["when"];
+    if (e.when !== undefined) {
+      if (!isObj(e.when)) throw bad(`${w}.when: not an object`);
+      when = {};
+      for (const [k, v] of Object.entries(e.when)) {
+        const attr = k.startsWith("attr:") ? k.slice(5) : undefined;
+        if (attr === undefined ? k !== "focus-within" && k !== "hover" : !attrOk(attr)) throw bad(`${w}.when.${k.slice(0, 50)}: only focus-within, hover or attr:data-<name>`);
+        if (attr === undefined ? typeof v !== "boolean" : typeof v !== "boolean" && (typeof v !== "string" || v.length > 64)) throw bad(`${w}.when.${k}: ${attr === undefined ? "a boolean" : "a boolean or a text up to 64 characters"}`);
+        when[k] = v as boolean | string;
+      }
+    }
+    let watch: string[] | undefined;
+    if (e.watch !== undefined) {
+      const ws = list(e.watch, `${w}.watch`);
+      if (ws.length > 8 || !ws.every(attrOk)) throw bad(`${w}.watch: at most 8 data-<name> attributes`);
+      watch = [...new Set(ws)];
+    }
+    if (e.option !== undefined && (typeof e.option !== "string" || !boolOptions.has(e.option))) throw bad(`${w}.option: not a boolean option of a theme of this addon`);
+    return { id: eid, target, entry: pathOk(root, e.entry, ".html", `${w}.entry`), layer, bleed, ...(when && { when }), ...(watch && { watch }), ...(e.option !== undefined && { option: e.option as string }) } satisfies AddonEffect;
+  });
 }
 
 /** Validates addon.json (already parsed) of the addon at `root`; the returned manifest holds only known fields. */
@@ -315,6 +358,7 @@ export function parseManifest(raw: unknown, root: string): AddonManifest {
     const entry = pathOk(root, r.entry, ".html", `renderers[${i}].entry`);
     return r.fence !== undefined ? { fence: str(r.fence, `renderers[${i}].fence`, 32), entry } : { tool: str(r.tool, `renderers[${i}].tool`, 128), entry };
   });
+  const effects = parseEffects(raw.effects, root, themes);
   const m: AddonManifest = {
     name,
     version: str(raw.version, "version", 64),
@@ -328,6 +372,7 @@ export function parseManifest(raw: unknown, root: string): AddonManifest {
     commands,
     ...(raw.commandsEntry !== undefined && { commandsEntry: pathOk(root, raw.commandsEntry, ".html", "commandsEntry") }),
     renderers,
+    ...(effects.length && { effects }),
   };
   const missing = coverageErrors(m);
   if (missing.length) throw bad(missing.join("; "));

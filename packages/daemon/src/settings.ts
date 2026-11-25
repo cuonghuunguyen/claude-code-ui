@@ -3,9 +3,9 @@
 import { isAbsolute } from "node:path";
 import { createJsonFile } from "./json-file.ts";
 import { marksOk } from "./back-marks.ts";
-import { EFFORTS, ENGINES, parseEditorCommand, PROJECT_OVERRIDES_SIDES_MAX, APP_ICON_MAX, COMMIT_INSTRUCTION_MAX, AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, jiraUrlProblem, JIRA_HTTPS_RULE, LABEL_EMOJI_MAX, LABEL_ENTRIES_MAX, LABEL_ICON_MAX, LABEL_NAME_MAX, PARENT_FOLDER_MODES, SESSION_MODES, WORKER_MODES, type BackMark, type ProjectOverrides, type Settings, type SettingsPatch } from "@claude-ui/protocol";
+import { EFFORTS, ENGINES, parseEditorCommand, PROJECT_OVERRIDES_SIDES_MAX, APP_ICON_MAX, COMMIT_INSTRUCTION_MAX, AUTO_REPOSITORY_DETECTION, DEFAULT_BRANCH_TEMPLATE, jiraUrlProblem, JIRA_HTTPS_RULE, LABEL_EMOJI_MAX, LABEL_ENTRIES_MAX, LABEL_ICON_MAX, LABEL_NAME_MAX, PARENT_FOLDER_MODES, SESSION_MODES, WORKER_MODES, type BackMark, type LastUsed, type ProjectOverrides, type Settings, type SettingsPatch } from "@claude-ui/protocol";
 
-export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {}, commitMessageWarm: false, commitMessageEngine: "claude", commitMessageModel: "haiku", commitMessageOpenCodeModel: "" }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, projects: { overrides: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } };
+export const DEFAULTS: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: DEFAULT_BRANCH_TEMPLATE, jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {}, commitMessageWarm: false, commitMessageEngine: "claude", commitMessageModel: "haiku", commitMessageOpenCodeModel: "" }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, projects: { overrides: {}, lastUsed: {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } };
 
 /**
  * `patch`: a stricter rule for a new value only; a stored value that fails it is kept (and refused at use), never emptied.
@@ -121,6 +121,21 @@ const overrides = (label: string): Check => ({
   stored: (v) => (isObj(v) ? overridesMap(v, (o) => overridesOk(o)) : undefined),
   normalize: (v) => overridesMap(v as Record<string, unknown>, () => true),
 });
+type LastUsedMap = Record<string, Record<string, LastUsed>>;
+/** One Project's last choice: a known Engine, a model and an effort under the overrides' rules, nothing else. */
+const lastUsedOk = (o: unknown): o is LastUsed =>
+  isObj(o) &&
+  CHECKS.sessions.engine.valid(o.engine) &&
+  Object.entries(o).every(([k, v]) => v === undefined || k === "engine" || ((k === "model" || k === "effort") && overridesOk({ [k]: v })));
+/** The valid entries, at most PROJECT_OVERRIDES_SIDES_MAX Sides of LABEL_ENTRIES_MAX Projects (the newest: an entry is appended when written). */
+const lastUsedMap = (v: unknown): LastUsedMap =>
+  Object.fromEntries(
+    Object.entries(isObj(v) ? v : {})
+      .filter(([side, projects]) => keyOk(side) && isObj(projects))
+      .slice(-PROJECT_OVERRIDES_SIDES_MAX)
+      .map(([side, projects]) => [side, Object.fromEntries(Object.entries(projects as Record<string, unknown>).filter((e): e is [string, LastUsed] => keyOk(e[0]) && lastUsedOk(e[1])).slice(-LABEL_ENTRIES_MAX))] as const)
+      .filter(([, projects]) => Object.keys(projects).length),
+  );
 const intIn = (label: string, min: number, max: number): Check => ({ valid: (v) => Number.isInteger(v) && (v as number) >= min && (v as number) <= max, label, rule: `a whole number from ${min} to ${max}` });
 /** Per field: is `v` valid. A stored field that fails falls back to its default; a patched one is refused with "<label> must be <rule>". */
 const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
@@ -192,7 +207,11 @@ const CHECKS: { [S in keyof Settings]: { [K in keyof Settings[S]]: Check } } = {
     open: bool("Open browser at start"),
   },
   labels: { projects: labels("Project names and icons"), sides: labels("Machine names and icons") },
-  projects: { overrides: overrides("Project overrides") },
+  projects: {
+    overrides: overrides("Project overrides"),
+    // Written only by the daemon at session.create (`setLastUsed`): a whole-map patch would undo another daemon's write.
+    lastUsed: { valid: (v) => isObj(v), label: "Last used per Project", rule: "valid", patch: () => false, patchRule: "recorded by the daemon when a session is created", stored: (v) => (isObj(v) ? lastUsedMap(v) : undefined) },
+  },
   editor: {
     command: { valid: (v) => v === "" || (typeof v === "string" && v.length <= 1024 && !/[\0\r\n]/.test(v) && !!parseEditorCommand(v)[0]), label: "Editor command", rule: "one line, at most 1024 characters, with a program first and balanced quotes" },
     name: { valid: (v) => v === "" || nameOk(v), label: "Editor name", rule: `empty or 1 to ${LABEL_NAME_MAX} characters, not only spaces, without control characters` },
@@ -361,6 +380,28 @@ export function createSettings({ file }: { file?: string } = {}) {
           delete d.projects.overrides;
           if (!Object.keys(d.projects).length) delete d.projects;
         }
+      });
+      return parseSettings(store.get());
+    },
+    /**
+     * Records the last choice of one Project (`projects.lastUsed`), in one change() of the latest file. The entry moves to the end, so the bound
+     * drops the Projects (and Sides) not used for the longest time. Returns undefined when the entry is already stored as is (nothing written).
+     * Throws when the entry is invalid or the save fails.
+     */
+    setLastUsed(side: string, cwd: string, entry: LastUsed) {
+      if (!keyOk(side) || !keyOk(cwd) || !lastUsedOk(entry)) throw new Error(`${CHECKS.projects.lastUsed!.label} must be an Engine with an optional model and effort`);
+      const value: LastUsed = { engine: entry.engine, ...(entry.model !== undefined && { model: entry.model }), ...(entry.effort !== undefined && { effort: entry.effort }) };
+      const now = parseSettings(store.get()).projects.lastUsed ?? {};
+      if (Object.hasOwn(now, side) && Object.hasOwn(now[side]!, cwd) && same(now[side]![cwd], value)) return undefined;
+      store.change((d) => {
+        // Maps: a Side or cwd named "__proto__" is a plain key; delete + set moves it to the end.
+        const sides = new Map(Object.entries(lastUsedMap(d.projects?.lastUsed)).map(([s, p]) => [s, new Map(Object.entries(p))] as const));
+        const projects = sides.get(side) ?? new Map<string, LastUsed>();
+        projects.delete(cwd);
+        projects.set(cwd, value);
+        sides.delete(side);
+        sides.set(side, projects);
+        (d.projects ??= {}).lastUsed = lastUsedMap(Object.fromEntries([...sides].map(([s, p]) => [s, Object.fromEntries(p)])));
       });
       return parseSettings(store.get());
     },

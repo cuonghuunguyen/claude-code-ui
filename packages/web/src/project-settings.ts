@@ -1,6 +1,6 @@
 // Project overrides in the web app (docs/spec.md "Project settings"): lookup, whole-map writes and the draft defaults. The daemon applies the
 // Permission mode, Claude account, inline task model and local history itself; the new-session tab reads Engine, model and effort here.
-import { LOCAL_SIDE, type Effort, type Engine, type ProjectOverrides, type Settings, type SettingsResult, type Worktree } from "@claude-ui/protocol";
+import { LOCAL_SIDE, type Effort, type Engine, type LastUsed, type ProjectOverrides, type Settings, type SettingsResult, type Worktree } from "@claude-ui/protocol";
 import type { Request } from "./client.ts";
 import { projectOf } from "./sessions.ts";
 
@@ -70,14 +70,27 @@ export function overridesRequest(all: OverrideMap | undefined, side: string, cwd
   return { type: "settings.project", side, cwd, overrides: own(overrides[side], cwd) ?? null };
 }
 
+/** The last choice of the Project of `cwd` (Settings `projects.lastUsed`): its own entry, else its Project's when it is a Worktree. */
+export function lastUsedOf(all: Settings["projects"]["lastUsed"], cwdSides: Record<string, string>, cwd: string | undefined, worktrees: Record<string, Worktree[]> = {}): LastUsed | undefined {
+  if (!cwd) return undefined;
+  const at = (c: string) => own(own(all, sideOfCwd(cwdSides, c)), c);
+  return at(cwd) ?? at(projectOf(cwd, worktrees));
+}
+
 /**
- * Engine, model and effort of the new-session tab. `picked`: what the user chose in the tab. Model and effort of the Project apply only for
- * the Project's own Engine (its override, else the global one): another Engine has its own models and effort levels.
+ * Engine, model and effort of the new-session tab, each: picked in the tab, else the Project's override, else the Project's last choice
+ * (`last`), else the global Engine and Default. Model and effort belong to an Engine and apply only when the resulting Engine is theirs:
+ * the override's are of the override's Engine (else the global one), the last choice's of its Engine. An override of model or effort without
+ * an Engine keeps the global Engine over the last choice's, so the override applies.
  */
-export function draftStart(o: ProjectOverrides, globalEngine: Engine, picked: { engine?: Engine; model?: string; effort?: Effort }): { engine: Engine; model: string; effort: Effort } {
-  const engine = picked.engine ?? o.engine ?? globalEngine;
-  const same = engine === (o.engine ?? globalEngine);
-  return { engine, model: picked.model ?? (same ? o.model : undefined) ?? "default", effort: picked.effort ?? (same ? o.effort : undefined) ?? "default" };
+export function draftStart(o: ProjectOverrides, globalEngine: Engine, picked: { engine?: Engine; model?: string; effort?: Effort }, last?: LastUsed): { engine: Engine; model: string; effort: Effort } {
+  const projectEngine = o.engine ?? globalEngine;
+  const pinned = o.engine !== undefined || o.model !== undefined || o.effort !== undefined;
+  const engine = picked.engine ?? (pinned ? projectEngine : (last?.engine ?? globalEngine));
+  const same = engine === projectEngine;
+  const lastSame = !!last && engine === last.engine;
+  const of = <K extends "model" | "effort">(k: K) => picked[k] ?? (same ? o[k] : undefined) ?? (lastSame ? last![k] : undefined);
+  return { engine, model: of("model") ?? "default", effort: of("effort") ?? "default" };
 }
 
 /** The origin (scheme, host, port) a Jira token belongs to; "" for no URL or one that is not a URL. */

@@ -126,6 +126,8 @@ export type DaemonContext = {
   sessionIds(): Promise<string[]>;
   /** Remembers the Engine of the last new session. */
   rememberEngine(engine: EngineName, cwd: string): void;
+  /** Records Engine, model and effort of a new session as its Project's last choice (Settings `projects.lastUsed`); `side` LOCAL_SIDE: a folder of this daemon. */
+  rememberLastUsed(side: string, cwd: string, engine: EngineName, model: unknown, effort: unknown): void;
   addProject(cwd: string): void;
   projects: Projects;
   /** Sessions being deleted. */

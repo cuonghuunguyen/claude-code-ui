@@ -124,7 +124,8 @@ export type FsEntry = { name: string; path: string; isDir: boolean };
 export type ClientMessage = { reqId: string; side?: string } & (
   /** `coordinator`: the session gets the orchestration tools (docs/spec.md "Orchestration"); refused while orchestration is off. */
   /** `draft`: the new-session tab's upload token (fs.upload `draft`); the session gets the id, and with it the folder, of those uploads; one claim per token. A `draft` already used by a loaded session of the same `cwd` and Engine returns that session and creates none (a retry after a lost reply). */
-  | { type: "session.create"; cwd: string; model?: string; draft?: string; engine?: Engine }
+  /** `effort`: the effort the client sets next (session.setEffort). Not applied here: recorded with Engine and model as the Project's last choice (Settings `projects.lastUsed`). */
+  | { type: "session.create"; cwd: string; model?: string; draft?: string; engine?: Engine; effort?: Effort }
   /** Binary and version of OpenCode, never starts its server. Reply OpenCodeStatus. */
   | { type: "opencode.status" }
   /** Stops OpenCode's server (the next use starts it again) and drops its cached model data; broadcasts opencode.providersChanged. Reply `{}`; error `opencode_busy` while a turn runs, an OAuth login waits or a session is created. */
@@ -1147,7 +1148,9 @@ export type ProjectOverrides = {
 };
 /** A Project as `projects.overrides` keys it: its Side id and its own folder (never a Worktree path). */
 export type ProjectRef = { side: string; cwd: string };
-/** Most Side ids in `projects.overrides`. */
+/** The Engine, model and effort of the last session created in a Project (Settings `projects.lastUsed`); an absent `model`/`effort` is Default. */
+export type LastUsed = { engine: Engine; model?: string; effort?: Effort };
+/** Most Side ids in `projects.overrides` (and in `projects.lastUsed`). */
 export const PROJECT_OVERRIDES_SIDES_MAX = 20;
 export type Settings = { orchestration: { enabled: boolean; /** Live workers of one root coordinator's tree, every depth, plus its worker_start calls in flight. */ workerCap: number; /** Live workers of this daemon, all trees; 0 = no limit. */ workerCapTotal: number; /** Depth = coordinatorId hops from the root coordinator; a worker at this depth may not start workers. */ maxDepth: number; /** Live direct workers one coordinator may run. */ maxChildren: number; /** A running worker whose CLI sends no message for this long raises a `stalled` event to its coordinator; 0 = off. */ stallMinutes: number; /** An idle coordinator that waits on running workers, subagents or background commands gets a one-line keep-warm message this long after its last turn, so its prompt cache stays warm (set under the cache lifetime: 55 for 1 hour, 4 for 5 minutes); 0 = off. */ keepWarmMinutes: number; workerMode: WorkerModeSetting; /** Off: a worker's finished and error notify nobody but its coordinator; a worker's permission request or question still notifies the user. */ workerNotifications: boolean; /** GH-574: a worker whose turn ends settled loses its CLI (worker_send resumes it). */ closeFinished: boolean }; /** New session mode when Claude settings set none; `auto` on a model without auto support runs in `default`. */ sessions: { defaultMode: (typeof SESSION_MODES)[number]; /** The Engine of the last session created: the new-session tab starts with it. */ engine: Engine }; /** OpenCode engine (docs/spec.md "OpenCode engine"): `path` of its binary, "" = look it up on PATH. */ opencode: { path: string }; usageLimit: { autoContinue: boolean }; focus: { /** Claude predicts the next prompt after a turn (SDK promptSuggestions); applies to sessions started or resumed after the change. */ nextForYou: boolean }; notifications: { desktop: boolean };
   /** Keep computer awake (GH-523): the Hub holds an OS sleep inhibitor while a session runs. */
@@ -1220,7 +1223,8 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
   /** GH-646: the user's own editor for "Open in <name>". `command`: one line, program then arguments, `"..."` groups; `{path}` and `{root}` are replaced, else the paths are appended. `name`: menu label, "" = the program name. Only a browser on the daemon machine may change it. */
   editor: { command: string; name: string };
   /** Overrides per Project, keyed by Side id (`local` = the daemon that stores it, `wsl:<distro>`, `ssh:<alias>`, `docker:<name>`), then Project cwd. A Side receives only its own entries as `local`, without `account`. `settings.set` replaces the whole map, `settings.project` sets one Project's entry. */
-  projects: { overrides: Record<string, Record<string, ProjectOverrides>> };
+  /** `lastUsed`: the last choice per Project, keyed like `overrides` (a local Worktree's session counts for its Project); written by the daemon at session.create only (settings.set refuses it), never sent to a Side; the new-session tab's fallback under the overrides. Absent from an older daemon. */
+  projects: { overrides: Record<string, Record<string, ProjectOverrides>>; lastUsed?: Record<string, Record<string, LastUsed>> };
   app: { /** "" = the built-in icon; else an emoji (≤ LABEL_EMOJI_MAX) or a data:image/(png|webp|jpeg);base64 URL of a square APP_ICON_PX image (≤ APP_ICON_MAX). */ icon: string; /** "" = "Claude UI"; else 1..LABEL_NAME_MAX chars, no control characters, not only whitespace. */ name: string };
 };
 export type SettingsPatch = { [S in keyof Settings]?: Partial<Settings[S]> };
@@ -1347,6 +1351,24 @@ export type AddonCandidate = { path: string; name: string; version: string; desc
 export type AddonView = { id: string; title: string; entry: string; kind: "pane" | "band"; phone?: boolean };
 export type AddonCommand = { name: string; description: string; argumentHint?: string };
 export type AddonRenderer = ({ fence: string } | { tool: string }) & { entry: string };
+/** `when` of an effect: every key must match. `focus-within` / `hover`: booleans; `attr:<data-name>`: `true` present, `false` absent, a string equal. */
+export type AddonEffectWhen = Record<string, boolean | string>;
+/** An effect (capability `ui.effect`, docs/spec.md "Addon effects"): a sandboxed canvas frame the host places over a part or the window. */
+export type AddonEffect = {
+  id: string;
+  /** A part name of `EFFECT_TARGETS` or `"window"`; any other name is never mounted (lint `effect-target`). */
+  target: string;
+  entry: string;
+  /** `below`: only with target `window`. */
+  layer: "above" | "below";
+  /** Pixels beyond the target on each side, 0-64. */
+  bleed: number;
+  when?: AddonEffectWhen;
+  /** `data-*` attributes whose values are sent in `effect.state` (besides the ones `when` uses). */
+  watch?: string[];
+  /** A boolean theme option of this addon that toggles the effect. */
+  option?: string;
+};
 /** Colours per palette key (themes.ts KEYS); `graph`: 8 colours for the Git graph lanes (`--graph-1..8`, the first 6 also `--context-1..6`). A mode may be partial: the web drops incomplete modes. */
 export type AddonPalette = Record<string, string | string[]>;
 /** Custom properties an addon theme sets per mode (`--name` -> value, protocol addon-theme.ts rules); written into the theme's colour rule. */
@@ -1380,11 +1402,13 @@ export type AddonManifest = {
   commands: AddonCommand[];
   commandsEntry?: string;
   renderers: AddonRenderer[];
+  /** Absent when the manifest declares none. */
+  effects?: AddonEffect[];
 };
 /** needs_approval: declared capabilities not all approved (never enabled). error: the manifest does not load. */
 export type AddonState = "enabled" | "disabled" | "needs_approval" | "error";
 /** One finding of the addon lint (docs/spec.md "Addon lint"). Warnings only: a finding never blocks an install or an enable. `text` is built by the client from `code` and the fields. */
-export type AddonLintCode = "selects-testid" | "unknown-part" | "unprefixed-name" | "top-level-css" | "css-broken" | "css-too-large" | "css-large" | "deprecated-part" | "low-contrast" | "asset-missing" | "asset-large" | "extends-missing";
+export type AddonLintCode = "selects-testid" | "unknown-part" | "unprefixed-name" | "top-level-css" | "css-broken" | "css-too-large" | "css-large" | "deprecated-part" | "low-contrast" | "asset-missing" | "asset-large" | "extends-missing" | "effect-target" | "effect-attr";
 export type AddonLint = {
   level: "warning";
   code: AddonLintCode;

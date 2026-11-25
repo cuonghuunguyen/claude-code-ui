@@ -70,16 +70,17 @@
 :root[data-page-hidden] *, :root[data-page-hidden] *::before, :root[data-page-hidden] *::after { animation-play-state: paused !important; }
 /* Theme background (backdrop.tsx renders the element only while the current addon theme has an image whose file exists for the mode; the theme's colour rule sets
    --backdrop-image, --backdrop-image-mobile, --backdrop-veil and --panel-alpha). Fixed behind the app: the app root becomes a stacking context so z-index -1 stays above its own background. */
-div:has(> [data-part="backdrop"]) { isolation: isolate; }
+div:has(> [data-part="backdrop"], > [data-effect-layer="below"]) { isolation: isolate; }
+/* Addon effects behind the app (addon-effects.tsx, a window effect with layer below) show through the same panels as the backdrop: data-effect-below. */
 [data-part="backdrop"] { position: fixed; inset: 0; z-index: -1; pointer-events: none; background: var(--backdrop-image) center / cover no-repeat; }
 @media (width < 48rem) { [data-part="backdrop"] { background-image: var(--backdrop-image-mobile, var(--backdrop-image)); } }
 /* Veil: the page background over the image, at --backdrop-veil (0..1). */
 [data-part="backdrop"]::after { content: ""; position: absolute; inset: 0; background: var(--background); opacity: var(--backdrop-veil, 0); }
 /* Main panels let the image through at --panel-alpha (default 1: opaque), only while a background shows (backdrop.tsx sets data-backdrop on <html>). Each keeps its own surface token. */
-:root[data-backdrop] :is([data-part="side-panel"], [data-part="prompt-box"], [data-part="focus-page"], [data-part="session-area"]:not([data-split])) { background-color: color-mix(in srgb, var(--card) calc(var(--panel-alpha, 1) * 100%), transparent); }
+:root:is([data-backdrop], [data-effect-below]) :is([data-part="side-panel"], [data-part="prompt-box"], [data-part="focus-page"], [data-part="session-area"]:not([data-split])) { background-color: color-mix(in srgb, var(--card) calc(var(--panel-alpha, 1) * 100%), transparent); }
 /* The sidebar is a plain drawer below md: it stays opaque there. */
-@media (width >= 48rem) { :root[data-backdrop] [data-part="sidebar"] { background-color: color-mix(in srgb, var(--card) calc(var(--panel-alpha, 1) * 100%), transparent); } }
-:root[data-backdrop] [data-part="titlebar"] { background-color: color-mix(in srgb, var(--background) calc(var(--panel-alpha, 1) * 100%), transparent); }
+@media (width >= 48rem) { :root:is([data-backdrop], [data-effect-below]) [data-part="sidebar"] { background-color: color-mix(in srgb, var(--card) calc(var(--panel-alpha, 1) * 100%), transparent); } }
+:root:is([data-backdrop], [data-effect-below]) [data-part="titlebar"] { background-color: color-mix(in srgb, var(--background) calc(var(--panel-alpha, 1) * 100%), transparent); }
 /* Guided tour popover fade-in (guide-tour.tsx). */
 @keyframes guide-in {
     from {

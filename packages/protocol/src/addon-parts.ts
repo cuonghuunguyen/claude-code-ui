@@ -76,3 +76,40 @@ const META: { [K in PartName]?: Omit<AddonPart, "name" | "since"> } = {
 };
 
 export const PARTS: readonly AddonPart[] = PART_NAMES.map((name) => ({ name, since: "1.5", ...META[name] }));
+
+/** Effect targets of `ui.effect` v1 (docs/spec.md "Addon effects"): `window` and the parts that do not scroll with content. A part inside a scrolling list (messages, sessions, files) is not one yet. */
+export const EFFECT_TARGETS = [
+  "window",
+  "titlebar",
+  "sidebar",
+  "work-area",
+  "session-area",
+  "session-header",
+  "side-panel",
+  "files-panel",
+  "graph-panel",
+  "terminal",
+  "permission-panel",
+  "question-panel",
+  "prompt-box",
+  "prompt-toolbar",
+  "send",
+  "context-meter",
+  "status-bar",
+  "focus-page",
+  "scroll-to-bottom",
+] as const satisfies readonly (PartName | "window")[];
+export type EffectTarget = (typeof EFFECT_TARGETS)[number];
+/** Most effects per addon manifest; most frames per addon at a time; most `bleed` px. */
+export const MAX_EFFECTS = 8;
+export const MAX_EFFECT_FRAMES = 3;
+export const MAX_EFFECT_BLEED = 64;
+/** A `data-*` attribute name an effect may name in `when` (`attr:<name>`) and `watch`. */
+export const EFFECT_ATTR = /^data-[a-z][a-z0-9-]{0,40}$/;
+
+/** The public state attributes of an effect target, the only ones the host reads for an effect: the `states` of the part (`window`: those on `<html>`). Empty for a name that is no target. */
+export function effectAttrs(target: string): string[] {
+  if (target === "window") return ["data-phase"];
+  if (!(EFFECT_TARGETS as readonly string[]).includes(target)) return [];
+  return (META[target as PartName]?.states ?? []).map((s) => /^(data-[a-z-]+)/.exec(s)![1]!);
+}

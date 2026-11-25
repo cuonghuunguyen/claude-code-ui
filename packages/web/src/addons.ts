@@ -149,6 +149,7 @@ export function capabilityLine(c: string): { key: Key; vars?: Record<string, str
     "ui.pane": "addons.cap.uiPane",
     "ui.band": "addons.cap.uiBand",
     "ui.command": "addons.cap.uiCommand",
+    "ui.effect": "addons.cap.uiEffect",
     log: "addons.cap.log",
   };
   return { key: fixed[c] ?? "addons.cap.unknown", vars: { capability: c } };

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectOverrides } from "@claude-ui/protocol";
-import { accountKeyOf, accountScopeOf, draftStart, jiraOf, jiraOriginOf, jiraTokenFor, overridesOf, overridesRequest, setOverride } from "./project-settings.ts";
+import { accountKeyOf, accountScopeOf, draftStart, jiraOf, lastUsedOf, jiraOriginOf, jiraTokenFor, overridesOf, overridesRequest, setOverride } from "./project-settings.ts";
 
 const map = (side: string, cwd: string, o: ProjectOverrides) => ({ [side]: { [cwd]: o } });
 
@@ -73,6 +73,29 @@ describe("draftStart", () => {
   });
   it("a picked model or effort wins over the override", () => {
     expect(draftStart({ model: "opus", effort: "max" }, "claude", { model: "sonnet", effort: "low" })).toEqual({ engine: "claude", model: "sonnet", effort: "low" });
+  });
+  const last = { engine: "opencode", model: "p/m", effort: "high" } as const;
+  it("no override: the Project's last choice wins over the global Engine", () => {
+    expect(draftStart({}, "claude", {}, last)).toEqual({ engine: "opencode", model: "p/m", effort: "high" });
+  });
+  it("an override wins over the last choice; the last model and effort fill in only for their own Engine", () => {
+    expect(draftStart({ engine: "claude" }, "claude", {}, last)).toEqual({ engine: "claude", model: "default", effort: "default" });
+    expect(draftStart({ engine: "opencode", effort: "low" }, "claude", {}, last)).toEqual({ engine: "opencode", model: "p/m", effort: "low" });
+    // A model override without an Engine is of the global Engine: it keeps that Engine over the last one.
+    expect(draftStart({ model: "opus" }, "claude", {}, last)).toEqual({ engine: "claude", model: "opus", effort: "default" });
+  });
+  it("a picked Engine: the last model and effort apply only when it is the last Engine", () => {
+    expect(draftStart({}, "claude", { engine: "claude" }, last)).toEqual({ engine: "claude", model: "default", effort: "default" });
+    expect(draftStart({}, "claude", { engine: "opencode", model: "x/y" }, last)).toEqual({ engine: "opencode", model: "x/y", effort: "high" });
+  });
+});
+
+describe("lastUsedOf", () => {
+  const all = { local: { "/p": { engine: "opencode" as const, model: "p/m" } }, "ssh:x": { "/p": { engine: "claude" as const } } };
+  it("a Worktree reads its Project's entry; a Side folder reads its Side's entry", () => {
+    expect(lastUsedOf(all, {}, "/p-wt", { "/p": [{ path: "/p-wt" } as never] })).toEqual({ engine: "opencode", model: "p/m" });
+    expect(lastUsedOf(all, { "/p": "ssh:x" }, "/p")).toEqual({ engine: "claude" });
+    expect(lastUsedOf(undefined, {}, "/p")).toBeUndefined();
   });
 });
 

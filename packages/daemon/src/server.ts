@@ -11,7 +11,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { DEFAULT_ENGINE, createAdapter, type Settings, editorLabel, type Engine as EngineName, type PromptResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_UPLOAD_BYTES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_TAG, type ClientMessage, type ListResult, type MediaReadResult, type ModelInfo, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { DEFAULT_ENGINE, EFFORTS, type Effort, createAdapter, type Settings, editorLabel, type Engine as EngineName, type PromptResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_UPLOAD_BYTES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_TAG, type ClientMessage, type ListResult, type MediaReadResult, type ModelInfo, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
@@ -42,7 +42,7 @@ import { ARCHIVED_TAG, createClaudeCatalogue, transcriptFile, type History } fro
 import { createOpenCodeCatalogues } from "./opencode-catalogues.ts";
 import { createProjects, trim, type Projects } from "./projects.ts";
 import { claudeEnv, setClaudeToken } from "./claude-env.ts";
-import { historySettings, inlineTaskSettings, jiraSettings, projectOverrides } from "./project-overrides.ts";
+import { historySettings, inlineTaskSettings, jiraSettings, projectFolderOf, projectOverrides } from "./project-overrides.ts";
 import { TEST_ARGS, TEST_TIMEOUT_MS, testOutcome } from "./claude-test.ts";
 import { createPlanTrackers, RESET_GRACE_MS, usesOauthToken } from "./plan-usage.ts";
 import { createPromptQueue } from "./prompt-queue.ts";
@@ -489,6 +489,21 @@ export function createDaemon(opts: {
       broadcastSettings(appSettings.set({ sessions: { engine } }));
     } catch (err) {
       console.error("saving the last engine failed:", err);
+    }
+  };
+  /**
+   * Settings `projects.lastUsed`: Engine, model and effort a new session started with, for the new-session tab of its Project (under the Project's
+   * overrides, which it never touches). A local Worktree counts for its main checkout; a Side's folder is kept as the Side names it. "default"
+   * (or a value the settings refuse) is no value. A failed save is logged: the session exists already.
+   */
+  const rememberLastUsed = (side: string, cwd: string, engine: EngineName, model: unknown, effort: unknown) => {
+    const valid = (v: unknown) => typeof v === "string" && v !== "" && v !== "default" && v.length <= 200 && !/[\0-\x1f\x7f]/.test(v);
+    const entry = { engine, ...(valid(model) && { model: model as string }), ...(valid(effort) && (EFFORTS as unknown[]).includes(effort) && { effort: effort as Effort }) };
+    try {
+      const next = appSettings.setLastUsed(side, side === LOCAL_SIDE ? projectFolderOf(cwd) : cwd, entry);
+      if (next) broadcastSettings(next);
+    } catch (err) {
+      console.error("saving the last used engine, model and effort failed:", err);
     }
   };
   /** The undo records of applied `fs.replace` calls (docs/spec.md "Editor"), shared by every connection. */
@@ -2073,6 +2088,7 @@ export function createDaemon(opts: {
     listVersions,
     sessionIds,
     rememberEngine,
+    rememberLastUsed,
     addProject,
     projects,
     deleting,
@@ -2255,6 +2271,7 @@ export function createDaemon(opts: {
         sameHost: sameBrowser,
         media: sideMedia,
         mediaTimeoutMs: opts.sideCallTimeoutMs,
+        onCreated: (side, msg, engine) => typeof msg.cwd === "string" && rememberLastUsed(side, msg.cwd, engine, msg.model, msg.effort),
       });
     // A handler that throws fails its request: a rejected promise nobody awaits would end the process (Node's default).
     ws.on("message", (data) =>

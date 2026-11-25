@@ -97,6 +97,7 @@ import { addonCommandOf, commandRows, AddonApiContext, AddonCommandContext, Addo
 import { AddonBands, AddonFrame, type AddonHandle } from "./addon-frame.tsx";
 import { addonThemes } from "./themes.ts";
 import { Backdrop } from "./backdrop.tsx";
+import { AddonEffects } from "./addon-effects.tsx";
 import { QuickCompactCard, QuickCompactSourceContext } from "./quick-compact-card.tsx";
 import { SlotsProvider, useThinkingPhrase } from "./slots.tsx";
 import { isPreviewHash } from "./addon-preview-route.ts";
@@ -184,7 +185,7 @@ import { isImeKey } from "./ime.ts";
 import { OpenProjectDialog } from "./open-project.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger } from "@/components/ui/select";
 import { LabelDialog } from "./label-dialog.tsx";
-import { accountScopeOf, draftStart, overridesOf, overridesRequest, sideOfCwd } from "./project-settings.ts";
+import { accountScopeOf, draftStart, lastUsedOf, overridesOf, overridesRequest, sideOfCwd } from "./project-settings.ts";
 import { applySettingsChanged, fromSettingsGet, publishSettings, type SettingsView } from "./settings-projection.ts";
 import { projectLabel, saveLabel, useLabels } from "./labels.ts";
 import { ENGINE_ICON, ENGINE_NAME, EngineTag } from "./engine-tag.tsx";
@@ -3146,7 +3147,8 @@ export function App() {
   };
   // Project settings (GH-894): the draft's project may set Engine, model and effort of a new session.
   const draftOverrides = overridesOf(settingsView?.projectOverrides, cwdSides, draftProject, worktrees);
-  const start = draftStart(draftOverrides, lastEngine, pick);
+  // Under the overrides, the Project's last choice (daemon Settings projects.lastUsed), then the global last Engine.
+  const start = draftStart(draftOverrides, lastEngine, pick, lastUsedOf(settingsView?.projectLastUsed, cwdSides, draftProject, worktrees));
   const draftEngine = start.engine;
   const engineEntry = enginesOf(draftProject).find((e) => e.engine === draftEngine);
   // An Engine whose modes include auto (it depends on the model): the start modes follow the model and the daemon config; another: the modes it lists.
@@ -3838,6 +3840,7 @@ export function App() {
     ) : (
     <div className="flex h-dvh flex-col bg-background text-foreground">
       <Backdrop />
+      <AddonEffects />
       <header className="flex h-9 shrink-0 items-center gap-1.5 px-2 max-md:h-11 max-md:gap-2 md:pr-3 md:pl-4" data-testid="titlebar" data-part="titlebar">
         <IconButton className="md:hidden" label={tr("app.main.sessions")} onClick={() => setDrawer(true)} testId="open-drawer">
           <MenuIcon />
@@ -5019,7 +5022,7 @@ export async function startSession(
   const timeoutMs = FIRST_SEND_TIMEOUT_MS;
   let session = reused
     ? created.current!
-    : (await request<CreateResult>({ type: "session.create", cwd, model, ...(engine && { engine }), ...(draft && { draft }) }, { timeoutMs, onSent: () => marks?.mark("firstSend.sent") })).session;
+    : (await request<CreateResult>({ type: "session.create", cwd, model, ...(engine && { engine }), ...(effort !== undefined && { effort }), ...(draft && { draft }) }, { timeoutMs, onSent: () => marks?.mark("firstSend.sent") })).session;
   if (!reused && draft) onDraftClaimed();
   created.current = session;
   onInfo(session);

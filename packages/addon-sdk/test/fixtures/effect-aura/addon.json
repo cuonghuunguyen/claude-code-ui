@@ -1,0 +1,11 @@
+{
+  "name": "effect-aura",
+  "version": "1.0.0",
+  "description": "Test addon for ui.effect: a flame aura around the focused prompt box, a probe that tries to leave its canvas, a window sparkle layer.",
+  "capabilities": ["ui.effect"],
+  "effects": [
+    { "id": "aura", "target": "prompt-box", "entry": "aura.html", "bleed": 24, "when": { "focus-within": true } },
+    { "id": "probe", "target": "status-bar", "entry": "probe.html" },
+    { "id": "sparkle", "target": "window", "entry": "sparkle.html", "when": { "attr:data-phase": "thinking" } }
+  ]
+}

@@ -125,13 +125,13 @@ it("a prompt that timed out keeps the session for the retry; the retry sends the
   expect(created.sent).toBeUndefined();
 });
 
-it("startSession sends the draft token with session.create; without one no draft key", async () => {
+it("startSession sends the draft token and the effort (recorded as the Project's last choice) with session.create; without a token no draft key", async () => {
   const T = "d".repeat(64);
   const requests: Record<string, unknown>[] = [];
   const request = vi.fn(async (msg: Record<string, unknown>) => (requests.push(msg), { session: { id: "s1", cwd: "/p/a", model: "default", permissionMode: "default", effort: "default" } }));
   const opts = { model: "default", mode: "default", effort: "default" } as const;
   await startSession(request as never, {}, "/p/a", { ...opts, draft: T }, { text: "hi", images: [] });
-  expect(requests[0]).toEqual({ type: "session.create", cwd: "/p/a", model: "default", draft: T });
+  expect(requests[0]).toEqual({ type: "session.create", cwd: "/p/a", model: "default", effort: "default", draft: T });
   requests.length = 0;
   await startSession(request as never, {}, "/p/a", opts, { text: "hi", images: [] });
   expect(requests[0]).not.toHaveProperty("draft");
@@ -186,7 +186,7 @@ it("startSession with a command: create, then mode and effort, then session.bash
     sent.push(msg);
     if (msg.type === "session.bash" && fail) throw new Error("session is busy");
     if (msg.mode) info.permissionMode = msg.mode as string;
-    if (msg.effort) info.effort = msg.effort as string;
+    if (msg.type === "session.setEffort") info.effort = msg.effort as string;
     return { session: { ...info } };
   });
   const created: { current?: never } = {};
