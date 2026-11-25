@@ -323,7 +323,16 @@ describe("OpenCode 2 sessions", { timeout: TEST_MS }, () => {
     await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
     await until(() => !!s.find("limit_stop"));
     expect(s.find("limit_stop")).toMatchObject({ stopped: true, resetsAt: expect.any(Number) });
-    expect(s.find("limit_stop")!.resetsAt!).toBeGreaterThanOrEqual(before + 60_000);
+    expect(s.find("limit_stop")!.resetsAt!).toBeGreaterThanOrEqual(before + 300_000);
+  });
+
+  it("an execution failure without status keeps the limit its step failure showed (GH-973)", async () => {
+    const d = await boot({ script: ["limit-step"] });
+    const s = await d.open();
+    await s.prompt("go");
+    await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
+    await until(() => !!s.find("limit_stop"));
+    expect(s.find("limit_stop")).toMatchObject({ stopped: true, resetsAt: expect.any(Number) });
   });
 
   it("a failure that is not a 429 is no limit stop (GH-973)", async () => {

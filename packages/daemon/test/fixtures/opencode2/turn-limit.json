@@ -39,7 +39,7 @@
     "type": "provider",
     "message": "Rate limit exceeded",
     "status": 429,
-    "retryAfterMs": 60000
+    "retryAfterMs": 300000
    }
   }
  },
@@ -51,7 +51,7 @@
     "type": "provider",
     "message": "Rate limit exceeded",
     "status": 429,
-    "retryAfterMs": 60000
+    "retryAfterMs": 300000
    }
   }
  }
