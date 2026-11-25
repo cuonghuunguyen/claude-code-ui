@@ -1572,4 +1572,39 @@ describe("OpenCode 2 sessions: a subagent's run timeline", { timeout: TEST_MS },
     expect(s.last("call_inner")).toMatchObject({ type: "subagent", parentId: "call_sub", status: "error" });
     expect(s.last("call_deep")).toMatchObject({ parentId: "call_inner", tool: "Read" });
   });
+
+  it("a background shell of a subagent: restored cards end like the session's own, Kill and output reach it, a live exit ends its card under the call", async () => {
+    const sh = (id: string, shellId: string) => ({ type: "tool", id, name: "shell", state: { status: "completed", input: { command: `cmd ${id}`, background: true }, content: [{ type: "text", text: `Command moved to the background (shell ID: ${shellId}).` }] }, time: { created: 5, completed: 6 } });
+    const messages = {
+      ses_own: [
+        { id: "msg_u", type: "user", text: "Run a subagent", time: { created: 1 } },
+        { id: "msg_a", type: "assistant", agent: "build", model: { id: "m", providerID: "fake" }, time: { created: 2 }, content: [{ type: "tool", id: "call_sub", name: "subagent", state: { status: "completed", input: { description: "Serve", prompt: "p" }, content: [{ type: "text", text: "ok" }], metadata: { sessionID: "ses_child", status: "running" } }, time: { created: 2, ran: 3, completed: 4 } }] },
+      ],
+      ses_child: [
+        { id: "msg_c1", type: "assistant", agent: "general", model: { id: "m", providerID: "fake" }, time: { created: 5 }, content: [sh("c_run", "sh_run"), sh("c_done", "sh_done"), sh("c_lost", "sh_lost"), sh("c_kill", "sh_kill")] },
+        { id: "msg_cs", type: "synthetic", time: { created: 8 }, text: '<shell id="sh_done" state="completed" command="cmd c_done">\nall good\n</shell>', metadata: { source: "shell", shellID: "sh_done", state: "completed", exit: 0 } },
+      ],
+    };
+    const d = await boot({ projectDirInData: true, data: { sessions: [row("ses_own", "PROJECT", "Owner", 5000), row("ses_child", "PROJECT", "Serve", 4000, { parentID: "ses_own" })], messages, shells: [{ id: "sh_run", command: "cmd c_run", sessionID: "ses_child", output: "still going\n" }, { id: "sh_kill", command: "cmd c_kill", sessionID: "ses_child" }] } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    for (let i = 0; i < 80 && !(await d.ok({ type: "session.list" })).sessions.some((x: any) => x.id === "ses_own"); i++) await sleep(50);
+    await d.ok({ type: "session.subscribe", sessionId: "ses_own", sinceSeq: 0 });
+    const s = d.view("ses_own");
+    const status = (id: string) => s.last(id)?.status;
+    await until(() => status("c_lost") === "stopped");
+    expect(s.last("c_lost")).toMatchObject({ parentId: "call_sub", shell: "background" });
+    expect(status("c_run")).toBe("running");
+    expect(status("c_done")).toBe("done");
+    expect(await d.ok({ type: "session.shellOutput", sessionId: "ses_own", toolUseId: "c_run" })).toEqual({ output: "still going\n", truncated: false });
+    expect(await d.ok({ type: "session.shellOutput", sessionId: "ses_own", toolUseId: "c_done" })).toEqual({ output: "all good", truncated: false });
+    // Kill of a child's shell removes it in OpenCode; the card ends under the call.
+    await d.ok({ type: "session.stopShell", sessionId: "ses_own", toolUseId: "c_kill" });
+    await until(() => status("c_kill") === "stopped");
+    expect(d.requests("DELETE", "/api/shell/sh_kill")).toHaveLength(1);
+    // Stop agent of an idle child (nothing to interrupt) kills the shells it left.
+    await d.ok({ type: "session.stopSubagent", sessionId: "ses_own", subagentId: "call_sub" });
+    await until(() => status("c_run") === "stopped");
+    expect(d.requests("DELETE", "/api/shell/sh_run")).toHaveLength(1);
+    expect(s.last("c_run")).toMatchObject({ parentId: "call_sub" });
+  });
 });
