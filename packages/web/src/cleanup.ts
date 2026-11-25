@@ -5,7 +5,8 @@ import { t } from "./i18n.ts";
 
 const DAY = 86_400_000;
 
-export type CleanupScope = { kind: "all" } | { kind: "project"; cwd: string } | { kind: "coordinator"; id: string; title: string };
+/** `repository`: every added project of one merged group (all its Sides and clones); `name` is the group's project name. */
+export type CleanupScope = { kind: "all" } | { kind: "project"; cwd: string } | { kind: "repository"; cwds: string[]; name: string } | { kind: "coordinator"; id: string; title: string };
 export type WorktreeCandidate = { key: string; project: string; path: string; branch?: string; external: boolean; outsideRoots: boolean; locked: boolean; sessions: number; lastActivity?: number };
 export type WorkerCandidate = { key: string; id: string; name: string; cwd: string; state: SessionState; lastActivity: number; /** The session that started it (a worker of a worker has a worker here). */ coordinatorId?: string; /** Path of its linked worktree candidate. */ worktree?: string };
 
@@ -40,8 +41,9 @@ export function cleanupCandidates(
   const workerSessions = list.filter((s) => s.coordinatorId && (scope.kind !== "coordinator" || s.coordinatorId === scope.id));
   // One entry per repository: two added projects of it list the same worktrees.
   const repos = new Map<string, Worktree[]>();
+  const only = scope.kind === "project" ? [scope.cwd] : scope.kind === "repository" ? scope.cwds : undefined;
   for (const [project, rows] of Object.entries(worktrees)) {
-    if (scope.kind === "project" && project !== scope.cwd) continue;
+    if (only && !only.includes(project)) continue;
     const main = repoOf(project, worktrees);
     if (!repos.has(main)) repos.set(main, rows);
   }
@@ -65,11 +67,7 @@ export function cleanupCandidates(
     }
   }
   const paths = new Set(wts.map((w) => w.path));
-  const inProject = (cwd: string) => {
-    if (scope.kind !== "project") return true;
-    const main = repoOf(scope.cwd, worktrees);
-    return cwd === main || cwd === scope.cwd || (worktrees[scope.cwd] ?? []).some((w) => w.path === cwd);
-  };
+  const inProject = (cwd: string) => !only || only.some((p) => cwd === repoOf(p, worktrees) || cwd === p || (worktrees[p] ?? []).some((w) => w.path === cwd));
   const workers = workerSessions
     .filter((s) => inProject(s.cwd))
     .map((s): WorkerCandidate => ({ key: `wk:${s.id}`, id: s.id, name: s.workerName ?? s.title, cwd: s.cwd, state: state(s), lastActivity: s.lastActivity, ...(s.coordinatorId && { coordinatorId: s.coordinatorId }), ...(paths.has(s.cwd) && { worktree: s.cwd }) }));

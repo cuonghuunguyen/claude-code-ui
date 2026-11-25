@@ -114,8 +114,8 @@ const repoKeyOf = (g: SessionGroup, origins: Record<string, string>) => [g.cwd, 
 /**
  * The groups of one repository (same `origin`) on several Sides or clones become one group, at the place of its first group; the others
  * stay. The merged group's primary project (name, avatar, header actions): on this machine the clone with the shortest path (then
- * lexical), else the same on the first Side. Rows: this machine first, then the other Sides in `sideOrder`; per Side the main checkout of
- * the shortest clone, the other clones' main checkouts by path, then the linked worktrees by branch. A project without linked worktrees
+ * lexical), else the same on the first Side. Rows: every main checkout first (this machine, then the other Sides in `sideOrder`; per Side the
+ * shortest clone, then the other clones by path), then the linked worktrees (same Side order, per Side by branch). A project without linked worktrees
  * gets a row for its main checkout; the sessions of a group's own folder go to its main row.
  */
 export function mergeRepositories(groups: SessionGroup[], ctx: MergeContext): SessionGroup[] {
@@ -135,7 +135,8 @@ export function mergeRepositories(groups: SessionGroup[], ctx: MergeContext): Se
     const bySide = new Map<string, SessionGroup[]>();
     for (const m of same) bySide.set(ctx.sideOf(m.cwd), [...(bySide.get(ctx.sideOf(m.cwd)) ?? []), m]);
     const sides = [...bySide.keys()].sort((a, b) => rank(a) - rank(b));
-    const rows: WorktreeRow[] = [];
+    const allMains: WorktreeRow[] = [];
+    const allLinked: WorktreeRow[] = [];
     let primary: SessionGroup | undefined;
     for (const side of sides) {
       const clones = [...bySide.get(side)!].sort((a, b) => a.cwd.length - b.cwd.length || a.cwd.localeCompare(b.cwd));
@@ -151,8 +152,10 @@ export function mergeRepositories(groups: SessionGroup[], ctx: MergeContext): Se
         mains.push({ ...(main ?? ctx.worktrees[m.cwd]?.find((w) => w.main) ?? { path: m.cwd, main: true }), ...tag, sessions: own });
         for (const r of m.worktrees) if (!r.main) linked.push({ ...r, ...tag });
       });
-      rows.push(...mains, ...linked.sort(byRow));
+      allMains.push(...mains);
+      allLinked.push(...linked.sort(byRow));
     }
+    const rows = [...allMains, ...allLinked];
     return [{ cwd: primary!.cwd, members: same.flatMap((m) => m.members), sessions: [], worktrees: rows, repo: key, sides }];
   });
 }

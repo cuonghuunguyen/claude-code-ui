@@ -32,6 +32,17 @@ describe("cleanup", () => {
     expect(co.worktrees.map((w) => w.path)).toEqual(["/r/.claude/worktrees/a"]);
   });
 
+  it("cleanupCandidates: the repository scope lists the worktrees and workers of every project of a merged group (every Side), not of other projects", () => {
+    const remote: Worktree = { path: "/srv/app/.claude/worktrees/b", branch: "b", main: false };
+    const worktrees = { "/r": [main, managed], "/srv/app": [{ path: "/srv/app", main: true }, remote], "/o": [{ path: "/o", main: true }, { path: "/o/w", main: false }] };
+    const list = [s("w1", "/r/.claude/worktrees/a", { coordinatorId: "c1" }), s("w2", "/srv/app/.claude/worktrees/b", { coordinatorId: "c1" }), s("w3", "/o/w", { coordinatorId: "c1" })];
+    const repo = cleanupCandidates({ kind: "repository", cwds: ["/r", "/srv/app"], name: "app" }, list, worktrees, state);
+    expect(repo.worktrees.map((w) => [w.project, w.path])).toEqual([["/r", managed.path], ["/srv/app", remote.path]]);
+    expect(repo.workers.map((w) => w.id)).toEqual(["w1", "w2"]);
+    // A project scope stays on its own Side.
+    expect(cleanupCandidates({ kind: "project", cwd: "/srv/app" }, list, worktrees, state).worktrees.map((w) => w.path)).toEqual([remote.path]);
+  });
+
   it("rowSafety: outside roots, locked, status blocked reasons, has_work text with singular/plural, worker running / needs input blocked", () => {
     expect(rowSafety(wt("/a", { outsideRoots: true }))).toEqual({ safety: "blocked", reason: "Outside the allowed roots" });
     expect(rowSafety(wt("/a", { locked: true }))).toEqual({ safety: "blocked", reason: "Locked (git worktree lock)" });

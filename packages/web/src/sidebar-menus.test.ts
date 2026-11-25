@@ -50,7 +50,7 @@ describe("groupSessions", () => {
 
 describe("groupEntries", () => {
   const base = { prefix: "g-", archivedView: false, onlyActive: false, setOnlyActive: () => {}, archiveCount: (d: number) => (d === 1 ? 0 : d), onArchive: () => {} };
-  const ids = (e: MenuEntry[]) => e.map((x) => (x.kind === "sep" ? "-" : x.kind === "label" ? "label" : x.id));
+  const ids = (e: MenuEntry[]) => e.map((x) => (x.kind === "sep" ? "-" : x.kind === "label" ? "label" : x.kind === "info" ? "info" : x.id));
   it("project: new, worktree, hide, archive, remove", () => {
     const e = groupEntries({ ...base, newSession: () => {}, newWorktree: () => {}, copyPath: () => {}, tail: { id: "g-remove", label: "Remove from list (files stay)", onSelect: () => {} } });
     expect(ids(e)).toEqual(["g-new-session", "g-create-worktree", "-", "g-copy-path", "-", "g-hide-inactive", "label", "g-archive-1", "g-archive-7", "g-archive-30", "-", "g-remove"]);

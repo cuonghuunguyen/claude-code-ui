@@ -30,7 +30,29 @@ export type Question = {
   header: string;
   options: { label: string; description: string; preview?: string }[];
   multiSelect: boolean;
+  /** A typed free answer (OpenCode 2 form field): the answer box is this input, checked before Next/Submit. */
+  input?: QuestionInput;
+  /** Shown only while every condition holds (OpenCode 2 `when`). */
+  when?: QuestionCondition[];
+  /** May be left empty (OpenCode 2 field with `required: false`). */
+  optional?: boolean;
+  /** Pre-filled answer (OpenCode 2 field `default`, as an option label or text). */
+  default?: string;
 };
+
+/** The kind of a typed free answer; `pattern` is an ECMAScript regex, unanchored (JSON Schema). */
+export type QuestionInput = {
+  type: "text" | "number" | "integer" | "date" | "date-time" | "email" | "uri";
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
+  minimum?: number;
+  maximum?: number;
+  placeholder?: string;
+};
+
+/** `question` = another question's text, `value` = an answer of it (an option label, Yes/No, or text). */
+export type QuestionCondition = { question: string; op: "eq" | "neq"; value: string };
 
 export type TokenUsage = {
   inputTokens: number;

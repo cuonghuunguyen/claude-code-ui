@@ -27,6 +27,9 @@ export type OpenCodePart = {
 export type OpenCodeMessage = { info: { id: string; role: "user" | "assistant"; /** An assistant message: the user message it answers. */ parentID?: string; agent?: string; providerID?: string; modelID?: string; time?: { created?: number; completed?: number }; /** OpenCode's error of the message (a turn it aborted: `MessageAbortedError`). */ error?: OpenCodeError & { name: string }; summary?: { diffs?: { file: string; additions: number; deletions: number }[] }; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } }; parts: OpenCodePart[] };
 export type OpenCodeTodo = { content: string; status: string };
 
+/** The error text of a tool OpenCode 1 refused: the user's rejection, or a permission rule that denies it. */
+export const REJECTED = /^The user (rejected permission to use this specific tool call|has specified a rule which prevents you from using this specific tool call)/;
+
 const STATUS: Record<string, ToolStatus> = { completed: "done", error: "error", pending: "pending", running: "running" };
 
 /** OpenCode tool -> Claude card name and input shape; other tools keep their name and input. */
@@ -61,6 +64,23 @@ export function mapTool(name: string, input: Record<string, unknown> = {}): { to
 /** A value with its object keys sorted, for comparing inputs. */
 /** `v` with its object keys sorted: inputs compared by value. */
 export const canon = (v: unknown): unknown => (Array.isArray(v) ? v.map(canon) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, x]) => [k, canon(x)])) : v);
+
+/** A value that says nothing in a call's input: absent, null, empty text, list or object. */
+const unset = (v: unknown) => v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length) || (typeof v === "object" && !Array.isArray(v) && !Object.keys(v as object).length);
+const trimmed = (i: Record<string, unknown> | undefined) => JSON.stringify(canon(Object.fromEntries(Object.entries(i ?? {}).filter(([, v]) => !unset(v)))));
+
+/**
+ * The running call (oldest first in `running`) an inline run belongs to, in order: the newest with an input equal to `input`; else the newest equal once keys with no
+ * value are dropped on both sides (the model's call may carry what the tool's schema dropped, or the other way round); else the only candidate (`lone`: no other run waits for a call, or the call could be another run's).
+ */
+export function pickCall(running: readonly { id: string; input: Record<string, unknown> }[], input: Record<string, unknown> | undefined, lone = true): string | undefined {
+  const newest = [...running].reverse();
+  const want = JSON.stringify(canon(input ?? {}));
+  const exact = newest.find((c) => JSON.stringify(canon(c.input)) === want);
+  if (exact) return exact.id;
+  const lean = trimmed(input);
+  return newest.find((c) => trimmed(c.input) === lean)?.id ?? (lone && running.length === 1 ? running[0]!.id : undefined);
+}
 
 const sumTokens = (parts: Iterable<OpenCodePart>) => {
   const t = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
@@ -106,9 +126,8 @@ export class OpenCodeMapper {
     return !!c && c.type === "tool_call" && (c.status === "running" || c.status === "pending");
   };
   /** The newest running call of `tool` whose input equals `input` and is not in `skip` (the call an inline run belongs to). */
-  runningCall(tool: string, input: Record<string, unknown> | undefined, skip: ReadonlySet<string>): string | undefined {
-    const want = JSON.stringify(canon(input ?? {}));
-    return [...this.calls.values()].reverse().find((c) => c.type === "tool_call" && c.tool === tool && (c.status === "running" || c.status === "pending") && !skip.has(c.id) && JSON.stringify(canon(c.input)) === want)?.id;
+  runningCall(tool: string, input: Record<string, unknown> | undefined, skip: ReadonlySet<string>, lone = true): string | undefined {
+    return pickCall([...this.calls.values()].flatMap((c) => (c.type === "tool_call" && c.tool === tool && (c.status === "running" || c.status === "pending") && !skip.has(c.id) ? [{ id: c.id, input: c.input as Record<string, unknown> }] : [])), input, lone);
   }
   /** The newest running Fork run call (`fork` tool) whose input equals `input` and is not in `skip`. */
   runningFork(input: Record<string, unknown> | undefined, skip: ReadonlySet<string>): string | undefined {
@@ -184,7 +203,7 @@ export class OpenCodeMapper {
 
   private tool(p: OpenCodePart, callId: string, s: ToolState): Part[] {
     let status = STATUS[s.status] ?? "pending";
-    if (this.denied.has(callId) && status !== "done") status = "denied";
+    if ((this.denied.has(callId) && status !== "done") || (s.status === "error" && REJECTED.test(s.error ?? ""))) status = "denied";
     const times = { ...(s.time?.start && { startedAt: s.time.start }), ...(s.time?.end && { endedAt: s.time.end }) };
     if (p.tool === "task") {
       const child = s.metadata?.sessionId;
@@ -228,7 +247,7 @@ export class OpenCodeMapper {
  * History of a session: its messages in order, a task call's child session (`children`: child id -> its messages) right after the call.
  * Nothing streams (an unfinished part shows as it was stored).
  */
-export function openCodeParts(messages: readonly OpenCodeMessage[], children: Readonly<Record<string, readonly OpenCodeMessage[]>> = {}, m = new OpenCodeMapper(), forks: readonly { forkId: string; callId: string; prefix: number; messages: readonly OpenCodeMessage[] }[] = []): Part[] {
+export function openCodeParts(messages: readonly OpenCodeMessage[], children: Readonly<Record<string, readonly OpenCodeMessage[]>> = {}, m = new OpenCodeMapper(), forks: readonly { forkId: string; callId: string; prefix: number; messages: readonly OpenCodeMessage[] }[] = [], inlines: readonly { inlineId: string; callId: string; messages: readonly OpenCodeMessage[] }[] = []): Part[] {
   const walk = (list: readonly OpenCodeMessage[], sessionID?: string): Part[] =>
     list.flatMap((msg) => [
       ...m.message(msg.info, false),
@@ -238,6 +257,12 @@ export function openCodeParts(messages: readonly OpenCodeMessage[], children: Re
         if (typeof child === "string" && children[child]) return [...out, ...walk(children[child]!, child)];
         // A Fork run: its fork session holds a copy of the parent's history first (`prefix` messages), which is no step of the run.
         const fork = p.callID ? forks.find((f) => f.callId === p.callID) : undefined;
+        // An inline task: its session's assistant messages are the steps (its prompt is the call's input).
+        const inline = p.callID ? inlines.find((f) => f.callId === p.callID) : undefined;
+        if (inline) {
+          m.adopt(inline.inlineId, inline.callId);
+          return [...out, ...walk(inline.messages.filter((x) => x.info.role === "assistant"), inline.inlineId)];
+        }
         if (!fork) return out;
         m.adopt(fork.forkId, fork.callId);
         // The fork's prompt (a user message) is the card's task, not a step: live it is not echoed either (`own`).

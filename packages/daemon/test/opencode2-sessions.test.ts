@@ -744,6 +744,44 @@ describe("OpenCode 2 sessions: rename, archive, delete and Aside", { timeout: TE
     await until(() => !link(d, "ses_fork"));
   });
 
+  it("an inline task's kept session is hidden from the list, restores under its call with its assistant steps only (its prompt is no step), and is deleted with its parent", async () => {
+    const call = { type: "tool", id: "call_inline", name: "claude-ui-ownxxxxxxx_inline_task", state: { status: "completed", input: { prompt: "find foo" }, content: [{ type: "text", text: "{}" }] }, time: { ran: 2, completed: 3 } };
+    const parent = [msg("msg_u1", "user"), msg("msg_a1", "assistant", { ...done, content: [call] })];
+    const own = [msg("msg_i_u", "user", { text: "find foo" }), msg("msg_i_a", "assistant", { ...done, content: [{ type: "text", text: "foo is in a.txt" }] })];
+    const d = await boot({ sessionsJson: { ses_inl: { inlineOf: { sessionId: "ses_own", callId: "call_inline" } } }, projectDirInData: true, adapters: { ses_own: 2, ses_inl: 2 }, data: { sessions: [row("ses_own", "PROJECT", "Owner", 5000), row("ses_inl", "PROJECT", "Inline: find foo", 6000, { metadata: { "claude-ui.inlineOf": "ses_own" } })], messages: { ses_own: parent, ses_inl: own } } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    await until(() => d.log().some((l) => l.type === "start"));
+    for (let i = 0; i < 80 && !(await d.ok({ type: "session.list" })).sessions.some((x: any) => x.id === "ses_own"); i++) await sleep(50);
+    expect((await d.ok({ type: "session.list" })).sessions.map((x: any) => x.id)).toEqual(["ses_own"]);
+    await d.ok({ type: "session.subscribe", sessionId: "ses_own", sinceSeq: 0 });
+    const s = d.view("ses_own");
+    await until(() => !!s.parts().find((p) => p.parentId === "call_inline"));
+    const steps = s.parts().filter((p) => p.parentId === "call_inline");
+    expect([...new Set(steps.map((p) => `${p.type}:${p.id}`))]).toEqual(["assistant_text:msg_i_a:text:0"]);
+    expect(s.parts().some((p) => p.type === "user_text" && p.text === "find foo")).toBe(false);
+    await until(() => (s.states().at(-1) === "idle"));
+    await d.ok({ type: "session.delete", sessionId: "ses_own" });
+    await until(() => d.requests("DELETE", "/api/session/ses_inl").length === 1);
+    await until(() => !link(d, "ses_inl"));
+  });
+
+  it("an inline task's step the user denied restores as Denied (its stored state is an aborted error; the link keeps the denied call ids)", async () => {
+    const call = { type: "tool", id: "call_inline", name: "claude-ui-ownxxxxxxx_inline_task", state: { status: "completed", input: { prompt: "run it" }, content: [{ type: "text", text: "{}" }] }, time: { ran: 2, completed: 3 } };
+    const parent = [msg("msg_u1", "user"), msg("msg_a1", "assistant", { ...done, content: [call] })];
+    const step = { type: "tool", id: "c1", name: "shell", state: { status: "error", input: { command: "echo blocked" }, error: { type: "aborted" } }, time: { ran: 2, completed: 3 } };
+    const own = [msg("msg_i_u", "user", { text: "run it" }), msg("msg_i_a", "assistant", { ...done, content: [step] })];
+    const d = await boot({ sessionsJson: { ses_inl: { inlineOf: { sessionId: "ses_own", callId: "call_inline", denied: ["c1"] } } }, projectDirInData: true, adapters: { ses_own: 2, ses_inl: 2 }, data: { sessions: [row("ses_own", "PROJECT", "Owner", 5000), row("ses_inl", "PROJECT", "Inline: run it", 6000, { metadata: { "claude-ui.inlineOf": "ses_own" } })], messages: { ses_own: parent, ses_inl: own } } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    await until(() => d.log().some((l) => l.type === "start"));
+    for (let i = 0; i < 80 && !(await d.ok({ type: "session.list" })).sessions.some((x: any) => x.id === "ses_own"); i++) await sleep(50);
+    await d.ok({ type: "session.subscribe", sessionId: "ses_own", sinceSeq: 0 });
+    const s = d.view("ses_own");
+    await until(() => !!s.parts().find((p) => p.id === "c1"));
+    expect(s.last("c1")).toMatchObject({ type: "tool_call", status: "denied", parentId: "call_inline" });
+  });
+
   it("a mode change of an Aside drops the edit denial at its next prompt", async () => {
     const d = await owned([msg("msg_u1", "user"), msg("msg_a1", "assistant", done)]);
     const { session } = await d.ok({ type: "aside.open", sessionId: "ses_own", text: "q" });
@@ -1201,24 +1239,40 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
   });
 
   // A form of OpenCode with these fields, asked by the turn (`kind` other than question: no call of the question tool).
-  const formTurn = (fields: object[], kind?: string) => {
+  const formTurn = (fields: object[], kind?: string, sessionID?: string) => {
     const file = join(mkdtempSync(join(tmpdir(), "oc2-form-")), "turn.json");
     const step = (event: string, data: object) => ({ event, data: { sessionID: "$SESSION", ...data } });
-    writeFileSync(file, JSON.stringify([step("session.execution.started", {}), step("session.step.started", { agent: "build", model: { id: "m", providerID: "fake" }, assistantMessageID: "$A1" }), { form: { fields, ...(kind && { kind }) } }, { wait: "form" }, step("session.step.ended", { assistantMessageID: "$A1", finish: "stop", tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0, files: [] }), step("session.execution.succeeded", {})]));
+    writeFileSync(file, JSON.stringify([step("session.execution.started", {}), step("session.step.started", { agent: "build", model: { id: "m", providerID: "fake" }, assistantMessageID: "$A1" }), { form: { fields, ...(kind && { kind }), ...(sessionID && { sessionID }) } }, { wait: "form" }, step("session.step.ended", { assistantMessageID: "$A1", finish: "stop", tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0, files: [] }), step("session.execution.succeeded", {})]));
     return file;
+  };
+  // The same turn, running 1.5 s before its form (both sessions run when the form comes).
+  const slow = (file: string) => {
+    const steps = JSON.parse(readFileSync(file, "utf8")) as object[];
+    const out = join(mkdtempSync(join(tmpdir(), "oc2-form-")), "slow.json");
+    writeFileSync(out, JSON.stringify([...steps.slice(0, 2), { sleep: 1500 }, ...steps.slice(2)]));
+    return out;
   };
   const opts = [{ value: "v1", label: "One", description: "first" }, { value: "v2", label: "Two" }];
   it.each([
     ["a string with options answers with the option's value", [{ key: "a", type: "string", title: "A", description: "Pick", options: opts, custom: true }], undefined, [{ question: "Pick", header: "A", options: [{ label: "One", description: "first" }, { label: "Two", description: "" }], multiSelect: false }], { Pick: "Two" }, { a: "v2" }],
-    ["a string with no options is a question with the free text", [{ key: "a", type: "string", title: "Name", description: "Your name?" }], undefined, [{ question: "Your name?", header: "Name", options: [], multiSelect: false }], { "Your name?": "Ada" }, { a: "Ada" }],
+    ["a string with no options is a question with the free text", [{ key: "a", type: "string", title: "Name", description: "Your name?" }], undefined, [{ question: "Your name?", header: "Name", options: [], multiSelect: false, input: { type: "text" } }], { "Your name?": "Ada" }, { a: "Ada" }],
     ["a boolean offers Yes and No and answers true or false", [{ key: "b", type: "boolean", title: "Sure" }], undefined, [{ question: "Sure", header: "Sure", options: [{ label: "Yes", description: "" }, { label: "No", description: "" }], multiSelect: false }], { Sure: "No" }, { b: false }],
-    ["a number and an integer answer as numbers", [{ key: "n", type: "number", title: "Ratio" }, { key: "i", type: "integer", title: "Count", minimum: 1, maximum: 5 }], undefined, [{ question: "Ratio", header: "Ratio", options: [], multiSelect: false }, { question: "Count", header: "Count", options: [], multiSelect: false }], { Ratio: "0.5", Count: "3" }, { n: 0.5, i: 3 }],
-    ["a hidden field is not shown and answers with its default", [{ key: "h", type: "string", title: "H", hidden: true, default: "dflt" }, { key: "a", type: "string", title: "A" }], undefined, [{ question: "A", header: "A", options: [], multiSelect: false }], { A: "x" }, { h: "dflt", a: "x" }],
-    ["a field with a condition says so and is left out of the answer when the condition fails", [{ key: "b", type: "boolean", title: "Deploy" }, { key: "w", type: "string", title: "Where", when: [{ key: "b", op: "eq", value: true }] }], undefined, [{ question: "Deploy", header: "Deploy", options: [{ label: "Yes", description: "" }, { label: "No", description: "" }], multiSelect: false }, { question: "Where", header: "Where (if Deploy is true)", options: [], multiSelect: false }], { Deploy: "No", Where: "prod" }, { b: false }],
-    ["two fields with the same question text get a number", [{ key: "a", type: "string", title: "A", description: "Same?" }, { key: "b", type: "string", title: "B", description: "Same?" }], undefined, [{ question: "Same?", header: "A", options: [], multiSelect: false }, { question: "Same? (2)", header: "B", options: [], multiSelect: false }], { "Same?": "one", "Same? (2)": "two" }, { a: "one", b: "two" }],
+    ["a number and an integer answer as numbers", [{ key: "n", type: "number", title: "Ratio" }, { key: "i", type: "integer", title: "Count", minimum: 1, maximum: 5 }], undefined, [{ question: "Ratio", header: "Ratio", options: [], multiSelect: false, input: { type: "number" } }, { question: "Count", header: "Count", options: [], multiSelect: false, input: { type: "integer", minimum: 1, maximum: 5 } }], { Ratio: "0.5", Count: "3" }, { n: 0.5, i: 3 }],
+    ["a hidden field is not shown and answers with its default", [{ key: "h", type: "string", title: "H", hidden: true, default: "dflt" }, { key: "a", type: "string", title: "A" }], undefined, [{ question: "A", header: "A", options: [], multiSelect: false, input: { type: "text" } }], { A: "x" }, { h: "dflt", a: "x" }],
+    ["a field with a condition carries it and is left out of the answer when the condition fails", [{ key: "b", type: "boolean", title: "Deploy" }, { key: "w", type: "string", title: "Where", when: [{ key: "b", op: "eq", value: true }] }], undefined, [{ question: "Deploy", header: "Deploy", options: [{ label: "Yes", description: "" }, { label: "No", description: "" }], multiSelect: false }, { question: "Where", header: "Where", options: [], multiSelect: false, input: { type: "text" }, when: [{ question: "Deploy", op: "eq", value: "Yes" }] }], { Deploy: "No", Where: "prod" }, { b: false }],
+    ["a field whose condition fails on a hidden field's default is not asked", [{ key: "h", type: "boolean", title: "H", hidden: true, default: false }, { key: "w", type: "string", title: "W", when: [{ key: "h", op: "eq", value: true }] }, { key: "a", type: "string", title: "A" }], undefined, [{ question: "A", header: "A", options: [], multiSelect: false, input: { type: "text" } }], { A: "x" }, { h: false, a: "x" }],
+    ["a field that depends on a later one comes after it", [{ key: "w", type: "string", title: "Why", when: [{ key: "k", op: "eq", value: "x" }] }, { key: "k", type: "string", title: "Kind", options: [{ value: "x", label: "X" }, { value: "y", label: "Y" }] }], undefined, [{ question: "Kind", header: "Kind", options: [{ label: "X", description: "" }, { label: "Y", description: "" }], multiSelect: false }, { question: "Why", header: "Why", options: [], multiSelect: false, input: { type: "text" }, when: [{ question: "Kind", op: "eq", value: "X" }] }], { Kind: "X", Why: "b" }, { k: "x", w: "b" }],
+    ["a condition on a multi-select holds when the list includes the value (OpenCode 2's rule)", [{ key: "m", type: "multiselect", title: "M", options: opts }, { key: "w", type: "string", title: "W", when: [{ key: "m", op: "eq", value: "v1" }] }], undefined, [{ question: "M", header: "M", options: [{ label: "One", description: "first" }, { label: "Two", description: "" }], multiSelect: true }, { question: "W", header: "W", options: [], multiSelect: false, input: { type: "text" }, when: [{ question: "M", op: "eq", value: "One" }] }], { M: "One, Two", W: "k" }, { m: ["v1", "v2"], w: "k" }],
+    ["a free text next to options carries the format; an infinite number default is no default", [{ key: "d", type: "string", title: "D", description: "When?", format: "date", custom: true, options: [{ value: "t", label: "Today" }] }, { key: "n", type: "number", title: "N", default: "Infinity" }], undefined, [{ question: "When?", header: "D", options: [{ label: "Today", description: "" }], multiSelect: false, input: { type: "date" } }, { question: "N", header: "N", options: [], multiSelect: false, input: { type: "number" } }], { "When?": "Today", N: "1" }, { d: "t", n: 1 }],
+    ["a date field is a typed question and answers with the text", [{ key: "d", type: "string", title: "Due", format: "date", placeholder: "pick" }], undefined, [{ question: "Due", header: "Due", options: [], multiSelect: false, input: { type: "date", placeholder: "pick" } }], { Due: "2026-12-01" }, { d: "2026-12-01" }],
+    ["length and pattern go to the question", [{ key: "c", type: "string", title: "Code", pattern: "^[A-Z]+$", minLength: 2, maxLength: 5 }], undefined, [{ question: "Code", header: "Code", options: [], multiSelect: false, input: { type: "text", minLength: 2, maxLength: 5, pattern: "^[A-Z]+$" } }], { Code: "ABC" }, { c: "ABC" }],
+    ["an MCP elicitation field without required: true may stay empty: no key in the answer", [{ key: "o", type: "string", title: "Note" }, { key: "a", type: "string", title: "A", required: true }], "mcp-elicitation", [{ question: "Note", header: "Questions", options: [], multiSelect: false, input: { type: "text" }, optional: true }, { question: "A", header: "A", options: [], multiSelect: false, input: { type: "text" } }], { Note: "", A: "x" }, { a: "x" }],
+    ["a field of the question tool stays required even without required: true", [{ key: "q", type: "string", title: "Q", description: "Which?" }], undefined, [{ question: "Which?", header: "Q", options: [], multiSelect: false, input: { type: "text" } }], { "Which?": "x" }, { q: "x" }],
+    ["a default is the pre-filled answer, an option by its label", [{ key: "o", type: "string", title: "O", description: "Pick", options: opts, default: "v2" }, { key: "n", type: "number", title: "N", default: 3 }], undefined, [{ question: "Pick", header: "O", options: [{ label: "One", description: "first" }, { label: "Two", description: "" }], multiSelect: false, default: "Two" }, { question: "N", header: "N", options: [], multiSelect: false, input: { type: "number" }, default: "3" }], { Pick: "Two", N: "3" }, { o: "v2", n: 3 }],
+    ["two fields with the same question text get a number", [{ key: "a", type: "string", title: "A", description: "Same?" }, { key: "b", type: "string", title: "B", description: "Same?" }], undefined, [{ question: "Same?", header: "A", options: [], multiSelect: false, input: { type: "text" } }, { question: "Same? (2)", header: "B", options: [], multiSelect: false, input: { type: "text" } }], { "Same?": "one", "Same? (2)": "two" }, { a: "one", b: "two" }],
     ["a multi-select answers with the values of the chosen options", [{ key: "m", type: "multiselect", title: "M", description: "Which?", options: opts }], undefined, [{ question: "Which?", header: "M", options: [{ label: "One", description: "first" }, { label: "Two", description: "" }], multiSelect: true }], { "Which?": "One, Two" }, { m: ["v1", "v2"] }],
     ["an external field shows its address and is acknowledged with Done", [{ key: "e", type: "external", title: "Sign in", url: "https://example.com/x" }], undefined, [{ question: "Sign in", header: "Sign in", options: [{ label: "Done", description: "https://example.com/x" }], multiSelect: false }], { "Sign in": "Done" }, { e: true }],
-    ["a form of another kind shows as a question with the form's title", [{ key: "a", type: "string", title: "A", description: "Value?" }], "input", [{ question: "Value?", header: "Questions", options: [], multiSelect: false }], { "Value?": "z" }, { a: "z" }],
+    ["a form of another kind shows as a question with the form's title", [{ key: "a", type: "string", title: "A", description: "Value?" }], "input", [{ question: "Value?", header: "Questions", options: [], multiSelect: false, input: { type: "text" } }], { "Value?": "z" }, { a: "z" }],
   ])("OpenCode 2 form: %s", async (_name, fields, kind, questions, answers, body) => {
     const d = await boot({ env: { FAKE_OPENCODE2_SCRIPT: formTurn(fields, kind) } });
     const s = await d.open();
@@ -1232,21 +1286,60 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     expect(d.requests("POST", new RegExp(`/form/${q.requestId}/reply$`))[0]!.body).toEqual({ answer: body });
   });
 
-  it("a number that is not a whole number or out of range is not sent: a warning names the field and the question comes back", async () => {
-    const d = await boot({ env: { FAKE_OPENCODE2_SCRIPT: formTurn([{ key: "i", type: "integer", title: "Count", minimum: 1, maximum: 5 }]) } });
+  it("a global form of an MCP elicitation (session \"global\", 2.3.0) is shown by the run that waits and answered with its folder in a header", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_SCRIPT: formTurn([{ key: "due", type: "string", title: "Due", format: "date", required: true }, { key: "note", type: "string", title: "Note" }], "mcp-elicitation", "global") } });
     const s = await d.open();
     await s.prompt("ask");
     await until(() => !!s.find("question"));
     const q = s.find("question")!;
-    for (const [bad, text] of [["2.5", /Count needs a whole number/], ["9", /Count must be between 1 and 5/]] as const) {
-      await d.ok({ type: "question.respond", requestId: q.requestId, answers: { Count: bad } });
+    expect(q.questions.map((x) => [x.question, x.optional ?? false, x.input?.type])).toEqual([["Due", false, "date"], ["Note", true, "text"]]);
+    await d.ok({ type: "question.respond", requestId: q.requestId, answers: { Due: "2026-12-01", Note: "" } });
+    await until(() => s.parts().some((p) => p.type === "turn_result"));
+    expect(d.requests("POST", /\/session\/global\/form\/[^/]+\/reply$/)[0]!.body).toEqual({ answer: { due: "2026-12-01" } });
+  });
+
+  it("a global form stays open after a reconnect and is answered afterwards", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_SCRIPT: formTurn([{ key: "due", type: "string", title: "Due", required: true }], "mcp-elicitation", "global") } });
+    const s = await d.open();
+    await s.prompt("ask");
+    await until(() => !!s.find("question"));
+    const q = s.find("question")!;
+    await d.fake("/__drop");
+    await until(() => d.requests("GET", "/api/form").length > 0);
+    await sleep(300);
+    expect(s.find("question")!.settled).toBe(false);
+    await d.ok({ type: "question.respond", requestId: q.requestId, answers: { Due: "x" } });
+    await until(() => s.parts().some((p) => p.type === "turn_result"));
+    expect(d.requests("POST", /\/session\/global\/form\/[^/]+\/reply$/)[0]!.body).toEqual({ answer: { due: "x" } });
+  });
+
+  it("a global form that two running sessions of the folder could own is shown in neither: both get a notice", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_SCRIPT: [1, 2].map(() => slow(formTurn([{ key: "due", type: "string", title: "Due" }], "mcp-elicitation", "global"))).join(",") } });
+    const a = await d.open();
+    const b = await d.open();
+    await a.prompt("ask");
+    await b.prompt("ask");
+    await until(() => !!a.find("notice", (n) => /MCP server asks for input/.test(n.text)) && !!b.find("notice", (n) => /MCP server asks for input/.test(n.text)));
+    await sleep(300);
+    expect(a.find("question")).toBeUndefined();
+    expect(b.find("question")).toBeUndefined();
+  });
+
+  it("a number or string that breaks its rule is not sent: a warning names the field and the question comes back", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_SCRIPT: formTurn([{ key: "i", type: "integer", title: "Count", minimum: 1, maximum: 5 }, { key: "m", type: "string", title: "Mail", format: "email" }]) } });
+    const s = await d.open();
+    await s.prompt("ask");
+    await until(() => !!s.find("question"));
+    const q = s.find("question")!;
+    for (const [bad, mail, text] of [["2.5", "a@b.co", /Count needs a whole number/], ["9", "a@b.co", /Count must be between 1 and 5/], ["4", "nope", /Mail must be an email address/]] as const) {
+      await d.ok({ type: "question.respond", requestId: q.requestId, answers: { Count: bad, Mail: mail } });
       await until(() => !!s.find("notice", (n) => text.test(n.text)));
       await until(() => s.find("question")!.settled === false);
     }
     expect(d.requests("POST", /\/form\/[^/]+\/reply$/)).toHaveLength(0);
-    await d.ok({ type: "question.respond", requestId: q.requestId, answers: { Count: "4" } });
+    await d.ok({ type: "question.respond", requestId: q.requestId, answers: { Count: "4", Mail: "a@b.co" } });
     await until(() => s.parts().some((p) => p.type === "turn_result"));
-    expect(d.requests("POST", /\/form\/[^/]+\/reply$/).map((r) => r.body)).toEqual([{ answer: { i: 4 } }]);
+    expect(d.requests("POST", /\/form\/[^/]+\/reply$/).map((r) => r.body)).toEqual([{ answer: { i: 4, m: "a@b.co" } }]);
   });
 });
 
@@ -1550,5 +1643,136 @@ describe("OpenCode 2 sessions: the daemon's MCP servers (orchestration, claude-u
     await s.prompt("third");
     await until(() => d.requests("POST", `/api/session/${s.id}/prompt`).length === 3);
     expect(s.find("notice", (n) => n.id.startsWith(`${s.id}:mcp_failed:`))).toMatchObject({ level: "warning", text: expect.stringMatching(/^Could not attach the orchestration tools to OpenCode: /) });
+  });
+});
+
+describe("OpenCode 2 sessions: a subagent's run timeline", { timeout: TEST_MS }, () => {
+  /** The session row of the subagent's child session (its parent is not ours to name: the link comes from the call). */
+  const withChild = { projectDirInData: true, data: { sessions: [row("ses_child", "PROJECT", "Look around", 9000, { parentID: "ses_parent" })] } };
+  const statuses = (s: ReturnType<Awaited<ReturnType<typeof boot>>["view"]>, id: string) => s.parts().filter((p) => p.id === id).map((p) => (p as { status?: string }).status);
+
+  it("the parts of the child session show under the call; the card runs on after the call returned and only the end notice ends it", async () => {
+    const d = await boot({ script: ["subagent"], ...withChild });
+    const s = await d.open();
+    await s.prompt("Run a subagent");
+    await until(() => s.find("subagent", (p) => p.id === "call_sub")?.status === "done");
+    expect(s.find("tool_call", (p) => p.id === "call_child")).toMatchObject({ parentId: "call_sub", tool: "Bash", status: "done", input: { command: "echo sub" } });
+    expect(s.last("call_child:result")).toMatchObject({ parentId: "call_sub", output: "sub\n", isError: false });
+    expect(s.last("msg_c2:text:0")).toMatchObject({ parentId: "call_sub", text: "done" });
+    // The call returned with status running and the child went idle with work left (state running): neither ended the card.
+    expect(statuses(s, "call_sub").slice(0, -1)).not.toContain("done");
+    expect(statuses(s, "call_sub")).toContain("running");
+    // The prompt that started the child and the notices are no bubbles.
+    expect(s.parts().filter((p) => p.type === "user_text").map((p) => p.type === "user_text" && p.text)).toEqual(["Run a subagent"]);
+  });
+
+  it("an early event of the child, before its call names it, shows in order once the link comes", async () => {
+    const d = await boot({ script: ["subagent-early"], ...withChild });
+    const s = await d.open();
+    await s.prompt("Run a subagent");
+    await until(() => !!s.last("msg_c1:text:0"));
+    expect(s.last("msg_c1:text:0")).toMatchObject({ parentId: "call_sub", text: "early words" });
+  });
+
+  it("a permission ask of the child is a step of the card: Deny marks it denied under the call and answers under the child's id", async () => {
+    const d = await boot({ script: ["subagent-permission"], ...withChild });
+    const s = await d.open();
+    await s.prompt("Run a subagent");
+    await until(() => !!s.find("permission_request"));
+    const req = s.find("permission_request")!;
+    expect(req).toMatchObject({ tool: "Bash", toolUseId: "call_child", input: { command: "echo sub" } });
+    await d.ok({ type: "permission.respond", requestId: req.requestId, decision: "deny", message: "no" });
+    await until(() => s.find("tool_call", (p) => p.id === "call_child")?.status === "denied");
+    expect(s.find("tool_call", (p) => p.id === "call_child")).toMatchObject({ parentId: "call_sub" });
+    expect(d.requests("POST", `/api/session/ses_child/permission/${req.requestId}/reply`)[0]!.body).toMatchObject({ decision: "reject" });
+  });
+
+  it("Stop agent interrupts the child session; an idle child has nothing to interrupt, the card stops at once", async () => {
+    const d = await boot({ script: ["subagent"], ...withChild });
+    const s = await d.open();
+    await s.prompt("Run a subagent");
+    await until(() => s.find("subagent", (p) => p.id === "call_sub")?.status === "done");
+    // A second notice would end it again: Stop on a finished card still reaches the child (OpenCode answers it is not running).
+    await d.ok({ type: "session.stopSubagent", sessionId: s.id, subagentId: "call_sub" });
+    expect(d.requests("POST", "/api/session/ses_child/interrupt")).toHaveLength(1);
+    expect((await d.request({ type: "session.stopSubagent", sessionId: s.id, subagentId: "call_unknown" })).type).toBe("error");
+  });
+
+  it("Stop agent on a subagent whose session is gone answers unknown_subagent, not a failure", async () => {
+    // No session row for the child: OpenCode answers the interrupt 404.
+    const d = await boot({ script: ["subagent"] });
+    const s = await d.open();
+    await s.prompt("Run a subagent");
+    await until(() => s.find("subagent", (p) => p.id === "call_sub")?.status === "done");
+    const r = await d.request({ type: "session.stopSubagent", sessionId: s.id, subagentId: "call_sub" });
+    expect(r).toMatchObject({ type: "error", code: "unknown_subagent" });
+    expect(d.requests("POST", "/api/session/ses_child/interrupt")).toHaveLength(1);
+  });
+
+  it("restore: the stored subagent call, its child's messages (nested subagents too) and its end notice give the parts and ids of the live run", async () => {
+    const tool = (id: string, name: string, input: object, extra: object = {}) => ({ type: "tool", id, name, state: { status: "completed", input, content: [{ type: "text", text: "ok" }], ...extra }, time: { created: 2, ran: 3, completed: 4 } });
+    const sub = (id: string, child: string, description: string) => tool(id, "subagent", { description, prompt: "p" }, { metadata: { sessionID: child, status: "running" } });
+    const messages = {
+      ses_own: [
+        { id: "msg_u", type: "user", text: "Run a subagent", time: { created: 1 } },
+        { id: "msg_a", type: "assistant", agent: "build", model: { id: "m", providerID: "fake" }, time: { created: 2 }, content: [sub("call_sub", "ses_child", "Look around")] },
+        { id: "msg_n", type: "synthetic", time: { created: 9 }, text: '<subagent sessionID="ses_child" state="completed" description="Look around">\ndone\n</subagent>', metadata: { source: "subagent", childID: "ses_child", state: "completed" } },
+      ],
+      ses_child: [
+        { id: "msg_cu", type: "user", text: "You are a subagent spawned by another session.\nRun echo sub", time: { created: 4 } },
+        { id: "msg_c1", type: "assistant", agent: "general", model: { id: "m", providerID: "fake" }, time: { created: 5 }, content: [tool("call_child", "shell", { command: "echo sub" }), sub("call_inner", "ses_inner", "Dig")] },
+        { id: "msg_cn", type: "synthetic", time: { created: 8 }, text: "n", metadata: { source: "subagent", childID: "ses_inner", state: "error" } },
+      ],
+      ses_inner: [{ id: "msg_i1", type: "assistant", agent: "general", model: { id: "m", providerID: "fake" }, time: { created: 6 }, content: [tool("call_deep", "read", { path: "a.txt" })] }],
+    };
+    const d = await boot({ projectDirInData: true, data: { sessions: [row("ses_own", "PROJECT", "Owner", 5000), row("ses_child", "PROJECT", "Look around", 4000, { parentID: "ses_own" }), row("ses_inner", "PROJECT", "Dig", 3000, { parentID: "ses_child" })], messages } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    for (let i = 0; i < 80 && !(await d.ok({ type: "session.list" })).sessions.some((x: any) => x.id === "ses_own"); i++) await sleep(50);
+    await d.ok({ type: "session.subscribe", sessionId: "ses_own", sinceSeq: 0 });
+    const s = d.view("ses_own");
+    await until(() => !!s.last("call_deep"));
+    expect(s.last("call_sub")).toMatchObject({ type: "subagent", status: "done", description: "Look around" });
+    expect(s.last("call_sub").parentId).toBeUndefined();
+    expect(s.last("call_child")).toMatchObject({ parentId: "call_sub", tool: "Bash", status: "done" });
+    // A nested subagent: its card shows under the outer call, its steps under its own call; its notice says error.
+    expect(s.last("call_inner")).toMatchObject({ type: "subagent", parentId: "call_sub", status: "error" });
+    expect(s.last("call_deep")).toMatchObject({ parentId: "call_inner", tool: "Read" });
+    // The prompt that started the child is no bubble after a restart either (not shown live).
+    expect([...new Set(s.parts().filter((p) => p.type === "user_text").map((p) => p.type === "user_text" && p.text))]).toEqual(["Run a subagent"]);
+  });
+
+  it("a background shell of a subagent: restored cards end like the session's own, Kill and output reach it, a live exit ends its card under the call", async () => {
+    const sh = (id: string, shellId: string) => ({ type: "tool", id, name: "shell", state: { status: "completed", input: { command: `cmd ${id}`, background: true }, content: [{ type: "text", text: `Command moved to the background (shell ID: ${shellId}).` }] }, time: { created: 5, completed: 6 } });
+    const messages = {
+      ses_own: [
+        { id: "msg_u", type: "user", text: "Run a subagent", time: { created: 1 } },
+        { id: "msg_a", type: "assistant", agent: "build", model: { id: "m", providerID: "fake" }, time: { created: 2 }, content: [{ type: "tool", id: "call_sub", name: "subagent", state: { status: "completed", input: { description: "Serve", prompt: "p" }, content: [{ type: "text", text: "ok" }], metadata: { sessionID: "ses_child", status: "running" } }, time: { created: 2, ran: 3, completed: 4 } }] },
+      ],
+      ses_child: [
+        { id: "msg_c1", type: "assistant", agent: "general", model: { id: "m", providerID: "fake" }, time: { created: 5 }, content: [sh("c_run", "sh_run"), sh("c_done", "sh_done"), sh("c_lost", "sh_lost"), sh("c_kill", "sh_kill")] },
+        { id: "msg_cs", type: "synthetic", time: { created: 8 }, text: '<shell id="sh_done" state="completed" command="cmd c_done">\nall good\n</shell>', metadata: { source: "shell", shellID: "sh_done", state: "completed", exit: 0 } },
+      ],
+    };
+    const d = await boot({ projectDirInData: true, data: { sessions: [row("ses_own", "PROJECT", "Owner", 5000), row("ses_child", "PROJECT", "Serve", 4000, { parentID: "ses_own" })], messages, shells: [{ id: "sh_run", command: "cmd c_run", sessionID: "ses_child", output: "still going\n" }, { id: "sh_kill", command: "cmd c_kill", sessionID: "ses_child" }] } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    for (let i = 0; i < 80 && !(await d.ok({ type: "session.list" })).sessions.some((x: any) => x.id === "ses_own"); i++) await sleep(50);
+    await d.ok({ type: "session.subscribe", sessionId: "ses_own", sinceSeq: 0 });
+    const s = d.view("ses_own");
+    const status = (id: string) => s.last(id)?.status;
+    await until(() => status("c_lost") === "stopped");
+    expect(s.last("c_lost")).toMatchObject({ parentId: "call_sub", shell: "background" });
+    expect(status("c_run")).toBe("running");
+    expect(status("c_done")).toBe("done");
+    expect(await d.ok({ type: "session.shellOutput", sessionId: "ses_own", toolUseId: "c_run" })).toEqual({ output: "still going\n", truncated: false });
+    expect(await d.ok({ type: "session.shellOutput", sessionId: "ses_own", toolUseId: "c_done" })).toEqual({ output: "all good", truncated: false });
+    // Kill of a child's shell removes it in OpenCode; the card ends under the call.
+    await d.ok({ type: "session.stopShell", sessionId: "ses_own", toolUseId: "c_kill" });
+    await until(() => status("c_kill") === "stopped");
+    expect(d.requests("DELETE", "/api/shell/sh_kill")).toHaveLength(1);
+    // Stop agent of an idle child (nothing to interrupt) kills the shells it left.
+    await d.ok({ type: "session.stopSubagent", sessionId: "ses_own", subagentId: "call_sub" });
+    await until(() => status("c_run") === "stopped");
+    expect(d.requests("DELETE", "/api/shell/sh_run")).toHaveLength(1);
+    expect(s.last("c_run")).toMatchObject({ parentId: "call_sub" });
   });
 });

@@ -1,8 +1,8 @@
 // Inline task on OpenCode 2 (GH-734, docs/spec.md "Inline tasks"): what the daemon reads of the child session's events (usage, turns, last text, files) and the
 // rules that give the child only the granted tools. The session side (child create, stop, waiting) is OpenCode2Session.inlineTask.
-import { INLINE_OUTPUT_TOKENS, type InlineBuiltin, type InlineSpec } from "./inline-types.ts";
+import { Denials, INLINE_OUTPUT_TOKENS, stepLine, type InlineBuiltin, type InlineSpec } from "./inline-types.ts";
 import { mcpToolKey } from "./opencode-inline.ts";
-import { failureText } from "./opencode2-parts.ts";
+import { failureText, mapTool2 } from "./opencode2-parts.ts";
 import type { Rule2 } from "./opencode2-engine.ts";
 
 type Json = Record<string, any>;
@@ -61,6 +61,9 @@ export class InlineCollector2 {
   private readonly steps: { finish?: string; tokens?: Json; cost?: number }[] = [];
   private readonly files = new Set<string>();
   private readonly tools = new Map<string, string>();
+  private readonly inputs = new Map<string, Json>();
+  /** The steps the user or a rule denied. */
+  readonly denials = new Denials();
   private model: string | undefined;
   /** Set by the child's `session.execution.succeeded`. */
   idle = false;
@@ -83,20 +86,35 @@ export class InlineCollector2 {
         return void this.tools.set(d.id, d.name);
       case "session.tool.called": {
         const name = this.tools.get(d.id);
+        if (d.input && typeof d.input === "object") this.inputs.set(d.id, d.input);
         if ((name === "edit" || name === "write") && typeof d.input?.path === "string") this.files.add(d.input.path);
         return;
       }
+      case "session.tool.failed":
+        // A rule denial ends the call as rejected (a user's Deny is noted by the session when it replies).
+        if (d.error?.type === "permission.rejected") this.deny(d.id);
+        return;
       case "session.execution.succeeded":
         return void (this.idle = true);
       case "session.execution.interrupted":
         return void (this.interrupted = true);
       case "session.step.failed":
+        // The step ran (a Deny aborts it): it counts as a turn, with no usage.
+        this.steps.push({ finish: "failed" });
+      // falls through
       case "session.execution.failed":
         if (d.error && d.error.type !== "aborted") this.error ??= failureText(d.error);
         return;
     }
   }
 
+  /** Call `callId` was denied: listed as its card line (`Bash: rm x`). */
+  deny(callId: string) {
+    const name = this.tools.get(callId);
+    if (!name) return;
+    const { tool, input } = mapTool2(name, this.inputs.get(callId));
+    this.denials.add(callId, stepLine(tool, input));
+  }
   get turns() {
     return this.steps.length;
   }

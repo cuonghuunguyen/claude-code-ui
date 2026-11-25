@@ -7,7 +7,7 @@ import { withoutApiKeys } from "./claude-env.ts";
 import { ToolError } from "./daemon-mcp.ts";
 import { runGit } from "./git-runner.ts";
 import type { InlineTranscript } from "./inline-transcript.ts";
-import { INLINE_OUTPUT_TOKENS, INLINE_TEXT_CHARS, INLINE_TIMEOUT_MS, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
+import { INLINE_OUTPUT_TOKENS, INLINE_TEXT_CHARS, INLINE_TIMEOUT_MS, stepLine, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
 
 export const INLINE_SYSTEM = "You run one task for another agent. Use the tools you have to do it. Do not ask questions: if something is unclear, decide and say what you assumed. Reply with only the result the task asks for, no preface.";
 
@@ -170,12 +170,6 @@ export function inlineClaudeOptions(
 /** Thrown inside the run to skip the query: a stop or limit came during the setup awaits. */
 class Halt extends Error {}
 const LAST_STEPS = 5;
-/** One line of a tool step: the tool and the most telling input field, cut to 80 chars. */
-function stepLine(tool: string, input: Record<string, unknown> | undefined): string {
-  const v = ["command", "file_path", "path", "pattern", "url", "description"].map((k) => input?.[k]).find((x) => typeof x === "string") as string | undefined;
-  const one = (v ?? "").replace(/\s+/g, " ").trim();
-  return one ? `${tool}: ${one.length > 80 ? `${one.slice(0, 79)}…` : one}` : tool;
-}
 const rel = (cwd: string, p: string) => {
   const r = relative(cwd, p);
   return r === "" || r.startsWith("..") || isAbsolute(r) ? p : r.replace(/\\/g, "/");
