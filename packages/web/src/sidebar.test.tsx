@@ -759,7 +759,7 @@ describe("one repository on several Sides is one group (GH-591)", () => {
     await act(async () => btn.click());
     expect(onNew).toHaveBeenCalledWith(`${mac}/.claude/worktrees/idle`);
     // The WSL main checkout has no session now and keeps its toggle and empty line.
-    const wslMain = wtRows(el).find((r) => label(r).startsWith("WSL: Ubuntu · Main checkout"))!;
+    const wslMain = wtRows(el).find((r) => label(r) === "WSL: Ubuntu · Main checkout : main")!;
     expect(wslMain.querySelector('[data-testid="worktree-toggle"]')!.getAttribute("aria-expanded")).toBe("true");
     expect(wslMain.textContent).toContain("No sessions yet");
   });
