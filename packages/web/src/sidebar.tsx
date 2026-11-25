@@ -41,6 +41,9 @@ function Tip({ tip, trigger }: { tip: ReactNode; trigger: ReactElement }) {
   );
 }
 
+/** Row actions on a desktop pointer: no width is reserved for them, they appear over the end of the row on hover or focus with a fade so the text under them does not clash. Touch and narrow screens reserve the width (always visible). */
+const OVERLAY = "md:bg-linear-to-l md:from-secondary md:from-75% md:to-transparent md:pl-4 max-md:bg-none pointer-coarse:bg-none pointer-coarse:pl-0";
+
 /** Only states that need attention get an indicator; idle, error and closed rows stay plain. */
 function StateIcon({ state }: { state: SessionState }) {
   if (state === "running")
@@ -677,19 +680,16 @@ export function SessionList({
           const groupSides = sidesOf(g);
           const toggleButton = (
                 <button
-                  className="flex h-7 w-full items-center gap-2 rounded-md pr-20 pl-1.5 text-left max-md:pr-26 pointer-coarse:pr-38 max-md:pointer-coarse:pr-26 text-muted-foreground text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11"
+                  className="flex h-7 w-full items-center gap-2 rounded-md pr-1.5 pl-1.5 text-left max-md:pr-26 pointer-coarse:pr-38 max-md:pointer-coarse:pr-26 text-muted-foreground text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11"
                   aria-expanded={open}
                   aria-label={sidesLabel ? t("sidebar.sidesNames", { name: projectName(g.cwd), count: g.sides!.length, sides: groupSides.map((x) => x.title).join(", ") }) : sideOf(g.cwd) ? `${projectName(g.cwd)} (${sideOf(g.cwd)!.label})` : undefined}
                   onClick={() => toggle(groupKey(g))}
-                  title={sidesLabel ? undefined : g.cwd}
                   data-testid="group-toggle" data-part="group-toggle"
                 >
                   <ProjectAvatar cwd={g.cwd} />
                   <span className="min-w-0 truncate font-medium">{projectName(g.cwd)}</span>
                   {sidesLabel ? (
                     <span className="inline-flex h-4 shrink-0 select-none items-center gap-1 whitespace-nowrap rounded-xs border-[0.5px] bg-muted px-1 font-[530] text-[11px] text-muted-foreground leading-none tabular-nums" data-testid="sides-chip">
-                      {groupSides.slice(0, 3).map((x) => <SideIcon key={x.cwd} cwd={x.cwd} className="size-3" />)}
-                      {groupSides.length > 3 && <span>+{groupSides.length - 3}</span>}
                       {sidesLabel}
                     </span>
                   ) : (
@@ -703,22 +703,27 @@ export function SessionList({
             <section key={groupKey(g)} data-testid="session-group" data-cwd={g.cwd}>
               <RowContextMenu testId="group-menu" entries={groupMenu(g, "group-menu-")}>
               <h3 className="group/project relative">
-{sidesLabel ? (
-                  <Tip
-                    trigger={toggleButton}
-                    tip={groupSides.map((x) => (
-                      <span key={x.cwd} className="flex items-center gap-1.5">
-                        <SideIcon cwd={x.cwd} className="text-background" />
-                        <span>{x.title}</span>
-                        <span className="opacity-70">· {sideStateText(x.cwd)}</span>
-                      </span>
-                    ))}
-                  />
-                ) : (
-                  toggleButton
-                )}
+                <Tip
+                  trigger={toggleButton}
+                  tip={
+                    <>
+                      <span className="font-medium">{projectName(g.cwd)}</span>
+                      {sidesLabel ? (
+                        groupSides.map((x) => (
+                          <span key={x.cwd} className="flex items-center gap-1.5">
+                            <SideIcon cwd={x.cwd} className="text-background" />
+                            <span>{x.title}</span>
+                            <span className="opacity-70">· {sideStateText(x.cwd)}</span>
+                          </span>
+                        ))
+                      ) : (
+                        <span className="opacity-70">{g.cwd}</span>
+                      )}
+                    </>
+                  }
+                />
                 {/* OpenCode project row actions: shown on hover or focus; always on touch screens (no hover there), any width. */}
-                <span className="absolute inset-y-0 right-0.5 flex items-center gap-0.5 opacity-100 transition-opacity group-focus-within/project:opacity-100 group-hover/project:opacity-100 motion-reduce:transition-none md:opacity-0 max-md:gap-2 pointer-coarse:gap-2 pointer-coarse:opacity-100">
+                <span className={cn("absolute inset-y-0 right-0.5 flex items-center gap-0.5 opacity-100 transition-opacity group-focus-within/project:opacity-100 group-hover/project:opacity-100 motion-reduce:transition-none md:opacity-0 max-md:gap-2 pointer-coarse:gap-2 pointer-coarse:opacity-100", OVERLAY)}>
                   {onNewWorktree && !narrow && worktrees?.[g.cwd]?.some((w) => w.main && !w.outsideRoots) && (
                     <IconButton label={t("sidebar.createWorktreeIn", { name: projectName(g.cwd) })} onClick={(e) => onNewWorktree(g.cwd, e.shiftKey)} testId="project-new-worktree" className="size-6">
                       <GitBranchPlusIcon />
@@ -762,12 +767,11 @@ export function SessionList({
                   const compact = !r.main && !r.outsideRoots && !r.sessions.length && !(baseGroup(g.cwd)?.worktrees.find((x) => x.path === r.path)?.sessions.length);
                   const rowButton = (
                         <button
-                          className={cn("flex h-7 w-full items-center gap-2 rounded-md pr-14 pl-6 text-left text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11 max-md:pr-26 pointer-coarse:pr-26", "text-muted-foreground")}
+                          className={cn("flex h-7 w-full items-center gap-2 rounded-md pl-6 text-left text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11 max-md:pr-26 pointer-coarse:pr-26", r.outsideRoots ? "pr-8" : "pr-1.5", "text-muted-foreground")}
                           aria-expanded={compact ? undefined : rowOpen}
                           onClick={() => (compact ? onNew(r.path) : toggle(rowKey(r.path)))}
                           aria-label={narrow || rowSide ? `${label}${r.outsideRoots ? ` ${t("sidebar.outsideRoots")}` : ""}` : undefined}
                           aria-describedby={compact ? emptyId : undefined}
-                          title={rowSide ? undefined : `${narrow ? `${label}\n` : ""}${r.outsideRoots ? t("sidebar.outsideRootsTitle", { path: r.path }) : r.path}`}
                           data-testid="worktree-toggle"
                           data-empty={compact || undefined}
                         >
@@ -788,19 +792,22 @@ export function SessionList({
                       {/* OpenCode WorkspaceHeader: branch icon, "local : <branch>" / "worktree : <branch>", chevron; New session on hover. */}
                       <RowContextMenu testId="worktree-context-menu" entries={rowMenu(g, r, label, "worktree-context-")}>
                       <div className={cn("group/worktree relative", busy && "pointer-events-none opacity-50")} data-removing={busy || undefined} aria-busy={busy || undefined}>
-{rowSide ? (
-                          <Tip
-                            trigger={rowButton}
-                            tip={
-                              <>
-                                <span>{`${rowSide.label} · ${t(r.main ? "sidebar.kindMain" : "sidebar.kindWorktreeCap")}`}</span>
-                                <span className="opacity-70">{r.outsideRoots ? t("sidebar.outsideRootsTitle", { path: r.path }) : r.path}</span>
-                              </>
-                            }
-                          />
-                        ) : (
-                          rowButton
-                        )}
+                        <Tip
+                          trigger={rowButton}
+                          tip={
+                            <>
+                              {rowSide ? (
+                                <>
+                                  <span>{`${rowSide.label} · ${t(r.main ? "sidebar.kindMain" : "sidebar.kindWorktreeCap")}`}</span>
+                                  <span className="font-medium">{`${branch}${clone}`}</span>
+                                </>
+                              ) : (
+                                <span className="font-medium">{label}</span>
+                              )}
+                              <span className="opacity-70">{r.outsideRoots ? t("sidebar.outsideRootsTitle", { path: r.path }) : r.path}</span>
+                            </>
+                          }
+                        />
                         {/* Touch has no tooltip: outside the roots a lock takes New session's place (same slot, so the chevrons stay in one column). */}
                         {r.outsideRoots ? (
                           <span className="pointer-events-none absolute inset-y-0 right-0.5 flex items-center" aria-hidden>
@@ -809,7 +816,7 @@ export function SessionList({
                             </span>
                           </span>
                         ) : (
-                          <span className="absolute inset-y-0 right-0.5 flex items-center opacity-100 transition-opacity group-focus-within/worktree:opacity-100 group-hover/worktree:opacity-100 motion-reduce:transition-none md:opacity-0 max-md:gap-2 pointer-coarse:gap-2 pointer-coarse:opacity-100">
+                          <span className={cn("absolute inset-y-0 right-0.5 flex items-center opacity-100 transition-opacity group-focus-within/worktree:opacity-100 group-hover/worktree:opacity-100 motion-reduce:transition-none md:opacity-0 max-md:gap-2 pointer-coarse:gap-2 pointer-coarse:opacity-100", OVERLAY)}>
                             <IconButton label={t("sidebar.newSessionIn", { name: label })} onClick={() => onNew(r.path)} disabled={busy} testId="worktree-new-session" className="size-6">
                               <SquarePenIcon />
                             </IconButton>

@@ -15,6 +15,15 @@ vi.mock("./session-actions.tsx", async (orig) => {
   return { ...m, SessionMenu: (p: Parameters<typeof m.SessionMenu>[0]) => (rowRenders.push(p.target.title), <m.SessionMenu {...p} />) };
 });
 
+/** The tooltip text a button shows on keyboard focus (the app Tooltip replaces the native title on rows and headers). */
+async function tip(btn: HTMLElement) {
+  await act(async () => btn.focus());
+  await vi.waitFor(() => expect(document.querySelector('[data-testid="side-tooltip"]')).not.toBeNull());
+  const text = document.querySelector('[data-testid="side-tooltip"]')!.textContent;
+  await act(async () => btn.blur());
+  return text;
+}
+
 // Pinned to local noon: relative fixtures never straddle midnight, whatever the real clock says.
 const now = new Date(2026, 5, 15, 12, 0).getTime();
 const item = (id: string, cwd: string, title: string, minutesAgo: number, state: SessionState = "closed"): SessionListItem => ({
@@ -120,7 +129,8 @@ it("one group per working directory with the project name as header and the full
   const { groups, toggle } = await render();
   expect(groups().map((g) => g.dataset.cwd)).toEqual(["/home/u/web", "/home/u/api"]);
   expect(toggle("/home/u/web").textContent).toBe("Wweb");
-  expect(toggle("/home/u/web").title).toBe("/home/u/web");
+  expect(toggle("/home/u/web").hasAttribute("title")).toBe(false);
+  expect(await tip(toggle("/home/u/web"))).toBe("web/home/u/web");
   expect(groups()[0]!.textContent).not.toContain("/home/u");
 });
 
@@ -341,7 +351,7 @@ describe("worktrees", () => {
     const rows = worktreeRows(el);
     expect(rows.map((r) => r.querySelector('[data-testid="worktree-toggle"]')!.textContent)).toEqual(["local : main", "worktree : far(outside the allowed roots)", "worktree : fix-login"]);
     expect(rows.map(titles)).toEqual([["Fix login"], [], ["Worktree job"]]);
-    expect(rowToggle(el, "/home/u/orca/web/fix").title).toBe("/home/u/orca/web/fix");
+    expect(await tip(rowToggle(el, "/home/u/orca/web/fix"))).toContain("/home/u/orca/web/fix");
     expect(rows[1]!.textContent).toContain("No sessions yet");
   });
 
@@ -449,7 +459,7 @@ describe("worktrees", () => {
     await act(async () => action("/home/u/orca/web/fix")!.click());
     expect(onNew).toHaveBeenCalledWith("/home/u/orca/web/fix");
     expect(action("/srv/web-far")).toBeNull();
-    expect(rowToggle(el, "/srv/web-far").title).toBe("/srv/web-far: Outside the allowed roots (--roots)");
+    expect(await tip(rowToggle(el, "/srv/web-far"))).toContain("/srv/web-far: Outside the allowed roots (--roots)");
     expect(el.querySelector('[data-path="/srv/web-far"] [data-testid="worktree-outside"]')).not.toBeNull();
     expect(rowToggle(el, "/srv/web-far").textContent).toBe("worktree : far(outside the allowed roots)");
     expect(el.querySelector('[data-path="/home/u/orca/web/fix"] [data-testid="worktree-outside"]')).toBeNull();
@@ -711,7 +721,8 @@ describe("one repository on several Sides is one group (GH-591)", () => {
     const { groups, toggle, el } = await render(props);
     expect(groups().map((g) => g.dataset.cwd)).toEqual([mac]);
     expect(el.querySelector('[data-testid="sides-chip"]')!.textContent).toBe("3 sides");
-    expect(el.querySelectorAll('[data-testid="sides-chip"] [data-testid="side-icon"]')).toHaveLength(3);
+    // The chip is the count only: the Side icons are in the tooltip.
+    expect(el.querySelectorAll('[data-testid="sides-chip"] [data-testid="side-icon"]')).toHaveLength(0);
     expect(toggle(mac).getAttribute("aria-label")).toBe("app (3 sides: macOS, WSL: Ubuntu, SSH: dev)");
     expect(el.querySelector('[data-testid="side-badge"]')).toBeNull();
     // Mains first (this machine, WSL, SSH), then the linked worktree; the text is the branch, no row starts with a Side title.
@@ -731,9 +742,9 @@ describe("one repository on several Sides is one group (GH-591)", () => {
     const btn = wtRows(el)[2]!.querySelector<HTMLElement>('[data-testid="worktree-toggle"]')!;
     await act(async () => btn.focus());
     await vi.waitFor(() => expect(document.querySelector('[data-testid="side-tooltip"]')).not.toBeNull(), { timeout: 3000 });
-    expect(document.querySelector('[data-testid="side-tooltip"]')!.textContent).toBe("SSH: dev · Main checkout/srv/app");
+    expect(document.querySelector('[data-testid="side-tooltip"]')!.textContent).toBe("SSH: dev · Main checkoutrelease/srv/app");
     await act(async () => toggle(mac).focus());
-    await vi.waitFor(() => expect(document.querySelector('[data-testid="side-tooltip"]')!.textContent).toBe("macOS· ReadyWSL: Ubuntu· ReadySSH: dev· Ready"));
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="side-tooltip"]')!.textContent).toBe("appmacOS· ReadyWSL: Ubuntu· ReadySSH: dev· Ready"));
   });
 
   it("a linked worktree with no session is one compact line (no chevron, no empty text) whose click starts a session; a main checkout keeps its toggle", async () => {
@@ -960,7 +971,8 @@ describe("project row below md (GH-132): name, chevron and New session inline; t
     const toggle = row(managed).querySelector<HTMLElement>('[data-testid="worktree-toggle"]')!;
     expect(toggle.textContent).toBe("GH-1-fix");
     expect(toggle.getAttribute("aria-label")).toBe("worktree : team/GH-1-fix");
-    expect(toggle.title).toContain("team/GH-1-fix");
+    // Narrow, cut to the tail: the tooltip still has the full branch.
+    expect(await tip(toggle)).toContain("worktree : team/GH-1-fix");
     await act(async () => row(managed).querySelector<HTMLElement>('[data-testid="worktree-new-session"]')!.click());
     expect(onNew).toHaveBeenCalledWith(managed);
     expect(row("/home/u/web").querySelector('[data-testid="worktree-menu"]')).not.toBeNull();
