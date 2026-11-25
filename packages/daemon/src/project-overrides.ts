@@ -1,7 +1,7 @@
 // Project overrides of global settings (ADR 0013, docs/spec.md "Project settings"): the lookup the daemon's readers share.
 // Only `overrides.local` counts: it holds this daemon's own Projects (the Hub puts a Side's entries there when it syncs, `sideSettings`).
 import { basename, dirname } from "node:path";
-import { LOCAL_SIDE, type ProjectOverrides, type ProjectRef, type Settings } from "@claude-ui/protocol";
+import { LOCAL_SIDE, type Engine, type ProjectOverrides, type ProjectRef, type Settings } from "@claude-ui/protocol";
 import { gitDirsOf } from "./git.ts";
 
 const own = (settings: Settings): Record<string, ProjectOverrides> => {
@@ -78,4 +78,11 @@ export const ownJiraUrl = (settings: Settings, ref: ProjectRef): string | undefi
 export function jiraOriginsInUse(settings: Settings): string[] {
   const urls = [settings.jira.url, ...Object.values(settings.projects.overrides).flatMap((side) => Object.values(side).map((o) => o.jira?.url ?? ""))];
   return [...new Set(urls.filter((u, i) => i === 0 || u).map((u) => (u ? new URL(u).origin : "")))];
+}
+
+/** The commit message generator of the Project at `cwd` (GH-984): the fields its overrides set over the global `git.commitMessage*` ones. `model` is never blank. */
+export function commitMessageSettings(settings: Settings, cwd: string): { engine: Engine; model: string; openCodeModel: string } {
+  const o = projectOverrides(settings, cwd).commitMessage;
+  const g = settings.git;
+  return { engine: o?.engine ?? g.commitMessageEngine, model: o?.model || g.commitMessageModel || "haiku", openCodeModel: o?.openCodeModel || g.commitMessageOpenCodeModel };
 }

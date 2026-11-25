@@ -6,6 +6,7 @@ import { request as httpRequest } from "node:http";
 import { connect, createServer as createNetServer, type AddressInfo } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
@@ -1388,6 +1389,98 @@ describe("daemon", () => {
     } finally {
       d.close();
     }
+  });
+
+  describe("git.commitMessage engine (GH-984)", () => {
+    const FAKE_OC = fileURLToPath(new URL("./fixtures/opencode/fake-opencode-bin.mjs", import.meta.url));
+    /** A daemon whose Claude answers per `claude.mode` and whose OpenCode is the fake binary with `env`. */
+    async function boot(env: Record<string, string> = {}) {
+      const repo = realpathSync(mkdtempSync(join(tmpdir(), "cme-")));
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+      writeFileSync(join(repo, "a.txt"), "hello\n");
+      const logFile = join(repo, "..", `${basename(repo)}.log`);
+      const claude = { calls: 0, models: [] as string[], mode: "ok" as "ok" | "auth" | "wait" };
+      const query = ((a: { prompt: unknown; options: { model?: string; abortController?: AbortController } }) => {
+        if (typeof a.prompt !== "string") return (fakeQuery as never as (x: unknown) => unknown)(a);
+        claude.calls++;
+        claude.models.push(a.options.model ?? "");
+        return (async function* () {
+          if (claude.mode === "wait") await new Promise<void>((r) => a.options.abortController!.signal.addEventListener("abort", () => r(), { once: true }));
+          else if (claude.mode === "auth") {
+            yield { type: "assistant", error: "authentication_failed", message: { content: [{ type: "text", text: "Not logged in · Please run /login" }] } };
+            yield { type: "result", subtype: "success", is_error: true, result: "Not logged in · Please run /login" };
+          } else yield { type: "result", subtype: "success", is_error: false, result: "feat: from claude" };
+        })();
+      }) as never;
+      const d = createDaemon({ webRoot, token, roots: [repo], query, appSettings: createSettings(), opencode: { command: [process.execPath, FAKE_OC], env: () => ({ FAKE_OPENCODE_LOG: logFile, ...env }) } });
+      await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+      const c = await client((d.address() as AddressInfo).port);
+      const log = () => (existsSync(logFile) ? readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, any>) : []).filter((l) => l.type === "request");
+      return { d, c, repo, claude, log, m: { type: "git.commitMessage", cwd: repo, paths: ["a.txt"] } };
+    }
+
+    it("Claude on the set model; a login error falls back to the OpenCode model only when one is set; the OpenCode run is a deleted, tool-less, deny-all session; OpenCode as engine never touches Claude and needs a model", async () => {
+      const t = await boot();
+      try {
+        await t.c.request({ type: "settings.set", patch: { git: { commitMessageModel: "sonnet" } } });
+        expect(await t.c.request(t.m)).toMatchObject({ result: { message: "feat: from claude", engine: "claude" } });
+        expect(t.claude.models).toEqual(["sonnet"]);
+        // Not logged in, no OpenCode model: Claude's own text, OpenCode untouched.
+        t.claude.mode = "auth";
+        expect(await t.c.request(t.m)).toMatchObject({ type: "error", code: "generate_failed", message: "Not logged in · Please run /login" });
+        expect(t.log().filter((l) => l.path.startsWith("/session"))).toEqual([]);
+        // With an OpenCode model: one fallback run.
+        await t.c.request({ type: "settings.set", patch: { git: { commitMessageOpenCodeModel: "deepseek/flash-1" } } });
+        const fell = (await t.c.request(t.m)) as { result: object };
+        expect(fell.result).toEqual({ message: "feat: from opencode", engine: "opencode", fellBack: true });
+        expect(t.claude.calls).toBe(3);
+        const reqs = t.log().filter((l) => l.path.startsWith("/session"));
+        expect(reqs.map((l) => `${l.method} ${l.path.replace(/ses_\w+/, "ID")}`)).toEqual(["POST /session", "POST /session/ID/message", "DELETE /session/ID"]);
+        expect(reqs[0]!.body.permission).toEqual([{ permission: "*", pattern: "*", action: "deny" }]);
+        expect(reqs[1]!.body).toMatchObject({ model: { providerID: "deepseek", modelID: "flash-1" }, tools: { "*": false }, system: expect.stringContaining("git commit messages") });
+        // Engine OpenCode: Claude is not asked, with or without a Claude login.
+        t.claude.mode = "ok";
+        await t.c.request({ type: "settings.set", patch: { git: { commitMessageEngine: "opencode" } } });
+        expect((await t.c.request(t.m)) as object).toMatchObject({ result: { message: "feat: from opencode", engine: "opencode" } });
+        expect(((await t.c.request(t.m)) as { result: object }).result).not.toHaveProperty("fellBack");
+        expect(t.claude.calls).toBe(3);
+        // The Project's override wins over the global engine; no model: the daemon refuses.
+        await t.c.request({ type: "settings.set", patch: { git: { commitMessageOpenCodeModel: "" } } });
+        expect(await t.c.request(t.m)).toMatchObject({ type: "error", code: "commit_model_missing" });
+        await t.c.request({ type: "settings.set", patch: { projects: { overrides: { local: { [t.repo]: { commitMessage: { engine: "claude" } } } } } } });
+        expect(await t.c.request(t.m)).toMatchObject({ result: { message: "feat: from claude", engine: "claude" } });
+        expect(t.claude.calls).toBe(4);
+      } finally {
+        t.d.close();
+      }
+    }, 30_000);
+
+    it("an OpenCode failure is the error: Claude is never asked as a fallback", async () => {
+      const t = await boot({ FAKE_OPENCODE_ONESHOT_ERROR: "ProviderModelNotFoundError" });
+      try {
+        await t.c.request({ type: "settings.set", patch: { git: { commitMessageEngine: "opencode", commitMessageOpenCodeModel: "deepseek/flash-1" } } });
+        expect(await t.c.request(t.m)).toMatchObject({ type: "error", code: "generate_failed", message: expect.stringMatching(/not available in OpenCode/) });
+        expect(t.claude.calls).toBe(0);
+        expect(t.log().some((l) => l.method === "DELETE")).toBe(true);
+      } finally {
+        t.d.close();
+      }
+    }, 30_000);
+
+    it("Cancel stops a running OpenCode run: the session is aborted and deleted", async () => {
+      const t = await boot({ FAKE_OPENCODE_ONESHOT_MS: "60000" });
+      try {
+        await t.c.request({ type: "settings.set", patch: { git: { commitMessageEngine: "opencode", commitMessageOpenCodeModel: "deepseek/flash-1" } } });
+        const pending = t.c.request(t.m);
+        await vi.waitFor(() => expect(t.log().some((l) => l.path.endsWith("/message"))).toBe(true));
+        await t.c.request({ type: "git.commitMessageCancel", cwd: t.repo });
+        expect(await pending).toMatchObject({ type: "error", code: "cancelled" });
+        await vi.waitFor(() => expect(t.log().some((l) => l.method === "DELETE")).toBe(true));
+        expect(t.log().some((l) => l.method === "POST" && l.path.endsWith("/abort"))).toBe(true);
+      } finally {
+        t.d.close();
+      }
+    }, 30_000);
   });
 
   it("git.checkout with local changes that the branch would overwrite replies local_changes", async () => {

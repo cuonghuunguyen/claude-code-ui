@@ -35,7 +35,7 @@ async function render({ project, overrides, legacy = false, sides, docker, failG
   const onShortcuts = vi.fn();
   const onAddons = vi.fn();
   const onProjectSettings = vi.fn();
-  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {}, commitMessageWarm: false }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, projects: { overrides: overrides ?? {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } };
+  let settings: Settings = { orchestration: { enabled: false, workerCap: 4, workerCapTotal: 0, maxDepth: 2, maxChildren: 4, stallMinutes: 20, keepWarmMinutes: 55, workerMode: "coordinator", workerNotifications: true, closeFinished: true }, sessions: { defaultMode: "auto", engine: "claude" }, opencode: { path: "" }, usageLimit: { autoContinue: true }, focus: { nextForYou: false }, notifications: { desktop: true }, power: { keepAwake: false }, performance: { monitor: true }, chrome: { enabled: false }, chat: { visualize: true }, terminalAccess: { enabled: true }, inlineTask: { enabled: true, model: "haiku", openCodeModel: "", maxTurns: 10 }, fork: { enabled: true }, claude: { account: "" }, history: { enabled: true, exclude: ["**/node_modules/**", "**/.git/**"] }, jira: { url: "", email: "", template: "{type}/{key}-{summary}", jql: "" }, git: { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {}, commitMessageWarm: false, commitMessageEngine: "claude", commitMessageModel: "haiku", commitMessageOpenCodeModel: "" }, launcher: { port: 4280, roots: [], tailscale: false, lan: false, allowBypass: false, updateCheck: true, osNotify: true, open: true }, labels: { projects: {}, sides: {} }, projects: { overrides: overrides ?? {} }, editor: { command: "", name: "" }, back: { marks: {} }, app: { icon: "", name: "" } };
   if (legacy) (delete (settings as Partial<Settings>).power, delete (settings as Partial<Settings>).app, delete (settings as Partial<Settings>).launcher);
   let refuse: string | undefined;
   const calls: Request[] = [];
@@ -1042,6 +1042,22 @@ it("Settings › Git: the warm commit message generator switch is off by default
   await act(async () => sw.click());
   expect(calls.filter((c) => c.type === "settings.set").at(-1)).toEqual({ type: "settings.set", patch: { git: { commitMessageWarm: true } } });
   expect(q("settings-git-commitMessageWarm")?.getAttribute("aria-checked")).toBe("true");
+});
+
+it("Settings › Git: the commit message engine saves; OpenCode without a model warns and holds the warm switch off", async () => {
+  const { q, pick, calls } = await render();
+  await pick("git");
+  expect(q("settings-git-commitMessageEngine")?.textContent).toContain("Claude");
+  expect((q("settings-git-commitMessageModel") as HTMLInputElement).placeholder).toBe("haiku");
+  expect(q("settings-git-modelMissing")).toBeNull();
+  await act(async () => q("settings-git-commitMessageEngine")!.click());
+  await act(async () => q("settings-git-commitMessageEngine-opencode")!.click());
+  expect(calls.filter((c) => c.type === "settings.set").at(-1)).toEqual({ type: "settings.set", patch: { git: { commitMessageEngine: "opencode" } } });
+  expect(q("settings-git-modelMissing")?.textContent).toContain("Pick a model");
+  expect(q("settings-git-commitMessageWarm")?.getAttribute("aria-disabled")).toBe("true");
+  await act(async () => q("settings-git-commitMessageWarm")!.click());
+  expect(calls.filter((c) => c.type === "settings.set").at(-1)).toEqual({ type: "settings.set", patch: { git: { commitMessageEngine: "opencode" } } });
+  expect(document.getElementById("settings-git-commitMessageWarm-hint")?.textContent).toContain("The engine is OpenCode");
 });
 
 it("Auto repository detection saves true/false as booleans and subFolders as a string", async () => {

@@ -990,7 +990,8 @@ export type GitRemote = { output: string; refs: string | null };
 export type GitCommitted = { hash: string; output: string; refs: string | null; /** `push` was asked: `git.branch` data of HEAD's branch (the push dialog). */ push?: GitBranchInfo };
 /** `committed` is null outside a git work tree. */
 /** `truncated`: the diff in the prompt was cut (the file list was complete). */
-export type GitCommitMessageResult = { message: string; truncated?: true };
+/** `engine`: the Engine that wrote the message. `fellBack`: Claude failed on its login and OpenCode wrote it (GH-984). */
+export type GitCommitMessageResult = { message: string; truncated?: true; engine?: Engine; fellBack?: true };
 export type GitCommitFilesResult = { committed: GitCommitted | null };
 /** A file a rollback acts on: `A` added or untracked, `D` deleted, `R` renamed (`path` the new name), `M` the rest. */
 export type GitRollbackFile = { path: string; kind: "M" | "D" | "R" | "A"; oldPath?: string };
@@ -1128,6 +1129,8 @@ export type ProjectOverrides = {
   /** `""` = Default, `"cli"`, or a Claude account id. Hub-local: never sent to a Side. */
   account?: string;
   inlineTask?: { model?: string; openCodeModel?: string };
+  /** Commit message generator of the Project (GH-984); a field not set inherits `git.commitMessage*`. */
+  commitMessage?: { engine?: Engine; model?: string; openCodeModel?: string };
   history?: { enabled?: boolean };
   jira?: { url?: string; email?: string; jql?: string; template?: string };
 };
@@ -1177,6 +1180,12 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
     commitMessageInstructions: Record<string, string>;
     /** GH-668: the daemon keeps one Haiku process ready for Generate (faster start, one idle process). Default off. */
     commitMessageWarm: boolean;
+    /** GH-984: the Engine that writes the commit message. Default `claude`. */
+    commitMessageEngine: Engine;
+    /** Claude alias or id for Generate. 1..200 chars. Default `haiku`. */
+    commitMessageModel: string;
+    /** `provider/model` for Generate on OpenCode, also the fallback when Claude is not logged in; `""` = not set. */
+    commitMessageOpenCodeModel: string;
   };
   /** Custom names and icons (GH-515), shared by every browser. Key: project cwd, or side id (`local`, `wsl:<distro>`, `docker:<name>`). A patch replaces the whole map. */
   labels: { projects: Record<string, Label>; sides: Record<string, Label> };

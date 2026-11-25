@@ -11,6 +11,8 @@ import { useT } from "./i18n.ts";
 import { cn } from "@/lib/utils";
 import { IS_MAC } from "./shortcuts.ts";
 import { COMMIT_ASK_EVENT, takeCommitAsk } from "./commit-ask.ts";
+import { commitGeneratorOf, useCommitGeneratorState } from "./commit-generator.ts";
+import { askSettings } from "./settings-group.ts";
 
 // Keys scoped to the box: Mod+Enter commit, Alt+M amend (IntelliJ). The app keys Commit and Push are in shortcuts.ts.
 const KEYS = IS_MAC ? { commit: "⌘↩", amend: "⌥M" } : { commit: "Ctrl+Enter", amend: "Alt+M" };
@@ -50,6 +52,13 @@ export function CommitBox({ client, cwd, exact, repoName, project, rows, checked
   const [writing, setWriting] = useState(false);
   const [writeError, setWriteError] = useState("");
   const write = useRef(0);
+  // GH-984: the engine of this Project and whether OpenCode has no model (the daemon says so too: settings here may be stale).
+  const eff = commitGeneratorOf(useCommitGeneratorState(), project ?? cwd);
+  const [refused, setRefused] = useState(false);
+  const noModel = (eff.engine === "opencode" && !eff.openCodeModel) || refused;
+  // A reply that came from the OpenCode fallback.
+  const [fellBack, setFellBack] = useState(false);
+  useEffect(() => setRefused(false), [eff.engine, eff.openCodeModel, cwd]);
   /** The cwd of the running generation: a cancel goes to the Side that runs it, and `cwd` may have changed since. */
   const writingNow = useRef<string | undefined>(undefined);
   const paths = commitPaths(rows, checked);
@@ -71,6 +80,7 @@ export function CommitBox({ client, cwd, exact, repoName, project, rows, checked
     setAmend(false);
     setPush(undefined);
     setWriteError("");
+    setFellBack(false);
     gen.current++;
     stopWriting();
   }, [cwd]);
@@ -106,18 +116,21 @@ export function CommitBox({ client, cwd, exact, repoName, project, rows, checked
     writingNow.current = cwd;
     setWriting(true);
     setWriteError("");
+    setFellBack(false);
     client.request<GitCommitMessageResult>({ type: "git.commitMessage", cwd, ...(exact && { exact: true as const }), paths, ...(project && { project }) }).then(
       (r) => {
         if (id !== write.current) return;
         writingNow.current = undefined;
         setWriting(false);
         setMessage(r.message);
+        setFellBack(r.fellBack === true);
       },
       (e: Error & { code?: string }) => {
         if (id !== write.current) return;
         writingNow.current = undefined;
         setWriting(false);
-        if (e.code !== "cancelled") setWriteError(e.message);
+        if (e.code === "commit_model_missing") setRefused(true);
+        else if (e.code !== "cancelled") setWriteError(e.message);
       },
     );
   };
@@ -158,6 +171,7 @@ export function CommitBox({ client, cwd, exact, repoName, project, rows, checked
       },
     );
   };
+  const generateLabel = t("files.changes.generateWith", { engine: eff.engine === "opencode" ? "OpenCode" : "Claude" });
   const all = rows.length > 0 && rows.every((r) => checked.has(r.path));
   const some = rows.some((r) => checked.has(r.path));
   const box = "size-4 accent-primary focus-visible:outline-2 focus-visible:outline-ring";
@@ -193,15 +207,28 @@ export function CommitBox({ client, cwd, exact, repoName, project, rows, checked
           size="icon"
           variant="ghost"
           className="absolute top-0.5 right-0.5 size-11 md:size-7"
-          disabled={writing ? false : paths.length === 0 || busy}
+          disabled={writing ? false : paths.length === 0 || busy || noModel}
           onClick={writing ? stopWriting : generate}
-          aria-label={writing ? t("files.changes.generateStop") : t("files.changes.generate")}
-          title={writing ? t("files.changes.generateStop") : t("files.changes.generate")}
+          aria-label={writing ? t("files.changes.generateStop") : generateLabel}
+          title={writing ? t("files.changes.generateStop") : generateLabel}
           data-testid="commit-generate"
         >
           {writing ? <SquareIcon className="size-3.5 animate-pulse" /> : <SparklesIcon className="size-4" />}
         </Button>
       </div>
+      {noModel && (
+        <p className="flex flex-wrap items-center gap-x-2 text-muted-foreground text-xs" data-testid="commit-generate-nomodel">
+          <span className="text-warning">{t("files.changes.generateNoModel")}</span>
+          <button type="button" onClick={() => askSettings("git")} className="flex h-6 items-center rounded-md px-1 underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:h-11" data-testid="commit-generate-settings">
+            {t("files.changes.generateOpenSettings")}
+          </button>
+        </p>
+      )}
+      {fellBack && !writeError && (
+        <p role="status" className="text-muted-foreground text-xs" data-testid="commit-generated-with">
+          {t("files.changes.generatedWithOpenCode")}
+        </p>
+      )}
       {writeError && (
         <p role="alert" className="text-destructive text-xs" data-testid="commit-generate-error">
           {writeError}

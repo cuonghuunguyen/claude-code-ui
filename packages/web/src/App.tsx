@@ -99,7 +99,7 @@ import { addonThemes } from "./themes.ts";
 import { Backdrop } from "./backdrop.tsx";
 import { SlotsProvider, useThinkingPhrase } from "./slots.tsx";
 import { isPreviewHash } from "./addon-preview-route.ts";
-import { saveGroup as saveSettingsGroup } from "./settings-group.ts";
+import { OPEN_SETTINGS_EVENT, saveGroup as saveSettingsGroup } from "./settings-group.ts";
 import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
 import { activeMention, insertAtCaret, matchAgents, insertCommand, insertMention, mentionPath, splitUploads } from "./mentions.ts";
@@ -1901,6 +1901,12 @@ export function App() {
   }
   /** Settings opened at one group (the Create worktree modal's "Open Settings › Jira"). */
   const openSettingsGroup = (id: string) => (saveSettingsGroup(id), setSettingsOpen(true));
+  // The commit box asks for Settings › Git when Generate has no OpenCode model.
+  useEffect(() => {
+    const open: EventListener = (e) => openSettingsGroup(String((e as unknown as { detail?: string }).detail));
+    window.addEventListener(OPEN_SETTINGS_EVENT, open);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, open);
+  }, []);
   // Settings > About and the palette (docs/spec.md "Updates"): a version found now shows the notice again, even one "Not yet" hid.
   const checkUpdate = async () => {
     const r = await client.current!.request<UpdateCheckResult>({ type: "update.check" });

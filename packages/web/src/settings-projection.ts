@@ -3,6 +3,7 @@ import { DEFAULT_ENGINE, type ClaudeAccountInfo, type Engine, type PermissionMod
 import { setApp } from "./app-icon.ts";
 import { setBack } from "./back-marks.ts";
 import { setLabels } from "./labels.ts";
+import { setCommitGenerator } from "./commit-generator.ts";
 import { customEditor, type EditorInfo } from "./open-external-menu.ts";
 
 export type SettingsChangedMessage = { settings: Settings; claudeAccounts?: ClaudeAccountInfo[] };
@@ -80,6 +81,7 @@ export function applySettingsChanged(prev: SettingsView | undefined, m: Settings
 /** Module stores: labels, back marks (settings.get is `first`: no reminder card, a reconnect must not replay them), app name and icon. */
 export function publishSettings(s: Settings, source: "get" | "changed") {
   setLabels(s.labels);
+  setCommitGenerator(s);
   setBack(s.back, source === "get");
   setApp(s.app);
 }

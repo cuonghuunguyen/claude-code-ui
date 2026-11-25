@@ -11,6 +11,7 @@ import { createOpenCode2Engine, loadOpenCode2History, OPENCODE2_CAPABILITIES } f
 import { createOpenCode2McpConfig, createOpenCode2PluginsConfig, createOpenCode2SkillsConfig } from "./opencode2-config.ts";
 import { createOpenCode2Login } from "./opencode2-providers.ts";
 import { INLINE_META } from "./opencode2-inline.ts";
+import { oneShot2 } from "./opencode2-oneshot.ts";
 import { FORK_META, forkCut } from "./opencode2-fork.ts";
 import { createFolderReloads } from "./folder-reload.ts";
 import { mapLimit } from "./session-scan.ts";
@@ -316,5 +317,6 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
       return { agents: both.primary.map(info), subagents: both.subagents.map(info) };
     },
     models: (cwd) => engine.modelInfos(cwd),
+    oneShot: async (r) => oneShot2(await server.client().catch((err) => Promise.reject(failure(err))), r),
   };
 }

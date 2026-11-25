@@ -5,6 +5,7 @@ import { EngineError, isModel, type CatalogueContext, type CatalogueList, type E
 import { brokenState, createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels, primaryAgents, ProviderStateBroken, type ForkLink, type InlineLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { createFolderReloads } from "./folder-reload.ts";
 import { forkAt } from "./opencode-fork.ts";
+import { oneShot1 } from "./opencode-oneshot.ts";
 import { createOpenCodeMcpConfig } from "./opencode-config-mcp.ts";
 import { createOpenCodeSkillsConfig } from "./opencode-config-skills.ts";
 import { createOpenCodePluginsConfig } from "./opencode-config-plugins.ts";
@@ -36,6 +37,8 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
   const openCode = o.server?.instance ?? createOpenCodeServer({ path: () => appSettings.get().opencode.path, ...o.server });
   /** Directory and title of each OpenCode session this daemon listed, created or opened. */
   const openCodeMeta = new Map<string, { cwd: string; title: string }>();
+  /** Ids of the temporary sessions of `oneShot`: never listed. */
+  const transient = new Set<string>();
   const openCodeFail = (err: unknown) => (err instanceof OpenCodeError ? { code: err.code, message: err.message } : { code: "opencode_failed", message: (err as Error).message });
   /** The inline task sessions of session `id` (sessions.json `inlineOf`). */
   const inlinesOf = (id: string): InlineLink[] => settings.entries().flatMap(([inlineId, l]) => (l.inlineOf?.sessionId === id ? [{ inlineId, callId: l.inlineOf.callId, ...(l.inlineOf.denied && { denied: l.inlineOf.denied }) }] : []));
@@ -174,6 +177,7 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
       const folderDefault = (cwd: string) => (defaults.get(cwd) ?? defaults.set(cwd, Promise.race([openCodeEngine.defaultAgent(cwd), new Promise<string>((r) => setTimeout(() => r(openCodeEngine.defaultAgentKnown(cwd)), 2_000).unref())])).get(cwd)!);
       for (const [cwd, list] of rows)
         for (const row of list) {
+          if (transient.has(row.id)) continue;
           const loaded = ctx.session(row.id);
           const saved = linked.get(row.id);
           // The fork of a Fork run shows in its parent's card only; its id stays known so its link is kept (`keep`).
@@ -390,6 +394,7 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
       return { agents: both.primary.map(info), subagents: both.subagents.map(info) };
     },
     models: (cwd) => openCodeModelsRepaired(cwd),
+    oneShot: (r) => oneShot1(openCode, r, transient),
     // A model refresh held back by a running OpenCode session no longer waits for it.
     settled: () => (void flushProviders(), reloads.settled(), globalReloads.settled()),
     settingsChanged: (before: Settings, next: Settings) => {

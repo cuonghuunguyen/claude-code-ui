@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ProjectOverrides } from "@claude-ui/protocol";
-import { historySettings, inlineTaskSettings, jiraOriginsInUse, jiraSettings, projectOverrides, projectOverridesOfFile } from "../src/project-overrides.ts";
+import { commitMessageSettings, historySettings, inlineTaskSettings, jiraOriginsInUse, jiraSettings, projectOverrides, projectOverridesOfFile } from "../src/project-overrides.ts";
 import { createLocalHistory } from "../src/local-history.ts";
 import { parseSettings } from "../src/settings.ts";
 
@@ -84,6 +84,19 @@ describe("readers", () => {
     expect(inlineTaskSettings(s, "/a")).toEqual({ enabled: true, model: "sonnet", openCodeModel: "", maxTurns: 10 });
     expect(inlineTaskSettings(s, "/b")).toEqual({ enabled: true, model: "haiku", openCodeModel: "deepseek/flash", maxTurns: 10 });
     expect(inlineTaskSettings(s, "/c")).toEqual(s.inlineTask);
+  });
+
+  it("commit message generator: Project fields replace the global ones, a Worktree uses its main checkout, a blank model is haiku", () => {
+    const s = parseSettings({ git: { commitMessageEngine: "claude", commitMessageModel: "sonnet", commitMessageOpenCodeModel: "a/b" }, projects: { overrides: { local: { "/a": { commitMessage: { engine: "opencode" } }, "/b": { commitMessage: { model: "opus", openCodeModel: "c/d" } } } } } });
+    expect(commitMessageSettings(s, "/a")).toEqual({ engine: "opencode", model: "sonnet", openCodeModel: "a/b" });
+    expect(commitMessageSettings(s, "/b")).toEqual({ engine: "claude", model: "opus", openCodeModel: "c/d" });
+    expect(commitMessageSettings(s, "/c")).toEqual({ engine: "claude", model: "sonnet", openCodeModel: "a/b" });
+    const main = tmp();
+    git(main, "init", "-q", "-b", "main");
+    git(main, "commit", "-q", "--allow-empty", "-m", "init");
+    const wt = join(tmp(), "wt");
+    git(main, "worktree", "add", "-q", "-b", "x", wt);
+    expect(commitMessageSettings(parseSettings({ projects: { overrides: { local: { [main]: { commitMessage: { engine: "opencode" } } } } } }), wt).engine).toBe("opencode");
   });
 
   it("local history: the Project override of enabled decides per file, both ways; exclude stays global", () => {

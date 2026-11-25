@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 import { createSecrets } from "../src/secrets.ts";
 import { checkPatch, createSettings, DEFAULTS, parseSettings, sideSettings } from "../src/settings.ts";
 
-const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {}, commitMessageWarm: false };
+const GIT = { autoRepositoryDetection: true, repositoryScanMaxDepth: 1, repositoryScanIgnoredFolders: ["node_modules"], scanRepositories: [], ignoredRepositories: [], detectSubmodules: true, detectSubmodulesLimit: 10, ignoreSubmodules: false, openRepositoryInParentFolders: "always", commitMessageInstruction: "", commitMessageInstructions: {}, commitMessageWarm: false, commitMessageEngine: "claude", commitMessageModel: "haiku", commitMessageOpenCodeModel: "" };
 const file = () => join(mkdtempSync(join(tmpdir(), "settings-")), "settings.json");
 
 it("defaults with no file: orchestration off, cap 4, coordinator does not answer permissions (the user opts in)", () => {
@@ -460,6 +460,9 @@ it("projects.overrides: a patch with an invalid override is refused with the fie
     [{ local: { "/p": { history: { exclude: [] } } } }, /Project overrides must be/],
     [{ local: { "": { mode: "plan" } } }, /Project overrides must be/],
     [{ local: { "/p": { effort: "huge" } } }, /Project overrides must be/],
+    [{ local: { "/p": { commitMessage: { engine: "gpt" } } } }, /Project overrides must be/],
+    [{ local: { "/p": { commitMessage: { openCodeModel: "flash" } } } }, /Project overrides must be/],
+    [{ local: { "/p": { commitMessage: { model: "" } } } }, /Project overrides must be/],
   ];
   for (const [overrides, message] of bad) expect(() => s.set({ projects: { overrides: overrides as never } })).toThrow(message);
   // A refused Jira URL says so (the https rule), not the whole-map rule.
@@ -536,4 +539,15 @@ it("a key like __proto__ is a plain key", () => {
   settings.setProject("__proto__", "__proto__", { mode: "plan" });
   expect(Object.getPrototypeOf(settings.get().projects.overrides)).toBe(Object.prototype);
   expect(({} as Record<string, unknown>).mode).toBeUndefined();
+});
+
+it("git commit message generator: engine, model and OpenCode model are validated; Project overrides take the same rules", () => {
+  const s = createSettings({ file: file() });
+  expect(() => s.set({ git: { commitMessageEngine: "gpt" as never } })).toThrow("Commit message generator engine must be");
+  expect(() => s.set({ git: { commitMessageModel: "" } })).toThrow("Commit message generator model must be");
+  expect(() => s.set({ git: { commitMessageOpenCodeModel: "flash" } })).toThrow("Commit message generator OpenCode model must be");
+  const next = s.set({ git: { commitMessageEngine: "opencode", commitMessageModel: "sonnet", commitMessageOpenCodeModel: "deepseek/flash" }, projects: { overrides: { local: { "/p": { commitMessage: { engine: "claude", openCodeModel: "a/b" } } } } } });
+  expect(next.git).toMatchObject({ commitMessageEngine: "opencode", commitMessageModel: "sonnet", commitMessageOpenCodeModel: "deepseek/flash" });
+  expect(next.projects.overrides.local!["/p"]).toEqual({ commitMessage: { engine: "claude", openCodeModel: "a/b" } });
+  expect(s.set({ git: { commitMessageOpenCodeModel: "" } }).git.commitMessageOpenCodeModel).toBe("");
 });

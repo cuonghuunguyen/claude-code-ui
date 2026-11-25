@@ -801,7 +801,7 @@ function LauncherShortcutRow({ installed, request, onInstalled, onError }: { ins
   );
 }
 
-type Row = { key: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number } | { kind: "list" } | { kind: "text" } | { kind: "line" } | { kind: "select"; options: { value: string; label?: Key }[]; parse?: (v: string) => unknown });
+type Row = { key: string } & ({ kind: "switch" } | { kind: "number"; min: number; max: number } | { kind: "list" } | { kind: "text" } | { kind: "line"; placeholder?: string } | { kind: "select"; options: { value: string; label?: Key }[]; parse?: (v: string) => unknown });
 /** The select option's text: its catalog key, or the value itself for a setting value of VS Code's Git extension (true, subFolders, always). */
 const optionLabel = (o?: { value: string; label?: Key }) => o && (o.label ? t(o.label) : o.value);
 /** The group and section title of a daemon section. */
@@ -930,6 +930,9 @@ const SECTIONS: { id: keyof Settings; rows: Row[] }[] = [
       { key: "detectSubmodulesLimit", kind: "number", min: 0, max: 100 },
       { key: "ignoreSubmodules", kind: "switch" },
       { key: "openRepositoryInParentFolders", kind: "select", options: ["always", "never", "prompt"].map((value) => ({ value })) },
+      { key: "commitMessageEngine", kind: "select", options: [{ value: "claude", label: "settings.git.engine.claude" }, { value: "opencode", label: "settings.git.engine.opencode" }] },
+      { key: "commitMessageModel", kind: "line", placeholder: "haiku" },
+      { key: "commitMessageOpenCodeModel", kind: "line", placeholder: "provider/model" },
       { key: "commitMessageInstruction", kind: "text" },
       { key: "commitMessageWarm", kind: "switch" },
     ],
@@ -965,6 +968,9 @@ function overriddenRows(o: ProjectOverrides): Set<string> {
   if (o.inlineTask?.model) rows.add("inlineTask.model");
   if (o.inlineTask?.openCodeModel) rows.add("inlineTask.openCodeModel");
   if (o.history?.enabled !== undefined) rows.add("history.enabled");
+  if (o.commitMessage?.engine) rows.add("git.commitMessageEngine");
+  if (o.commitMessage?.model) rows.add("git.commitMessageModel");
+  if (o.commitMessage?.openCodeModel) rows.add("git.commitMessageOpenCodeModel");
   return rows;
 }
 
@@ -1050,7 +1056,9 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
       {sec.rows.map((row) => {
         const id = `settings-${sec.id}-${row.key}`;
         const label = rk(sec.id, row.key, "label");
-        const hint = rk(sec.id, row.key, "hint");
+        // GH-984: the warm process is Claude only.
+        const warmOff = sec.id === "git" && row.key === "commitMessageWarm" && settings.git.commitMessageEngine === "opencode";
+        const hint = warmOff ? t("settings.git.warmOpenCode") : rk(sec.id, row.key, "hint");
         const value = (settings[sec.id] as Record<string, unknown>)[row.key];
         const patch = (v: unknown) => ({ [sec.id]: { [row.key]: v } }) as SettingsPatch;
         const marked = overriddenIn.has(`${sec.id}.${row.key}`);
@@ -1062,10 +1070,13 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
             <div className="min-w-0 flex-1">
               <label htmlFor={id} className="block text-sm">{label}</label>
               <span id={`${id}-hint`} className="block text-muted-foreground text-xs">{hint}</span>
+              {sec.id === "git" && row.key === "commitMessageOpenCodeModel" && settings.git.commitMessageEngine === "opencode" && !settings.git.commitMessageOpenCodeModel && (
+                <span className="block text-warning text-xs" data-testid="settings-git-modelMissing">{t("settings.git.modelMissing")}</span>
+              )}
               {marked && <OverriddenMarker id={`${id}-overridden`} onOpen={openProject} />}
             </div>
             {row.kind === "switch" ? (
-              <Switch on={value === true} label={label} held={saving} onToggle={(on) => void save(patch(on))} title={label} describedBy={described} testId={id} />
+              <Switch on={value === true} label={label} held={saving || warmOff} onToggle={(on) => void save(patch(on))} title={label} describedBy={described} testId={id} />
             ) : row.kind === "select" ? (
               <Select value={String(value)} onValueChange={(v) => v && void save(patch(row.parse ? row.parse(v) : v))}>
                 <SelectTrigger id={id} aria-describedby={described} aria-label={label} data-testid={id} className="w-44 max-md:data-[size=default]:h-11">
@@ -1087,6 +1098,7 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
                 spellCheck={false}
                 autoCapitalize="off"
                 autoComplete="off"
+                placeholder={row.placeholder}
                 value={draft[id] ?? String(value)}
                 onChange={(e) => setDraft((d) => ({ ...d, [id]: e.target.value }))}
                 onBlur={() => id in draft && void save(patch(draft[id]!.trim()), id)}

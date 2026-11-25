@@ -6,15 +6,16 @@ import type { GitTypes } from "./areas.ts";
 import type { DaemonContext } from "./daemon-context.ts";
 import type { Area, Msg, Respond } from "./dispatch.ts";
 import { GitRequestError, NOT_TOP, answer, gitRequest, read as gitRead, write as gitWrite } from "./git-request.ts";
-import { gitBlame, gitDiff, gitFileAt, gitLog, gitOperationOf, gitRefs, gitShow, isHash } from "./git.ts";
+import { WorktreeError, gitBlame, gitDiff, gitFileAt, gitLog, gitOperationOf, gitRefs, gitShow, isHash } from "./git.ts";
 import { gitBranch, gitFetch, gitPull, gitPush, gitTagDelete, gitTagRemote } from "./git-remote.ts";
-import { generateCommitMessage, instructionFor, promptFor } from "./commit-message.ts";
+import { COMMIT_SYSTEM, DEFAULT_COMMIT_MODEL, generateCommitMessage, generateConfig, instructionFor, promptFor, unfence, warmWanted } from "./commit-message.ts";
+import { commitMessageSettings } from "./project-overrides.ts";
 import { gitAbort, gitBranchCreate, gitCheckout, gitCommitAction, gitCommitDiff, gitCommitFiles, gitCommitMenu, gitContinue, gitMergeRebase, gitReword, gitRollback, gitRollbackHunk, gitRollbackPreview, gitStash, gitStashList, gitStashPush, gitTag, gitTagCreate, gitTagSigning } from "./git-write.ts";
 
-export type GitAreaContext = Pick<DaemonContext, "git" | "refused" | "statusOf" | "reposOf" | "lastOpen" | "localHistory" | "netSlot" | "appSettings" | "warmCommit" | "accountOf"> & { opts: Pick<DaemonContext["opts"], "query"> };
+export type GitAreaContext = Pick<DaemonContext, "git" | "refused" | "statusOf" | "reposOf" | "lastOpen" | "localHistory" | "netSlot" | "appSettings" | "warmCommit" | "accountOf" | "catalogues"> & { opts: Pick<DaemonContext["opts"], "query"> };
 
 export function createGitArea(ctx: GitAreaContext): Area<GitTypes> {
-  const { git, refused, statusOf, reposOf, lastOpen, localHistory, netSlot, appSettings, warmCommit, accountOf, opts } = ctx;
+  const { git, refused, statusOf, reposOf, lastOpen, localHistory, netSlot, appSettings, warmCommit, accountOf, catalogues, opts } = ctx;
   /** The running `git.commitMessage` of this connection: stopped by `git.commitMessageCancel`, a newer one, and the close. */
   let generating: AbortController | undefined;
   /** The signed `git.tagCreate` of this connection, aborted by `git.tagCancel` and when the connection closes. */
@@ -152,8 +153,48 @@ export function createGitArea(ctx: GitAreaContext): Area<GitTypes> {
         const prompt = promptFor(instructionFor(appSettings.get().git, msg.project), d);
         // The Project's Claude account: a diff of a Project with its own account does not go out on the global one. The warm process runs on the global account only.
         const account = accountOf(cwd);
-        const message = await generateCommitMessage({ cwd, prompt, signal: ctl.signal, query: opts.query, env: account.env, ...(account.global && appSettings.get().git.commitMessageWarm && { warm: warmCommit }) });
-        return { message, ...(d.cut && { truncated: true }) };
+        const settings = appSettings.get();
+        const eff = commitMessageSettings(settings, msg.project ?? cwd);
+        const cut = d.cut ? { truncated: true as const } : {};
+        // OpenCode: one temporary tool-less session. It never falls back to Claude.
+        const viaOpenCode = async (model: string): Promise<string> => {
+          const oneShot = catalogues.byName("opencode")?.oneShot;
+          if (!oneShot) throw new WorktreeError("generate_failed", "OpenCode is not available");
+          const run = new AbortController();
+          let timedOut = false;
+          const timer = setTimeout(() => ((timedOut = true), run.abort()), generateConfig.timeout);
+          const stop = () => run.abort();
+          ctl.signal.addEventListener("abort", stop, { once: true });
+          if (ctl.signal.aborted) run.abort();
+          try {
+            const text = unfence(await oneShot({ cwd, system: COMMIT_SYSTEM, text: prompt, model, signal: run.signal }));
+            if (!text) throw new WorktreeError("generate_failed", "OpenCode returned no message");
+            return text;
+          } catch (e) {
+            if (e instanceof WorktreeError) throw e;
+            if (timedOut) throw new WorktreeError("timeout", "OpenCode did not answer in time");
+            if (ctl.signal.aborted) throw new WorktreeError("cancelled", "cancelled");
+            throw new WorktreeError("generate_failed", (e as Error).message);
+          } finally {
+            clearTimeout(timer);
+            ctl.signal.removeEventListener("abort", stop);
+          }
+        };
+        if (eff.engine === "opencode") {
+          if (!eff.openCodeModel) throw new GitRequestError("commit_model_missing", "Pick an OpenCode model in Settings › Git › Commit message generator");
+          return { message: await viaOpenCode(eff.openCodeModel), engine: "opencode", ...cut };
+        }
+        // The warm process runs on the global account, engine and model only.
+        const warm = account.global && warmWanted(settings) && eff.model === (settings.git.commitMessageModel || DEFAULT_COMMIT_MODEL);
+        try {
+          const message = await generateCommitMessage({ cwd, prompt, signal: ctl.signal, query: opts.query, env: account.env, model: eff.model, ...(warm && { warm: warmCommit }) });
+          return { message, engine: "claude", ...cut };
+        } catch (e) {
+          if (!(e instanceof WorktreeError) || e.code !== "generate_auth") throw e;
+          // Claude is not logged in: the one case that falls back, and only to a set OpenCode model.
+          if (!eff.openCodeModel) throw new WorktreeError("generate_failed", e.message);
+          return { message: await viaOpenCode(eff.openCodeModel), engine: "opencode", fellBack: true, ...cut };
+        }
       })));
     } finally {
       if (generating === ctl) generating = undefined;
