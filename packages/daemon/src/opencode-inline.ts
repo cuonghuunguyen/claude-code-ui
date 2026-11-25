@@ -1,8 +1,8 @@
 // Inline task on OpenCode (GH-734, docs/spec.md "Inline tasks"): what the daemon reads of a child session's events (usage, turns, last text, files)
 // and the request bodies it sends. The session side (child create, abort, waiting) is OpenCodeSession.inlineTask.
-import { INLINE_OUTPUT_TOKENS, INLINE_TEXT_CHARS, type InlineBuiltin, type InlineResult, type InlineSpec } from "./inline-types.ts";
+import { Denials, INLINE_OUTPUT_TOKENS, INLINE_TEXT_CHARS, stepLine, type InlineBuiltin, type InlineResult, type InlineSpec } from "./inline-types.ts";
 import { errorText, type OpenCodeError } from "./opencode-errors.ts";
-import type { OpenCodeMessage, OpenCodePart } from "./opencode-parts.ts";
+import { mapTool, REJECTED, type OpenCodeMessage, type OpenCodePart } from "./opencode-parts.ts";
 
 type Payload = { type: string; properties: Record<string, any> };
 
@@ -38,6 +38,9 @@ export class InlineCollector {
   private readonly texts = new Map<string, { messageId: string; text: string }>();
   private readonly steps = new Map<string, OpenCodePart & { reason?: string }>();
   private readonly files = new Set<string>();
+  private readonly calls = new Map<string, { tool: string; input: Record<string, unknown> }>();
+  /** The steps the user or a rule denied. */
+  readonly denials = new Denials();
   private model: string | undefined;
   /** Set by `session.idle` of the child. */
   idle = false;
@@ -61,7 +64,12 @@ export class InlineCollector {
         if (part.sessionID !== this.sessionId) return;
         if (part.type === "text" && part.messageID && !part.synthetic && !part.ignored) this.texts.set(part.id, { messageId: part.messageID, text: part.text ?? "" });
         else if (part.type === "step-finish") this.steps.set(part.id, part);
-        else if (part.type === "tool" && part.state?.status === "completed" && (part.tool === "edit" || part.tool === "write")) {
+        else if (part.type === "tool" && part.callID && part.state) {
+          this.calls.set(part.callID, { tool: part.tool ?? "", input: part.state.input ?? this.calls.get(part.callID)?.input ?? {} });
+          // The error OpenCode stores for a refused call (a user's Deny is noted by the session when it replies).
+          if (part.state.status === "error" && REJECTED.test(part.state.error ?? "")) this.deny(part.callID);
+        }
+        if (part.type === "tool" && part.state?.status === "completed" && (part.tool === "edit" || part.tool === "write")) {
           const file = part.state.input?.filePath;
           if (typeof file === "string") this.files.add(file);
         }
@@ -81,6 +89,13 @@ export class InlineCollector {
     }
   }
 
+  /** Call `callId` was denied: listed as its card line (`Bash: rm x`). */
+  deny(callId: string) {
+    const c = this.calls.get(callId);
+    if (!c) return;
+    const { tool, input } = mapTool(c.tool, c.input);
+    this.denials.add(callId, stepLine(tool, input));
+  }
   get turns() {
     return this.steps.size;
   }

@@ -2,7 +2,7 @@
 import { existsSync } from "node:fs";
 import { EFFORTS, type ClientMessage, type ModelInfo, type PermissionMode, type SessionListItem } from "@claude-ui/protocol";
 import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx, type SavedSession, type Settings } from "./engine-catalogue.ts";
-import { brokenState, createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels, primaryAgents, ProviderStateBroken, type ForkLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
+import { brokenState, createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels, primaryAgents, ProviderStateBroken, type ForkLink, type InlineLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { createFolderReloads } from "./folder-reload.ts";
 import { forkAt } from "./opencode-fork.ts";
 import { createOpenCodeMcpConfig } from "./opencode-config-mcp.ts";
@@ -37,6 +37,8 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
   /** Directory and title of each OpenCode session this daemon listed, created or opened. */
   const openCodeMeta = new Map<string, { cwd: string; title: string }>();
   const openCodeFail = (err: unknown) => (err instanceof OpenCodeError ? { code: err.code, message: err.message } : { code: "opencode_failed", message: (err as Error).message });
+  /** The inline task sessions of session `id` (sessions.json `inlineOf`). */
+  const inlinesOf = (id: string): InlineLink[] => settings.entries().flatMap(([inlineId, l]) => (l.inlineOf?.sessionId === id ? [{ inlineId, callId: l.inlineOf.callId }] : []));
   /** The forks of the Fork runs of session `id` (sessions.json). */
   const forksOf = (id: string): ForkLink[] => settings.entries().flatMap(([forkId, l]) => (l.forkOf?.sessionId === id ? [{ forkId, callId: l.forkOf.callId, prefix: l.forkOf.prefix }] : []));
   const openCodeEngine = createOpenCodeEngine(openCode, {
@@ -50,6 +52,8 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     visualizeOn: () => appSettings.get().chat.visualize,
     onFork: (id, forkOf) => ctx.saveSettings(() => settings.set(id, { forkOf })),
     forksOf,
+    onInline: (id, inlineOf) => ctx.saveSettings(() => settings.set(id, { inlineOf })),
+    inlinesOf,
   });
   /** A config change saved while a session of its folder ran: the folder is reloaded when they are idle, then the dialogs are told (docs/spec.md "Config dialogs"). A stopped server reads the files when it starts. */
   const reloads = createFolderReloads({ reload: async (cwd) => !openCode.running() || openCodeEngine.repairFolder(cwd), changed: (kind, cwd) => ctx.broadcast({ type: "config.changed", kind, cwd }) });
@@ -149,7 +153,7 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
           const loaded = ctx.session(row.id);
           const saved = linked.get(row.id);
           // The fork of a Fork run shows in its parent's card only; its id stays known so its link is kept (`keep`).
-          if (saved?.forkOf) {
+          if (saved?.forkOf || saved?.inlineOf) {
             out.ids.add(row.id);
             continue;
           }
@@ -162,6 +166,8 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
           out.ids.add(row.id);
           out.items.push({ ...info, id: row.id, cwd, title: row.title, lastActivity: row.time.updated, archived: !!row.time.archived, transcript: true, live: false, ...links(row.id) });
         }
+      // An inline task's session is a child (the root list has none): its id stays known so its link is kept.
+      for (const [id, l] of settings.entries()) if (l.inlineOf) out.ids.add(id);
     } catch (err) {
       const text = (err as Error).message;
       if (text !== openCodeListError) console.error("listing OpenCode sessions failed:", text);
@@ -209,7 +215,7 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     const row = await openCode.request<OpenCodeSessionRow>(`/session/${id}`, { directory: known?.cwd, timeoutMs: 0 }).catch(() => undefined);
     const cwd = row && ctx.allowed(known?.cwd ?? row.directory);
     if (!row || !cwd || ctx.isRemoving(cwd)) return undefined;
-    const history = await loadOpenCodeHistory(openCode, id, cwd, forksOf(id));
+    const history = await loadOpenCodeHistory(openCode, id, cwd, forksOf(id), inlinesOf(id));
     openCodeMeta.set(id, { cwd, title: row.title });
     const saved = settings.get(id);
     const permissionMode = OPENCODE_MODES.includes(saved?.permissionMode as never) ? (saved!.permissionMode as SessionSettings["permissionMode"]) : undefined;
@@ -336,7 +342,7 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
       await openCode.request(`/session/${id}`, { method: "DELETE", directory: at.cwd });
       openCodeMeta.delete(id);
       // The forks of its Fork runs go with it (they show nowhere else); a fork already gone is no failure.
-      const forks = settings.entries().filter(([, l]) => l.forkOf?.sessionId === id).map(([forkId]) => forkId);
+      const forks = settings.entries().filter(([, l]) => l.forkOf?.sessionId === id || l.inlineOf?.sessionId === id).map(([forkId]) => forkId);
       await Promise.all(forks.map((forkId) => openCode.request(`/session/${forkId}`, { method: "DELETE", directory: at.cwd }).catch(() => undefined)));
       if (forks.length) ctx.saveSettings(() => settings.delete(forks));
     },

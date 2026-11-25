@@ -58,3 +58,30 @@ export type InlineRunner = (spec: InlineSpec, hooks: InlineHooks) => Promise<Inl
 /** A Fork run (docs/spec.md "Fork runs"): the daemon `fork` tool's input and what an engine's `forkRun` returns to the tool. */
 export type ForkSpec = { description: string; prompt: string };
 export type ForkResult = Pick<InlineResult, "status" | "limit" | "error" | "text" | "truncated" | "filesChanged" | "durationMs">;
+
+/** One line of a tool step: the tool and the most telling input field, cut to 80 chars. */
+export function stepLine(tool: string, input: Record<string, unknown> | undefined): string {
+  const v = ["command", "file_path", "path", "pattern", "url", "description"].map((k) => input?.[k]).find((x) => typeof x === "string") as string | undefined;
+  const one = (v ?? "").replace(/\s+/g, " ").trim();
+  return one ? `${tool}: ${one.length > 80 ? `${one.slice(0, 79)}…` : one}` : tool;
+}
+
+/** The denied steps of one OpenCode inline run (a user Deny, Don't ask, a rule), one line each, once per call. */
+export class Denials {
+  private readonly lines = new Map<string, string>();
+  add(callId: string, line: string) {
+    if (!this.lines.has(callId)) this.lines.set(callId, line);
+  }
+  has = (callId: string) => this.lines.has(callId);
+  list = () => [...this.lines.values()];
+}
+
+/**
+ * The result with its denials (docs/spec.md "Inline tasks"): `denied` lists them; a run that ended in error, or done with no text, after a denial ends `denied`
+ * (the run could not do its task); any other status stays.
+ */
+export function withDenials(r: InlineResult, denied: readonly string[]): InlineResult {
+  if (!denied.length) return r;
+  const out = { ...r, denied: [...denied] };
+  return r.status === "error" || (r.status === "done" && !r.text.trim()) ? { ...out, status: "denied", error: `The user denied ${denied.join("; ")}.` } : out;
+}

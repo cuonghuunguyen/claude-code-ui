@@ -4,15 +4,15 @@
 // slash commands, inline tasks, Fork runs and the daemon's MCP servers (orchestration, claude-ui).
 import { randomUUID } from "node:crypto";
 import type { OpenCodeClient } from "@opencode/client";
-import { permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
+import { permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type Part, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT } from "./aside.ts";
 import { DAEMON_SERVER } from "./daemon-mcp.ts";
 import { DeniedRetryError } from "./denied-retry.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
-import { INLINE_TIMEOUT_MS, type ForkResult, type ForkSpec, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
+import { INLINE_TIMEOUT_MS, withDenials, type ForkResult, type ForkSpec, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
 import { ascending } from "./opencode-id.ts";
 import { INLINE_SYSTEM, clip } from "./opencode-inline.ts";
-import { DONT_ASK, LOCAL_COMMANDS, OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels, withVisualize, type ForkLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
+import { DONT_ASK, LOCAL_COMMANDS, OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels, withVisualize, type ForkLink, type InlineLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { findCall, mcpKeys, mcpName, mcpTimeoutMs, showDaemonCard, WORKER_START, type McpServerKey } from "./opencode-shared.ts";
 import { FORK_PREAMBLE } from "./opencode-fork.ts";
 import { FORK_META, forkCut } from "./opencode2-fork.ts";
@@ -20,7 +20,7 @@ import { mapLimit } from "./session-scan.ts";
 import { INLINE_META, InlineCollector2, inlineRules, storedEnd, type StoredEnd } from "./opencode2-inline.ts";
 import { contentBefore, type PatchPart, type SnapshotSource } from "./opencode-snapshot.ts";
 import { visualizeSystem } from "./visualize.ts";
-import { ChildRuns, EarlyEvents } from "./opencode2-children.ts";
+import { ChildRuns, EarlyEvents, type ChildKind } from "./opencode2-children.ts";
 import { OpenCode2Mapper, bashPart, failureText, mapTool2, type Failure, type OpenCode2Message, type Shell2 } from "./opencode2-parts.ts";
 import type { OpenCodeServer } from "./opencode-server.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
@@ -106,6 +106,9 @@ const COLD_AGENTS_MS = 5_000;
 const COMMANDS_WAIT_MS = 5_000;
 /** The instruction entry that carries an inline task's system text. */
 const INLINE_ENTRY = "claude-ui-inline";
+/** The steps an inline run keeps while it has no call (the call's event may come after the run started). */
+const EARLY_STEPS = 500;
+const INLINE_TOOL = `mcp__${DAEMON_SERVER}__inline_task`;
 /** The instruction entry that carries the visualize skill's text while the setting is on (docs/spec.md "Inline visualizations"). */
 const VISUALIZE_ENTRY = "claude-ui-visualize";
 
@@ -146,7 +149,7 @@ export type OpenCode2History = {
   /** The fork sessions of the Fork runs of this session with their stored messages (none: the fork is gone from OpenCode). */
   forks?: (ForkLink & { messages?: OpenCode2Message[] })[];
   /** The child sessions of the `subagent` calls (stored `state.metadata.sessionID`), nested ones included, with their stored messages and the call each runs for. */
-  children?: Record<string, { callId: string; messages: OpenCode2Message[] }>;
+  children?: Record<string, { callId: string; messages: OpenCode2Message[]; /** An inline task's session (its prompt is no step); none = a subagent's. */ kind?: ChildKind }>;
 };
 /** How deep the subagents of subagents are followed at a restore. */
 const CHILD_DEPTH = 5;
@@ -177,7 +180,7 @@ export async function loadMessages(client: OpenCodeClient, sessionID: string): P
   }
 }
 
-export async function loadOpenCode2History(client: OpenCodeClient, id: string, cwd: string, isOurs: (sessionID: string) => Promise<boolean> = async (sid) => sid === id, forkLinks: readonly ForkLink[] = []): Promise<OpenCode2History> {
+export async function loadOpenCode2History(client: OpenCodeClient, id: string, cwd: string, isOurs: (sessionID: string) => Promise<boolean> = async (sid) => sid === id, forkLinks: readonly ForkLink[] = [], inlineLinks: readonly InlineLink[] = []): Promise<OpenCode2History> {
   const [all, info, active, requests, forms] = await Promise.all([
     loadMessages(client, id),
     client.session.get({ sessionID: id }),
@@ -193,6 +196,10 @@ export async function loadOpenCode2History(client: OpenCodeClient, id: string, c
   const forks = await mapLimit([...forkLinks], 4, async (f) => ({ ...f, messages: await loadMessages(client, f.forkId).catch(() => undefined) }));
   const messages = cut < 0 ? all : all.slice(0, cut);
   const children = await loadChildren(client, messages);
+  // The sessions of linked inline tasks (one whose session is gone shows as its call only).
+  const calls = new Set(messages.flatMap((m) => (m.content ?? []).flatMap((c) => (c.type === "tool" && c.id ? [c.id] : []))));
+  for (const l of await mapLimit(inlineLinks.filter((x) => calls.has(x.callId)), 4, async (x) => ({ ...x, messages: await loadMessages(client, x.inlineId).catch(() => undefined) })))
+    if (l.messages) children[l.inlineId] = { callId: l.callId, messages: l.messages, kind: "inline" };
   return { messages, forks, children, busy: id in active, permissions: await ours(requests), forms: await ours(forms), rules: (info.permissions ?? []) as Rule2[], ...(revert && { revert }), ...(info.agent && { agent: info.agent }) };
 }
 
@@ -210,7 +217,7 @@ const SHELL_POLL_MS = 500;
 const shownUser = (m: OpenCode2Message) => m.type === "user" && (!!m.text || !!m.files?.some((f) => f.mime?.startsWith("image/") && f.data));
 type Req = { kind: "permission"; callId?: string; sessionID: string; /** The mapper of the call: an inline run's own. */ mapper: OpenCode2Mapper; /** An inline run's call: its denied card shows under it. */ parentId?: string } | { kind: "question"; sessionID: string; form: Json; questions: Question[]; /** The shown fields, one per question. */ fields: Json[] };
 /** A running inline task: its child session's events feed `notify`; `callId` = the call its steps show under. */
-type InlineRun = { callId?: string; mapper: OpenCode2Mapper; notify: (type: string, d: Json) => void; /** Its prompt reached OpenCode: a check that finds it not running ends it. */ posted?: boolean; /** The id of its prompt: stored rows with a smaller id are copied from a parent (a fork's), not its own. */ after?: string; /** Ends the run as OpenCode stored its end (an end event lost with a stream drop). */ settle: (end: StoredEnd) => void };
+type InlineRun = { callId?: string; mapper: OpenCode2Mapper; notify: (type: string, d: Json) => void; /** Its prompt reached OpenCode: a check that finds it not running ends it. */ posted?: boolean; /** The id of its prompt: stored rows with a smaller id are copied from a parent (a fork's), not its own. */ after?: string; /** Ends the run as OpenCode stored its end (an end event lost with a stream drop). */ settle: (end: StoredEnd) => void; /** The user or Don't ask denied call `callId` of the run. */ deny: (callId: string) => void; /** An inline task's input: a call that comes later is matched by it. */ input?: Json; /** Steps seen while the run has no call (newest kept), shown under the call once it is matched. */ early?: Map<string, Part>; /** Takes the call `callId` as the run's own (late match). */ attach?: (callId: string) => void };
 /** The text of the last assistant message of a stored child session (the fallback when its events were missed). */
 const lastAssistantText2 = (messages: readonly OpenCode2Message[]) => {
   for (const m of [...messages].reverse()) {
@@ -360,10 +367,11 @@ class OpenCode2Session implements EngineSession {
     }
     // A subagent's session: its stored parts show under its call (the web groups by `parentId`, the order here does not matter).
     this.linkFrom(this.mapper);
-    for (const [childId, c] of Object.entries(h.children ?? {})) this.children.link(childId, c.callId);
+    for (const [childId, c] of Object.entries(h.children ?? {})) this.children.link(childId, c.callId, c.kind);
     for (const [childId, c] of Object.entries(h.children ?? {})) {
       const child = this.children.get(childId);
-      if (child) for (const part of child.mapper.history(c.messages)) this.session.emit({ ...part, parentId: child.callId });
+      // An inline task's session starts with its prompt, which is the call's input: not a step.
+      if (child) for (const part of child.mapper.history(c.kind === "inline" ? c.messages.filter((m) => m.type !== "user") : c.messages)) this.session.emit({ ...part, parentId: child.callId });
     }
     for (const m of h.messages) this.noteUsage(m);
     void this.emitUsage();
@@ -507,7 +515,7 @@ class OpenCode2Session implements EngineSession {
     const posts = this.posts;
     return (this.resyncing ??= this.server
       .client()
-      .then((c) => loadOpenCode2History(c, this.id, this.cwd, (sid) => this.engine.isOurs(this.id, sid), this.engine.forksOf?.(this.id)))
+      .then((c) => loadOpenCode2History(c, this.id, this.cwd, (sid) => this.engine.isOurs(this.id, sid), this.engine.forksOf?.(this.id), this.engine.inlinesOf?.(this.id)))
       .then((h) => {
         // A revert missed as an event (stream drop): the cut is shown; a clear brings the cut messages back with the history below.
         if (h.revert !== this.revertAt && (this.revertAt = h.revert)) (this.mapper.forgetFrom(h.revert), this.session.emit({ type: "rewind", id: randomUUID(), userMessageId: h.revert }));
@@ -1123,6 +1131,7 @@ class OpenCode2Session implements EngineSession {
   private emitAll(parts: ReturnType<OpenCode2Mapper["event"]>) {
     this.linkFrom(this.mapper);
     for (const part of parts) this.session.emit(part);
+    if (parts.some((p) => p.type === "tool_call" && p.tool === INLINE_TOOL)) this.lateClaims();
   }
 
   private askPermission(e: Json, mapper = this.mapper, parentId?: string) {
@@ -1132,6 +1141,7 @@ class OpenCode2Session implements EngineSession {
     if (this.permissionMode === "dontAsk") {
       const card = callId && mapper.deny(callId);
       if (card) this.session.emit({ ...card, ...(parentId && { parentId }) });
+      if (callId) this.inlineRuns.get(e.sessionID)?.deny(callId);
       void this.server
         .client()
         .then((c) => c.permission.reply({ sessionID: e.sessionID, requestID: e.id, decision: "reject", message: DONT_ASK }))
@@ -1179,6 +1189,7 @@ class OpenCode2Session implements EngineSession {
       case "interrupt": {
         const card = req.callId && req.mapper.deny(req.callId);
         if (card) this.session.emit({ ...card, ...(req.parentId && { parentId: req.parentId }) });
+        if (req.callId) this.inlineRuns.get(req.sessionID)?.deny(req.callId);
         return send("reject", r.kind === "deny" ? r.message : undefined);
       }
       case "cancel":
@@ -1212,7 +1223,7 @@ class OpenCode2Session implements EngineSession {
     let callId: string | undefined;
     let client: OpenCodeClient | undefined;
     try {
-      callId = await findCall(() => this.mapper.runningCall(`mcp__${DAEMON_SERVER}__inline_task`, hooks.input, this.inlineClaimed));
+      callId = await findCall(() => this.mapper.runningCall(INLINE_TOOL, hooks.input, this.inlineClaimed));
       if (callId) this.inlineClaimed.add(callId);
       client = await this.server.client();
       const agent = await this.agentName();
@@ -1225,7 +1236,7 @@ class OpenCode2Session implements EngineSession {
       const collector = (col = new InlineCollector2());
       const mapper = new OpenCode2Mapper();
       const outcome = new Promise<{ status: InlineResult["status"]; limit?: InlineResult["limit"]; error?: string }>((resolve) => {
-        this.inlineRuns.set(id, {
+        const run: InlineRun = {
           ...(callId && { callId }),
           mapper,
           notify: (type, d) => {
@@ -1237,7 +1248,19 @@ class OpenCode2Session implements EngineSession {
             else if (collector.interrupted) resolve({ status: "stopped" });
           },
           settle: resolve,
-        });
+          deny: (cid) => collector.deny(cid),
+          ...(hooks.input && { input: hooks.input }),
+          early: new Map(),
+          attach: (cid) => {
+            run.callId = callId = cid;
+            this.inlineClaimed.add(cid);
+            if (onAbort) this.inlineStops.set(cid, onAbort);
+            this.engine.onInline?.(id, { sessionId: this.id, callId: cid });
+            for (const part of run.early!.values()) this.session.emit({ ...part, parentId: cid });
+            run.early!.clear();
+          },
+        };
+        this.inlineRuns.set(id, run);
         this.engine.adoptInline(id, this);
         timer = setTimeout(() => resolve({ status: "limit", limit: "time" }), INLINE_TIMEOUT_MS);
         onAbort = () => resolve({ status: "stopped" });
@@ -1255,13 +1278,14 @@ class OpenCode2Session implements EngineSession {
         await client.session.prompt({ sessionID: id, id: messageID, text: spec.text });
         if (run) run.posted = true;
       }
+      if (callId) this.engine.onInline?.(id, { sessionId: this.id, callId });
       const end = await outcome;
       if (end.status !== "done" && end.status !== "error") await client.session.interrupt({ sessionID: id }).catch(() => undefined);
       let text = collector.text();
       if (!text && end.status === "done") text = lastAssistantText2(await loadMessages(client, id).catch(() => []));
-      return result({ ...end, ...clip(text) }, collector);
+      return withDenials(result({ ...end, ...clip(text) }, collector), collector.denials.list());
     } catch (err) {
-      return result({ status: "error", error: (err as Error).message, ...(col && clip(col.text())) }, col);
+      return withDenials(result({ status: "error", error: (err as Error).message, ...(col && clip(col.text())) }, col), col?.denials.list() ?? []);
     } finally {
       if (timer) clearTimeout(timer);
       if (onAbort) hooks.signal.removeEventListener("abort", onAbort);
@@ -1271,13 +1295,23 @@ class OpenCode2Session implements EngineSession {
         this.engine.releaseInline(gone);
         // Its asks wait for no one any more.
         for (const [rid, r] of this.reqs) if (r.sessionID === gone && this.session.pendingRequest(rid)) this.session.cancel(rid, "The inline task ended");
-        void client?.session.remove({ sessionID: gone }).catch(() => undefined);
+        // A run with a call keeps its session (hidden): its steps show under the call after a reload (the link is saved).
+        if (!callId) void client?.session.remove({ sessionID: gone }).catch(() => undefined);
       }
       if (callId) this.inlineStops.delete(callId);
       // A claim stays while its call still runs (a second run must not take it); finished calls are dropped.
       for (const id of this.inlineClaimed) if (!this.mapper.isRunning(id)) this.inlineClaimed.delete(id);
     }
   };
+
+  /** A new `inline_task` call: a run that found none yet takes it (its event came after the run started). */
+  private lateClaims() {
+    for (const run of this.inlineRuns.values()) {
+      if (run.callId || !run.attach) continue;
+      const id = this.mapper.runningCall(INLINE_TOOL, run.input, this.inlineClaimed);
+      if (id) run.attach(id);
+    }
+  }
 
   /** One event of an inline run's session: its result, its permission asks (answered under its id), its steps under the call. */
   inlineEvent(childId: string, type: string, d: Json) {
@@ -1288,7 +1322,15 @@ class OpenCode2Session implements EngineSession {
     else if (type === "session.step.ended") this.stepPatch(childId, d);
     if (type === "permission.asked") return this.askPermission(d, run.mapper, run.callId);
     if (type === "permission.replied") return this.session.pendingRequest(d.requestID) ? this.session.cancel(d.requestID, ANSWERED) : undefined;
-    if (run.callId) for (const part of run.mapper.event(type, d)) this.session.emit({ ...part, parentId: run.callId });
+    for (const part of run.mapper.event(type, d)) {
+      if (run.callId) this.session.emit({ ...part, parentId: run.callId });
+      else if (run.early) {
+        // No call yet: the newest steps wait for it.
+        run.early.delete(part.id);
+        run.early.set(part.id, part);
+        if (run.early.size > EARLY_STEPS) run.early.delete(run.early.keys().next().value!);
+      }
+    }
   }
 
   /**
@@ -1501,6 +1543,7 @@ class OpenCode2Session implements EngineSession {
             else if (collector.interrupted) resolve({ status: "stopped" });
           },
           settle: resolve,
+          deny: () => undefined,
         });
         this.engine.adoptInline(id, this);
         timer = setTimeout(() => resolve({ status: "limit", limit: "time" }), INLINE_TIMEOUT_MS);
@@ -1648,6 +1691,9 @@ class OpenCode2EngineImpl implements Engine {
     readonly onFork?: (forkId: string, link: { sessionId: string; callId: string; prefix: number }) => void,
     /** The fork sessions of the Fork runs of a session. */
     readonly forksOf?: (id: string) => ForkLink[],
+    /** An inline task matched its call: its link is saved (sessions.json `inlineOf`). */
+    readonly onInline?: (inlineId: string, link: { sessionId: string; callId: string }) => void,
+    readonly inlinesOf?: (id: string) => InlineLink[],
   ) {}
 
   /** OpenCode's snapshot store (same layout as OpenCode 1): the data folder; `projectID` of the session row and the project's `canonical` folder as the worktree (cached; a failed read is not). */
@@ -1935,4 +1981,4 @@ class OpenCode2EngineImpl implements Engine {
 }
 
 export type OpenCode2Engine = OpenCode2EngineImpl;
-export const createOpenCode2Engine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; record?: (id: string) => void; mcp?: OpenCodeMcpRoute; visualizeOn?: () => boolean; onFork?: (forkId: string, link: { sessionId: string; callId: string; prefix: number }) => void; forksOf?: (id: string) => ForkLink[] } = {}): OpenCode2Engine => new OpenCode2EngineImpl(server, o.onTitle, o.record, o.mcp, o.visualizeOn, o.onFork, o.forksOf);
+export const createOpenCode2Engine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; record?: (id: string) => void; mcp?: OpenCodeMcpRoute; visualizeOn?: () => boolean; onFork?: (forkId: string, link: { sessionId: string; callId: string; prefix: number }) => void; forksOf?: (id: string) => ForkLink[]; onInline?: (inlineId: string, link: { sessionId: string; callId: string }) => void; inlinesOf?: (id: string) => InlineLink[] } = {}): OpenCode2Engine => new OpenCode2EngineImpl(server, o.onTitle, o.record, o.mcp, o.visualizeOn, o.onFork, o.forksOf, o.onInline, o.inlinesOf);

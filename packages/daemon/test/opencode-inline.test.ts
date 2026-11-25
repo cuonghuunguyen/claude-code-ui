@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Part } from "@claude-ui/protocol";
 import { createOpenCodeEngine } from "../src/opencode-engine.ts";
 import type { InlineSpec } from "../src/inline-types.ts";
+import type { Reply } from "../src/engine.ts";
 import type { Session, SessionOpts } from "../src/session.ts";
 import type { OpenCodeServer } from "../src/opencode-server.ts";
 
@@ -38,13 +39,15 @@ function rig(o: { smallModel?: string; script?: (path: string, body: any, emit: 
     streamReady: async () => {},
   } as unknown as OpenCodeServer;
   const emitted: Part[] = [];
-  const session = { id: "ses_parent", cwd: "/p", emit: (p: Part) => emitted.push(p), currentState: () => "running", setState: () => {}, request: () => {}, pendingRequest: () => undefined, cancel: () => {} } as unknown as Session;
-  const run = createOpenCodeEngine(server).open(session, { permissionMode: "default" } as SessionOpts);
+  const asks: { part: Record<string, any>; reply: (r: Reply) => void }[] = [];
+  const session = { id: "ses_parent", cwd: "/p", emit: (p: Part) => emitted.push(p), currentState: () => "running", setState: () => {}, request: (a: (typeof asks)[number]) => asks.push(a), pendingRequest: (id: string) => asks.find((a) => a.part.id === id), cancel: () => {} } as unknown as Session;
+  const links: [string, { sessionId: string; callId: string }][] = [];
+  const run = createOpenCodeEngine(server, { onInline: (id, l) => links.push([id, l]) }).open(session, { permissionMode: "default" } as SessionOpts);
   run.begin();
   /** The running inline_task call of the parent, as OpenCode reports it. */
   const callRunning = (id = "call_1", input: Record<string, unknown> = INPUT) =>
     emit({ type: "message.part.updated", properties: { part: { id: `prt_${id}`, type: "tool", sessionID: "ses_parent", messageID: "msg_p", callID: id, tool: TOOL, state: { status: "running", input, time: { start: 1 } } } } });
-  return { run, calls, emit, emitted, callRunning, onAbort: (f: () => void) => (abortHook = f), sent: (suffix: string) => calls.filter((c) => c.method === "POST" && c.path.endsWith(suffix)) };
+  return { run, calls, emit, emitted, asks, links, callRunning, onAbort: (f: () => void) => (abortHook = f), sent: (suffix: string) => calls.filter((c) => c.method === "POST" && c.path.endsWith(suffix)) };
 }
 const asst = (emit: (p: Payload) => void, id = "msg_a1", extra: Record<string, unknown> = {}) => emit({ type: "message.updated", properties: { info: { id, sessionID: "ses_child", role: "assistant", providerID: "acme", modelID: "small", ...extra } } });
 const part = (emit: (p: Payload) => void, p: object) => emit({ type: "message.part.updated", properties: { part: p } });
@@ -124,6 +127,54 @@ describe("OpenCode inline task", () => {
     await r2.run.inlineTask(spec(), hooks());
     await r2.run.inlineTask(spec(), hooks());
     expect(new Set(r2.emitted.filter((p) => p.parentId).map((p) => p.parentId))).toEqual(new Set(["new", "old"]));
+  });
+
+  it("a denied step: Deny on the child's ask marks the step denied under the call and lists it; done with no answer after it is status denied, with an answer stays done", async () => {
+    const run = async (answer: string) => {
+      const r = rig({
+        script: (_p, _b, emit) =>
+          queueMicrotask(() => {
+            asst(emit);
+            part(emit, { id: "prt_b", type: "tool", sessionID: "ses_child", messageID: "msg_a1", callID: "c_b", tool: "bash", state: { status: "running", input: { command: "rm x" }, time: { start: 1 } } });
+            emit({ type: "permission.asked", properties: { id: "per_1", sessionID: "ses_child", permission: "bash", patterns: ["rm x"], tool: { callID: "c_b" } } });
+          }),
+      });
+      r.callRunning();
+      const done = r.run.inlineTask(spec({ tools: ["Bash"] }), hooks());
+      for (let i = 0; i < 200 && !r.asks.length; i++) await new Promise((x) => setTimeout(x, 20));
+      r.asks[0]!.reply({ kind: "deny" });
+      part(r.emit, { id: "prt_b", type: "tool", sessionID: "ses_child", messageID: "msg_a1", callID: "c_b", tool: "bash", state: { status: "error", input: { command: "rm x" }, error: "tool call aborted", time: { start: 1, end: 2 } } });
+      if (answer) part(r.emit, text("prt_t", answer));
+      idle(r.emit);
+      return { res: await done, emitted: r.emitted };
+    };
+    const none = await run("");
+    expect(none.res).toMatchObject({ status: "denied", denied: ["Bash: rm x"], error: "The user denied Bash: rm x." });
+    expect(none.emitted.filter((p) => p.id === "c_b").at(-1)).toMatchObject({ type: "tool_call", status: "denied", parentId: "call_1" });
+    expect((await run("worked around it")).res).toMatchObject({ status: "done", text: "worked around it", denied: ["Bash: rm x"] });
+  });
+
+  it("a rule denial (OpenCode's stored rejection text) is listed once; the link of the matched call is saved; a call whose input differs still matches when it is the only running one", async () => {
+    const rule = { id: "prt_b", type: "tool", sessionID: "ses_child", messageID: "msg_a1", callID: "c_b", tool: "bash", state: { status: "error", input: { command: "rm x" }, error: "The user has specified a rule which prevents you from using this specific tool call. Rules: …", time: { start: 1, end: 2 } } };
+    const r = rig({ script: (_p, _b, emit) => queueMicrotask(() => (asst(emit), part(emit, rule), part(emit, rule), part(emit, text("prt_t", "no")), idle(emit))) });
+    r.callRunning("call_1", { ...INPUT, extra: "x", files: [] });
+    expect(await r.run.inlineTask(spec(), hooks())).toMatchObject({ status: "done", denied: ["Bash: rm x"] });
+    expect(r.emitted.filter((p) => p.id === "c_b").at(-1)).toMatchObject({ type: "tool_call", status: "denied", parentId: "call_1" });
+    expect(r.links).toEqual([["ses_child", { sessionId: "ses_parent", callId: "call_1" }]]);
+  });
+
+  it("a call that comes after the run started takes the steps seen before it", async () => {
+    const r = rig({ script: (_p, _b, emit) => queueMicrotask(() => (asst(emit), part(emit, toolPart("prt_g", "grep", { pattern: "foo" })), part(emit, text("prt_t", "ok")))) });
+    const done = r.run.inlineTask(spec(), hooks());
+    // The run looks for its call for a second first.
+    for (let i = 0; i < 200 && !r.calls.some((c) => c.path.endsWith("/prompt_async")); i++) await new Promise((x) => setTimeout(x, 20));
+    await new Promise((x) => setTimeout(x, 20));
+    expect(r.emitted.filter((p) => p.parentId)).toEqual([]);
+    r.callRunning();
+    expect(r.emitted.filter((p) => p.parentId === "call_1").map((p) => p.type)).toEqual(["tool_call", "tool_result", "assistant_text"]);
+    idle(r.emit);
+    await done;
+    expect(r.links).toEqual([["ses_child", { sessionId: "ses_parent", callId: "call_1" }]]);
   });
 
   it("filesChanged: edit and write inputs of the child, once each", async () => {

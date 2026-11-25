@@ -72,6 +72,12 @@ describe("OpenCodeMapper (live)", () => {
     ]);
   });
 
+  it("a stored tool error with OpenCode's rejection text is denied, also in a restored history; another error stays an error", () => {
+    const rejected = tool({ status: "error", input: { command: "rm x" }, error: "The user rejected permission to use this specific tool call." });
+    expect(ready().part(rejected)[0]).toMatchObject({ type: "tool_call", status: "denied" });
+    expect(ready().part(tool({ status: "error", input: { command: "rm x" }, error: "command not found" }))[0]).toMatchObject({ type: "tool_call", status: "error" });
+  });
+
   it("a task call is a subagent part; the parts of its child session carry its call id; todo status cancelled counts as completed", () => {
     const m = ready();
     const [sub] = m.part(tool({ status: "running", input: { description: "dig" }, metadata: { sessionId: "ses_kid" }, time: { start: 7 } }, { tool: "task", callID: "call_task" }));
@@ -220,5 +226,13 @@ describe("openCodeParts: a Fork run (docs/spec.md \"Fork runs\")", () => {
     expect(parts.filter((p) => p.parentId === "call_fork")).toEqual([{ type: "assistant_text", id: "prt_msg_f5", text: "the answer", streaming: false, parentId: "call_fork" }]);
     expect(parts.some((p) => p.type === "user_text" && p.text.includes("fork"))).toBe(false);
     expect(parts.filter((p) => p.type === "assistant_text").map((p) => (p as { text: string }).text)).toEqual(["hi", "the answer"]);
+  });
+
+  it("a linked inline task's session shows its assistant steps under the inline_task call (its prompt is no step)", () => {
+    const call: OpenCodeMessage = { info: { id: "msg_a3", role: "assistant" }, parts: [{ id: "prt_i", type: "tool", messageID: "msg_a3", callID: "call_inline", tool: "claude-ui-abcdefghij_inline_task", state: { status: "completed", input: { prompt: "find foo" }, output: "{}", time: { start: 5, end: 9 } } }] };
+    const inline = [user("msg_i1", "find foo"), reply("msg_i2", "foo is in a.txt")];
+    const parts = openCodeParts([...parent, call], {}, undefined, [], [{ inlineId: "ses_inline", callId: "call_inline", messages: inline }]);
+    expect(parts.filter((p) => p.parentId === "call_inline")).toEqual([{ type: "assistant_text", id: "prt_msg_i2", text: "foo is in a.txt", streaming: false, parentId: "call_inline" }]);
+    expect(parts.some((p) => p.type === "user_text" && p.text === "find foo")).toBe(false);
   });
 });
