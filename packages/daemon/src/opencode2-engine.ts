@@ -585,6 +585,7 @@ class OpenCode2Session implements EngineSession {
   private attach(): Promise<void> {
     let attaching: McpServerKey = "orchestration";
     return (this.attaching ??= (async () => {
+      await this.released;
       const route = this.engine.mcp;
       const url = route?.url();
       const keys = url ? mcpKeys(this.opts, this.id) : [];
@@ -641,6 +642,8 @@ class OpenCode2Session implements EngineSession {
       this.localRun = this.clearing ??= this.startOver().finally(() => (this.clearing = undefined));
       return undefined;
     }
+    // The heir is being made: a turn here would run on a session the tabs are about to leave.
+    if (this.clearing) return void ((this.localRun = undefined), this.notice(`local:${ascending("msg")}`, "Starting a new session; send again in a moment"));
     const local = !images.length && /^\/(compact|undo|redo)$/.exec(text.trim())?.[1];
     if (local) {
       // Only /undo is awaited by its reply (the undone prompt goes back to the box); /compact and /redo run on their own.
@@ -692,7 +695,21 @@ class OpenCode2Session implements EngineSession {
 
   private localRun?: Promise<{ text: string; images: string[] } | undefined>;
   private clearing?: Promise<undefined>;
-  private startOver = (): Promise<undefined> => clearSession(this.session, this.opts, this.settings(), this.engine.createHeir, (text) => this.notice(`local:${ascending("msg")}`, text)).then(() => undefined);
+  private startOver = (): Promise<undefined> => clearSession(this.session, this.opts, this.settings(), this.engine.createHeir, (text) => this.notice(`local:${ascending("msg")}`, text), () => this.releaseTools()).then(() => undefined);
+  private released: Promise<unknown> | undefined;
+  /** After a /clear the orchestration binding of this session's live tools server went to the heir: the servers leave OpenCode and their routes are dropped; the next attach adds them again with a token and binding of this session's own. */
+  private releaseTools() {
+    this.engine.mcp?.drop(this.id);
+    const names = [...this.mcpOn].map((k) => mcpName(this.id, k));
+    this.mcpOn = new Set();
+    this.added.clear();
+    if (!names.length || !this.server.running()) return;
+    this.released = this.server
+      .client()
+      .then((c) => Promise.all(names.map((server) => c.experimental.mcp.remove({ server, location: { directory: this.cwd } }).catch(() => undefined))))
+      .catch(() => undefined)
+      .finally(() => (this.released = undefined));
+  }
   /** The run of the `/undo` just taken by prompt(): its undone prompt (no draft when nothing was undone). */
   localDraft = () => this.localRun ?? Promise.resolve(undefined);
 

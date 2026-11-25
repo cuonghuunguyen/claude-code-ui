@@ -37,9 +37,9 @@ describe("clearing", () => {
 
 describe("heirView", () => {
   it("carries the settings and commands of the old view with an empty timeline", () => {
-    const old = { ...state(said(emptySession(), "u1", "hi"), "running"), commands: [{ name: "x", description: "", argumentHint: "" }], model: "haiku", permissionMode: "plan" as const, effort: "high" as const };
+    const old = { ...state(said(emptySession(), "u1", "hi"), "running"), commands: [{ name: "x", description: "", argumentHint: "" }], model: "haiku", permissionMode: "plan" as const, effort: "high" as const, agent: "docs" };
     const v = heirView(old);
-    expect(v).toMatchObject({ commands: old.commands, model: "haiku", permissionMode: "plan", effort: "high", state: "idle", lastSeq: 0, order: [] });
+    expect(v).toMatchObject({ commands: old.commands, model: "haiku", permissionMode: "plan", effort: "high", agent: "docs", state: "idle", lastSeq: 0, order: [] });
     expect(v.parts.size).toBe(0);
   });
   it("without an old view is an empty one", () => {

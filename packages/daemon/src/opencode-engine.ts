@@ -219,7 +219,7 @@ export type CreateHeir = (cwd: string, settings: SessionSettings) => Promise<Ses
  * OpenCode `/clear`: a new OpenCode session takes over the chat view (the same `onCleared` + `session_cleared` hand-over as Claude's); the old one stays untouched and idle.
  * Refused while a turn runs. A failure is a notice on the old session (no `session_cleared`).
  */
-export async function clearSession(session: Session, opts: SessionOpts, settings: SessionSettings, createHeir: CreateHeir | undefined, notice: (text: string) => void): Promise<void> {
+export async function clearSession(session: Session, opts: SessionOpts, settings: SessionSettings, createHeir: CreateHeir | undefined, notice: (text: string) => void, handedOver: () => void): Promise<void> {
   if (session.currentState() !== "idle" || session.pendingCount()) return notice("Stop the turn first");
   try {
     if (!createHeir) throw new Error("not supported");
@@ -229,6 +229,7 @@ export async function clearSession(session: Session, opts: SessionOpts, settings
     session.emit({ type: "session_cleared", id: randomUUID(), sessionId: heir.id });
     // The prompts the server moved to the heir on `session_cleared` start on its idle state.
     heir.setState("idle");
+    handedOver();
   } catch (err) {
     notice(`/clear failed: ${(err as Error).message}`);
   }
@@ -531,6 +532,7 @@ class OpenCodeSession implements EngineSession {
   private attach(): Promise<void> {
     let attaching: McpServerKey = "orchestration";
     return (this.attaching ??= (async () => {
+      await this.released;
       const route = this.engine.mcp;
       const url = route?.url();
       const keys = url ? mcpKeys(this.opts, this.id) : [];
@@ -559,6 +561,8 @@ class OpenCodeSession implements EngineSession {
       this.localRun = this.clearing ??= this.startOver().finally(() => (this.clearing = undefined));
       return undefined;
     }
+    // The heir is being made: a turn here would run on a session the tabs are about to leave.
+    if (this.clearing) return void ((this.localRun = undefined), this.notice(`local:${ascending("msg")}`, "Starting a new session; send again in a moment"));
     const local = !images.length && /^\/(compact|undo|redo)$/.exec(text.trim())?.[1];
     if (local) {
       // Only /undo is awaited by its reply (the undone prompt goes back to the box); /compact and /redo run on their own.
@@ -581,7 +585,20 @@ class OpenCodeSession implements EngineSession {
 
   private localRun?: Promise<{ text: string; images: string[] } | undefined>;
   private clearing?: Promise<undefined>;
-  private startOver = (): Promise<undefined> => clearSession(this.session, this.opts, this.settings(), this.engine.createHeir, (text) => this.notice(`local:${ascending("msg")}`, text)).then(() => undefined);
+  private startOver = (): Promise<undefined> => clearSession(this.session, this.opts, this.settings(), this.engine.createHeir, (text) => this.notice(`local:${ascending("msg")}`, text), () => this.releaseTools()).then(() => undefined);
+  /** The disconnect of the tools after a /clear: the next attach waits for it. */
+  private released: Promise<unknown> | undefined;
+  /**
+   * After a /clear the orchestration binding of this session's live tools server went to the heir. The connection leaves OpenCode and its route is dropped:
+   * the next attach connects again with a token and a binding of this session's own (else its tools would act for the heir).
+   */
+  private releaseTools() {
+    this.engine.mcp?.drop(this.id);
+    const keys = [...this.mcpOn];
+    this.mcpOn = new Set();
+    if (!keys.length || !this.server.running()) return;
+    this.released = Promise.all(keys.map((key) => this.server.request(`/mcp/${mcpName(this.id, key)}/disconnect`, { method: "POST", directory: this.cwd, timeoutMs: 0 }).catch(() => {}))).finally(() => (this.released = undefined));
+  }
   /** The run of the `/undo` just taken by prompt(): its undone prompt (no draft when nothing was undone). */
   localDraft = () => this.localRun ?? Promise.resolve(undefined);
 
