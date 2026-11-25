@@ -1467,6 +1467,20 @@ describe("daemon", () => {
       }
     }, 30_000);
 
+    it("a running OpenCode generation holds an OpenCode restart (it would lose the session); the restart works after", async () => {
+      const t = await boot({ FAKE_OPENCODE_ONESHOT_MS: "1500" });
+      try {
+        await t.c.request({ type: "settings.set", patch: { git: { commitMessageEngine: "opencode", commitMessageOpenCodeModel: "deepseek/flash-1" } } });
+        const pending = t.c.request(t.m);
+        await vi.waitFor(() => expect(t.log().some((l) => l.path.endsWith("/message"))).toBe(true));
+        expect(await t.c.request({ type: "opencode.restart" })).toMatchObject({ type: "error", code: "opencode_busy" });
+        expect(await pending).toMatchObject({ result: { engine: "opencode" } });
+        expect(await t.c.request({ type: "opencode.restart" })).toMatchObject({ type: "reply" });
+      } finally {
+        t.d.close();
+      }
+    }, 30_000);
+
     it("Cancel stops a running OpenCode run: the session is aborted and deleted", async () => {
       const t = await boot({ FAKE_OPENCODE_ONESHOT_MS: "60000" });
       try {

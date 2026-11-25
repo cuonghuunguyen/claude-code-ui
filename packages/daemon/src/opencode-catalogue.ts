@@ -394,7 +394,16 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
       return { agents: both.primary.map(info), subagents: both.subagents.map(info) };
     },
     models: (cwd) => openCodeModelsRepaired(cwd),
-    oneShot: (r) => oneShot1(openCode, r, transient),
+    // The temporary session holds a restart of the server (it would be lost) like a session creation does; a restart that waited for it runs after.
+    oneShot: async (r) => {
+      openCodeCreating++;
+      try {
+        return await oneShot1(openCode, r, transient);
+      } finally {
+        openCodeCreating--;
+        globalReloads.settled();
+      }
+    },
     // A model refresh held back by a running OpenCode session no longer waits for it.
     settled: () => (void flushProviders(), reloads.settled(), globalReloads.settled()),
     settingsChanged: (before: Settings, next: Settings) => {
