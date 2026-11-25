@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -1207,6 +1207,24 @@ describe("OpenCode Aside and session management", { timeout: TEST_MS }, () => {
     await until(() => d.requests("DELETE", `/session/${session.id}`).length > 0);
     expect(d.requests("DELETE", `/session/${session.id}`)).toHaveLength(1);
     expect((await d.ok({ type: "session.list" })).sessions.map((s: any) => s.id)).toEqual(["ses_own"]);
+  });
+
+  it("quick compact creates a session with the digest as a message that gets no reply and may read its files", async () => {
+    vi.stubEnv("XDG_CONFIG_HOME", mkdtempSync(join(tmpdir(), "qc-cfg-")));
+    try {
+      const d = await owned([{ ...msg("msg_u1", { role: "user" }), parts: [{ id: "p1", sessionID: "ses_own", messageID: "msg_u1", type: "text", text: "remember ZEBRA-7781" }] }, msg("msg_a1", done)]);
+      const r = await d.ok({ type: "session.quickCompact", sessionId: "ses_own" });
+      expect(r.session.id).not.toBe("ses_own");
+      const sent = d.requests("POST", `/session/${r.session.id}/message`);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.body.noReply).toBe(true);
+      expect(String(sent[0]!.body.parts[0].text)).toContain("source=ses_own");
+      const created = d.requests("POST", "/session").at(-1)!.body.permission;
+      expect(created).toContainEqual(expect.objectContaining({ permission: "external_directory", action: "allow" }));
+      expect(d.requests("POST", `/session/${r.session.id}/prompt_async`)).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("a running owner turn is forked before its unfinished assistant message", async () => {

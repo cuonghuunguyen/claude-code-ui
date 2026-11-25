@@ -78,6 +78,8 @@ export interface EngineCatalogue {
   delete(id: string, at: { cwd: string; transcript: boolean }): Promise<void>;
   /** A fork of the session for an Aside, or the reason there is none. Throws when the fork failed. */
   forkForAside(owner: Session, title: string): Promise<{ id: string } | { unavailable: string }>;
+  /** Quick compact (docs/spec.md "Quick compact"): a new session whose first message is the digest of `source`, or the reason there is none. Throws when it failed. */
+  quickCompact(source: Session): Promise<{ id: string; tokens: number; summarised: boolean } | { unavailable: string }>;
   commands(cwd: string): Promise<SlashCommand[]>;
   agents(cwd: string): Promise<{ agents: { name: string; description?: string }[]; subagents?: { name: string; description?: string }[] }>;
   models(cwd?: string): Promise<ModelInfo[]>;

@@ -52,6 +52,11 @@ export const asideOf = (text: string) => /^\/btw(?:\s+([\s\S]*))?$/.exec(text.tr
 /** The picker row of /btw. */
 export const ASIDE_COMMAND: SlashCommand = { name: "btw", get description() { return t("app.slash.btw"); }, argumentHint: "<question>" };
 
+/** /quick-compact (docs/spec.md "Quick compact"): typed alone it digests the session into a new one; handled by the web app, never sent. */
+export const isQuickCompact = (text: string) => text.trim() === "/quick-compact";
+/** The picker row of /quick-compact. */
+export const QUICK_COMPACT_COMMAND: SlashCommand = { name: "quick-compact", get description() { return t("app.slash.quickCompact"); }, argumentHint: "" };
+
 /** The dialogs the web app opens itself. */
 export type DialogName = "mcp" | "skills" | "plugins" | "addons" | "resume" | "shells";
 
@@ -72,9 +77,10 @@ const has = (commands: SlashCommand[], name: string) => commands.some((c) => c.n
 
 /** The picker's rows: the session's commands plus the dialog commands (a CLI row of the same name gives way to `always` ones). */
 export const withDialogCommands = (commands: SlashCommand[]): SlashCommand[] => [
-  ...commands.filter((c) => c.name !== ASIDE_COMMAND.name && !DIALOG_COMMANDS.some((d) => d.always && d.name === c.name)),
+  ...commands.filter((c) => c.name !== ASIDE_COMMAND.name && c.name !== QUICK_COMPACT_COMMAND.name && !DIALOG_COMMANDS.some((d) => d.always && d.name === c.name)),
   ...DIALOG_COMMANDS.filter((d) => d.always || !has(commands, d.name)),
   ASIDE_COMMAND,
+  QUICK_COMPACT_COMMAND,
 ];
 
 /** The dialog a prompt opens instead of being sent: `/mcp`, `/tasks`, `/bashes` alone; `/resume` alone or with text; `/skills`, `/help`, `/plugins`, `/plugin`, `/marketplace` alone unless the CLI has a command of that name. */

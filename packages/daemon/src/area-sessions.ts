@@ -3,7 +3,7 @@
 // Per-connection state: the session subscriptions and feeds and the running transcript search; `close` releases them.
 import { existsSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
-import { DEFAULT_ENGINE, ENGINES, EFFORTS, imageBlock, KNOWN_HASH_MAX, LOCAL_SIDE, KNOWN_ID_MAX, KNOWN_MAX, MAX_SEARCH_CHARS, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, BACK_MARKS_MAX, type AsideOpenResult, type PromptResult, type RewindMode, type SessionIdsResult } from "@claude-ui/protocol";
+import { DEFAULT_ENGINE, ENGINES, EFFORTS, imageBlock, KNOWN_HASH_MAX, LOCAL_SIDE, KNOWN_ID_MAX, KNOWN_MAX, MAX_SEARCH_CHARS, MIN_SEARCH_CHARS, MAX_UPLOAD_BYTES, PERMISSION_MODES, BACK_MARKS_MAX, type AsideOpenResult, type PromptResult, type QuickCompactResult, type RewindMode, type SessionIdsResult } from "@claude-ui/protocol";
 import type { SessionsTypes } from "./areas.ts";
 import type { DaemonContext } from "./daemon-context.ts";
 import type { Area, Connection, Handlers, Msg, Respond } from "./dispatch.ts";
@@ -625,6 +625,31 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
       return r.fail("aside_failed", (e as Error).message);
     }
   };
+  const quickCompact = async (msg: Msg<"session.quickCompact">, r: Respond) => {
+    const source = await find(r, msg.sessionId);
+    if (!source) return;
+    const catalogue = catalogues.ownerOf(source.id, source);
+    if (!catalogue) return r.fail("quick_compact_failed", `no engine for session ${source.id}`);
+    let id: string | undefined;
+    try {
+      const res = await catalogue.quickCompact(source);
+      if ("unavailable" in res) return r.fail("quick_compact_unavailable", res.unavailable);
+      id = res.id;
+      const oi = source.info();
+      // Right after the creation, no await between: a list scan reads the link after its transcript scan.
+      saveSettings(() => settings.set(id!, { port: port(), model: oi.model, permissionMode: oi.permissionMode, effort: oi.effort, ...(oi.agent && { agent: oi.agent }) }));
+      const s = await findSession(id);
+      if (!s) throw new Error("the new session could not be restored");
+      broadcast({ type: "sessions.changed" });
+      return r.reply({ session: s.info(), tokens: res.tokens, summarised: res.summarised } satisfies QuickCompactResult);
+    } catch (e) {
+      if (id) {
+        const err = await deleteSessionById(id, true).catch(() => undefined);
+        if (err?.code === "unknown_session" || !(await locate(id))) saveSettings(() => settings.delete([id!]));
+      }
+      return r.fail("quick_compact_failed", (e as Error).message);
+    }
+  };
   const asideClose = async (msg: Msg<"aside.close">, r: Respond) => {
     if (typeof msg.sessionId !== "string" || !asideOf(msg.sessionId)) return r.fail("not_an_aside", "this session is not an aside");
     const err = await deleteSessionById(msg.sessionId, true);
@@ -727,6 +752,7 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     "session.archive": renameOrArchive,
     "session.delete": del,
     "aside.open": asideOpen,
+    "session.quickCompact": quickCompact,
     "aside.close": asideClose,
     "aside.keep": asideKeep,
     "worker.close": worker,

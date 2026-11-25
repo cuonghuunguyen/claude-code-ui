@@ -1735,12 +1735,12 @@ class OpenCodeEngineImpl implements Engine {
     if (agent) this.created.set(id, agent);
   };
   /** The rules `POST /session` gets for a new session in `mode` (`plan` = agent plan, mode default), else as agent `agent` (none: OpenCode's default agent). */
-  block = async (mode: PermissionMode, cwd: string, agent?: string): Promise<Rule[]> => {
+  block = async (mode: PermissionMode, cwd: string, agent?: string, always: Rule[] = []): Promise<Rule[]> => {
     // The list first: a folder whose agents cannot be read fails the create (the rules cannot be known), the default agent then reuses the list.
     const known = await this.agents(cwd);
     const as = mode === "plan" ? "plan" : (agent ?? (await this.defaultAgent(cwd)));
     const own = known.find((a) => a.name === as)?.permission ?? [];
-    return modeBlock(mode === "plan" ? "default" : mode, [], denialsOf(own), { agent: as, ...(mode === "dontAsk" && { agentAsks: own.filter((a) => a.action === "ask") }) });
+    return modeBlock(mode === "plan" ? "default" : mode, always, denialsOf(own), { agent: as, ...(mode === "dontAsk" && { agentAsks: own.filter((a) => a.action === "ask") }) });
   };
 }
 

@@ -156,6 +156,7 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
       }
     },
     forkForAside: async (owner, title) => (await forId(owner.id)).forkForAside(owner, title),
+    quickCompact: async (source) => (await forId(source.id)).quickCompact(source),
     commands: async (cwd) => (await known()).commands(cwd),
     agents: async (cwd) => (await known()).agents(cwd),
     models: async (cwd) => (await known()).models(cwd),

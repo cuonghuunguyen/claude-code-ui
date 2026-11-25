@@ -7,6 +7,7 @@ import {
   partHash,
   type Effort,
   type Event,
+  type ContextUsage,
   type Part,
   type PermissionMode,
   type PermissionDecision,
@@ -322,6 +323,11 @@ export class Session {
   }
   externalTurnRunning() {
     return this.run.externalTurnRunning();
+  }
+  /** The window of the latest `/context` numbers of this session (Claude); undefined before its first turn here. */
+  contextUsage(): ContextUsage | undefined {
+    for (const e of this.index.heads().reverse()) if (e.part.type === "context_usage") return e.part.usage;
+    return undefined;
   }
   untitled() {
     return this.run.untitled();

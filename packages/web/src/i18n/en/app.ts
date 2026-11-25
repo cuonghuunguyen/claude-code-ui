@@ -782,6 +782,16 @@ export default {
   // tabs-bar.tsx
   "app.tabs.closeShort": "Close",
   // commands.ts / split.ts / copy-text.ts
+  "app.slash.quickCompact": "Digest this session into a new one, no model call",
+  "app.session.quickCompact": "Quick compact",
+  "app.quickCompact.label": "Quick compact",
+  "app.quickCompact.from": "from {title}",
+  "app.quickCompact.tokens": "~{n} tokens",
+  "app.quickCompact.summarised": "oldest part summarised",
+  "app.quickCompact.show": "Show digest",
+  "app.quickCompact.hide": "Hide digest",
+  "app.quickCompact.opening": "Quick compact: building the digest…",
+  "app.prompt.quickCompactFailed": "Quick compact failed: {message}",
   "app.slash.btw": "Ask an aside: a read-only side conversation forked from this session",
   "app.slash.mcp": "Configure Model Context Protocol servers",
   "app.slash.skills": "List available skills",

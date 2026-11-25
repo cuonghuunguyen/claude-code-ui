@@ -248,6 +248,8 @@ export class OpenCode2Mapper {
     for (const m of messages) if (m.type === "synthetic" && m.metadata?.source === "subagent") this.subagentNotice(m.metadata, m.text ?? "", m.time?.created);
     return messages.flatMap((m) => {
       if (m.type === "user") return this.user(m);
+      // A quick-compact digest (docs/spec.md "Quick compact"): the first message of the session, shown as the digest card.
+      if (m.type === "synthetic" && m.metadata?.source === "quick-compact") return [{ type: "user_text", id: m.id, text: m.text ?? "", images: [] }];
       if (m.type === "shell" && m.shellID) return [bashPart({ id: m.shellID, command: m.command ?? "", status: m.status ?? "exited", exit: m.exit }, m.output?.output ?? "")];
       if (m.type === "compaction") return m.status === "running" ? [] : compactionParts(m.id, m.reason, m.summary, m.error);
       if (m.type !== "assistant") return [];

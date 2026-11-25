@@ -239,9 +239,12 @@ it("each row has an actions menu: Rename, Archive, Delete; Delete is disabled wh
   const { el, onAction } = await render();
   const menuOf = (title: string) => el.querySelector<HTMLElement>(`[data-testid="session-menu"][aria-label="Actions for ${title}"]`)!;
   await act(async () => menuOf("Old idea").click());
-  expect(document.querySelector('[role="menu"]')!.textContent).toBe("RenameArchiveCopy session IDDelete…");
+  expect(document.querySelector('[role="menu"]')!.textContent).toBe("RenameArchiveQuick compactCopy session IDDelete…");
   await act(async () => document.querySelector<HTMLElement>('[data-testid="action-delete"]')!.click());
   expect(onAction).toHaveBeenLastCalledWith("c", "delete");
+  await act(async () => menuOf("Old idea").click());
+  await act(async () => [...document.querySelectorAll<HTMLElement>('[data-testid="action-quick-compact"]')].at(-1)!.click());
+  expect(onAction).toHaveBeenLastCalledWith("c", "quick-compact");
   for (const title of ["Fix login", "Docs pass"]) {
     await act(async () => menuOf(title).click());
     const del = [...document.querySelectorAll<HTMLElement>('[data-testid="action-delete"]')].at(-1)!;
@@ -249,7 +252,7 @@ it("each row has an actions menu: Rename, Archive, Delete; Delete is disabled wh
     expect(del.textContent).toBe("Delete… (stop it first)");
     await act(async () => del.click());
     expect(onAction).not.toHaveBeenCalledWith(expect.anything(), "delete", expect.anything());
-    expect(onAction).toHaveBeenCalledTimes(1);
+    expect(onAction).toHaveBeenCalledTimes(2);
   }
 });
 
@@ -1387,11 +1390,11 @@ const old = (id: string, cwd: string, title: string, days: number, o: Partial<Se
 it("GH-358 a session row's menu has Copy session ID, and Close tab only while a tab is open; each calls onAction", async () => {
   const { el, onAction } = await render({ openTabs: new Set(["c"]) });
   await ctx(row(el, "d"));
-  expect(texts()).toEqual(["Rename", "Archive", "Copy session ID", "Delete…"]);
+  expect(texts()).toEqual(["Rename", "Archive", "Quick compact", "Copy session ID", "Delete…"]);
   await act(async () => tid("action-copy-id").click());
   expect(onAction).toHaveBeenLastCalledWith("d", "copy-id");
   await ctx(row(el, "c"));
-  expect(texts()).toEqual(["Rename", "Archive", "Copy session ID", "Close tab", "Delete…"]);
+  expect(texts()).toEqual(["Rename", "Archive", "Quick compact", "Copy session ID", "Close tab", "Delete…"]);
   await act(async () => tid("action-close-tab").click());
   expect(onAction).toHaveBeenLastCalledWith("c", "close-tab");
 });
@@ -1407,7 +1410,7 @@ it("GH-358 a worker row offers Close worker and Remove worker… (no Delete…);
   openWorkers("coordinator:co");
   const { el, onAction } = await render({ list: WORKERS, activeId: null });
   await ctx(row(el, "w1"));
-  expect(texts()).toEqual(["Rename", "Archive", "Copy session ID", "Close worker", "Remove worker…"]);
+  expect(texts()).toEqual(["Rename", "Archive", "Quick compact", "Copy session ID", "Close worker", "Remove worker…"]);
   await act(async () => tid("action-close-worker").click());
   expect(onAction).toHaveBeenLastCalledWith("w1", "close-worker");
   await ctx(row(el, "w2"));

@@ -309,6 +309,10 @@ _Avoid_: toast (the component), alert, banner
 A browser-wide timeline setting (Settings > General > Timeline, palette, Ctrl+Alt+S; one value for every session) that folds each run of tool cards into one line ("4 tool calls · Read 3 · Grep 1"); prompts, text, errors and pending requests stay expanded.
 _Avoid_: compact mode
 
+**Quick compact**:
+Shrinking a Session into a new Session on the same Engine whose first message is a digest the Daemon builds from the transcript with code: user and assistant text and tool inputs kept, tool outputs in files, the recent tail verbatim; a small model condenses only the oldest part, and only over the cap (30 % of the model's context window). The source Session stays untouched. Not the Engine's own `/compact` (a model rewrite), not **Signal only** (a display setting).
+_Avoid_: compact mode, fast compact, digest session
+
 **Permission tier**:
 `low` or `high`, assigned by the daemon to a permission request (`risk-tier.ts`): for the Focus page (Always allow) and the notification card (inline Allow once and Deny), also for a worker's request (the tier at arrival, taken back if a later read says otherwise). It is no coordinator boundary: no coordinator answers a request. Unknown = `high`. Low covers reads in the worker folder and its repository's agent docs and main checkout, and, in a **plain repository** (nothing a worker can write decides what git runs: no hooks or programs in the cwd, no includes into it, no submodules or nested repositories), file edits in the worker folder and read-only git there.
 _Avoid_: risk level, trust level

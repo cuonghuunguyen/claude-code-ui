@@ -67,6 +67,8 @@ async function start({ messages = chain, settingsFile = join(mkdtempSync(join(tm
         return { sessionId };
       }) as never,
       deleteSession: (async (sid: string) => void (deleted.push(sid), transcripts.delete(sid))) as never,
+      // Quick compact writes the new transcript itself, then names it: the fake store learns it here.
+      renameSession: (async (sid: string, title: string) => void transcripts.set(sid, { messages: messages as never[], summary: title })) as never,
     },
     ...extra,
   });
@@ -149,6 +151,30 @@ describe("aside.open", () => {
     const t = await start();
     t.transcripts.delete(OWNER);
     expect((await t.request({ type: "aside.open", sessionId: OWNER, text: "q" })).code).toBe("unknown_session");
+  });
+});
+
+describe("session.quickCompact", () => {
+  it("opens a new session with the source settings and a digest transcript", async () => {
+    const uploadDir = mkdtempSync(join(tmpdir(), "qc-up-"));
+    const t = await start({ extra: { uploadDir } });
+    await t.request({ type: "session.setModel", sessionId: OWNER, model: "haiku" });
+    const r = await t.request({ type: "session.quickCompact", sessionId: OWNER });
+    expect(r.type).toBe("reply");
+    const { session, tokens, summarised } = r.result;
+    expect(session.id).not.toBe(OWNER);
+    expect(tokens).toBeGreaterThan(0);
+    expect(summarised).toBe(false);
+    expect(session.model).toBe("haiku");
+    expect(linkOf(t.settingsFile, session.id)).toMatchObject({ port: t.port, model: "haiku" });
+    expect(linkOf(t.settingsFile, session.id)?.ownerId).toBeUndefined();
+    expect(await t.ids()).toContain(OWNER);
+  });
+
+  it("replies quick_compact_unavailable for a session with no messages", async () => {
+    const t = await start({ messages: [], extra: { uploadDir: mkdtempSync(join(tmpdir(), "qc-up-")) } });
+    expect(await t.request({ type: "session.quickCompact", sessionId: OWNER })).toMatchObject({ type: "error", code: "quick_compact_unavailable" });
+    expect(await t.request({ type: "session.quickCompact", sessionId: "00000000-0000-4000-8000-0000000000ff" })).toMatchObject({ type: "error", code: "unknown_session" });
   });
 });
 

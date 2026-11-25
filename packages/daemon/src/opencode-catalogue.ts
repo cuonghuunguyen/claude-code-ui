@@ -1,5 +1,6 @@
 // The OpenCode Engine catalogue (docs/spec.md "OpenCode engine"): OpenCode's server, its stored sessions and its provider state, moved out of server.ts.
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { EFFORTS, type ClientMessage, type ModelInfo, type PermissionMode, type SessionListItem } from "@claude-ui/protocol";
 import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx, type SavedSession, type Settings } from "./engine-catalogue.ts";
 import { brokenState, createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels, primaryAgents, ProviderStateBroken, type ForkLink, type InlineLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
@@ -11,6 +12,9 @@ import { createOpenCodeSkillsConfig } from "./opencode-config-skills.ts";
 import { createOpenCodePluginsConfig } from "./opencode-config-plugins.ts";
 import { checkLogin, listProviders, loginError } from "./opencode-providers.ts";
 import { createOpenCodeServer, OpenCodeError, OpenCodeHttpError, type OpenCodeServer } from "./opencode-server.ts";
+import { capOf, fitCap, writeDigestFiles } from "./quick-compact.ts";
+import { oc1DigestEvents, openCode1Summarise, openCodeDigestDir } from "./quick-compact-opencode.ts";
+import { configDir } from "./token.ts";
 import { mapLimit } from "./session-scan.ts";
 import { Session, type SessionOpts, type SessionSettings } from "./session.ts";
 
@@ -21,6 +25,8 @@ export const OPENCODE_ID = /^ses_[A-Za-z0-9]+$/;
 /** OpenCode is wanted for a session list: the last created session was OpenCode's, or `sessions.json` has an OpenCode session (a stored one of any folder). */
 export const openCodeWanted = (engine: string, linked: Map<string, SavedSession>) => engine === "opencode" || [...linked.keys()].some((id) => OPENCODE_ID.test(id));
 type OpenCodeSessionRow = { id: string; directory: string; title: string; time: { created: number; updated: number; archived?: number } };
+/** The context window quick compact assumes for a model OpenCode does not know the limit of. */
+export const OPENCODE_WINDOW = 128_000;
 const OPENCODE_RESTART_BUSY = "OpenCode is busy: a turn runs, a login waits or a session is being created. Restart it when that is done.";
 const PROVIDERS_BROKEN_BUSY = "OpenCode's provider list is broken. It is reloaded when no OpenCode turn runs: press Retry then.";
 
@@ -369,10 +375,40 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     delete: async (id, at) => {
       await openCode.request(`/session/${id}`, { method: "DELETE", directory: at.cwd });
       openCodeMeta.delete(id);
+      rmSync(openCodeDigestDir(id), { recursive: true, force: true });
       // The forks of its Fork runs go with it (they show nowhere else); a fork already gone is no failure.
       const forks = settings.entries().filter(([, l]) => l.forkOf?.sessionId === id || l.inlineOf?.sessionId === id).map(([forkId]) => forkId);
       await Promise.all(forks.map((forkId) => openCode.request(`/session/${forkId}`, { method: "DELETE", directory: at.cwd }).catch(() => undefined)));
       if (forks.length) ctx.saveSettings(() => settings.delete(forks));
+    },
+    quickCompact: async (source) => {
+      const history = await loadOpenCodeHistory(openCode, source.id, source.cwd, []);
+      const { earlier, events } = oc1DigestEvents(history.messages);
+      if (!events.length) return { unavailable: "Quick compact needs a message in this session first" };
+      const oi = source.info();
+      const last = history.messages.map((m) => m.info).filter((i) => i.role === "assistant" && i.providerID && i.modelID).at(-1);
+      const model = last ? { providerID: last.providerID!, modelID: last.modelID! } : undefined;
+      const window = (model && (await openCodeEngine.contextLimit(model.providerID, model.modelID, source.cwd))) || OPENCODE_WINDOW;
+      const title = openCodeMeta.get(source.id)?.title ?? "New session";
+      // The new session may read the digest's files without a prompt: an always-allow rule for the quick-compact folder (kept on restore).
+      const permission = await openCodeEngine.block(oi.permissionMode, source.cwd, oi.agent, [{ permission: "external_directory", pattern: join(configDir(), "quick-compact", "*"), action: "allow" }]);
+      const row = await openCode.request<OpenCodeSessionRow>("/session", { method: "POST", directory: source.cwd, timeoutMs: 0, body: { permission } });
+      const outDir = openCodeDigestDir(row.id);
+      try {
+        const digest = await fitCap({ sessionId: source.id, title, transcript: `OpenCode session ${source.id} (open it in claude-ui; no file)`, outDir, ...(earlier && { earlier }), events }, capOf(window), openCode1Summarise(openCode, { cwd: source.cwd, fallback: model }));
+        writeDigestFiles(outDir, digest.files);
+        const name = `${title} (quick compact)`;
+        await openCode.request(`/session/${row.id}`, { method: "PATCH", directory: source.cwd, body: { title: name } });
+        openCodeEngine.noteCreated(row.id, permission);
+        const chosen = oi.model.includes("/") ? { providerID: oi.model.split("/")[0]!, modelID: oi.model.split("/").slice(1).join("/") } : model;
+        await openCode.request(`/session/${row.id}/message`, { method: "POST", directory: source.cwd, timeoutMs: 0, body: { noReply: true, ...(oi.agent && { agent: oi.agent }), ...(chosen && { model: chosen }), parts: [{ type: "text", text: digest.text }] } });
+        openCodeMeta.set(row.id, { cwd: source.cwd, title: name });
+        return { id: row.id, tokens: digest.tokens, summarised: digest.summarised };
+      } catch (e) {
+        await openCode.request(`/session/${row.id}`, { method: "DELETE", directory: source.cwd }).catch(() => undefined);
+        rmSync(outDir, { recursive: true, force: true });
+        throw e;
+      }
     },
     forkForAside: async (owner, title) => {
       const at = await forkAt(openCode, owner, "An aside");

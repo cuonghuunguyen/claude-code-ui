@@ -100,6 +100,7 @@ export const ROUTES: { readonly [T in ClientMessage["type"]]: Route } = {
   "session.delete": SESSION,
   "worker.close": SESSION,
   "aside.open": SESSION,
+  "session.quickCompact": SESSION,
   "aside.close": SESSION,
   "aside.keep": SESSION,
   "worker.remove": SESSION,

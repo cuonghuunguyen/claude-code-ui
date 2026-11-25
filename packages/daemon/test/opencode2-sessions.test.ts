@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -801,6 +801,23 @@ describe("OpenCode 2 sessions: rename, archive, delete and Aside", { timeout: TE
     const r = await owned([msg("msg_u1", "user"), msg("msg_a1", "assistant", done), msg("msg_u2", "user"), msg("msg_a2", "assistant", done)], { revert: { messageID: "msg_u2" } });
     await r.ok({ type: "aside.open", sessionId: "ses_own", text: "q" });
     expect(r.requests("POST", "/api/session/ses_own/fork")[0]!.body).toEqual({ before: "msg_u2" });
+  });
+
+  it("quick compact creates a session with the digest as a hidden message that starts no turn", async () => {
+    // The digest's files go under the config dir: a temporary one, never the user's.
+    vi.stubEnv("XDG_CONFIG_HOME", mkdtempSync(join(tmpdir(), "qc-cfg-")));
+    const d = await owned([msg("msg_u1", "user", { text: "remember ZEBRA-7781" }), msg("msg_a1", "assistant", { ...done, content: [{ type: "text", text: "ok" }] })]);
+    const r = await d.ok({ type: "session.quickCompact", sessionId: "ses_own" });
+    expect(r.session.id).not.toBe("ses_own");
+    const sent = d.requests("POST", new RegExp(`/api/session/${r.session.id}/synthetic$`));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.body).toMatchObject({ resume: false, metadata: { source: "quick-compact" } });
+    expect(String(sent[0]!.body.text)).toContain("ZEBRA-7781");
+    expect(String(sent[0]!.body.text).startsWith("[claude-ui quick compact] source=ses_own")).toBe(true);
+    expect(d.requests("POST", new RegExp(`/api/session/${r.session.id}/prompt$`))).toEqual([]);
+    const none = await owned([]);
+    vi.unstubAllEnvs();
+    expect(await none.request({ type: "session.quickCompact", sessionId: "ses_own" })).toMatchObject({ type: "error", code: "quick_compact_unavailable" });
   });
 
   it("an owner without messages, or rewound to its first message, is refused and nothing is forked", async () => {

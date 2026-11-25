@@ -292,7 +292,7 @@ it("right click on a session tab opens the session menu; Delete is disabled whil
     await act(async () => void tab(id).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })));
     return document.querySelector<HTMLElement>('[role="menu"]');
   };
-  expect((await menu("c"))!.textContent).toBe("Move leftMove rightClose tabRenameArchiveDelete…");
+  expect((await menu("c"))!.textContent).toBe("Move leftMove rightClose tabRenameArchiveQuick compactDelete…");
   await act(async () => document.querySelector<HTMLElement>('[data-testid="action-archive"]')!.click());
   expect(onAction).toHaveBeenLastCalledWith("c", "archive");
   expect((await menu("a"))!.querySelector('[data-testid="action-delete"]')!.getAttribute("aria-disabled")).toBe("true");
@@ -938,7 +938,7 @@ const closeMenu = () => act(async () => void document.dispatchEvent(new Keyboard
 it("GH-359 the tab menu lists the close block, reopen, pin, copy and reveal, in sections", async () => {
   const { el } = await render({ onTabCommand: vi.fn(), canReopen: true });
   const m = await ctxMenu(el, "c");
-  expect([...m.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual(["Move left", "Move right", "Close tab", "Close others", "Close to the right", "Close all", "Reopen closed tab", "Pin tab", "Copy session ID", "Copy cwd path", "Reveal in sidebar", "Rename", "Archive", "Delete…"]);
+  expect([...m.querySelectorAll('[role="menuitem"]')].map((i) => i.textContent)).toEqual(["Move left", "Move right", "Close tab", "Close others", "Close to the right", "Close all", "Reopen closed tab", "Pin tab", "Copy session ID", "Copy cwd path", "Reveal in sidebar", "Rename", "Archive", "Quick compact", "Delete…"]);
   expect(m.querySelectorAll('[role="separator"]')).toHaveLength(5);
   await closeMenu();
 });

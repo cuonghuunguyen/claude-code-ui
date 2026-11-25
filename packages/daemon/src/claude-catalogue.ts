@@ -1,6 +1,7 @@
 // The Claude Engine catalogue (ADR 0001: the SDK transcript is the store): listing, restoring, locating, renaming, archiving, deleting and forking Claude sessions, moved out of server.ts.
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { ALL_CAPABILITIES, createAdapter, EFFORTS, permissionModesFor, type ModelInfo, type PermissionMode, type SessionListItem, type SlashCommand } from "@claude-ui/protocol";
 import { deleteSession, forkSession, getSessionInfo, listSessions, renameSession, tagSession, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { asideForkPoint } from "./aside.ts";
@@ -11,6 +12,8 @@ import { isModel, type CatalogueContext, type CatalogueList, type EngineCatalogu
 import { lastEntryTime, mapLimit } from "./session-scan.ts";
 import { Session, transcriptModel, type SessionSettings, type Transcript } from "./session.ts";
 import { interleaveRuns } from "./transcript.ts";
+import { capOf, fitCap, writeDigestFiles } from "./quick-compact.ts";
+import { claudeDigestEvents, claudeSummarise, syntheticTranscript } from "./quick-compact-claude.ts";
 
 /** A Claude session id is a UUID: it becomes a transcript file name, so only this shape does. */
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -26,8 +29,18 @@ const TAIL_BYTES = 256 * 1024;
 /** `listed`: the transcript scan's mtime and size when the file was read (lastMessageAt skips the open while they hold). */
 const lastMessageCache = new Map<string, { version: string; listed?: string; at: number | undefined }>();
 
-// ponytail: the SDK's project folder name for cwds up to 200 chars; longer ones get a hash suffix and are not found.
-export const transcriptFile = (projectsDir: string, cwd: string, sessionId: string) => join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${sessionId}.jsonl`);
+/**
+ * The SDK's project folder name of `cwd`: every non-alphanumeric character is `-`; a name over 200 characters is cut to 200 and
+ * gets `-<abs(31-hash of cwd) in base 36>` (the SDK's own rule; the CLI stores the transcript there).
+ */
+export function projectFolder(cwd: string): string {
+  const name = cwd.replace(/[^a-zA-Z0-9]/g, "-");
+  if (name.length <= 200) return name;
+  let h = 0;
+  for (let i = 0; i < cwd.length; i++) h = ((h << 5) - h + cwd.charCodeAt(i)) | 0;
+  return `${name.slice(0, 200)}-${Math.abs(h).toString(36)}`;
+}
+export const transcriptFile = (projectsDir: string, cwd: string, sessionId: string) => join(projectsDir, projectFolder(cwd), `${sessionId}.jsonl`);
 
 /**
  * Permission mode of the last prompt and effort of the last reply in a session's raw transcript (getSessionMessages() drops
@@ -92,6 +105,9 @@ export type ClaudeDeps = {
   sessionCwd(cwd: string): string;
   /** The model list of the Claude account of `cwd`'s Project (the global account without a folder). */
   modelList(cwd?: string): Promise<ModelInfo[]>;
+  /** Quick compact: the session's uploads folder (the CLI reads it without a prompt; the digest's files go in it) and the env of the Project's Claude account for the summary turn. */
+  uploadDir?(id: string): string | undefined;
+  claudeEnvFor?(cwd: string): NodeJS.ProcessEnv;
   supportsAuto(model: string, cwd?: string): boolean;
   localFiles(cwd: string): Promise<string[]>;
   commandsOf(cwd: string): Promise<SlashCommand[]>;
@@ -257,6 +273,37 @@ export function createClaudeCatalogue(ctx: CatalogueContext, d: ClaudeDeps): Eng
       const dir = d.transcriptCwd(owner.id, owner.cwd);
       // The owner's transcript is only read: a running owner turn and an external turn are not touched.
       return { id: (await history.forkSession(owner.id, { dir, upToMessageId: at, title: name })).sessionId };
+    },
+    quickCompact: async (source) => {
+      let main: Awaited<ReturnType<typeof d.readTranscript>>["main"] = [];
+      try {
+        if (!source.untitled()) main = (await d.readTranscript(source.id, source.cwd)).main;
+      } catch (e) {
+        throw new Error(`Could not read the session: ${(e as Error).message}`);
+      }
+      const { earlier, events } = claudeDigestEvents(main);
+      if (!events.length) return { unavailable: "Quick compact needs a reply in this session first" };
+      const id = randomUUID();
+      const upload = d.uploadDir?.(id);
+      if (!upload) throw new Error("no uploads folder for the new session");
+      const outDir = join(upload, "quick-compact");
+      const dir = d.transcriptCwd(source.id, source.cwd);
+      const file = transcriptFile(d.projectsDir, dir, id);
+      const model = source.info().model;
+      const window = source.contextUsage()?.maxTokens ?? (/\[1m\]/i.test(model) ? 1_000_000 : 200_000);
+      try {
+        const sourceTitle = await title(source);
+        const digest = await fitCap({ sessionId: source.id, title: sourceTitle, transcript: transcriptFile(d.projectsDir, dir, source.id), outDir, ...(earlier && { earlier }), events }, capOf(window), claudeSummarise({ cwd: source.cwd, env: d.claudeEnvFor?.(source.cwd) }));
+        writeDigestFiles(outDir, digest.files);
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, syntheticTranscript({ id, cwd: dir, digest: digest.text, now: new Date() }), { mode: 0o600 });
+        await history.renameSession(id, `${sourceTitle} (quick compact)`, { dir });
+        return { id, tokens: digest.tokens, summarised: digest.summarised };
+      } catch (e) {
+        rmSync(file, { force: true });
+        rmSync(outDir, { recursive: true, force: true });
+        throw e;
+      }
     },
     commands: (cwd) => d.commandsOf(cwd),
     agents: async () => ({ agents: [] }),

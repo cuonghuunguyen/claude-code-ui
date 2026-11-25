@@ -11,7 +11,7 @@ import { trapTab } from "./focus-trap.ts";
 import { isImeKey } from "./ime.ts";
 import { useT } from "./i18n.ts";
 
-export type SessionAction = "rename" | "rename-inline" | "archive" | "unarchive" | "delete" | "copy-id" | "close-tab" | "close-worker" | "remove-worker" | "close-finished" | "remove-closed" | "cleanup-workers";
+export type SessionAction = "rename" | "rename-inline" | "quick-compact" | "archive" | "unarchive" | "delete" | "copy-id" | "close-tab" | "close-worker" | "remove-worker" | "close-finished" | "remove-closed" | "cleanup-workers";
 
 /**
  * `busy`: running or needs input; it must be stopped before it can be deleted. `transcript`: false before the first prompt, nothing to rename or archive.
@@ -36,6 +36,9 @@ export function Items({ kind, target, onAction }: { kind: "menu" | "context"; ta
       </Item>
       <Item className={ITEM} disabled={!target.transcript} onClick={() => onAction(target.archived ? "unarchive" : "archive")} data-testid="action-archive">
         {t(target.archived ? "sidebar.action.unarchive" : "sidebar.action.archive")}
+      </Item>
+      <Item className={ITEM} disabled={!target.transcript} onClick={() => onAction("quick-compact")} data-testid="action-quick-compact">
+        {t("app.session.quickCompact")}
       </Item>
       {(target.copyId || target.tab) && <Separator className="-mx-1 my-1 h-px bg-border" />}
       {target.copyId && (

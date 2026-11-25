@@ -1,13 +1,15 @@
 // The OpenCode 2 adapter's catalogue (ADR 0015): creates, lists and restores sessions of the daemon's OpenCode 2 server through `@opencode/client`.
 // Create, list, restore, models, rename, archive, delete, the Aside fork, agents and the slash commands (the daemon's and OpenCode's).
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { EFFORTS, type PermissionMode, type SessionListItem } from "@claude-ui/protocol";
 import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineConfig, type ListCtx, type SavedSession } from "./engine-catalogue.ts";
 import { OPENCODE_MODES, type ForkLink, type InlineLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
-import { openCodeWanted } from "./opencode-catalogue.ts";
+import { openCodeWanted, OPENCODE_WINDOW } from "./opencode-catalogue.ts";
 import { OpenCodeError, type OpenCodeServer } from "./opencode-server.ts";
-import { createOpenCode2Engine, loadOpenCode2History, OPENCODE2_CAPABILITIES } from "./opencode2-engine.ts";
+import { capOf, fitCap, writeDigestFiles } from "./quick-compact.ts";
+import { oc2DigestEvents, openCode2Summarise, openCodeDigestDir } from "./quick-compact-opencode.ts";
+import { createOpenCode2Engine, loadMessages, loadOpenCode2History, OPENCODE2_CAPABILITIES } from "./opencode2-engine.ts";
 import { createOpenCode2McpConfig, createOpenCode2PluginsConfig, createOpenCode2SkillsConfig } from "./opencode2-config.ts";
 import { createOpenCode2Login } from "./opencode2-providers.ts";
 import { INLINE_META } from "./opencode2-inline.ts";
@@ -234,6 +236,37 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     }
   }
 
+  /** A new session whose first message is the digest of `source` (a hidden message of OpenCode 2: `synthetic`, read by the next prompt's turn). */
+  async function quickCompact(source: Session): Promise<{ id: string; tokens: number; summarised: boolean } | { unavailable: string }> {
+    const client = await server.client();
+    const messages = await loadMessages(client, source.id);
+    const { earlier, events } = oc2DigestEvents(messages);
+    if (!events.length) return { unavailable: "Quick compact needs a message in this session first" };
+    const oi = source.info();
+    const lastModel = messages.filter((m) => m.type === "assistant" && m.model).at(-1)?.model;
+    const window = (lastModel && (await engine.contextLimit(lastModel.providerID, lastModel.id, source.cwd).catch(() => undefined))) || OPENCODE_WINDOW;
+    const title = meta.get(source.id)?.title ?? "New session";
+    const created = await engine.createRules(oi.permissionMode, source.cwd);
+    const row = await client.session.create({ location: { directory: source.cwd }, permissions: created.rules, ...(created.agent && { agent: created.agent }) });
+    const outDir = openCodeDigestDir(row.id);
+    try {
+      engine.noteCreated(row.id, created);
+      const digest = await fitCap({ sessionId: source.id, title, transcript: `OpenCode session ${source.id} (open it in claude-ui; no file)`, outDir, ...(earlier && { earlier }), events }, capOf(window), openCode2Summarise(client, { cwd: source.cwd }));
+      writeDigestFiles(outDir, digest.files);
+      const name = `${title} (quick compact)`;
+      await client.session.update({ sessionID: row.id, title: name });
+      // `steer` and `resume: false` as the adapter's own hidden messages: no turn starts, the next prompt's turn reads it.
+      await client.session.synthetic({ sessionID: row.id, text: digest.text, description: "Quick compact", metadata: { source: "quick-compact" }, delivery: "steer", resume: false });
+      o.record?.(row.id);
+      meta.set(row.id, { cwd: source.cwd, title: name });
+      return { id: row.id, tokens: digest.tokens, summarised: digest.summarised };
+    } catch (e) {
+      await client.session.remove({ sessionID: row.id }).catch(() => undefined);
+      rmSync(outDir, { recursive: true, force: true });
+      throw e;
+    }
+  }
+
   return {
     engine,
     config,
@@ -300,6 +333,7 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
         throw failure(err);
       }
       meta.delete(id);
+      rmSync(openCodeDigestDir(id), { recursive: true, force: true });
       // Its Fork runs' forks and its kept inline task sessions go with it (OpenCode 1 does the same).
       const forks = [...forksOf(id).map((f) => f.forkId), ...inlinesOf(id).map((l) => l.inlineId)];
       if (forks.length) {
@@ -310,6 +344,7 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
       }
     },
     forkForAside: (owner, title) => forkForAside(owner, title).catch((err) => Promise.reject(failure(err))),
+    quickCompact: (source) => quickCompact(source).catch((err) => Promise.reject(failure(err))),
     commands: (cwd) => engine.commands(cwd),
     agents: async (cwd) => {
       const info = ({ id, description }: { id: string; description?: string }) => ({ name: id, ...(description && { description }) });

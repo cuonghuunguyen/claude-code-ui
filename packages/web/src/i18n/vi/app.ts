@@ -784,6 +784,16 @@ export default {
   // tabs-bar.tsx
   "app.tabs.closeShort": "Đóng",
   // commands.ts / split.ts / copy-text.ts
+  "app.slash.quickCompact": "Tóm tắt phiên này thành phiên mới, không gọi mô hình",
+  "app.session.quickCompact": "Nén nhanh",
+  "app.quickCompact.label": "Nén nhanh",
+  "app.quickCompact.from": "từ {title}",
+  "app.quickCompact.tokens": "~{n} token",
+  "app.quickCompact.summarised": "phần cũ nhất đã được tóm tắt",
+  "app.quickCompact.show": "Xem bản tóm tắt",
+  "app.quickCompact.hide": "Ẩn bản tóm tắt",
+  "app.quickCompact.opening": "Nén nhanh: đang tạo bản tóm tắt…",
+  "app.prompt.quickCompactFailed": "Nén nhanh thất bại: {message}",
   "app.slash.btw": "Hỏi câu hỏi bên lề: cuộc trò chuyện phụ chỉ đọc, tách ra từ phiên này",
   "app.slash.mcp": "Cấu hình máy chủ Model Context Protocol",
   "app.slash.skills": "Liệt kê các skill có sẵn",
