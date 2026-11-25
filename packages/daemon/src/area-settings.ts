@@ -3,6 +3,7 @@
 import type { SettingsTypes } from "./areas.ts";
 import type { DaemonContext } from "./daemon-context.ts";
 import { claudeEnv } from "./claude-env.ts";
+import { warmWanted } from "./commit-message.ts";
 import { ConfigError } from "./config.ts";
 import type { AddonsRequest } from "./addons.ts";
 import type { Area, Connection, Handlers, Msg, Respond } from "./dispatch.ts";
@@ -132,7 +133,12 @@ export function createSettingsArea(ctx: SettingsAreaContext, conn: Pick<Connecti
       const before = appSettings.get().claude.account;
       const settingsBefore = appSettings.get();
       const settings = write();
-      if (patch?.git?.commitMessageWarm !== undefined) (settings.git.commitMessageWarm ? ctx.warmCommit.prewarm() : ctx.warmCommit.stop());
+      // GH-984: a new global model or engine restarts the ready process (or ends it: the engine is OpenCode).
+      const g = patch?.git;
+      if (g && (g.commitMessageWarm !== undefined || g.commitMessageEngine !== undefined || g.commitMessageModel !== undefined)) {
+        ctx.warmCommit.stop();
+        if (warmWanted(settings)) ctx.warmCommit.prewarm();
+      }
       for (const c of ctx.catalogues.all) c.settingsChanged?.(settingsBefore, settings);
       if (settings.claude.account !== before) (ctx.applyAccountToken(), ctx.claudeLoginChanged());
       else ctx.projectAccountsChanged(settingsBefore);

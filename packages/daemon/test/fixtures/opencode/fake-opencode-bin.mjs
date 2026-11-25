@@ -427,6 +427,13 @@ const server = createServer(async (req, res) => {
     await play(JSON.parse(readFileSync(new URL("./turn-shell.json", import.meta.url), "utf8")), s.id, dir, body.messageID, "msg_SHELLUSER");
     return json(200, { info: {}, parts: [] });
   }
+  // The synchronous prompt (GH-984, the commit message generator): answers with the finished assistant message. FAKE_OPENCODE_ONESHOT = its text, FAKE_OPENCODE_ONESHOT_ERROR = an error name instead, FAKE_OPENCODE_ONESHOT_MS = answers that late (logged `oneshot-waiting` first).
+  if (m && s && m[2] === "/message" && req.method === "POST") {
+    log({ type: "oneshot-waiting", sessionId: s.id });
+    await sleep(Number(process.env.FAKE_OPENCODE_ONESHOT_MS ?? 0));
+    const error = process.env.FAKE_OPENCODE_ONESHOT_ERROR;
+    return json(200, { info: { id: "msg_fake", role: "assistant", sessionID: s.id, ...(error && { error: { name: error, data: { message: "refused" } } }) }, parts: error ? [] : [{ type: "text", text: process.env.FAKE_OPENCODE_ONESHOT ?? "feat: from opencode" }] });
+  }
   if (m && s && m[2] === "/prompt_async" && req.method === "POST") {
     // The next prompt removes the reverted messages for good.
     if (s.revert) {

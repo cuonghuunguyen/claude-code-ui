@@ -34,7 +34,7 @@ import type { Connection } from "./dispatch.ts";
 import { createJira, jiraOrigin } from "./jira.ts";
 import { createSecrets, type Secrets } from "./secrets.ts";
 import { createWorktree, gitDirsOf, gitEscapes, gitStatus, gitTopOf, limiter, listRepos, listWorktrees, originKeyOf, removeWorktree, WorktreeError, markRepoStale, markWorktreeStale, type CreateWorktreeOptions } from "./git.ts";
-import { createWarmCommitMessage } from "./commit-message.ts";
+import { createWarmCommitMessage, warmWanted } from "./commit-message.ts";
 import { createNotifier, type Push } from "./push.ts";
 import { createSettings, type AppSettings } from "./settings.ts";
 import { createCatalogues, EngineError, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx } from "./engine-catalogue.ts";
@@ -429,8 +429,8 @@ export function createDaemon(opts: {
   const projectsDir = opts.projectsDir ?? join(claudeDir, "projects");
   const projects = opts.projects ?? createProjects();
   const appSettings = opts.appSettings ?? createSettings();
-  /** GH-668: the ready Haiku process of Generate; used only while `git.commitMessageWarm` is on. */
-  const warmCommit = createWarmCommitMessage(opts.query);
+  /** GH-668: the ready process of Generate (the global Claude model, GH-984); used only while `git.commitMessageWarm` is on and the global engine is Claude. */
+  const warmCommit = createWarmCommitMessage(opts.query, () => appSettings.get().git.commitMessageModel || "haiku");
   /**
    * Orchestration MCP of OpenCode sessions (docs/spec.md "Orchestration"): OpenCode connects to `/opencode-mcp` of this daemon with a
    * per-session bearer token (token -> session id); one stateful transport and server per token, a new `initialize` replaces both.
@@ -654,7 +654,7 @@ export function createDaemon(opts: {
     void plans.reset();
     // GH-668: the ready Haiku process holds the old login (token in its env).
     warmCommit.stop();
-    if (appSettings.get().git.commitMessageWarm) warmCommit.prewarm();
+    if (warmWanted(appSettings.get())) warmCommit.prewarm();
     broadcast({ type: "config.changed", kind: "models", cwd: "" });
   };
   const supportsAuto = (model: string, cwd?: string) => knownModels(cwd).some((m) => m.value === model && m.supportsAutoMode);

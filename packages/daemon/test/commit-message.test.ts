@@ -84,12 +84,21 @@ describe("generateCommitMessage", () => {
     expect(s.seen.options!.env).not.toHaveProperty("ANTHROPIC_API_KEY");
     expect(s.seen.options!.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
   });
+  it("passes the model; a login error is generate_auth (assistant message or result text), any other error stays generate_failed", async () => {
+    const s = stub(ok("m"));
+    await generateCommitMessage({ cwd: "/x", prompt: "p", signal: new AbortController().signal, query: s.query, model: "sonnet" });
+    expect(s.seen.options).toMatchObject({ model: "sonnet" });
+    const login = { type: "assistant", error: "authentication_failed", message: { content: [{ type: "text", text: "Not logged in · Please run /login" }] } };
+    await expect(gen(stub([login, { type: "result", subtype: "success", is_error: true, result: "Not logged in · Please run /login" }]).query)).rejects.toMatchObject({ code: "generate_auth", message: "Not logged in · Please run /login" });
+    await expect(gen(stub([{ type: "result", subtype: "success", is_error: true, result: "Invalid API key" }]).query)).rejects.toMatchObject({ code: "generate_auth" });
+    await expect(gen(stub([{ type: "result", subtype: "success", is_error: true, result: "Overloaded" }]).query)).rejects.toMatchObject({ code: "generate_failed" });
+  });
   it("unwraps a code fence", async () => {
     expect(await gen(stub(ok("```\nfeat: x\n\nbody\n```\n")).query)).toBe("feat: x\n\nbody");
     expect(unfence("  plain  ")).toBe("plain");
   });
   it("an error result carries its text; an empty result is an error", async () => {
-    await expect(gen(stub([{ type: "result", subtype: "success", is_error: true, result: "Not logged in" }]).query)).rejects.toMatchObject({ code: "generate_failed", message: "Not logged in" });
+    await expect(gen(stub([{ type: "result", subtype: "success", is_error: true, result: "Credit balance is too low" }]).query)).rejects.toMatchObject({ code: "generate_failed", message: "Credit balance is too low" });
     await expect(gen(stub([{ type: "result", subtype: "error_max_turns", is_error: true }]).query)).rejects.toMatchObject({ code: "generate_failed" });
     await expect(gen(stub(ok("  ")).query)).rejects.toMatchObject({ code: "generate_failed", message: "Claude returned no message" });
     await expect(gen((() => { throw new Error("boom"); }) as never)).rejects.toMatchObject({ code: "generate_failed", message: "boom" });
@@ -146,6 +155,17 @@ describe("warm commit message generator", () => {
     expect(s.log.options[0]).toMatchObject({ tools: [], persistSession: false, model: "haiku", thinking: { type: "disabled" }, settingSources: [], mcpServers: {}, strictMcpConfig: true, settings: { disableAllHooks: true } });
     w.stop();
     expect(s.log.aborted).toBe(3);
+  });
+  it("spawns on the model the getter returns at that moment; stop then prewarm restarts it on the new one", () => {
+    const s = warmStub();
+    let model = "haiku";
+    const w = createWarmCommitMessage(s.query, () => model);
+    w.prewarm();
+    model = "sonnet";
+    w.stop();
+    w.prewarm();
+    expect(s.log.options.map((o) => o.model)).toEqual(["haiku", "sonnet"]);
+    w.stop();
   });
   it("starts a process on the first click when none is ready; stop ends the ready one and nothing restarts", async () => {
     const s = warmStub();

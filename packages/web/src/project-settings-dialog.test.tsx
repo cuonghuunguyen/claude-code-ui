@@ -126,6 +126,20 @@ it("changing the Engine clears the model and effort of the Project", async () =>
   expect(patches()).toEqual([{ local: { "/p": { engine: "opencode", mode: "plan" } } }]);
 });
 
+it("commit message generator rows save under commitMessage and keep the other fields; the engine placeholder is the global one", async () => {
+  const { q, patches } = await render();
+  await click(q("project-commit-engine-select"));
+  await click(q("project-commit-engine-opencode"));
+  expect(patches()).toEqual([{ local: { "/p": { commitMessage: { engine: "opencode" } } } }]);
+  const input = q("project-commit-opencode-input") as HTMLInputElement;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "deepseek/flash-1");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => void input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  expect(patches()[1]).toEqual({ local: { "/p": { commitMessage: { engine: "opencode", openCodeModel: "deepseek/flash-1" } } } });
+});
+
 it("a text field saves on Enter, empty unsets it, the placeholder is the global value", async () => {
   const { q, patches } = await render();
   const input = q("project-inline-model-input") as HTMLInputElement;
