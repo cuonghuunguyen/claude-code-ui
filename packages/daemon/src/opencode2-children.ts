@@ -6,6 +6,8 @@ import { OpenCode2Mapper } from "./opencode2-parts.ts";
 export type ChildKind = "subagent" | "inline";
 export type Child = { callId: string; kind: ChildKind; mapper: OpenCode2Mapper };
 
+const PENDING_EXITS = 100;
+
 export class ChildRuns {
   private readonly byChild = new Map<string, Child>();
   private readonly byCall = new Map<string, string>();
@@ -25,13 +27,29 @@ export class ChildRuns {
   childOf = (callId: string) => this.byCall.get(callId);
   /** The mapper of every child (a child's own background shells live there). */
   mappers = (): Iterable<OpenCode2Mapper> => [...this.byChild.values()].map((c) => c.mapper);
-  /** `shell.exited` of shell `shellId`: only the child that owns the shell stores the exit; its card parts come back under that child's call. */
+  /** Exits of shells no child owns yet (the exit can come before the call that names the shell): kept until an owner knows the shell, the oldest dropped past PENDING_EXITS. */
+  private readonly pending = new Map<string, { status: string | undefined; exit: number | undefined }>();
+  /** `shell.exited` of shell `shellId`: only the child that owns the shell stores the exit; its card parts come back under that child's call. Without an owner the exit waits (`flushShellExits`). */
   shellExited(shellId: string, status: string | undefined, exit: number | undefined): Part[] {
     for (const child of this.byChild.values()) {
       if (!child.mapper.hasShell(shellId)) continue;
       return child.mapper.shellExited(shellId, status, exit).map((p) => ({ ...p, parentId: child.callId }));
     }
+    this.pending.delete(shellId);
+    this.pending.set(shellId, { status, exit });
+    if (this.pending.size > PENDING_EXITS) this.pending.delete(this.pending.keys().next().value!);
     return [];
+  }
+  /** Applies the waiting exits whose shell a child has learned since (call this after a child mapper took in parts). */
+  flushShellExits(): Part[] {
+    if (!this.pending.size) return [];
+    const out: Part[] = [];
+    for (const [id, e] of [...this.pending]) {
+      if (![...this.byChild.values()].some((c) => c.mapper.hasShell(id))) continue;
+      this.pending.delete(id);
+      out.push(...this.shellExited(id, e.status, e.exit));
+    }
+    return out;
   }
   unlink(childId: string) {
     const child = this.byChild.get(childId);

@@ -379,6 +379,7 @@ class OpenCode2Session implements EngineSession {
       // An inline task's session starts with its prompt, which is the call's input: not a step.
       if (child) for (const part of child.mapper.history(c.messages.filter((m) => m.type !== "user"))) this.session.emit({ ...part, parentId: child.callId });
     }
+    for (const part of this.children.flushShellExits()) this.session.emit(part);
     for (const m of h.messages) this.noteUsage(m);
     void this.emitUsage();
     void this.reconcileShells();
@@ -436,6 +437,8 @@ class OpenCode2Session implements EngineSession {
     const show = (parts: ReturnType<OpenCode2Mapper["event"]>) => {
       this.linkFrom(child.mapper);
       for (const part of parts) this.session.emit({ ...part, parentId: child.callId });
+      // An exit that came before this child's call named its shell ends the card now.
+      for (const part of this.children.flushShellExits()) this.session.emit(part);
     };
     switch (type) {
       case "permission.asked":
@@ -469,7 +472,7 @@ class OpenCode2Session implements EngineSession {
     const exit = typeof d.exit === "number" ? d.exit : undefined;
     this.emitAll(this.mapper.shellExited(d.id, d.status, exit));
     // A shell of a subagent lives in its child's mapper (only the owner stores the exit): its card shows under the child's call.
-    for (const part of this.children.shellExited(d.id, d.status, exit)) this.session.emit(part);
+    if (!this.mapper.hasShell(d.id)) for (const part of this.children.shellExited(d.id, d.status, exit)) this.session.emit(part);
   }
 
   private noteUsage(m: { type?: string; tokens?: Json; model?: { id: string; providerID: string } }) {
