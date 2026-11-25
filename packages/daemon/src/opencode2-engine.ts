@@ -1554,8 +1554,10 @@ class OpenCode2Session implements EngineSession {
     const childId = this.children.childOf(callId) ?? this.mapper.childOf(callId);
     if (!childId) return false;
     const client = await this.server.client();
-    const r = await client.session.interrupt({ sessionID: childId });
-    if (r?.interrupted === false) {
+    // A child session OpenCode no longer has (deleted) cannot be stopped: no running run, as for an unknown id.
+    const r = await client.session.interrupt({ sessionID: childId }).catch(() => undefined);
+    if (!r) return false;
+    if (r.interrupted === false) {
       // The card of a nested subagent is in its parent child's mapper and shows under that child's call.
       const owner = [...this.children.entries()].find(([, c]) => c.mapper.childOf(callId) === childId);
       for (const part of (owner?.[1].mapper ?? this.mapper).subagentEnded(childId, "stopped", Date.now())) this.session.emit(owner ? { ...part, parentId: owner[1].callId } : part);

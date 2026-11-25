@@ -1544,6 +1544,17 @@ describe("OpenCode 2 sessions: a subagent's run timeline", { timeout: TEST_MS },
     expect((await d.request({ type: "session.stopSubagent", sessionId: s.id, subagentId: "call_unknown" })).type).toBe("error");
   });
 
+  it("Stop agent on a subagent whose session is gone answers unknown_subagent, not a failure", async () => {
+    // No session row for the child: OpenCode answers the interrupt 404.
+    const d = await boot({ script: ["subagent"] });
+    const s = await d.open();
+    await s.prompt("Run a subagent");
+    await until(() => s.find("subagent", (p) => p.id === "call_sub")?.status === "done");
+    const r = await d.request({ type: "session.stopSubagent", sessionId: s.id, subagentId: "call_sub" });
+    expect(r).toMatchObject({ type: "error", code: "unknown_subagent" });
+    expect(d.requests("POST", "/api/session/ses_child/interrupt")).toHaveLength(1);
+  });
+
   it("restore: the stored subagent call, its child's messages (nested subagents too) and its end notice give the parts and ids of the live run", async () => {
     const tool = (id: string, name: string, input: object, extra: object = {}) => ({ type: "tool", id, name, state: { status: "completed", input, content: [{ type: "text", text: "ok" }], ...extra }, time: { created: 2, ran: 3, completed: 4 } });
     const sub = (id: string, child: string, description: string) => tool(id, "subagent", { description, prompt: "p" }, { metadata: { sessionID: child, status: "running" } });
