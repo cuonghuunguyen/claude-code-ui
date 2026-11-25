@@ -1,6 +1,6 @@
 // "Manage addons" dialog (/addons; docs/spec.md "Frontend" › Addons dialog, ADR 0006): install from git or a local folder, approval card
 // with the declared capabilities, enable, update check, uninstall, renderer conflicts and the per-addon log. State lives on the daemon (Hub).
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Trash2Icon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -17,6 +17,30 @@ const withPath = (s: GitSource, path: string) => (path ? { ...s, path } : s);
 const INPUT = "h-9 w-full rounded-md bg-secondary/60 px-3 text-sm outline-none placeholder:text-muted-foreground hover:bg-secondary focus-visible:bg-secondary max-md:h-11 max-md:text-base";
 
 /** `changed`: bumped on `config.changed` kind addons. `log`: the addon logs of this browser (`log` calls and refused calls), by addon. */
+/** Addon description clamped to 2 lines; a toggle shows only when the text overflows. */
+function Description({ text }: { text: string }) {
+  const t = useT();
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [open, setOpen] = useState(false);
+  const [overflow, setOverflow] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el && !open) setOverflow(el.scrollHeight > el.clientHeight + 1);
+  }, [text, open]);
+  return (
+    <div className="flex flex-col items-start gap-0.5">
+      <p ref={ref} className={cn("text-muted-foreground text-xs leading-4", !open && "line-clamp-2")} data-testid="addons-description">
+        {text}
+      </p>
+      {(overflow || open) && (
+        <button type="button" className="text-foreground text-xs underline-offset-2 hover:underline max-md:min-h-11" aria-expanded={open} onClick={() => setOpen(!open)} data-testid="addons-description-toggle">
+          {t(open ? "addons.showLess" : "addons.showMore")}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onClose }: { open: boolean; changed?: number; log?: Map<string, AddonLogEntry[]>; onClearLog?: (name: string) => void; request: <T>(msg: Request) => Promise<T>; onClose: () => void }) {
   const t = useT();
   const [loading, setLoading] = useState(true);
@@ -233,7 +257,7 @@ export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onCl
                 {t(`addons.state.${a.state}`)}
               </span>
             </div>
-            {a.manifest?.description && <p className="text-muted-foreground text-xs leading-4">{a.manifest.description}</p>}
+            {a.manifest?.description && <Description text={a.manifest.description} />}
             <p className="text-muted-foreground text-xs [overflow-wrap:anywhere]">{sourceText(a)}</p>
             {a.error && (
               <p className="text-destructive text-xs" data-testid="addons-error">
@@ -277,7 +301,7 @@ export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onCl
           </div>
           <div className="flex shrink-0 items-center gap-1">
             {(a.state === "enabled" || a.state === "disabled") && (
-              <Switch on={a.state === "enabled"} label={t("addons.enable", { name: a.name })} held={!!working} onToggle={(enabled) => void act(a.name, { type: "addons.setEnabled", name: a.name, enabled })} testId="addons-enabled" />
+              <Switch on={a.state === "enabled"} label={t("addons.enable", { name: a.name })} held={!!working} onToggle={(enabled) => void act(a.name, { type: "addons.setEnabled", name: a.name, enabled })} testId="addons-enabled" text={t("addons.enableText")} />
             )}
             {a.state === "enabled" && (
               <Button variant="ghost" size="sm" className="text-muted-foreground max-md:h-11" aria-label={t("addons.previewLabel", { name: a.name })} onClick={() => ((location.hash = PREVIEW_HASH), onClose())} data-testid="addons-preview">
@@ -285,7 +309,7 @@ export function AddonsDialog({ open, changed = 0, log, onClearLog, request, onCl
               </Button>
             )}
             {a.source.kind === "local" && (
-              <Switch on={!!a.dev} label={t("addons.dev", { name: a.name })} held={!!working} onToggle={(dev) => void act(a.name, { type: "addons.setDev", name: a.name, dev })} testId="addons-dev" />
+              <Switch on={!!a.dev} label={t("addons.dev", { name: a.name })} held={!!working} onToggle={(dev) => void act(a.name, { type: "addons.setDev", name: a.name, dev })} testId="addons-dev" text={t("addons.devText")} />
             )}
             {a.source.kind === "git" && (a.state !== "error" || !!a.manifest) && (
               <Button variant="ghost" size="sm" className="text-muted-foreground max-md:h-11" disabled={!!working} onClick={() => void check(a.name)} data-testid="addons-check-update">
