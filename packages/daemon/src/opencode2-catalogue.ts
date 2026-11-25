@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { EFFORTS, type PermissionMode, type SessionListItem } from "@claude-ui/protocol";
 import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineConfig, type ListCtx, type SavedSession } from "./engine-catalogue.ts";
-import { OPENCODE_MODES, type ForkLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
+import { OPENCODE_MODES, type ForkLink, type InlineLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { openCodeWanted } from "./opencode-catalogue.ts";
 import { OpenCodeError, type OpenCodeServer } from "./opencode-server.ts";
 import { createOpenCode2Engine, loadOpenCode2History, OPENCODE2_CAPABILITIES } from "./opencode2-engine.ts";
@@ -32,6 +32,8 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
   const meta = new Map<string, { cwd: string; title: string }>();
   /** The fork sessions of the Fork runs of session `id` (sessions.json `forkOf`). */
   const forksOf = (id: string): ForkLink[] => settings.entries().flatMap(([forkId, l]) => (l.forkOf?.sessionId === id ? [{ forkId, callId: l.forkOf.callId, prefix: l.forkOf.prefix }] : []));
+  /** The inline task sessions of session `id` (sessions.json `inlineOf`). */
+  const inlinesOf = (id: string): InlineLink[] => settings.entries().flatMap(([inlineId, l]) => (l.inlineOf?.sessionId === id ? [{ inlineId, callId: l.inlineOf.callId, ...(l.inlineOf.denied && { denied: l.inlineOf.denied }) }] : []));
   const engine = createOpenCode2Engine(server, {
     onTitle: (id, title) => {
       const m = meta.get(id);
@@ -44,6 +46,8 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     visualizeOn: () => appSettings.get().chat.visualize,
     onFork: (id, forkOf) => ctx.saveSettings(() => settings.set(id, { forkOf })),
     forksOf,
+    onInline: (id, inlineOf) => ctx.saveSettings(() => settings.set(id, { inlineOf })),
+    inlinesOf,
   });
   /** A config change saved while a session runs: the reload waits for idle (folder-reload.ts). Nothing to reload while the server is down. */
   const reloads = createFolderReloads({ all: true, reload: async (_cwd, folders) => !server.running() || engine.reloadLocations(folders), changed: (kind, cwd) => ctx.broadcast({ type: "config.changed", kind, cwd }) });
@@ -136,7 +140,7 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
         for (const row of rows) {
           const saved = linked.get(row.id);
           // A fork whose metadata PATCH failed: its link hides it.
-          if (saved?.forkOf) {
+          if (saved?.forkOf || saved?.inlineOf) {
             out.ids.add(row.id);
             continue;
           }
@@ -199,7 +203,7 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     const row = await client.session.get({ sessionID: id }).catch((err) => (isSessionNotFoundError(err) ? undefined : Promise.reject(err)));
     const cwd = row && ctx.allowed(known?.cwd ?? row.location.directory);
     if (!row || !cwd || ctx.isRemoving(cwd)) return undefined;
-    const history = await loadOpenCode2History(client, id, cwd, (sid) => engine.isOurs(id, sid), forksOf(id));
+    const history = await loadOpenCode2History(client, id, cwd, (sid) => engine.isOurs(id, sid), forksOf(id), inlinesOf(id));
     meta.set(id, { cwd, title: row.title ?? "New session" });
     const saved = settings.get(id);
     const permissionMode = OPENCODE_MODES.includes(saved?.permissionMode as never) ? (saved!.permissionMode as SessionSettings["permissionMode"]) : undefined;
@@ -295,8 +299,8 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
         throw failure(err);
       }
       meta.delete(id);
-      // Its Fork runs' forks go with it (OpenCode 1 does the same).
-      const forks = forksOf(id).map((f) => f.forkId);
+      // Its Fork runs' forks and its kept inline task sessions go with it (OpenCode 1 does the same).
+      const forks = [...forksOf(id).map((f) => f.forkId), ...inlinesOf(id).map((l) => l.inlineId)];
       if (forks.length) {
         const client = await server.client().catch(() => undefined);
         // One already gone (or a failed remove) is no failure of the delete.
