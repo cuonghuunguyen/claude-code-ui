@@ -26,4 +26,5 @@
 - Việc quét nhanh và không làm chậm thanh trạng thái. Nhánh đã squash-merge được tính là đã merge, nên worktree của nó là **An toàn**. Trạng thái của worktree được lưu đệm để hiển thị; khi gỡ luôn kiểm tra lại.
 - Việc gỡ worktree chạy nền: mọi hàng trong hàng đợi hiển thị **Đang gỡ…**.
 - Mọi worktree liên kết nằm trong các thư mục gốc của bạn đều gỡ được, kể cả worktree tạo thủ công hoặc bằng công cụ khác. Worktree bị khóa hoặc là symlink thì **Bị chặn**.
+- **Dọn dẹp…** của nhóm kho gộp (một kho trên nhiều Side) liệt kê worktree và worker của mọi Side. Dòng chính của mỗi Side có **Dọn dẹp…** riêng. Xem [Nhóm kho gộp](projects#merged-repository-group).
 - Worktree gắn nhãn **Ngoài** không nằm trong `.claude/worktrees` và không được đánh dấu sẵn.

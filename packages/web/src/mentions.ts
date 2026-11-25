@@ -15,6 +15,17 @@ export function insertMention(text: string, m: Mention, path: string) {
   return { text: text.slice(0, m.start) + token + text.slice(end), caret: m.start + token.length };
 }
 
+/** An OpenCode subagent offered in the picker: its name and description. */
+export type AgentRow = { name: string; description?: string };
+
+/** The subagents whose name matches the typed `@query` (case-insensitive): names that start with it first, then names that contain it. None once the query reads as a path. */
+export function matchAgents<T extends AgentRow>(agents: readonly T[], query: string): T[] {
+  if (/[/\\.]/.test(query)) return [];
+  const q = query.toLowerCase();
+  const at = (a: T) => a.name.toLowerCase().indexOf(q);
+  return [...agents.filter((a) => at(a) === 0), ...agents.filter((a) => at(a) > 0)];
+}
+
 /** `@path`, quoted when the path has spaces. */
 export const mentionPath = (path: string) => `@${/\s/.test(path) ? `"${path}"` : path}`;
 

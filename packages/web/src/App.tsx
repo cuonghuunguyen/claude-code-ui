@@ -1,6 +1,6 @@
 import { createPortal, flushSync } from "react-dom";
 import { Activity, lazy, memo, Suspense, use, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentProps, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, LoaderCircleIcon, MenuIcon, MonitorIcon, MoonIcon, PanelLeftIcon, PanelRightIcon, RotateCcwIcon, SearchIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, SunIcon, TriangleAlertIcon, UsersIcon, XIcon } from "lucide-react";
+import { BrainIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, LoaderCircleIcon, MenuIcon, MonitorIcon, MoonIcon, PanelLeftIcon, PanelRightIcon, RotateCcwIcon, SearchIcon, SettingsIcon, SquareIcon, SquareTerminalIcon, SunIcon, TriangleAlertIcon, UsersIcon, XIcon } from "lucide-react";
 import type {
   ContextUsage,
   CreateResult,
@@ -100,10 +100,10 @@ import { Backdrop } from "./backdrop.tsx";
 import { QuickCompactCard, QuickCompactSourceContext } from "./quick-compact-card.tsx";
 import { SlotsProvider, useThinkingPhrase } from "./slots.tsx";
 import { isPreviewHash } from "./addon-preview-route.ts";
-import { saveGroup as saveSettingsGroup } from "./settings-group.ts";
+import { OPEN_SETTINGS_EVENT, saveGroup as saveSettingsGroup } from "./settings-group.ts";
 import { nextReloadFailed } from "./plugins.ts";
 import { paletteOrder, statusIcon, statusLabel } from "./mcp.ts";
-import { activeMention, insertAtCaret, insertCommand, insertMention, mentionPath, splitUploads } from "./mentions.ts";
+import { activeMention, insertAtCaret, matchAgents, insertCommand, insertMention, mentionPath, splitUploads } from "./mentions.ts";
 import { SessionList } from "./sidebar.tsx";
 import { copyFailText } from "./copy-text.ts";
 import { prefixTitle } from "./shortcut-titles.ts";
@@ -166,7 +166,7 @@ import { focusCommit } from "./graph-focus.ts";
 import { sessionDiffChoice } from "./diff-mode.ts";
 import { sessionChanges } from "./changes.ts";
 import { QuickOpen, quickOpenLabel } from "./quick-open.tsx";
-import { FindInFiles, type FindQuery, type FindReplace } from "./find-in-files.tsx";
+import type { FindQuery, FindReplace } from "./find-in-files.tsx";
 import { selectionQuery } from "./find-in-files.ts";
 import { CommandPalette } from "./palette.tsx";
 import { appCommands, shortcutFor } from "./app-commands.ts";
@@ -233,6 +233,7 @@ const SkillsDialog = lazy(() => import("./skills-dialog.tsx").then((x) => ({ def
 const ShellsDialog = lazy(() => import("./shells-dialog.tsx").then((x) => ({ default: x.ShellsDialog })));
 const ProjectSettingsDialog = lazy(() => import("./project-settings-dialog.tsx").then((x) => ({ default: x.ProjectSettingsDialog })));
 const SettingsDialog = lazy(() => import("./settings-dialog.tsx").then((x) => ({ default: x.SettingsDialog })));
+const FindInFiles = lazy(() => import("./find-in-files.tsx").then((x) => ({ default: x.FindInFiles })));
 const PluginsDialog = lazy(() => import("./plugins-dialog.tsx").then((x) => ({ default: x.PluginsDialog })));
 const AddonPreview = lazy(() => import("./addon-preview.tsx").then((x) => ({ default: x.AddonPreview })));
 const AddonsDialog = lazy(() => import("./addons-dialog.tsx").then((x) => ({ default: x.AddonsDialog })));
@@ -1920,6 +1921,12 @@ export function App() {
   }
   /** Settings opened at one group (the Create worktree modal's "Open Settings › Jira"). */
   const openSettingsGroup = (id: string) => (saveSettingsGroup(id), setSettingsOpen(true));
+  // The commit box asks for Settings › Git when Generate has no OpenCode model.
+  useEffect(() => {
+    const open: EventListener = (e) => openSettingsGroup(String((e as unknown as { detail?: string }).detail));
+    window.addEventListener(OPEN_SETTINGS_EVENT, open);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, open);
+  }, []);
   // Settings > About and the palette (docs/spec.md "Updates"): a version found now shows the notice again, even one "Not yet" hid.
   const checkUpdate = async () => {
     const r = await client.current!.request<UpdateCheckResult>({ type: "update.check" });
@@ -4011,6 +4018,7 @@ export function App() {
       <OnFirstOpen open={!!creatingWt} fallback={<DialogFallback size="worktree" />}><CreateWorktreeDialog
         project={creatingWt}
         side={creatingWt === undefined ? undefined : sideOfCwd(cwdSides, creatingWt)}
+        sideLabel={creatingWt === undefined ? undefined : sideOf.badge(creatingWt)?.label}
         request={(m) => client.current!.request(m)}
         onClose={() => setCreatingWt(undefined)}
         onCreated={(project, r) => void openInWorktree(project, r.path)}
@@ -4316,7 +4324,7 @@ export function App() {
                   onSearch={search}
                   commandsRev={Object.values(configChanged).reduce((a, b) => a + b, 0)}
                   onCommands={(cwd, engine) => client.current!.request<CommandsResult>({ type: "session.commands", cwd, engine }).then((r) => r.commands)}
-                  onAgents={(cwd, engine) => client.current!.request<AgentsResult>({ type: "session.agents", cwd, engine }).then((r) => r.agents)}
+                  onAgents={(cwd, engine) => client.current!.request<AgentsResult>({ type: "session.agents", cwd, engine })}
                   onStart={createSession}
                   onDialog={openDialog}
                   inputRef={newPrompt}
@@ -4600,7 +4608,7 @@ export function App() {
         />
       )}
       {findOpen && shown && (
-        <FindInFiles
+        <Suspense fallback={null}><FindInFiles
           connected={status === "connected"}
           initialQuery={findQuery}
           initialReplace={findReplace || undefined}
@@ -4613,7 +4621,7 @@ export function App() {
           }}
           onOpen={(p, line) => (hideFind(false), openInPanel(p, line))}
           onClose={() => hideFind(true)}
-        />
+        /></Suspense>
       )}
       {palette && (
         <CommandPalette
@@ -5150,7 +5158,7 @@ export function NewSession({
   /** Commands and skills of a project for the `/` menu (no session exists yet). */
   onCommands: (cwd: string, engine: Engine) => Promise<SlashCommand[]>;
   /** The primary agents of a project's folder (Engines with `agents`) for the agent chooser. */
-  onAgents?: (cwd: string, engine: Engine) => Promise<AgentInfo[]>;
+  onAgents?: (cwd: string, engine: Engine) => Promise<AgentsResult>;
   /** Changes on any config.changed (a user-wide change shows in every project): the commands are asked again. */
   commandsRev?: number;
   /** Rejects when the session was not created; the prompt box keeps the draft. */
@@ -5186,13 +5194,14 @@ export function NewSession({
   // The project's commands, asked when the tab shows or the project changes; until they arrive only the dialog commands are listed.
   // The agents of the folder (OpenCode), asked when the tab shows an Engine with agents; the draft starts as build (else the first).
   const [agentList, setAgentList] = useState<AgentInfo[]>([]);
+  const [subagentList, setSubagentList] = useState<AgentInfo[]>([]);
   const [agentsFailed, setAgentsFailed] = useState(false);
   const [agentsTry, setAgentsTry] = useState(0);
   useEffect(() => {
     setAgentsFailed(false);
-    if (!cwd || !connected || !caps?.agents) return setAgentList([]);
+    if (!cwd || !connected || !caps?.agents) return (setAgentList([]), setSubagentList([]));
     let stale = false;
-    onAgents?.(cwd, engine).then((l) => !stale && setAgentList(l), () => !stale && (setAgentList([]), setAgentsFailed(true)));
+    onAgents?.(cwd, engine).then((r) => !stale && (setAgentList(r.agents), setSubagentList(r.subagents ?? [])), () => !stale && (setAgentList([]), setSubagentList([]), setAgentsFailed(true)));
     return () => void (stale = true);
   }, [cwd, connected, engine, caps?.agents, agentsTry]);
   // Until the list arrives (or when it failed) the chooser shows the pick, else the first agent of the list (OpenCode's default agent), else build.
@@ -5226,6 +5235,7 @@ export function NewSession({
           onMode={(m) => onDraft({ ...draft, mode: m })}
           agent={agent}
           agentList={agentList}
+          subagents={subagentList}
           onAgent={(a) => onDraft({ ...draft, agent: a })}
           agentsFailed={agentsFailed}
           onRetryAgents={() => setAgentsTry((n) => n + 1)}
@@ -5969,6 +5979,7 @@ export function SessionPane({
               onMode={onMode}
               agent={view.agent ?? session.agent}
               agentList={view.agents}
+              subagents={view.subagents}
               onAgent={onAgent}
               agentsFailed={view.agentsFailed}
               onRetryAgents={onRetryAgents}
@@ -6050,6 +6061,7 @@ function PromptBox({
   onMode,
   agent,
   agentList,
+  subagents,
   onAgent,
   agentsFailed,
   onRetryAgents,
@@ -6107,6 +6119,8 @@ function PromptBox({
   /** Engines with agents (OpenCode): the agent, the primary agents, the choice; Shift+Tab cycles them instead of the permission mode. */
   agent?: string;
   agentList?: AgentInfo[];
+  /** OpenCode subagents the `@` picker lists above files. */
+  subagents?: AgentInfo[];
   onAgent?: (agent: string) => void;
   agentsFailed?: boolean;
   onRetryAgents?: () => void;
@@ -6227,8 +6241,9 @@ function PromptBox({
   const mention = dismissed || bash || matches ? undefined : activeMention(text, caret);
   // Only results for the query being typed, so Enter never picks a stale path.
   const paths = mention && found?.query === mention.query ? found.paths : [];
-  const pickerOpen = !!matches?.length || paths.length > 0;
-  const rows = matches?.length ? matches.length : paths.length;
+  const agentRows = useMemo(() => (mention && subagents?.length ? matchAgents(subagents, mention.query) : []), [mention?.query, subagents]);
+  const pickerOpen = !!matches?.length || agentRows.length > 0 || paths.length > 0;
+  const rows = matches?.length ? matches.length : agentRows.length + paths.length;
   useEffect(() => {
     if (mention === undefined) return;
     let current = true;
@@ -6414,7 +6429,7 @@ function PromptBox({
   };
   const pick = (i: number) => {
     if (!matches?.length) {
-      const r = insertMention(text, mention!, paths[i]!);
+      const r = insertMention(text, mention!, i < agentRows.length ? agentRows[i]!.name : paths[i - agentRows.length]!);
       return edit(r.text, r.caret);
     }
     if (!token!.lead) {
@@ -6600,25 +6615,47 @@ function PromptBox({
       <ul
         id="command-picker"
         role="listbox"
-        aria-label={tr("app.palette.groupFiles")}
+        aria-label={tr(agentRows.length ? "app.prompt.agentsAndFiles" : "app.palette.groupFiles")}
         data-testid="mention-picker"
         className="absolute inset-x-0 bottom-full max-h-72 overflow-y-auto rounded-lg border bg-popover p-1 font-mono text-sm shadow-md"
       >
-        {paths.map((p, i) => (
+        {agentRows.map((a, i) => (
           <li
-            key={p}
+            key={`agent:${a.name}`}
             id={`command-${i}`}
             role="option"
             aria-selected={i === selected}
+            aria-label={`@${a.name}, ${tr("app.prompt.subagent")}${a.description ? `: ${a.description}` : ""}`}
+            data-testid="mention-agent"
             ref={(el) => void (i === selected && el?.scrollIntoView({ block: "nearest" }))}
-            className={`cursor-pointer truncate rounded-md px-2 py-1.5 ${i === selected ? "bg-muted" : ""}`}
+            className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 max-md:min-h-11 pointer-coarse:min-h-11 ${i === selected ? "bg-muted" : ""}`}
             onMouseDown={(e) => e.preventDefault()}
             onMouseEnter={() => setSelected(i)}
             onClick={() => pick(i)}
           >
-            @{p}
+            <BrainIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+            <span className="shrink-0">@{a.name}</span>
+            {a.description && <span className="truncate font-sans text-muted-foreground">{a.description}</span>}
           </li>
         ))}
+        {paths.map((p, k) => {
+          const i = agentRows.length + k;
+          return (
+            <li
+              key={p}
+              id={`command-${i}`}
+              role="option"
+              aria-selected={i === selected}
+              ref={(el) => void (i === selected && el?.scrollIntoView({ block: "nearest" }))}
+              className={`cursor-pointer truncate rounded-md px-2 py-1.5 max-md:flex max-md:min-h-11 max-md:items-center pointer-coarse:flex pointer-coarse:min-h-11 pointer-coarse:items-center ${i === selected ? "bg-muted" : ""}`}
+              onMouseDown={(e) => e.preventDefault()}
+              onMouseEnter={() => setSelected(i)}
+              onClick={() => pick(i)}
+            >
+              <span className="truncate">@{p}</span>
+            </li>
+          );
+        })}
       </ul>
     )}
     {!!matches?.length && (

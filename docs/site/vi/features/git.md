@@ -21,6 +21,10 @@ Trong [Thay đổi](changes), chế độ **Chưa commit**, hộp commit nằm p
 
 **Tạo nội dung commit** hỏi Claude bằng một chỉ dẫn có sẵn. Đổi nó tại **Cài đặt › Git › Chỉ dẫn viết nội dung commit**. Cùng nhóm đó có **Chỉ dẫn viết nội dung commit cho** *dự án*, ưu tiên hơn cho dự án đó. Để trống: dùng chỉ dẫn có sẵn. Xem [Cài đặt › Git](../reference/settings#git).
 
+### Engine viết nội dung commit {#commit-message-engine}
+
+**Cài đặt › Git** chọn engine viết nội dung commit: Claude (mặc định, model `haiku`) hoặc OpenCode (cần một model OpenCode). Một dự án có thể ghi đè engine và cả hai model trong Cài đặt dự án; cũng áp dụng cho Side và worktree. OpenCode viết trong một phiên tạm không có công cụ; phiên bị xóa sau đó. Nếu Claude chưa đăng nhập và đã đặt model OpenCode, OpenCode viết nội dung một lần và hộp hiện "Generated with OpenCode". Khi engine là OpenCode mà chưa có model, hộp commit hiện gợi ý kèm liên kết tới cài đặt.
+
 ## Rollback thay đổi {#roll-back-changes}
 
 **Rollback** đưa tệp về commit gần nhất.

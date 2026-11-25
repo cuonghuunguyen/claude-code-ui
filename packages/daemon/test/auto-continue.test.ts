@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createAutoContinue } from "../src/auto-continue.ts";
+import { createAutoContinue, MAX_TRIES } from "../src/auto-continue.ts";
 
 const T0 = Date.UTC(2026, 9, 8, 12, 0, 0);
 function setup(enabled = { on: true }, sendResult = true) {
@@ -151,5 +151,57 @@ describe("auto-continue", () => {
     const { ac } = setup();
     ac.schedule("a", T0 - 20_000);
     expect(ac.scheduled().get("a")).toBe(T0 + 10_000);
+  });
+
+  it("a relative reset time (OpenCode: now + retry-after, new at every hit) counts tries per session: at most MAX_TRIES continues (GH-973)", async () => {
+    const { ac, send } = setup();
+    for (let i = 0; i < 8; i++) {
+      await vi.advanceTimersByTimeAsync(100_000);
+      ac.schedule("a", Date.now() + 20_000, true);
+      await vi.advanceTimersByTimeAsync(120_000);
+    }
+    expect(send).toHaveBeenCalledTimes(MAX_TRIES);
+  });
+
+  // OpenCode waits retry-after between its 5 retries before it gives up: with a 5-minute wait the next stop comes ~25 min after the continue.
+  async function longWaitHits(ac: ReturnType<typeof setup>["ac"], hits: number) {
+    for (let i = 0; i < hits; i++) {
+      ac.schedule("a", Date.now() + 300_000, true);
+      await vi.advanceTimersByTimeAsync(310_000);
+      await vi.advanceTimersByTimeAsync(5 * 300_000 + 1_000);
+    }
+  }
+
+  it("relative hits far apart (OpenCode retries 5 x a 5-minute wait between them) still count: at most MAX_TRIES continues", async () => {
+    const { ac, send } = setup();
+    await longWaitHits(ac, 8);
+    expect(send).toHaveBeenCalledTimes(MAX_TRIES);
+  });
+
+  it("a turn that ends without a limit stop starts the relative count over", async () => {
+    const { ac, send } = setup();
+    await longWaitHits(ac, MAX_TRIES);
+    ac.turnEnded("a");
+    await longWaitHits(ac, 2);
+    expect(send).toHaveBeenCalledTimes(MAX_TRIES + 2);
+  });
+
+  it("a user prompt (cancel) starts the relative count over", async () => {
+    const { ac, send } = setup();
+    await longWaitHits(ac, MAX_TRIES + 1);
+    ac.cancel("a");
+    await longWaitHits(ac, 2);
+    expect(send).toHaveBeenCalledTimes(MAX_TRIES + 2);
+  });
+
+  it("a turn end does not reset the Claude count (same reset time)", async () => {
+    const { ac, send } = setup();
+    const reset = T0 + 60_000;
+    for (let i = 0; i < 5; i++) {
+      ac.schedule("a", reset);
+      ac.turnEnded("a");
+      await vi.advanceTimersByTimeAsync(120_000);
+    }
+    expect(send).toHaveBeenCalledTimes(MAX_TRIES);
   });
 });

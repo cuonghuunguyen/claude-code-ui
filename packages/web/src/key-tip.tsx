@@ -6,7 +6,7 @@ import { useKeymap } from "./keymap.ts";
 import { keyText, shortcutById } from "./shortcuts.ts";
 import { shortcutTitle } from "./shortcut-titles.ts";
 import { recordClick, setKeyTipsOn, useKeyTipsOn } from "./key-tips.ts";
-import { Switch } from "./plugins-dialog.tsx";
+import { Switch } from "./switch.tsx";
 import { useT } from "./i18n.ts";
 
 /** The command a click counts for, or undefined: a mouse click (not touch, pen or keyboard) on an enabled [data-command] in the registry. */

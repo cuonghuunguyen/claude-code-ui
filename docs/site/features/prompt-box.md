@@ -33,13 +33,13 @@ While Claude works, a `!` command waits in the queue like a message and runs whe
 - Type `/` to list commands and skills. Pick one with the arrows and <kbd>Enter</kbd>. <kbd>Tab</kbd> inserts it.
 - A `/command` works in the middle of a message too, like in Claude Code.
 - Some open a dialog instead of being sent: `/mcp`, `/skills` (or `/help`), `/plugins`, `/resume`. See [MCP, skills & plugins](config-dialogs).
-- `/clear` starts a fresh session in the same tab.
+- `/clear` starts a fresh session in the same tab. In an OpenCode session `/new` and `/reset` do the same; the new session keeps the model, agent, permission mode and effort.
 - `/btw <question>` asks an [aside](aside) in a floating popup, also while Claude works.
 - `/tasks` (or `/bashes`) opens the [Background shells](background-shells) list.
 
 ## Files and images
 
-- Type `@` and part of a file name to mention a file.
+- Type `@` and part of a file name to mention a file. In an OpenCode session the list starts with the subagents (for example `explore`); a mentioned subagent gets the task ([OpenCode engine](opencode)).
 - Paste or drop images into the box, or click **+** (**Add images and files**). PNG, JPEG, GIF and WebP go to Claude as images.
 - Other files are uploaded and added to the prompt as a path.
 - A file you copied in Explorer or Finder works too: paste it (<kbd>Ctrl</kbd>+<kbd>V</kbd>, <kbd>⌘</kbd> <kbd>V</kbd> on a Mac) or drag it into the box. A folder is skipped with "Folders cannot be attached; mention them with @." and the other files still attach.

@@ -476,7 +476,10 @@ const inputClass =
 function AddServer({ config, onSubmit, onBack, onBusy }: { config?: ConfigCapabilities; onSubmit: (name: string, scope: ConfigScope, config: McpAddConfig) => Promise<void>; onBack: () => void; onBusy: (b: boolean) => void }) {
   const t = useT();
   const [form, setForm] = useState<AddForm>({ name: "", transport: "stdio", command: "", args: "", env: "", url: "", headers: "" });
-  const scopes = SCOPES.filter((o) => !config || config.mcpScopes.includes(o.value)).map((o) => (config && o.value === "project" ? { ...o, description: t("session.mcp.scopeOption.projectHintOpenCode") } : o));
+  // OpenCode: Project first and the default (a User server is in a file that affects every project), User described by its file.
+  const scopes = SCOPES.filter((o) => !config || config.mcpScopes.includes(o.value))
+    .map((o) => (config && o.value === "project" ? { ...o, description: t("session.mcp.scopeOption.projectHintOpenCode") } : config && o.value === "user" ? { ...o, description: t("session.mcp.scopeOption.userHintOpenCode") } : o))
+    .sort((a, b) => (config ? Number(b.value === "project") - Number(a.value === "project") : 0));
   const transports = TRANSPORTS.filter((o) => !config || config.mcpTransports.includes(o.value));
   const [scope, setScope] = useState<ConfigScope>(scopes[0]?.value ?? "local");
   const [busy, setBusy] = useState(false);

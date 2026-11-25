@@ -36,6 +36,8 @@ export type ConfigGap = "mcpTools" | "mcpAuth" | "mcpRemoveScope" | "skillTokens
 export type ConfigCapabilities = {
   /** Scopes `mcp.add` and `mcp.remove` write. */
   mcpScopes: ConfigScope[];
+  /** Scopes `plugins.uninstall` writes. Absent with `config` present = `["project"]` (an older daemon or Side bundle). */
+  pluginRemoveScopes?: ConfigScope[];
   /** Transports `mcp.add` takes. */
   mcpTransports: ("stdio" | "http" | "sse")[];
   /** States the skill button cycles through. */
@@ -158,7 +160,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.media"; sessionId: string; partId: string; index: number }
   /** URL of the local page an Artifact publish part of the session names (GH-175, GH-335); reply ArtifactPreviewResult. */
   | { type: "artifact.preview"; sessionId: string; partId: string }
-  // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp. Reply `{}`; `{ local: true }` (PromptResult) when the Engine ran the text as its own command (OpenCode `/compact`, `/undo`, `/redo`): no `user_text` echo follows, the client drops its pending bubble. `/undo` also sets `draft`: the undone prompt, which the client puts back into the prompt box.
+  // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp. Reply `{}`; `{ local: true }` (PromptResult) when the Engine ran the text as its own command (OpenCode `/compact`, `/undo`, `/redo`, `/clear`): no `user_text` echo follows, the client drops its pending bubble. `/undo` also sets `draft`: the undone prompt, which the client puts back into the prompt box.
   // once: a repeat with the same key on the same session is not sent again; it gets the first one's reply or error (a retry after a lost reply). Ignored by an older daemon.
   | { type: "session.prompt"; sessionId: string; text: string; images?: string[]; once?: string }
   /** Bash mode: runs `command` with the user's shell in the session cwd; output streams as a `bash` part; Claude sees it with the next prompt. `session.interrupt` kills it. Idle: runs, reply `{}`. Busy (turn, pending input, rewind, shell command, terminal CLI turn): queued as a bash item (`prompt_queue`), reply `{ itemId }`; error `queue_full`. */
@@ -689,7 +691,7 @@ export type DefaultModeResult = { mode: PermissionMode };
 /** session.commands. */
 export type CommandsResult = { commands: SlashCommand[] };
 /** session.agents. */
-export type AgentsResult = { agents: AgentInfo[] };
+export type AgentsResult = { agents: AgentInfo[]; /** OpenCode subagents for the `@` picker; absent for Claude. */ subagents?: AgentInfo[] };
 export type UploadResult = { path: string };
 /** fs.upload / session.create `draft`: a secret token, 32 random bytes as lowercase hex. */
 export const DRAFT_TOKEN = /^[0-9a-f]{64}$/;
@@ -999,7 +1001,8 @@ export type GitRemote = { output: string; refs: string | null };
 export type GitCommitted = { hash: string; output: string; refs: string | null; /** `push` was asked: `git.branch` data of HEAD's branch (the push dialog). */ push?: GitBranchInfo };
 /** `committed` is null outside a git work tree. */
 /** `truncated`: the diff in the prompt was cut (the file list was complete). */
-export type GitCommitMessageResult = { message: string; truncated?: true };
+/** `engine`: the Engine that wrote the message. `fellBack`: Claude failed on its login and OpenCode wrote it (GH-984). */
+export type GitCommitMessageResult = { message: string; truncated?: true; engine?: Engine; fellBack?: true };
 export type GitCommitFilesResult = { committed: GitCommitted | null };
 /** A file a rollback acts on: `A` added or untracked, `D` deleted, `R` renamed (`path` the new name), `M` the rest. */
 export type GitRollbackFile = { path: string; kind: "M" | "D" | "R" | "A"; oldPath?: string };
@@ -1137,6 +1140,8 @@ export type ProjectOverrides = {
   /** `""` = Default, `"cli"`, or a Claude account id. Hub-local: never sent to a Side. */
   account?: string;
   inlineTask?: { model?: string; openCodeModel?: string };
+  /** Commit message generator of the Project (GH-984); a field not set inherits `git.commitMessage*`. */
+  commitMessage?: { engine?: Engine; model?: string; openCodeModel?: string };
   history?: { enabled?: boolean };
   jira?: { url?: string; email?: string; jql?: string; template?: string };
 };
@@ -1186,6 +1191,12 @@ export type Settings = { orchestration: { enabled: boolean; /** Live workers of 
     commitMessageInstructions: Record<string, string>;
     /** GH-668: the daemon keeps one Haiku process ready for Generate (faster start, one idle process). Default off. */
     commitMessageWarm: boolean;
+    /** GH-984: the Engine that writes the commit message. Default `claude`. */
+    commitMessageEngine: Engine;
+    /** Claude alias or id for Generate. 1..200 chars. Default `haiku`. */
+    commitMessageModel: string;
+    /** `provider/model` for Generate on OpenCode, also the fallback when Claude is not logged in; `""` = not set. */
+    commitMessageOpenCodeModel: string;
   };
   /** Custom names and icons (GH-515), shared by every browser. Key: project cwd, or side id (`local`, `wsl:<distro>`, `docker:<name>`). A patch replaces the whole map. */
   labels: { projects: Record<string, Label>; sides: Record<string, Label> };

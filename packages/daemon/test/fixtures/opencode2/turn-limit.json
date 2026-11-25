@@ -1,0 +1,58 @@
+[
+ {
+  "event": "session.execution.started",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "agent": "build",
+   "model": {
+    "id": "m",
+    "providerID": "fake"
+   },
+   "assistantMessageID": "$A1"
+  }
+ },
+ {
+  "event": "session.retry.scheduled",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "attempt": 1,
+   "at": 4102444800000,
+   "error": {
+    "type": "provider",
+    "message": "Rate limited"
+   }
+  }
+ },
+ {
+  "event": "session.step.failed",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "error": {
+    "type": "provider",
+    "message": "Rate limit exceeded",
+    "status": 429,
+    "retryAfterMs": 300000
+   }
+  }
+ },
+ {
+  "event": "session.execution.failed",
+  "data": {
+   "sessionID": "$SESSION",
+   "error": {
+    "type": "provider",
+    "message": "Rate limit exceeded",
+    "status": 429,
+    "retryAfterMs": 300000
+   }
+  }
+ }
+]

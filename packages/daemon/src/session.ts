@@ -64,7 +64,10 @@ export type SessionOpts = Partial<Omit<SessionSettings, "agent">> & {
   /** An Edit or Write of the agent replaced an existing file: `original` is the text it had before (Local history, GH-565). A new file (originalFile null) calls nothing. */
   onFileEdit?: (path: string, original: string) => void;
   /** The turn just ended because the plan usage limit was hit (assistant error rate_limit); `resetsAt` ms from its rejected rate_limit_event. */
-  onLimitStop?: (id: string, resetsAt: number | undefined) => void;
+  /** `relative`: `resetsAt` is computed from the hit (OpenCode), so it differs at every hit of one limit. */
+  onLimitStop?: (id: string, resetsAt: number | undefined, relative?: boolean) => void;
+  /** A turn ended without a limit stop (OpenCode engines): ends the count of automatic continues after a relative limit stop. */
+  onTurnEnded?: (id: string) => void;
   /** Asks the CLI for a predicted next prompt after each turn (Settings › Focus › Next for you); read when the CLI starts. */
   promptSuggestions?: () => boolean;
   /** Claude in Chrome setting (GH-514); read at every query start. Workers never get it. */

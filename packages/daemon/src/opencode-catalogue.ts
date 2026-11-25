@@ -3,9 +3,10 @@ import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { EFFORTS, type ClientMessage, type ModelInfo, type PermissionMode, type SessionListItem } from "@claude-ui/protocol";
 import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineRequest, type ListCtx, type SavedSession, type Settings } from "./engine-catalogue.ts";
-import { brokenState, createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels, primaryAgents, ProviderStateBroken, type ForkLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
+import { brokenState, createOpenCodeEngine, loadOpenCodeHistory, OPENCODE_CAPABILITIES, OPENCODE_MODES, openCodeModels, primaryAgents, ProviderStateBroken, type ForkLink, type InlineLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { createFolderReloads } from "./folder-reload.ts";
 import { forkAt } from "./opencode-fork.ts";
+import { oneShot1 } from "./opencode-oneshot.ts";
 import { createOpenCodeMcpConfig } from "./opencode-config-mcp.ts";
 import { createOpenCodeSkillsConfig } from "./opencode-config-skills.ts";
 import { createOpenCodePluginsConfig } from "./opencode-config-plugins.ts";
@@ -42,7 +43,11 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
   const openCode = o.server?.instance ?? createOpenCodeServer({ path: () => appSettings.get().opencode.path, ...o.server });
   /** Directory and title of each OpenCode session this daemon listed, created or opened. */
   const openCodeMeta = new Map<string, { cwd: string; title: string }>();
+  /** Ids of the temporary sessions of `oneShot`: never listed. */
+  const transient = new Set<string>();
   const openCodeFail = (err: unknown) => (err instanceof OpenCodeError ? { code: err.code, message: err.message } : { code: "opencode_failed", message: (err as Error).message });
+  /** The inline task sessions of session `id` (sessions.json `inlineOf`). */
+  const inlinesOf = (id: string): InlineLink[] => settings.entries().flatMap(([inlineId, l]) => (l.inlineOf?.sessionId === id ? [{ inlineId, callId: l.inlineOf.callId, ...(l.inlineOf.denied && { denied: l.inlineOf.denied }) }] : []));
   /** The forks of the Fork runs of session `id` (sessions.json). */
   const forksOf = (id: string): ForkLink[] => settings.entries().flatMap(([forkId, l]) => (l.forkOf?.sessionId === id ? [{ forkId, callId: l.forkOf.callId, prefix: l.forkOf.prefix }] : []));
   const openCodeEngine = createOpenCodeEngine(openCode, {
@@ -56,6 +61,8 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     visualizeOn: () => appSettings.get().chat.visualize,
     onFork: (id, forkOf) => ctx.saveSettings(() => settings.set(id, { forkOf })),
     forksOf,
+    onInline: (id, inlineOf) => ctx.saveSettings(() => settings.set(id, { inlineOf })),
+    inlinesOf,
   });
   /** A config change saved while a session of its folder ran: the folder is reloaded when they are idle, then the dialogs are told (docs/spec.md "Config dialogs"). A stopped server reads the files when it starts. */
   const reloads = createFolderReloads({ reload: async (cwd) => !openCode.running() || openCodeEngine.repairFolder(cwd), changed: (kind, cwd) => ctx.broadcast({ type: "config.changed", kind, cwd }) });
@@ -75,10 +82,12 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
   }
   /** OpenCode sessions being created (POST /session in flight): a restart of OpenCode's server would lose them. */
   let openCodeCreating = 0;
+  /** MCP sign-ins in flight in OpenCode (opencode-config-mcp.ts): their state lives in OpenCode's memory, so they hold a restart too. */
+  const mcpAuth = new Set<string>();
   let openCodeRestarts = 0;
   let openCodeRestart: Promise<void> | undefined;
   /** A restart of OpenCode's server now would lose a turn, an OAuth login or a session creation. */
-  const openCodeHeld = () => openCodeBusy() || oauthWaits.size > 0 || openCodeCreating > 0;
+  const openCodeHeld = () => openCodeBusy() || oauthWaits.size > 0 || openCodeCreating > 0 || mcpAuth.size > 0;
   /** Stops OpenCode's server (the next request starts it again; open sessions resync on the new event stream) and drops its cached limits. One at a time. */
   const restartOpenCode = () =>
     (openCodeRestart ??= (async () => {
@@ -86,6 +95,12 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
       openCodeEngine.dropLimits();
       openCodeRestarts++;
     })().finally(() => (openCodeRestart = undefined)));
+  /**
+   * A change of the user's global config (~/.config/opencode): OpenCode 1.19.5 caches the global config for the process life (`/instance/dispose` and `/global/dispose` keep it;
+   * a `PATCH /global/config` would rewrite the user's file and lose its comments), so only a restart of its server makes every folder read the new file. It waits for idle like
+   * the other reloads: the change stays pending and is retried when a turn ends and every 30 s (folder-reload.ts). A stopped server reads the files when it starts.
+   */
+  const globalReloads = createFolderReloads({ all: true, reload: async () => !openCode.running() || (!openCodeHeld() && (await restartOpenCode(), true)), changed: (kind, cwd) => ctx.broadcast({ type: "config.changed", kind, cwd }) });
   /**
    * OpenCode's model list. Only a read that still answers 499 after the folder's instance was disposed means the provider state is broken server-wide
    * (nothing else clears it): then OpenCode's server restarts, unless a turn, an OAuth login or a session creation would be lost. A refused or failed
@@ -108,15 +123,21 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
   }
   const refreshProviders = () => ((providersStale = true), flushProviders());
 
-  /** A new OpenCode session in `cwd` with the rules of its mode (tracked, its project added); undefined when the folder is being removed meanwhile. Throws OpenCode's error. */
-  async function createOpenCodeSession(cwd: string, initial: { model?: string; permissionMode: PermissionMode; effort?: SessionSettings["effort"] }): Promise<Session | undefined> {
+  /** The OpenCode session row of a new session in `cwd` with the rules of its mode (and agent); undefined when the folder is being removed meanwhile. Throws OpenCode's error. */
+  async function createOpenCodeRow(cwd: string, mode: PermissionMode, agent?: string): Promise<OpenCodeSessionRow | undefined> {
     // No timeout: the first request of a cold folder boots its instance (> 3 s) and the user waits for the session; a timeout would lose the created session for good.
     // `resend`: a create cut off by a server that died is sent again to the next server; at worst (it died after creating) an empty session is left over.
-    const permission = await openCodeEngine.block(initial.permissionMode, cwd); // may reject: before the counter goes up
+    const permission = await openCodeEngine.block(mode, cwd, agent); // may reject: before the counter goes up
     openCodeCreating++;
     const row = await openCode.request<OpenCodeSessionRow>("/session", { method: "POST", directory: cwd, timeoutMs: 0, resend: true, body: { permission } }).finally(() => openCodeCreating--);
     openCodeEngine.noteCreated(row.id, permission);
-    if (ctx.isRemoving(cwd) || !existsSync(cwd)) return undefined;
+    return ctx.isRemoving(cwd) || !existsSync(cwd) ? undefined : row;
+  }
+
+  /** A new OpenCode session in `cwd` with the rules of its mode (tracked, its project added); undefined when the folder is being removed meanwhile. Throws OpenCode's error. */
+  async function createOpenCodeSession(cwd: string, initial: { model?: string; permissionMode: PermissionMode; effort?: SessionSettings["effort"] }): Promise<Session | undefined> {
+    const row = await createOpenCodeRow(cwd, initial.permissionMode);
+    if (!row) return undefined;
     const opts = sessionOpts(initial);
     const s = ctx.track(new Session(cwd, opts, { id: row.id }));
     // The entry makes the next list start OpenCode for a user whose last engine is Claude. `fields` empty: only a session without an entry is saved (as Claude does on its first query).
@@ -125,6 +146,16 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     ctx.addProject(cwd);
     return s;
   }
+
+  /** `/clear` (docs/spec.md "Sessions"): a new session with the model, mode, effort and agent of the cleared one. Not tracked here: `onCleared` tracks it. */
+  openCodeEngine.createHeir = async (cwd, carried) => {
+    const row = await createOpenCodeRow(cwd, carried.permissionMode, carried.agent);
+    if (!row) return undefined;
+    // Saved before the session exists: its `opts.agent(id)` gives the carried agent.
+    ctx.saveSettings(() => settings.set(row.id, { model: carried.model, permissionMode: carried.permissionMode, effort: carried.effort, ...(carried.agent && { agent: carried.agent }) }));
+    openCodeMeta.set(row.id, { cwd, title: row.title ?? "New session" });
+    return new Session(cwd, sessionOpts(carried), { id: row.id });
+  };
 
   /** The error text of the last failed OpenCode listing: logged once per change, not on every list. */
   let openCodeListError: string | undefined;
@@ -152,10 +183,11 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
       const folderDefault = (cwd: string) => (defaults.get(cwd) ?? defaults.set(cwd, Promise.race([openCodeEngine.defaultAgent(cwd), new Promise<string>((r) => setTimeout(() => r(openCodeEngine.defaultAgentKnown(cwd)), 2_000).unref())])).get(cwd)!);
       for (const [cwd, list] of rows)
         for (const row of list) {
+          if (transient.has(row.id)) continue;
           const loaded = ctx.session(row.id);
           const saved = linked.get(row.id);
           // The fork of a Fork run shows in its parent's card only; its id stays known so its link is kept (`keep`).
-          if (saved?.forkOf) {
+          if (saved?.forkOf || saved?.inlineOf) {
             out.ids.add(row.id);
             continue;
           }
@@ -168,6 +200,8 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
           out.ids.add(row.id);
           out.items.push({ ...info, id: row.id, cwd, title: row.title, lastActivity: row.time.updated, archived: !!row.time.archived, transcript: true, live: false, ...links(row.id) });
         }
+      // An inline task's session is a child (the root list has none): its id stays known so its link is kept.
+      for (const [id, l] of settings.entries()) if (l.inlineOf) out.ids.add(id);
     } catch (err) {
       const text = (err as Error).message;
       if (text !== openCodeListError) console.error("listing OpenCode sessions failed:", text);
@@ -215,7 +249,7 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     const row = await openCode.request<OpenCodeSessionRow>(`/session/${id}`, { directory: known?.cwd, timeoutMs: 0 }).catch(() => undefined);
     const cwd = row && ctx.allowed(known?.cwd ?? row.directory);
     if (!row || !cwd || ctx.isRemoving(cwd)) return undefined;
-    const history = await loadOpenCodeHistory(openCode, id, cwd, forksOf(id));
+    const history = await loadOpenCodeHistory(openCode, id, cwd, forksOf(id), inlinesOf(id));
     openCodeMeta.set(id, { cwd, title: row.title });
     const saved = settings.get(id);
     const permissionMode = OPENCODE_MODES.includes(saved?.permissionMode as never) ? (saved!.permissionMode as SessionSettings["permissionMode"]) : undefined;
@@ -289,9 +323,9 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
   return {
     engine: openCodeEngine,
     config: {
-      mcp: createOpenCodeMcpConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), reload: (cwd) => reloads.request(cwd, ["mcp"]), hidden: (name) => openCodeEngine.attached.has(name), waitMs: o.server?.mcpWaitMs }),
+      mcp: createOpenCodeMcpConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), reload: (cwd) => reloads.request(cwd, ["mcp"]), reloadGlobal: (cwd) => globalReloads.request(cwd, ["mcp"]), signingIn: mcpAuth, hidden: (name) => openCodeEngine.attached.has(name), waitMs: o.server?.mcpWaitMs }),
       skills: createOpenCodeSkillsConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), reload: (cwd) => reloads.request(cwd, ["skills"]), waitMs: o.server?.mcpWaitMs }),
-      plugins: createOpenCodePluginsConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), reload: (cwd) => reloads.request(cwd, ["plugins"]), waitMs: o.server?.mcpWaitMs }),
+      plugins: createOpenCodePluginsConfig({ server: openCode, repair: (cwd) => openCodeEngine.repairFolder(cwd), reload: (cwd) => reloads.request(cwd, ["plugins"]), reloadGlobal: (cwd) => globalReloads.request(cwd, ["plugins"]), waitMs: o.server?.mcpWaitMs }),
     },
     listScope: "folders",
     ownsId,
@@ -343,7 +377,7 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
       openCodeMeta.delete(id);
       rmSync(openCodeDigestDir(id), { recursive: true, force: true });
       // The forks of its Fork runs go with it (they show nowhere else); a fork already gone is no failure.
-      const forks = settings.entries().filter(([, l]) => l.forkOf?.sessionId === id).map(([forkId]) => forkId);
+      const forks = settings.entries().filter(([, l]) => l.forkOf?.sessionId === id || l.inlineOf?.sessionId === id).map(([forkId]) => forkId);
       await Promise.all(forks.map((forkId) => openCode.request(`/session/${forkId}`, { method: "DELETE", directory: at.cwd }).catch(() => undefined)));
       if (forks.length) ctx.saveSettings(() => settings.delete(forks));
     },
@@ -390,15 +424,29 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
       }
     },
     commands: (cwd) => openCodeEngine.commands(cwd),
-    agents: async (cwd) => (await openCodeEngine.primaryFirst(cwd)).map(({ name, description }) => ({ name, ...(description && { description }) })),
+    agents: async (cwd) => {
+      const info = ({ name, description }: { name: string; description?: string }) => ({ name, ...(description && { description }) });
+      const both = await openCodeEngine.agentSets(cwd);
+      return { agents: both.primary.map(info), subagents: both.subagents.map(info) };
+    },
     models: (cwd) => openCodeModelsRepaired(cwd),
+    // The temporary session holds a restart of the server (it would be lost) like a session creation does; a restart that waited for it runs after.
+    oneShot: async (r) => {
+      openCodeCreating++;
+      try {
+        return await oneShot1(openCode, r, transient);
+      } finally {
+        openCodeCreating--;
+        globalReloads.settled();
+      }
+    },
     // A model refresh held back by a running OpenCode session no longer waits for it.
-    settled: () => (void flushProviders(), reloads.settled()),
+    settled: () => (void flushProviders(), reloads.settled(), globalReloads.settled()),
     settingsChanged: (before: Settings, next: Settings) => {
       if (next.opencode.path === before.opencode.path) return;
       void restartOpenCode().then(() => ctx.broadcast({ type: "opencode.providersChanged" }));
     },
     requests,
-    close: () => (reloads.close(), openCode.close()),
+    close: () => (reloads.close(), globalReloads.close(), openCode.close()),
   };
 }

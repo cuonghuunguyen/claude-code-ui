@@ -26,6 +26,8 @@ When a session stops because of the plan limit, claude-code-ui can send it "cont
 
 Sending a message yourself also cancels it. Several stopped sessions continue one after another.
 
+An OpenCode session continues by itself after a provider usage or rate limit, when the limit resets (short rate limits are ignored). It tries at most 3 times; a message of yours or a turn that ends without a limit resets the count.
+
 ## Context window
 
 - Click the ring next to the send button to see what fills the context: messages, system prompt, tools, MCP tools, memory files and skills.

@@ -142,6 +142,9 @@ The same settings as VS Code's Git extension, with the same names and values. Th
 | Open repository in parent folders | `always` (default), `never` or `prompt` (behaves as `always` here). |
 | Commit message instruction | What Claude is asked when it writes a commit message for the checked files ([Git operations](../features/git#commit-message-instruction)). Empty: the built-in instruction. |
 | Commit message instruction for *project* | Only for that project; wins over the instruction above. Empty: use the instruction above. |
+| Commit message engine | `claude` (default) or `opencode`: which engine writes the commit message ([Commit message engine](../features/git#commit-message-engine)). A Project can override it. |
+| Commit message model (Claude) | Model used by Claude. Default `haiku`. Empty: the default. |
+| Commit message model (OpenCode) | Model used by OpenCode, as `provider/model`. Needed for the engine `opencode`, and for the fallback when Claude is not logged in. |
 
 ## Jira
 

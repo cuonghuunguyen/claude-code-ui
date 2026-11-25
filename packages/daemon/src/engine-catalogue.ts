@@ -5,6 +5,7 @@ import type { Engine } from "./engine.ts";
 import type { Session, SessionSettings } from "./session.ts";
 import type { Link, SessionSettingsStore } from "./session-settings.ts";
 import type { AppSettings } from "./settings.ts";
+import type { OneShotRequest } from "./opencode-oneshot.ts";
 
 /** The value of the app settings. */
 export type Settings = ReturnType<AppSettings["get"]>;
@@ -80,8 +81,10 @@ export interface EngineCatalogue {
   /** Quick compact (docs/spec.md "Quick compact"): a new session whose first message is the digest of `source`, or the reason there is none. Throws when it failed. */
   quickCompact(source: Session): Promise<{ id: string; tokens: number; summarised: boolean } | { unavailable: string }>;
   commands(cwd: string): Promise<SlashCommand[]>;
-  agents(cwd: string): Promise<{ name: string; description?: string }[]>;
+  agents(cwd: string): Promise<{ agents: { name: string; description?: string }[]; subagents?: { name: string; description?: string }[] }>;
   models(cwd?: string): Promise<ModelInfo[]>;
+  /** One tool-less prompt in a temporary session of `cwd` that is deleted afterwards (GH-984, the commit message generator). Resolves with the reply text; rejects on a failure; `signal` aborts it. */
+  oneShot?(o: OneShotRequest): Promise<string>;
   /** One of the Engine's sessions went idle, was closed by a worktree remove, or was deleted. */
   settled?(): void;
   /** The session left the daemon without a delete (its stored data was deleted outside). */

@@ -47,6 +47,14 @@ A long ticket summary is shortened, so a generated name is always valid. An erro
 
 **Shift+click** the button, or pick **New worktree** in the project menu, to create one at once with a generated name.
 
+### Merged repository group
+
+A repository that is open on several Sides shows as one group in the sidebar. A row shows the branch only. Icons show the kind (house: main checkout, branch: worktree) and, in a merged group, the Side; the tooltip has the Side, kind, full branch and path. Main checkouts of every Side come first. A worktree without sessions takes one line; a click opens a new session in it.
+
+- The group menu has **Project settings · *Side*…** and **Create worktree · *Side*…** for each Side. The main row of each Side has its own **Create worktree…** and **Clean up**. The **+ worktree** button uses the first Side; its label names that Side.
+- **Clean up** from the group covers the worktrees and workers of every Side ([Clean up](clean-up)).
+- The Create worktree modal names the Side in its footer when the repository is on several Sides.
+
 The **Run session in** chip of a new session calls the main checkout **Primary worktree**.
 
 To remove many at once, see [Clean up](clean-up). To remove one, click its trash icon (on a phone: its menu › **Delete worktree…**). The dialog opens at once with **Checking…**. After you confirm, the row shows **Removing…** while the removal runs in the background.

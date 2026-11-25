@@ -160,6 +160,7 @@ export function createOpenCodeCatalogues(ctx: CatalogueContext, o: OpenCodeCatal
     commands: async (cwd) => (await known()).commands(cwd),
     agents: async (cwd) => (await known()).agents(cwd),
     models: async (cwd) => (await known()).models(cwd),
+    oneShot: async (r) => (await known()).oneShot!(r),
     // A leftover Aside is looked up in OpenCode: while the server is down that waits for its start (GH-945).
     deferCleanup: (id) => OPENCODE_ID.test(id) && !srv.running(),
     onServerUp: (cb) => void srv.onUp(cb),

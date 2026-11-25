@@ -35,7 +35,7 @@ const cleanups: (() => void)[] = [];
 afterEach(() => cleanups.splice(0).forEach((c) => c()));
 
 type Boot = Awaited<ReturnType<typeof boot>>;
-async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object; root?: string; env?: Record<string, string> } = {}) {
+async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object; root?: string; env?: Record<string, string>; /** Settings patch (the OpenCode retry cases of GH-683 turn the usage-limit auto-continue off). */ settings?: object; autoContinue?: { graceMs?: number; gapMs?: number; retryMs?: number } } = {}) {
   const root = o.root ?? realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
   const project = join(root, "project");
   mkdirSync(project, { recursive: true });
@@ -45,7 +45,7 @@ async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object
   const env: Record<string, string> = { FAKE_OPENCODE_LOG: logFile, FAKE_OPENCODE_DATA: dataFile, FAKE_OPENCODE_SCRIPT: (o.script ?? []).map(turn).join(","), ...o.env };
   // Terminal access (GH-709) attaches a second MCP server to every session: off here; "OpenCode claude-ui tools" turns it on.
   const appSettings = createSettings();
-  appSettings.set({ terminalAccess: { enabled: false }, inlineTask: { enabled: false }, fork: { enabled: false } } as never);
+  appSettings.set({ terminalAccess: { enabled: false }, inlineTask: { enabled: false }, fork: { enabled: false }, ...o.settings } as never);
   const http = createDaemon({
     webRoot: root,
     roots: [root],
@@ -61,6 +61,7 @@ async function boot(o: { script?: string[]; allowBypass?: boolean; data?: object
     claudeDir: join(root, "claude"),
     projectsDir: join(root, "claude", "projects"),
     uploadSweepMs: 0,
+    autoContinue: o.autoContinue,
     // No transcript scan of the real ~/.claude (history defaults to the SDK's, which ignores projectsDir): on a machine with many projects every session.list scanned thousands of folders and the tests timed out under load.
     history: { listSessions: (async () => []) as never, getSessionInfo: (async () => undefined) as never, getSessionMessages: (async () => []) as never },
     allowBypass: o.allowBypass,
@@ -137,6 +138,22 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     expect(sent).toMatchObject({ messageID: user.id, agent: "build", parts: [{ type: "text", text: "hello" }, { type: "file", mime: "image/png", url: PNG }] });
     expect(sent.parts[0].id).toMatch(/^prt_/);
     expect(sent.model).toBeUndefined();
+  });
+
+  it("an @<subagent> in a prompt adds an agent part with its offsets, the session agent stays; the agents part lists the subagents", async () => {
+    const d = await boot({ script: ["text", "text"] });
+    const s = await d.open();
+    await until(() => !!s.find("agents"));
+    expect(s.find("agents")!.subagents).toEqual([{ name: "general" }]);
+    await s.prompt("@general look");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 1);
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
+    await s.prompt("plain @nobody");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 2);
+    const [first, second] = d.requests("POST", `/session/${s.id}/prompt_async`).map((r) => r.body);
+    expect(first).toMatchObject({ agent: "build", parts: [{ type: "text", text: "@general look" }, { type: "agent", name: "general", source: { value: "@general", start: 0, end: 8 } }] });
+    expect(first.parts[1].id).toMatch(/^prt_/);
+    expect(second.parts.map((p: { type: string }) => p.type)).toEqual(["text"]);
   });
 
   it("the visualize skill goes as `system` of a prompt while the setting is on, not when it is off", async () => {
@@ -343,6 +360,44 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     expect(d.requests("POST", "/instance/dispose")).toHaveLength(0);
   });
 
+  it("a question or permission OpenCode asks after Stop, before its abort ended the turn, is rejected at once: no card, nothing left pending; the next turn's ask shows", async () => {
+    const d = await boot({ script: ["abort", "question"], env: { FAKE_OPENCODE_ABORT_DELAY_MS: "1500" } });
+    const s = await d.open();
+    await s.prompt("long essay");
+    await until(() => s.parts().some((p) => p.type === "thinking"));
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    // OpenCode's loop unwinds after the abort answered: its asks on the way still arrive.
+    await d.fake("/__emit", { directory: d.project, events: [{ type: "question.asked", properties: { id: "que_late", sessionID: s.id, questions: [{ question: "Q", header: "H", options: [{ label: "A", description: "" }] }] } }, { type: "permission.asked", properties: { id: "per_late", sessionID: s.id, permission: "bash", patterns: ["ls"] } }] });
+    await until(() => d.requests("POST", "/question/que_late/reject").length === 1 && d.requests("POST", "/permission/per_late/reply").length === 1);
+    expect(d.requests("POST", "/permission/per_late/reply")[0]!.body).toEqual({ reply: "reject" });
+    // A prompt sent at once, while the aborted turn still runs: it starts the next turn when that one ended; that turn's ask is the user's.
+    await s.prompt("ask me");
+    await until(() => !!s.find("question"));
+    // The stopped turn showed no card and never waited for input.
+    const stopped = s.parts().slice(0, s.parts().findIndex((p) => p.type === "turn_interrupted"));
+    expect(stopped.length).toBeGreaterThan(0);
+    expect(stopped.some((p) => p.type === "question" || p.type === "permission_request" || (p.type === "session_state" && (p as { state: string }).state === "needs_input"))).toBe(false);
+    const q = s.find("question")!;
+    expect(q).toMatchObject({ requestId: "que_1b7edd2ad001vvGXsFVXVXH1oa", settled: false });
+    expect(s.states().at(-1)).toBe("needs_input");
+    expect(d.requests("POST", `/question/${q.requestId}/reject`)).toHaveLength(0);
+  });
+
+  it("a prompt sent after Stop that waited 10 s for a stopped turn OpenCode has not ended yet is a turn of its own: its ask shows", async () => {
+    const d = await boot({ script: ["abort", "question"], env: { FAKE_OPENCODE_ABORT_DELAY_MS: "14000" } });
+    const s = await d.open();
+    await s.prompt("long essay");
+    await until(() => s.parts().some((p) => p.type === "thinking"));
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await s.prompt("ask me");
+    // The prompt goes out after TURN_END_WAIT_MS (10 s); the stopped turn ends in OpenCode at 14 s.
+    await until(() => !!s.find("question"), 13_000);
+    const q = s.find("question")!;
+    expect(q).toMatchObject({ requestId: "que_1b7edd2ad001vvGXsFVXVXH1oa", settled: false });
+    expect(s.states().at(-1)).toBe("needs_input");
+    expect(d.requests("POST", `/question/${q.requestId}/reject`)).toHaveLength(0);
+  });
+
   it("a message sent right after Stop starts the next turn after the aborted one ended", async () => {
     const d = await boot({ script: ["abort", "text"] });
     const s = await d.open();
@@ -410,6 +465,55 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     await until(() => !!s.find("notice", (p) => p.text === "Stop the turn first"));
     expect(d.requests("POST", `/session/${s.id}/summarize`)).toHaveLength(1);
     expect(s.parts().filter((p) => p.type === "user_text").map((p) => (p as { text: string }).text)).toEqual(["run ls"]);
+  });
+
+  it("/clear (and /new, /reset) makes a new session with the model, mode, effort and agent; the old one keeps its history and logs session_cleared; it is refused while a turn runs, a failed create is a notice, /clear with text is a prompt", async () => {
+    const agents = [{ name: "build", mode: "primary", permission: [] }, { name: "docs", mode: "primary", permission: [{ permission: "edit", pattern: "*", action: "deny" }] }];
+    const d = await boot({ script: ["text", "text", "bash"], data: { agents }, env: { FAKE_OPENCODE_SESSION_FAIL_AFTER: "3", FAKE_OPENCODE_SESSION_CREATE_DELAY_MS: "400" } });
+    const s = await d.open();
+    const mode = (await d.ok({ type: "session.list" })).sessions.find((x: { id: string }) => x.id === s.id).permissionMode;
+    await d.ok({ type: "session.setModel", sessionId: s.id, model: "acme/x/y" });
+    await d.ok({ type: "session.setEffort", sessionId: s.id, effort: "high" });
+    await d.ok({ type: "session.setAgent", sessionId: s.id, agent: "docs" });
+    await s.prompt("one");
+    await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
+    expect(await s.prompt("/clear")).toEqual({ local: true });
+    const heirId = (s.find("session_cleared") as { sessionId: string }).sessionId;
+    expect(heirId).not.toBe(s.id);
+    // The old session is untouched: its messages stay, no `/clear` prompt reached the model, no echo.
+    expect(s.parts().filter((p) => p.type === "user_text").map((p) => (p as { text: string }).text)).toEqual(["one"]);
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)).toHaveLength(1);
+    expect(s.states().at(-1)).toBe("idle");
+    const posts = d.requests("POST", "/session");
+    expect(posts).toHaveLength(2);
+    expect(posts[1]!.body.permission.map((r: { pattern: string }) => r.pattern)).toContain("agent:docs");
+    const listed = (await d.ok({ type: "session.list" })).sessions;
+    expect(listed.map((x: { id: string }) => x.id)).toEqual(expect.arrayContaining([s.id, heirId]));
+    expect(listed.find((x: { id: string }) => x.id === heirId)).toMatchObject({ model: "acme/x/y", effort: "high", agent: "docs", permissionMode: mode, engine: "opencode" });
+    expect(s.find("commands")!.commands.map((c) => c.name)).toContain("clear");
+    // /new and /reset are /clear; the failed third create (the fake refuses after three) is a notice and no hand-over.
+    expect(await s.prompt("/new")).toEqual({ local: true });
+    expect(s.parts().filter((p) => p.type === "session_cleared")).toHaveLength(2);
+    expect(await s.prompt("/reset")).toEqual({ local: true });
+    expect(s.parts().filter((p) => p.type === "session_cleared")).toHaveLength(2);
+    expect(s.find("notice", (p) => /^\/clear failed: .*create refused/.test(p.text))).toBeTruthy();
+    // While the heir is being made another prompt is refused (a turn here would run on a session the tabs leave).
+    const racing = s.prompt("/clear");
+    await new Promise((r) => setTimeout(r, 100));
+    expect(await s.prompt("hi from another tab")).toEqual({ local: true });
+    expect(s.find("notice", (p) => p.text.startsWith("Starting a new session"))).toBeTruthy();
+    await racing;
+    expect(s.parts().some((p) => p.type === "user_text" && p.text === "hi from another tab")).toBe(false);
+    // With text it is a plain prompt; while a turn runs /clear is refused.
+    await s.prompt("/clear now");
+    await until(() => s.parts().some((p) => p.type === "user_text" && p.text === "/clear now"));
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result", () => true));
+    await s.prompt("run ls");
+    await until(() => !!s.find("permission_request"));
+    const creates = d.requests("POST", "/session").length;
+    await s.prompt("/clear");
+    await until(() => !!s.find("notice", (p) => p.text === "Stop the turn first"));
+    expect(d.requests("POST", "/session")).toHaveLength(creates);
   });
 
   it("/compact uses the chosen model", async () => {
@@ -799,9 +903,9 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     const d = await boot({ script: ["text"] });
     const s = await d.open();
     await until(() => !!s.find("commands"));
-    expect(s.find("commands")!.commands.map((c) => c.name)).toEqual(["compact", "undo", "redo", "visualize", "init", "review", "fail"]);
-    expect(s.find("commands")!.commands[4]).toEqual({ name: "init", description: "guided AGENTS.md setup", argumentHint: "$ARGUMENTS" });
-    expect(s.find("commands")!.commands[5]).toMatchObject({ description: "", argumentHint: "" });
+    expect(s.find("commands")!.commands.map((c) => c.name)).toEqual(["compact", "undo", "redo", "clear", "visualize", "init", "review", "fail"]);
+    expect(s.find("commands")!.commands[5]).toEqual({ name: "init", description: "guided AGENTS.md setup", argumentHint: "$ARGUMENTS" });
+    expect(s.find("commands")!.commands[6]).toMatchObject({ description: "", argumentHint: "" });
     expect((await d.ok({ type: "session.commands", cwd: d.project, engine: "opencode" })).commands.map((c: { name: string }) => c.name)).toContain("review");
 
     await s.prompt("/review main");
@@ -1192,6 +1296,33 @@ describe("OpenCode Aside and session management", { timeout: TEST_MS }, () => {
     expect(link(d, "ses_forked")).toBeUndefined();
   });
 
+  it("an inline task's session link stays after a list (a child session OpenCode may list); the parent restores the call's steps from it; deleting the parent deletes it", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const text = (id: string, mid: string, t: string, sid = "ses_own") => ({ id, type: "text", messageID: mid, sessionID: sid, text: t, time: { start: 1, end: 2 } });
+    const call = { id: "prt_c", type: "tool", messageID: "msg_a1", callID: "call_inline", tool: "claude-ui-abcdefghij_inline_task", state: { status: "completed", input: { prompt: "find foo" }, output: "{}", time: { start: 1, end: 2 } } };
+    const messages = {
+      ses_own: [{ info: { id: "msg_u1", sessionID: "ses_own", role: "user" }, parts: [text("prt_u1", "msg_u1", "go")] }, { info: { id: "msg_a1", sessionID: "ses_own", ...done }, parts: [call] }],
+      ses_inline: [{ info: { id: "msg_i1", sessionID: "ses_inline", role: "user" }, parts: [text("prt_i1", "msg_i1", "find foo", "ses_inline")] }, { info: { id: "msg_i2", sessionID: "ses_inline", ...done }, parts: [text("prt_i2", "msg_i2", "foo is in a.txt", "ses_inline")] }],
+    };
+    writeFileSync(join(root, "sessions.json"), JSON.stringify({ ses_inline: { inlineOf: { sessionId: "ses_own", callId: "call_inline" }, saved: 1 } }));
+    const d = await boot({ root, script: ["text"], data: { sessions: [row(project), row(project, "ses_inline")], messages } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    for (let i = 0; i < 2400; i++) {
+      if ((await d.ok({ type: "session.list" })).sessions.some((x: { id: string }) => x.id === "ses_own")) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect((await d.ok({ type: "session.list" })).sessions.map((s: any) => s.id)).toEqual(["ses_own"]);
+    expect(link(d, "ses_inline")).toMatchObject({ inlineOf: { sessionId: "ses_own", callId: "call_inline" } });
+    await d.ok({ type: "session.subscribe", sessionId: "ses_own", sinceSeq: 0 });
+    const parts = d.inbox.filter((m): m is Extract<ServerMessage, { type: "event" }> => m.type === "event" && m.sessionId === "ses_own").map((m) => m.part);
+    expect(new Set(parts.filter((p) => p.parentId === "call_inline").map((p) => `${p.id}:${p.type === "assistant_text" && p.text}`))).toEqual(new Set(["prt_i2:foo is in a.txt"]));
+    await d.ok({ type: "session.delete", sessionId: "ses_own" });
+    expect(d.requests("DELETE", "/session/ses_inline")).toHaveLength(1);
+    expect(link(d, "ses_inline")).toBeUndefined();
+  });
+
   it("rename, archive, unarchive and delete go to OpenCode", async () => {
     const d = await owned([msg("msg_u1", { role: "user" })]);
     await d.ok({ type: "session.rename", sessionId: "ses_own", title: " New name " });
@@ -1245,6 +1376,32 @@ describe("OpenCode orchestration", { timeout: TEST_MS }, () => {
     // OpenCode connects again (restart, dispose): a new initialize replaces the MCP session.
     const again = await mcpClient(body.config.url, bearer);
     expect(json(await again.callTool({ name: "worker_list", arguments: {} })).workers).toHaveLength(1);
+  });
+
+  it("/clear in a coordinator: the workers and the tools go to the new session; the old session's tools connection is dropped and a prompt there makes a fresh one that sees no workers", async () => {
+    const d = await boot({ script: ["text"] });
+    await on(d);
+    const s = await d.open();
+    const first = await attached(d, s.id);
+    const old = await mcpClient(first.config.url, first.config.headers.authorization);
+    const w = json(await old.callTool({ name: "worker_start", arguments: { name: "w1", cwd: d.project, prompt: "do it" } }));
+    expect(await s.prompt("/clear")).toEqual({ local: true });
+    const heir = (s.find("session_cleared") as { sessionId: string }).sessionId;
+    // The heir's tools list the worker.
+    const hb = await attached(d, heir);
+    const heirClient = await mcpClient(hb.config.url, hb.config.headers.authorization);
+    expect(json(await heirClient.callTool({ name: "worker_list", arguments: {} })).workers.map((x: any) => x.sessionId)).toEqual([w.sessionId]);
+    // The old session's connection left OpenCode and its route is gone: it no longer acts for the heir.
+    await until(() => d.requests("POST", `/mcp/${mcpName(s.id)}/disconnect`).length === 1);
+    await expect(old.callTool({ name: "worker_list", arguments: {} })).rejects.toThrow();
+    // A prompt on the old session attaches again, on a binding of its own: no workers.
+    await s.prompt("hi");
+    await until(() => d.requests("POST", "/mcp").filter((r) => r.body.name === mcpName(s.id)).length === 2);
+    const again = d.requests("POST", "/mcp").filter((r) => r.body.name === mcpName(s.id))[1]!.body;
+    expect(again.config.headers.authorization).not.toBe(first.config.headers.authorization);
+    const fresh = await mcpClient(again.config.url, again.config.headers.authorization);
+    expect(json(await fresh.callTool({ name: "worker_list", arguments: {} })).workers).toEqual([]);
+    expect(json(await heirClient.callTool({ name: "worker_list", arguments: {} })).workers).toHaveLength(1);
   });
 
   it("with a slow MCP load the attach waits instead of timing out: no warning, the server is attached before the prompt, the turn gets its reply (GH-681)", async () => {
@@ -2201,6 +2358,8 @@ const errorNotices = (s: { parts: () => Part[] }) => s.parts().filter((p) => p.t
 const status = (id: string, status: object) => ({ type: "session.status", properties: { sessionID: id, status } });
 const RETRY_3 = { type: "retry", attempt: 3, message: "Rate limit reached", next: 4102444800000 };
 
+const NO_AUTO = { usageLimit: { autoContinue: false } };
+
 describe("OpenCode retry and model errors (GH-683)", { timeout: 30_000 }, () => {
   it("a retry shows model_retry with attempt, reason and next; the next busy clears it; the reply ends the turn without a warning", async () => {
     const d = await boot({ script: ["retry"] });
@@ -2210,6 +2369,32 @@ describe("OpenCode retry and model errors (GH-683)", { timeout: 30_000 }, () => 
     expect(retries(s)).toEqual([{ attempt: 1, message: "Rate limit reached for m1", next: 4102444800000 }, null]);
     expect(s.parts().some((p) => p.type === "notice")).toBe(false);
     expect(s.find("turn_result")).toMatchObject({ isError: false });
+  });
+
+  it("a retry with an OpenCode action carries the https link as retry.action", async () => {
+    const d = await boot({ script: ["retry-action"] });
+    const s = await d.open();
+    await s.prompt("hi");
+    await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
+    expect(retries(s)[0]).toEqual({ attempt: 1, message: "Free usage exceeded, subscribe to Go", next: 4102444800000, action: { label: "subscribe", link: "https://opencode.ai/go", title: "Free limit reached" } });
+  });
+
+  it("the Go action drops the trailing link of the reason; an action without an https link is dropped", async () => {
+    const d = await boot();
+    const s = await d.open();
+    const go = "https://opencode.ai/workspace/wrk_test/go";
+    const msg = `5-hour usage limit reached. It will reset in 1 minute - ${go}`;
+    await d.fake("/__emit", { events: [status(s.id, { type: "busy" }), status(s.id, { ...RETRY_3, message: msg, action: { title: "Go limit reached", label: "open settings", link: go } })] });
+    await until(() => !!retries(s).at(-1));
+    expect(retries(s).at(-1)).toMatchObject({ message: "5-hour usage limit reached. It will reset in 1 minute", action: { label: "open settings", link: go, title: "Go limit reached" } });
+    const bad: { label: string; link?: string }[] = [{ label: "x", link: "javascript:alert(1)" }, { label: "x", link: "http://opencode.ai/go" }, { label: "x" }];
+    for (const [i, action] of bad.entries()) {
+      const attempt = 4 + i;
+      await d.fake("/__emit", { events: [status(s.id, { ...RETRY_3, attempt, message: `Limit - ${action.link ?? ""}`, action })] });
+      await until(() => retries(s).at(-1)?.attempt === attempt);
+      expect(retries(s).at(-1)).toMatchObject({ message: `Limit - ${action.link ?? ""}`.trim() });
+      expect(retries(s).at(-1)).not.toHaveProperty("action");
+    }
   });
 
   it("a turn that fails after its retries ends with one error notice of its own, after its prompt; a second failing turn has its own; retry state cleared", async () => {
@@ -2326,6 +2511,21 @@ describe("OpenCode retry and model errors (GH-683)", { timeout: 30_000 }, () => 
     expect(last).toMatchObject({ retry: { attempt: 2, message: "Rate limit reached" } });
   });
 
+  it("a session restored while OpenCode retries with an action shows the action link", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocp-")));
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    const row = { id: "ses_retry", slug: "r", projectID: "global", directory: project, title: "Retrying", version: "1.19.5", time: { created: 1, updated: 2 } };
+    const action = { reason: "free_tier_limit", title: "Free limit reached", label: "subscribe", link: "https://opencode.ai/go" };
+    const d = await boot({ root, data: { sessions: [row], messages: { ses_retry: [] }, statuses: { ses_retry: { type: "retry", attempt: 1, message: "Free usage exceeded, subscribe to Go", next: 4102444800000, action } } } });
+    await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
+    await d.ok({ type: "session.list" });
+    await d.ok({ type: "session.subscribe", sessionId: "ses_retry", sinceSeq: 0 });
+    await until(() => d.inbox.some((m) => m.type === "event" && m.part.type === "model_retry"));
+    const last = d.inbox.filter((m): m is Extract<ServerMessage, { type: "event" }> => m.type === "event" && m.part.type === "model_retry").at(-1)!.part;
+    expect(last).toMatchObject({ retry: { action: { label: "subscribe", link: "https://opencode.ai/go", title: "Free limit reached" } } });
+  });
+
   it("a failed prompt has a notice id per turn, so a second failure does not update the first", async () => {
     const d = await boot();
     const s = await d.open();
@@ -2335,5 +2535,81 @@ describe("OpenCode retry and model errors (GH-683)", { timeout: 30_000 }, () => 
       await until(() => new Set(s.parts().filter((p) => p.type === "notice").map((p) => p.id)).size === n);
       await until(() => s.states().at(-1) === "idle");
     }
+  });
+});
+
+describe("OpenCode auto-continue after a provider limit (GH-973)", { timeout: 30_000 }, () => {
+  const prompts = (d: Boot, id: string) => d.requests("POST", `/session/${id}/prompt_async`).map((r) => (r.body.parts as { text?: string }[])?.[0]?.text);
+  const stops = (s: { parts: () => Part[] }) => s.parts().filter((p) => p.type === "limit_stop") as Extract<Part, { type: "limit_stop" }>[];
+  const acs = (s: { parts: () => Part[] }) => s.parts().filter((p) => p.type === "auto_continue") as Extract<Part, { type: "auto_continue" }>[];
+  const idle = (s: { find: (t: "turn_result") => unknown; states: () => string[] }) => until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
+
+  it("a 429 that ends the turn with a retry-after is a limit stop with the reset time, schedules a continue and sends it after the reset", async () => {
+    const d = await boot({ script: ["limit-fail", "text"], autoContinue: { graceMs: 0, gapMs: 100 } });
+    const s = await d.open();
+    const before = Date.now();
+    await s.prompt("hi");
+    await idle(s);
+    await until(() => stops(s).length > 0 && acs(s).some((a) => typeof a.at === "number"));
+    expect(stops(s)[0]).toMatchObject({ stopped: true, resetsAt: expect.any(Number) });
+    expect(stops(s)[0]!.resetsAt!).toBeGreaterThanOrEqual(before + 2000);
+    expect(stops(s)[0]!.resetsAt!).toBeLessThan(before + 10_000);
+    await until(() => prompts(d, s.id).length === 2, 12_000);
+    expect(prompts(d, s.id)).toEqual(["hi", "continue"]);
+  });
+
+  it("a usage limit without a reset time stops the turn for good: limit stop without resetsAt, nothing scheduled", async () => {
+    const d = await boot({ script: ["limit-free"] });
+    const s = await d.open();
+    await s.prompt("hi");
+    await idle(s);
+    await until(() => stops(s).length > 0);
+    expect(stops(s).at(-1)!.stopped).toBe(true);
+    expect(stops(s).at(-1)!.resetsAt).toBeUndefined();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(acs(s).some((a) => typeof a.at === "number")).toBe(false);
+  });
+
+  it("a plain 429 (no reset time, no usage-limit marker) is an error only: no limit stop", async () => {
+    const d = await boot({ script: ["limit-plain"] });
+    const s = await d.open();
+    await s.prompt("hi");
+    await idle(s);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(stops(s)).toEqual([]);
+    expect(errorNotices(s).length).toBeGreaterThan(0);
+  });
+
+  it("a 429 with a short retry-after (4 s) and no usage-limit marker is a per-minute rate limit: error only, no limit stop", async () => {
+    const d = await boot({ script: ["retry-fail"], autoContinue: { graceMs: 0, gapMs: 100 } });
+    const s = await d.open();
+    await s.prompt("hi");
+    await idle(s);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(stops(s)).toEqual([]);
+    expect(prompts(d, s.id)).toEqual(["hi"]);
+  });
+
+  it("setting off: the limit stop shows, no continue is scheduled or sent", async () => {
+    const d = await boot({ script: ["limit-fail", "text"], settings: NO_AUTO, autoContinue: { graceMs: 0, gapMs: 100 } });
+    const s = await d.open();
+    await s.prompt("hi");
+    await idle(s);
+    await until(() => stops(s).length > 0);
+    await new Promise((r) => setTimeout(r, 2800));
+    expect(acs(s).some((a) => typeof a.at === "number")).toBe(false);
+    expect(prompts(d, s.id)).toEqual(["hi"]);
+  });
+
+  it("Stop during the retry wait never schedules a continue", async () => {
+    const d = await boot({ autoContinue: { graceMs: 0, gapMs: 100 } });
+    const s = await d.open();
+    await d.fake("/__emit", { events: [status(s.id, { type: "busy" }), status(s.id, RETRY_3)] });
+    await d.fake("/__status", { sessionId: s.id, status: RETRY_3 });
+    await until(() => !!retries(s).at(-1));
+    await d.ok({ type: "session.interrupt", sessionId: s.id });
+    await until(() => s.states().at(-1) === "idle");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(stops(s)).toEqual([]);
   });
 });

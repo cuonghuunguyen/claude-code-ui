@@ -1,5 +1,5 @@
 // The retry line (GH-683): while OpenCode waits to retry a failed model call it takes the place of the Thinking row: why it failed, and a countdown to the next try.
-import { TriangleAlertIcon } from "lucide-react";
+import { ExternalLinkIcon, TriangleAlertIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useT } from "./i18n.ts";
 
@@ -30,7 +30,9 @@ function useSecond(on: boolean) {
   return now;
 }
 
-export function RetryRow({ retry, className }: { retry: { attempt: number; message: string; next?: number }; className?: string }) {
+const upperFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+export function RetryRow({ retry, className }: { retry: { attempt: number; message: string; next?: number; action?: { label: string; link: string; title?: string } }; className?: string }) {
   const tr = useT();
   const left = retryCountdown(retry.next, useSecond(retry.next !== undefined));
   const countdown = left === "now" ? tr("app.timeline.retryNow", { attempt: retry.attempt }) : tr("app.timeline.retryIn", { time: retryTime(left.seconds), attempt: retry.attempt });
@@ -47,6 +49,22 @@ export function RetryRow({ retry, className }: { retry: { attempt: number; messa
       <div aria-hidden="true" data-testid="retry-countdown" className="pl-5 text-muted-foreground text-xs tabular-nums">
         {countdown}
       </div>
+      {retry.action && (
+        <div className="pl-5">
+          <a
+            href={retry.action.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={retry.action.title}
+            aria-label={tr("app.timeline.retryAction", { label: upperFirst(retry.action.label) })}
+            data-testid="retry-action"
+            className="inline-flex min-h-11 items-center gap-1 text-info text-xs underline underline-offset-2 hover:no-underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:min-h-0"
+          >
+            {upperFirst(retry.action.label)}
+            <ExternalLinkIcon aria-hidden="true" className="size-3" />
+          </a>
+        </div>
+      )}
     </div>
   );
 }

@@ -322,7 +322,7 @@ it("the new-session tab asks for the commands of the draft's engine and names it
 });
 
 it("GH-684: an OpenCode draft fetches the agents of its folder, shows build, and the first prompt carries the picked agent; a Claude draft asks for none", async () => {
-  const onAgents = vi.fn(async () => [{ name: "build" }, { name: "plan" }, { name: "review", description: "Reviews code" }]);
+  const onAgents = vi.fn(async () => ({ agents: [{ name: "build" }, { name: "plan" }, { name: "review", description: "Reviews code" }], subagents: [{ name: "explore", description: "Fast read-only search" }] }));
   const onStart = vi.fn(async () => {});
   const claude = await render({ onAgents });
   expect(onAgents).not.toHaveBeenCalled();
@@ -339,17 +339,20 @@ it("GH-684: an OpenCode draft fetches the agents of its folder, shows build, and
   await type(box, "hi");
   await key(box, { key: "Enter" });
   expect(onStart).toHaveBeenCalledWith("/p/a", expect.objectContaining({ engine: "opencode", agent: "plan", mode: "default" }), { text: "hi", images: [] });
+  // The same list feeds the `@` picker: the subagent is a row, picking it inserts `@explore `.
+  await type(box, "@ex");
+  expect([...el.querySelectorAll('[data-testid="mention-agent"]')].map((r) => r.textContent)).toEqual(["@exploreFast read-only search"]);
 });
 
 it("an OpenCode draft preselects the first agent of the list (OpenCode's default agent), not Build", async () => {
-  const onAgents = vi.fn(async () => [{ name: "review" }, { name: "build" }, { name: "plan" }]);
+  const onAgents = vi.fn(async () => ({ agents: [{ name: "review" }, { name: "build" }, { name: "plan" }] }));
   const { el } = await render({ onAgents, engine: "opencode" });
   expect(el.querySelector<HTMLElement>('[data-testid="agent-select"]')!.textContent).toContain("Review");
 });
 
 it("GH-684: an OpenCode draft shows the agent chooser with Build before the list arrives and after the request failed; Retry asks again", async () => {
   let n = 0;
-  const onAgents = vi.fn(() => (++n === 1 ? new Promise<never>(() => {}) : n === 2 ? Promise.reject(new Error("aborted")) : Promise.resolve([{ name: "build" }, { name: "plan" }])));
+  const onAgents = vi.fn(() => (++n === 1 ? new Promise<never>(() => {}) : n === 2 ? Promise.reject(new Error("aborted")) : Promise.resolve({ agents: [{ name: "build" }, { name: "plan" }] })));
   const { el, rerender } = await render({ onAgents, engine: "opencode" });
   const chooser = () => el.querySelector<HTMLElement>('[data-testid="agent-select"]')!;
   expect(chooser().textContent).toContain("Build");

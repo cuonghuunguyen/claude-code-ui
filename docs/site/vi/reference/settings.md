@@ -142,6 +142,9 @@ Các cài đặt giống tiện ích mở rộng Git của VS Code, cùng tên v
 | Mở kho mã trong thư mục cha || `always` (mặc định), `never` hoặc `prompt` (ở đây hoạt động như `always`). |
 | Chỉ dẫn viết nội dung commit | Điều Claude được yêu cầu khi viết nội dung commit cho các tệp đã chọn ([Thao tác Git](../features/git#commit-message-instruction)). Để trống: dùng chỉ dẫn có sẵn. |
 | Chỉ dẫn viết nội dung commit cho *dự án* | Chỉ áp dụng cho dự án đó; ưu tiên hơn chỉ dẫn ở trên. Để trống: dùng chỉ dẫn ở trên. |
+| Engine viết nội dung commit | `claude` (mặc định) hoặc `opencode`: engine nào viết nội dung commit ([Engine viết nội dung commit](../features/git#commit-message-engine)). Dự án có thể ghi đè. |
+| Model viết nội dung commit (Claude) | Model Claude dùng. Mặc định `haiku`. Để trống: dùng mặc định. |
+| Model viết nội dung commit (OpenCode) | Model OpenCode dùng, dạng `provider/model`. Cần cho engine `opencode`, và cho phương án dự phòng khi Claude chưa đăng nhập. |
 
 ## Jira {#jira}
 

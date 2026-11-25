@@ -407,9 +407,9 @@ describe("merging the projects of one repository (mergeRepositories)", () => {
     expect(rows(g)).toEqual([
       ["local", "main", undefined, "/Users/me/app", ["m"]],
       ["local", "main", "app-2", "/Users/me/app-2", ["c2"]],
-      ["local", "feat", undefined, "/Users/me/app", ["f"]],
       ["wsl:Ubuntu", "main", undefined, "/home/me/app", ["w"]],
       ["ssh:dev", "release", undefined, "/srv/app", ["s"]],
+      ["local", "feat", undefined, "/Users/me/app", ["f"]],
     ]);
     expect(groupKey(g)).toBe(`repo:${KEY}`);
   });
@@ -463,9 +463,9 @@ describe("merging the projects of one repository (mergeRepositories)", () => {
       `repo:${KEY}`,
       "worktree:/Users/me/app",
       "worktree:/Users/me/app-2",
-      "worktree:/Users/me/app/.claude/worktrees/feat",
       "worktree:/home/me/app",
       "worktree:/srv/app",
+      "worktree:/Users/me/app/.claude/worktrees/feat",
     ]);
     expect(revealKeys("s", groups, new Map(), false)).toEqual([`repo:${KEY}`, "worktree:/srv/app"]);
     expect(revealKeys("o", groups, new Map(), false)).toEqual(["/p/other"]);
@@ -480,7 +480,7 @@ describe("merging the projects of one repository (mergeRepositories)", () => {
   it("classic: the flat list names the branch of a linked worktree, and the Side (short label) and clone folder of a session not on this machine's first clone", () => {
     const c = classicGroup(group()[1]!, (cwd) => (cwd === "/srv/app" ? "SSH" : cwd === "/home/me/app" ? "WSL" : "Mac"));
     expect(c.group.sessions.map((x) => x.id)).toEqual(["m", "f", "c2", "w", "s"]);
-    expect([...c.branch]).toEqual([["c2", "app-2"], ["f", "feat"], ["w", "WSL"], ["s", "SSH"]]);
+    expect([...c.branch]).toEqual([["c2", "app-2"], ["w", "WSL"], ["s", "SSH"], ["f", "feat"]]);
     // Today's rule without merging: the branch of linked rows only.
     expect([...classicGroup(group("", false, null).find((g) => g.cwd === "/Users/me/app")!).branch]).toEqual([["f", "feat"]]);
   });

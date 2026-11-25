@@ -2,17 +2,18 @@
 // (`GET /api/event`, opencode-server.ts) feeds every open session; prompts, Stop and permission replies go back as client calls.
 // Has: create, list, prompt, stream, stop, permissions, models, the read-only rules of an Aside, rewind, /undo /redo /compact, bash mode, questions, agents, OpenCode's
 // slash commands, inline tasks, Fork runs and the daemon's MCP servers (orchestration, claude-ui).
+import { limitOfFailure, type LimitStop } from "./opencode-limit.ts";
 import { randomUUID } from "node:crypto";
 import type { OpenCodeClient } from "@opencode/client";
-import { permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
+import { agentMentions, checkAnswer, permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type Part, type PermissionMode, type PermissionUpdate, type Question, type QuestionInput, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT } from "./aside.ts";
 import { DAEMON_SERVER } from "./daemon-mcp.ts";
 import { DeniedRetryError } from "./denied-retry.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
-import { INLINE_TIMEOUT_MS, type ForkResult, type ForkSpec, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
+import { INLINE_TIMEOUT_MS, withDenials, type ForkResult, type ForkSpec, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
 import { ascending } from "./opencode-id.ts";
 import { INLINE_SYSTEM, clip } from "./opencode-inline.ts";
-import { DONT_ASK, LOCAL_COMMANDS, OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels, withVisualize, type ForkLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
+import { CLEAR_ALIASES, clearSession, DONT_ASK, LOCAL_COMMANDS, OPENCODE_CAPABILITIES, OPENCODE_PERMISSION_MODES, splitLabels, withVisualize, type CreateHeir, type ForkLink, type InlineLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { findCall, mcpKeys, mcpName, mcpTimeoutMs, showDaemonCard, WORKER_START, type McpServerKey } from "./opencode-shared.ts";
 import { FORK_PREAMBLE } from "./opencode-fork.ts";
 import { FORK_META, forkCut } from "./opencode2-fork.ts";
@@ -20,6 +21,7 @@ import { mapLimit } from "./session-scan.ts";
 import { INLINE_META, InlineCollector2, inlineRules, storedEnd, type StoredEnd } from "./opencode2-inline.ts";
 import { contentBefore, type PatchPart, type SnapshotSource } from "./opencode-snapshot.ts";
 import { visualizeSystem } from "./visualize.ts";
+import { ChildRuns, EarlyEvents, type ChildKind } from "./opencode2-children.ts";
 import { OpenCode2Mapper, bashPart, failureText, mapTool2, type Failure, type OpenCode2Message, type Shell2 } from "./opencode2-parts.ts";
 import type { OpenCodeServer } from "./opencode-server.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
@@ -85,13 +87,15 @@ export const modeOfRules = (rules: readonly Rule2[] | undefined): PermissionMode
 export type Agent2 = { id: string; name?: string; description?: string; mode?: string; hidden?: boolean; permissions?: Rule2[] };
 /** The agents a user chooses from (OpenCode's own filter): primary or all, not hidden. */
 export const primaryAgents2 = (list: readonly Agent2[]) => list.filter((a) => !a.hidden && a.mode !== "subagent");
+/** The agents a prompt can `@`-mention: not hidden, mode subagent or all. */
+export const subagents2 = (list: readonly Agent2[]) => list.filter((a) => !a.hidden && (a.mode === "subagent" || a.mode === "all"));
 /** An agent's denials: from its first deny of an action on, every rule of that action (so the exceptions after it hold: plan's plan-file `edit` allow). */
 export const denialsOf2 = (rules: readonly Rule2[]): Rule2[] => {
   const first = new Map<string, number>();
   rules.forEach((r, i) => r.effect === "deny" && !first.has(r.action) && first.set(r.action, i));
   return rules.filter((r, i) => i >= (first.get(r.action) ?? Infinity));
 };
-const LOCAL_NAMES = LOCAL_COMMANDS.map((c) => c.name);
+const LOCAL_NAMES = [...LOCAL_COMMANDS.map((c) => c.name), ...CLEAR_ALIASES];
 /** How often, and how many times, an agent list is read again while OpenCode has not loaded the folder (2.3.0 lists no agent then). */
 const AGENT_POLL_MS = 250;
 const SETTLE_MS = 500;
@@ -105,10 +109,37 @@ const COLD_AGENTS_MS = 5_000;
 const COMMANDS_WAIT_MS = 5_000;
 /** The instruction entry that carries an inline task's system text. */
 const INLINE_ENTRY = "claude-ui-inline";
+/** The steps an inline run keeps while it has no call (the call's event may come after the run started). */
+const EARLY_STEPS = 500;
+const INLINE_TOOL = `mcp__${DAEMON_SERVER}__inline_task`;
 /** The instruction entry that carries the visualize skill's text while the setting is on (docs/spec.md "Inline visualizations"). */
 const VISUALIZE_ENTRY = "claude-ui-visualize";
 
 type Json = Record<string, any>;
+
+/** OpenCode 2's `when` rule (its form filter): no answer = not active, eq and neq alike; a list answer holds a value when it includes `String(value)`; `external` fields are always active. */
+function conditionHolds(answer: unknown, w: Json): boolean {
+  if (answer === undefined) return false;
+  const r = Array.isArray(answer) ? answer.includes(String(w.value)) : answer === w.value;
+  return w.op === "eq" ? r : !r;
+}
+
+/** Why an answer is refused, as the warning says it (the rules are `checkAnswer`'s). */
+function inputReason(e: NonNullable<ReturnType<typeof checkAnswer>>, input: QuestionInput): string {
+  switch (e.code) {
+    case "number": return "needs a number";
+    case "integer": return "needs a whole number";
+    case "minimum":
+    case "maximum": return input.minimum !== undefined && input.maximum !== undefined ? `must be between ${input.minimum} and ${input.maximum}` : e.code === "minimum" ? `must be at least ${input.minimum}` : `must be at most ${input.maximum}`;
+    case "minLength": return `needs at least ${e.limit} characters`;
+    case "maxLength": return `needs at most ${e.limit} characters`;
+    case "pattern": return `must match ${e.limit}`;
+    case "date": return "must be a date (YYYY-MM-DD)";
+    case "date-time": return "must be a date and time (YYYY-MM-DDThh:mm:ssZ)";
+    case "email": return "must be an email address";
+    case "uri": return "must be a web address (https://...)";
+  }
+}
 /** A model of `GET /api/model` and its default. */
 type ModelRow = { id: string; providerID: string; name: string; enabled?: boolean; variants?: { id: string }[]; limit?: { context?: number } };
 type Models = { list: ModelRow[]; def: ModelRow | undefined };
@@ -136,6 +167,8 @@ export type OpenCode2History = {
   permissions: Json[];
   /** The question forms OpenCode waits for (of the session and its subagents). */
   forms?: Json[];
+  /** The forms of the folder that belong to no session (OpenCode 2.3.0: an MCP elicitation has the session `global`). */
+  globalForms?: Json[];
   /** The session's own permission rules in OpenCode. */
   rules?: Rule2[];
   /** The message OpenCode's staged revert cuts at: it and everything after are hidden (OpenCode still lists them until a prompt commits the revert). */
@@ -144,7 +177,24 @@ export type OpenCode2History = {
   agent?: string;
   /** The fork sessions of the Fork runs of this session with their stored messages (none: the fork is gone from OpenCode). */
   forks?: (ForkLink & { messages?: OpenCode2Message[] })[];
+  /** The child sessions of the `subagent` calls (stored `state.metadata.sessionID`), nested ones included, with their stored messages and the call each runs for. */
+  children?: Record<string, { callId: string; messages: OpenCode2Message[]; /** An inline task's session (its prompt is no step); none = a subagent's. */ kind?: ChildKind; /** An inline task's call ids the user denied. */ denied?: string[] }>;
 };
+/** How deep the subagents of subagents are followed at a restore. */
+const CHILD_DEPTH = 5;
+/** The `subagent` calls of stored messages that name their child session: `[child id, call id]`. */
+const childLinksOf = (messages: readonly OpenCode2Message[]): [string, string][] =>
+  messages.flatMap((m) => (m.content ?? []).flatMap((c): [string, string][] => (c.type === "tool" && c.name === "subagent" && c.id && typeof c.state?.metadata?.sessionID === "string" ? [[c.state.metadata.sessionID, c.id]] : [])));
+/** The stored messages of every child session under `messages`, each child once. A session that cannot be read has none. */
+async function loadChildren(client: OpenCodeClient, messages: readonly OpenCode2Message[], seen = new Set<string>(), depth = 0): Promise<NonNullable<OpenCode2History["children"]>> {
+  const links = childLinksOf(messages).filter(([child]) => !seen.has(child));
+  for (const [child] of links) seen.add(child);
+  const out: NonNullable<OpenCode2History["children"]> = {};
+  const loaded = await mapLimit(links, 4, async ([child, callId]) => ({ child, callId, messages: await loadMessages(client, child).catch(() => [] as OpenCode2Message[]) }));
+  for (const l of loaded) out[l.child] = { callId: l.callId, messages: l.messages };
+  if (depth + 1 < CHILD_DEPTH) for (const l of loaded) Object.assign(out, await loadChildren(client, l.messages, seen, depth + 1));
+  return out;
+}
 const PAGE = 100;
 
 /** The stored messages of a session, oldest first (all pages). */
@@ -159,7 +209,7 @@ export async function loadMessages(client: OpenCodeClient, sessionID: string): P
   }
 }
 
-export async function loadOpenCode2History(client: OpenCodeClient, id: string, cwd: string, isOurs: (sessionID: string) => Promise<boolean> = async (sid) => sid === id, forkLinks: readonly ForkLink[] = []): Promise<OpenCode2History> {
+export async function loadOpenCode2History(client: OpenCodeClient, id: string, cwd: string, isOurs: (sessionID: string) => Promise<boolean> = async (sid) => sid === id, forkLinks: readonly ForkLink[] = [], inlineLinks: readonly InlineLink[] = []): Promise<OpenCode2History> {
   const [all, info, active, requests, forms] = await Promise.all([
     loadMessages(client, id),
     client.session.get({ sessionID: id }),
@@ -173,7 +223,13 @@ export async function loadOpenCode2History(client: OpenCodeClient, id: string, c
   const cut = revert ? all.findIndex((m) => m.id === revert) : -1;
   // A fork whose session is gone (deleted in OpenCode) shows as its call only.
   const forks = await mapLimit([...forkLinks], 4, async (f) => ({ ...f, messages: await loadMessages(client, f.forkId).catch(() => undefined) }));
-  return { messages: cut < 0 ? all : all.slice(0, cut), forks, busy: id in active, permissions: await ours(requests), forms: await ours(forms), rules: (info.permissions ?? []) as Rule2[], ...(revert && { revert }), ...(info.agent && { agent: info.agent }) };
+  const messages = cut < 0 ? all : all.slice(0, cut);
+  const children = await loadChildren(client, messages);
+  // The sessions of linked inline tasks (one whose session is gone shows as its call only).
+  const calls = new Set(messages.flatMap((m) => (m.content ?? []).flatMap((c) => (c.type === "tool" && c.id ? [c.id] : []))));
+  for (const l of await mapLimit(inlineLinks.filter((x) => calls.has(x.callId)), 4, async (x) => ({ ...x, messages: await loadMessages(client, x.inlineId).catch(() => undefined) })))
+    if (l.messages) children[l.inlineId] = { callId: l.callId, messages: l.messages, kind: "inline", ...(l.denied && { denied: l.denied }) };
+  return { messages, forks, children, busy: id in active, permissions: await ours(requests), forms: await ours(forms.filter((f) => f.sessionID !== "global")), globalForms: forms.filter((f) => f.sessionID === "global"), rules: (info.permissions ?? []) as Rule2[], ...(revert && { revert }), ...(info.agent && { agent: info.agent }) };
 }
 
 type TurnEnd = { done: Promise<void>; resolve: () => void };
@@ -190,7 +246,7 @@ const SHELL_POLL_MS = 500;
 const shownUser = (m: OpenCode2Message) => m.type === "user" && (!!m.text || !!m.files?.some((f) => f.mime?.startsWith("image/") && f.data));
 type Req = { kind: "permission"; callId?: string; sessionID: string; /** The mapper of the call: an inline run's own. */ mapper: OpenCode2Mapper; /** An inline run's call: its denied card shows under it. */ parentId?: string } | { kind: "question"; sessionID: string; form: Json; questions: Question[]; /** The shown fields, one per question. */ fields: Json[] };
 /** A running inline task: its child session's events feed `notify`; `callId` = the call its steps show under. */
-type InlineRun = { callId?: string; mapper: OpenCode2Mapper; notify: (type: string, d: Json) => void; /** Its prompt reached OpenCode: a check that finds it not running ends it. */ posted?: boolean; /** The id of its prompt: stored rows with a smaller id are copied from a parent (a fork's), not its own. */ after?: string; /** Ends the run as OpenCode stored its end (an end event lost with a stream drop). */ settle: (end: StoredEnd) => void };
+type InlineRun = { callId?: string; mapper: OpenCode2Mapper; notify: (type: string, d: Json) => void; /** Its prompt reached OpenCode: a check that finds it not running ends it. */ posted?: boolean; /** The id of its prompt: stored rows with a smaller id are copied from a parent (a fork's), not its own. */ after?: string; /** Ends the run as OpenCode stored its end (an end event lost with a stream drop). */ settle: (end: StoredEnd) => void; /** The user or Don't ask denied call `callId` of the run. */ deny: (callId: string) => void; /** An inline task's input: a call that comes later is matched by it. */ input?: Json; /** Steps seen while the run has no call (newest kept), shown under the call once it is matched. */ early?: Map<string, Part>; /** Takes the call `callId` as the run's own (late match). */ attach?: (callId: string) => void };
 /** The text of the last assistant message of a stored child session (the fallback when its events were missed). */
 const lastAssistantText2 = (messages: readonly OpenCode2Message[]) => {
   for (const m of [...messages].reverse()) {
@@ -205,7 +261,9 @@ class OpenCode2Session implements EngineSession {
   private permissionMode: PermissionMode;
   private effort: Effort;
   staleLogin = false;
-  private readonly mapper = new OpenCode2Mapper();
+  private readonly mapper = new OpenCode2Mapper({ todos: true });
+  /** The child sessions of this session's `subagent` calls (nested ones too): their parts show under the call. */
+  private readonly children = new ChildRuns();
   /** The rules OpenCode has for this session, as JSON. */
   private written: string;
   /** The model or effort changed here since it was last sent to OpenCode (or the session was made with one). */
@@ -238,6 +296,8 @@ class OpenCode2Session implements EngineSession {
   private turnAt = 0;
   private aborted = false;
   private failed = false;
+  /** The turn ended on a provider usage / rate limit (GH-973): `finish()` tells the auto-continue scheduler. */
+  private limit: LimitStop | undefined;
   private resyncing: Promise<void> | undefined;
   /** Counts Stops: a prompt that was preparing when one came is not sent; a turn begun after the last one has the current count. */
   private stops = 0;
@@ -270,6 +330,8 @@ class OpenCode2Session implements EngineSession {
   private readonly inlineRuns = new Map<string, InlineRun>();
   /** The `inline_task` calls an inline run already took. */
   private readonly inlineClaimed = new Set<string>();
+  /** Inline runs that have no call yet (looking for it, or waiting for its event): a lone one may take any running call, else only an equal-input one. */
+  private readonly inlineWaiting = new Set<symbol>();
   /** Stop per running inline call id (the card's Stop agent): ends the run as stopped. */
   private readonly inlineStops = new Map<string, () => void>();
   private retrying: { attempt: number; message: string; next?: number } | undefined;
@@ -307,6 +369,15 @@ class OpenCode2Session implements EngineSession {
   get id() {
     return this.session.id;
   }
+  /** A global form that no session could be chosen for: a notice, once. */
+  unroutedForm(form: Json) {
+    if (this.unshown.has(form.id)) return;
+    this.unshown.add(form.id);
+    this.notice(`form:${form.id}`, `An MCP server asks for input (${form.title ?? "a form"}) and claude-ui cannot tell which session it belongs to. Answer it in OpenCode.`);
+  }
+  /** Whether a turn runs. */
+  isRunning = () => this.session.currentState() === "running";
+  runningTools = () => this.mapper.runningTools();
   get cwd() {
     return this.session.cwd;
   }
@@ -336,6 +407,19 @@ class OpenCode2Session implements EngineSession {
       if (!f.messages || !this.mapper.call(f.callId)) continue;
       for (const part of new OpenCode2Mapper().history(f.messages.slice(f.prefix).filter((m) => m.type === "assistant"))) this.session.emit({ ...part, parentId: f.callId });
     }
+    // A subagent's session: its stored parts show under its call (the web groups by `parentId`, the order here does not matter).
+    this.linkFrom(this.mapper);
+    // A running inline run (its link is saved while it works) is no restored child: its events and result go to the run.
+    const children = Object.entries(h.children ?? {}).filter(([childId]) => !this.inlineRuns.has(childId));
+    for (const [childId, c] of children) this.children.link(childId, c.callId, c.kind);
+    for (const [childId, c] of children) {
+      const child = this.children.get(childId);
+      // The steps the user denied (stored as aborted errors) show Denied.
+      for (const id of c.denied ?? []) child?.mapper.deny(id);
+      // An inline task's session starts with its prompt, which is the call's input: not a step.
+      if (child) for (const part of child.mapper.history(c.messages.filter((m) => m.type !== "user"))) this.session.emit({ ...part, parentId: child.callId });
+    }
+    for (const part of this.children.flushShellExits()) this.session.emit(part);
     for (const m of h.messages) this.noteUsage(m);
     void this.emitUsage();
     void this.reconcileShells();
@@ -343,7 +427,7 @@ class OpenCode2Session implements EngineSession {
 
   /** A background shell of the model that OpenCode no longer lists as running ended while the daemon was away (its end notice, if any, is already read): the card stops. */
   private async reconcileShells() {
-    const open = this.mapper.openShells();
+    const open = [this.mapper, ...this.children.mappers()].flatMap((m) => m.openShells());
     if (!open.length) return;
     const running = await this.server
       .client()
@@ -374,9 +458,61 @@ class OpenCode2Session implements EngineSession {
     const part: PatchPart = { id: key, hash, files: files.filter((f): f is string => typeof f === "string") };
     void contentBefore(this.engine.snapshots, this.cwd, sessionID, part).then((list) => list.forEach(([path, before]) => onEdit(path, before)), () => {});
   }
+  /** Registers the child sessions a mapper learned of (`subagent` calls) and replays their events that came before the link. */
+  private linkFrom(mapper: OpenCode2Mapper) {
+    for (const { childId, callId } of mapper.takeLinks()) {
+      if (this.children.get(childId)) continue;
+      this.children.link(childId, callId);
+      for (const e of this.engine.takeEarly(childId)) this.childEvent(childId, e.type, e.d);
+    }
+  }
+  /** The session is the owner of child session `sid`. */
+  ownsChild = (sid: string) => !!this.children.get(sid);
+  /** A running subagent call has no child session yet: the engine keeps the events of unknown sessions for a moment. */
+  awaitsChild = () => this.mapper.unlinkedSubagents() > 0 || [...this.children.mappers()].some((m) => m.unlinkedSubagents() > 0);
+  /** One event of a child session: its parts under its call, its asks as steps of the card. Its end is OpenCode's notice (a child that goes idle with work left is not ended). */
+  childEvent(sid: string, type: string, d: Json) {
+    const child = this.children.get(sid);
+    if (!child) return;
+    const show = (parts: ReturnType<OpenCode2Mapper["event"]>) => {
+      this.linkFrom(child.mapper);
+      for (const part of parts) this.session.emit({ ...part, parentId: child.callId });
+      // An exit that came before this child's call named its shell ends the card now.
+      for (const part of this.children.flushShellExits()) this.session.emit(part);
+    };
+    switch (type) {
+      case "permission.asked":
+        return this.askPermission(d, child.mapper, child.callId);
+      case "permission.replied":
+      case "form.replied":
+      case "form.cancelled":
+        return this.session.pendingRequest(d.requestID ?? d.id) ? this.session.cancel(d.requestID ?? d.id, ANSWERED) : undefined;
+      case "form.created":
+        return this.askForm(d.form);
+      case "session.step.started":
+        return this.stepStart(sid, d);
+      case "session.step.ended":
+        this.stepPatch(sid, d);
+        return child.mapper.step(d.assistantMessageID, d.tokens, d.cost);
+      case "session.inbox.enqueued":
+        // The prompt that started the child is no bubble; only the end notices (of its shells, of its own subagents) count.
+        return d.item?.type === "synthetic" ? show(child.mapper.inbox(d)) : undefined;
+      case "session.execution.started":
+      case "session.execution.succeeded":
+      case "session.execution.failed":
+      case "session.execution.interrupted":
+        return;
+      default:
+        return show(child.mapper.event(type, d));
+    }
+  }
+
   /** `shell.exited` of any shell: the card of the call that started it ends. */
   shellExited(d: Json) {
-    this.emitAll(this.mapper.shellExited(d.id, d.status, typeof d.exit === "number" ? d.exit : undefined));
+    const exit = typeof d.exit === "number" ? d.exit : undefined;
+    this.emitAll(this.mapper.shellExited(d.id, d.status, exit));
+    // A shell of a subagent lives in its child's mapper (only the owner stores the exit): its card shows under the child's call.
+    if (!this.mapper.hasShell(d.id)) for (const part of this.children.shellExited(d.id, d.status, exit)) this.session.emit(part);
   }
 
   private noteUsage(m: { type?: string; tokens?: Json; model?: { id: string; providerID: string } }) {
@@ -400,10 +536,16 @@ class OpenCode2Session implements EngineSession {
       live.add(p.id);
       // An inline run's ask keeps its own call data (its denied card shows under the inline task).
       const run = this.inlineRuns.get(p.sessionID);
+      const child = this.children.get(p.sessionID);
       if (run) this.askPermission(p, run.mapper, run.callId);
+      else if (child) this.askPermission(p, child.mapper, child.callId);
       else this.askPermission(p);
     }
     for (const f of h.forms ?? []) (live.add(f.id), this.askForm(f));
+    // A global form shown here stays; one not shown yet (a restart of the daemon) goes to the session it belongs to.
+    for (const f of h.globalForms ?? []) {
+      if (this.reqs.has(f.id) || this.engine.globalFormOwner(this.cwd, f) === this) (live.add(f.id), this.askForm({ ...f, location: { directory: this.cwd } }));
+    }
     for (const id of [...this.reqs.keys()]) if (!live.has(id) && this.session.pendingRequest(id)) this.session.cancel(id, ANSWERED);
   }
 
@@ -429,7 +571,7 @@ class OpenCode2Session implements EngineSession {
     const posts = this.posts;
     return (this.resyncing ??= this.server
       .client()
-      .then((c) => loadOpenCode2History(c, this.id, this.cwd, (sid) => this.engine.isOurs(this.id, sid), this.engine.forksOf?.(this.id)))
+      .then((c) => loadOpenCode2History(c, this.id, this.cwd, (sid) => this.engine.isOurs(this.id, sid), this.engine.forksOf?.(this.id), this.engine.inlinesOf?.(this.id)))
       .then((h) => {
         // A revert missed as an event (stream drop): the cut is shown; a clear brings the cut messages back with the history below.
         if (h.revert !== this.revertAt && (this.revertAt = h.revert)) (this.mapper.forgetFrom(h.revert), this.session.emit({ type: "rewind", id: randomUUID(), userMessageId: h.revert }));
@@ -457,9 +599,10 @@ class OpenCode2Session implements EngineSession {
   };
   /** The `agents` part, the default agent first; `failed: true` when OpenCode did not answer (the web offers a retry, which calls this again). */
   refreshAgents = async () => {
-    const list = await this.engine.primaryFirst(this.cwd).catch(() => undefined);
-    if (!list) return void this.session.emit({ type: "agents", id: "agents", agents: [], failed: true });
-    this.session.emit({ type: "agents", id: "agents", agents: list.map(({ id, description }) => ({ name: id, ...(description && { description }) })) });
+    const both = await this.engine.agentSets(this.cwd).catch(() => undefined);
+    if (!both) return void this.session.emit({ type: "agents", id: "agents", agents: [], failed: true });
+    const info = ({ id, description }: Agent2) => ({ name: id, ...(description && { description }) });
+    this.session.emit({ type: "agents", id: "agents", agents: both.primary.map(info), subagents: both.subagents.map(info) });
   };
 
   settings(): SessionSettings {
@@ -585,6 +728,7 @@ class OpenCode2Session implements EngineSession {
   private attach(): Promise<void> {
     let attaching: McpServerKey = "orchestration";
     return (this.attaching ??= (async () => {
+      await this.released;
       const route = this.engine.mcp;
       const url = route?.url();
       const keys = url ? mcpKeys(this.opts, this.id) : [];
@@ -636,6 +780,13 @@ class OpenCode2Session implements EngineSession {
       void this.commandGate.then(() => this.stops === stops && this.prompt(text, images));
       return undefined;
     }
+    if (!images.length && /^\/(clear|new|reset)$/.test(text.trim())) {
+      // Nothing is posted to OpenCode; the reply waits for the hand-over (the spinner of the web client).
+      this.localRun = this.clearing ??= this.startOver().finally(() => (this.clearing = undefined));
+      return undefined;
+    }
+    // The heir is being made: a turn here would run on a session the tabs are about to leave.
+    if (this.clearing) return void ((this.localRun = undefined), this.notice(`local:${ascending("msg")}`, "Starting a new session; send again in a moment"));
     const local = !images.length && /^\/(compact|undo|redo)$/.exec(text.trim())?.[1];
     if (local) {
       // Only /undo is awaited by its reply (the undone prompt goes back to the box); /compact and /redo run on their own.
@@ -686,6 +837,22 @@ class OpenCode2Session implements EngineSession {
   }
 
   private localRun?: Promise<{ text: string; images: string[] } | undefined>;
+  private clearing?: Promise<undefined>;
+  private startOver = (): Promise<undefined> => clearSession(this.session, this.opts, this.settings(), this.engine.createHeir, (text) => this.notice(`local:${ascending("msg")}`, text), () => this.releaseTools()).then(() => undefined);
+  private released: Promise<unknown> | undefined;
+  /** After a /clear the orchestration binding of this session's live tools server went to the heir: the servers leave OpenCode and their routes are dropped; the next attach adds them again with a token and binding of this session's own. */
+  private releaseTools() {
+    this.engine.mcp?.drop(this.id);
+    const names = [...this.mcpOn].map((k) => mcpName(this.id, k));
+    this.mcpOn = new Set();
+    this.added.clear();
+    if (!names.length || !this.server.running()) return;
+    this.released = this.server
+      .client()
+      .then((c) => Promise.all(names.map((server) => c.experimental.mcp.remove({ server, location: { directory: this.cwd } }).catch(() => undefined))))
+      .catch(() => undefined)
+      .finally(() => (this.released = undefined));
+  }
   /** The run of the `/undo` just taken by prompt(): its undone prompt (no draft when nothing was undone). */
   localDraft = () => this.localRun ?? Promise.resolve(undefined);
 
@@ -853,12 +1020,16 @@ class OpenCode2Session implements EngineSession {
     const live = () => this.stops === stops;
     const client = await this.server.client();
     if (!(await this.prepare(client, live))) return;
+    // `@<subagent>` tokens of a plain prompt (text not starting with `/`): recorded on the message with their offsets; the session's agent stays. Read before the turn counts as posted; no list (OpenCode unreachable): no mention.
+    const names = text.includes("@") && !text.trimStart().startsWith("/") ? subagents2(await this.engine.agents(this.cwd).catch(() => [])).map((a) => a.id) : [];
+    if (!live()) return;
     this.turnPosted = true;
     const files = images.map((uri) => ({ uri, source: { type: "inline" as const }, name: "image" }));
     // A hidden message for the model right before the prompt: `resume: false` starts no turn of its own, the prompt's turn reads it.
     if (directive) await client.session.synthetic({ sessionID: this.id, text: directive, delivery: "steer", resume: false });
+    const agents = agentMentions(text, names).map((m) => ({ name: m.name, mention: { start: m.start, end: m.end, text: m.value } }));
     this.posts++;
-    const post = client.session.prompt({ sessionID: this.id, id: messageID, text, ...(files.length && { files }) });
+    const post = client.session.prompt({ sessionID: this.id, id: messageID, text, ...(files.length && { files }), ...(agents.length && { agents }) });
     this.posting.add(post);
     try {
       await post;
@@ -883,6 +1054,7 @@ class OpenCode2Session implements EngineSession {
     this.turnAt = Date.now();
     this.aborted = false;
     this.failed = false;
+    this.limit = undefined;
     this.turnKey = ascending("msg");
     this.turnAssistant = undefined;
     this.errorKeys = new Set();
@@ -896,6 +1068,11 @@ class OpenCode2Session implements EngineSession {
     const { usage, cost } = this.mapper.turn();
     if (!this.aborted) this.session.emit({ type: "turn_result", id: `turn:${ascending("msg")}`, durationMs: Date.now() - this.turnAt, ...(cost > 0 && { costUsd: cost }), usage, isError: this.failed });
     this.toIdle();
+    const limit = this.limit;
+    this.limit = undefined;
+    // After idle, like claude-engine: the queue hold of onLimitStop lands before the queue's deferred kick. Never for a stopped turn.
+    if (limit && !this.aborted) this.opts.onLimitStop?.(this.id, limit.resetsAt, true);
+    else this.opts.onTurnEnded?.(this.id);
     void this.emitUsage();
   }
 
@@ -956,6 +1133,7 @@ class OpenCode2Session implements EngineSession {
       case "session.execution.failed":
         if (this.clear?.run) return void (this.clear = undefined);
         this.failed = true;
+        this.limit = limitOfFailure(d.error, Date.now()) ?? this.limit;
         this.showError(d.error);
         return this.finish();
       case "session.execution.interrupted":
@@ -980,6 +1158,7 @@ class OpenCode2Session implements EngineSession {
         // Interrupted steps are the Stop's: `execution.interrupted` shows it.
         if (d.error?.type === "aborted") return;
         this.failed = true;
+        this.limit ??= limitOfFailure(d.error, Date.now());
         return this.showError(d.error);
       case "session.retry.scheduled":
         return this.setRetry({ attempt: d.attempt ?? 1, message: failureText(d.error), ...(typeof d.at === "number" && { next: d.at }) });
@@ -1043,7 +1222,9 @@ class OpenCode2Session implements EngineSession {
     this.session.emit({ type: "notice", id: `error:${this.turnAssistant ?? this.turnKey}`, level: "warning", text });
   }
   private emitAll(parts: ReturnType<OpenCode2Mapper["event"]>) {
+    this.linkFrom(this.mapper);
     for (const part of parts) this.session.emit(part);
+    if (parts.some((p) => p.type === "tool_call" && p.tool === INLINE_TOOL)) this.lateClaims();
   }
 
   private askPermission(e: Json, mapper = this.mapper, parentId?: string) {
@@ -1053,6 +1234,7 @@ class OpenCode2Session implements EngineSession {
     if (this.permissionMode === "dontAsk") {
       const card = callId && mapper.deny(callId);
       if (card) this.session.emit({ ...card, ...(parentId && { parentId }) });
+      if (callId) this.inlineRuns.get(e.sessionID)?.deny(callId);
       void this.server
         .client()
         .then((c) => c.permission.reply({ sessionID: e.sessionID, requestID: e.id, decision: "reject", message: DONT_ASK }))
@@ -1100,6 +1282,7 @@ class OpenCode2Session implements EngineSession {
       case "interrupt": {
         const card = req.callId && req.mapper.deny(req.callId);
         if (card) this.session.emit({ ...card, ...(req.parentId && { parentId: req.parentId }) });
+        if (req.callId) this.inlineRuns.get(req.sessionID)?.deny(req.callId);
         return send("reject", r.kind === "deny" ? r.message : undefined);
       }
       case "cancel":
@@ -1131,10 +1314,12 @@ class OpenCode2Session implements EngineSession {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let onAbort: (() => void) | undefined;
     let callId: string | undefined;
+    const waiting = Symbol("inline");
     let client: OpenCodeClient | undefined;
     try {
-      callId = await findCall(() => this.mapper.runningCall(`mcp__${DAEMON_SERVER}__inline_task`, hooks.input, this.inlineClaimed));
-      if (callId) this.inlineClaimed.add(callId);
+      this.inlineWaiting.add(waiting);
+      callId = await findCall(() => this.mapper.runningCall(INLINE_TOOL, hooks.input, this.inlineClaimed, this.inlineWaiting.size === 1));
+      if (callId) (this.inlineClaimed.add(callId), this.inlineWaiting.delete(waiting));
       client = await this.server.client();
       const agent = await this.agentName();
       const own = (await this.engine.agents(this.cwd)).find((a) => a.id === agent)?.permissions ?? [];
@@ -1146,7 +1331,12 @@ class OpenCode2Session implements EngineSession {
       const collector = (col = new InlineCollector2());
       const mapper = new OpenCode2Mapper();
       const outcome = new Promise<{ status: InlineResult["status"]; limit?: InlineResult["limit"]; error?: string }>((resolve) => {
-        this.inlineRuns.set(id, {
+        /** The link (and the denied call ids, which the stored states do not carry) is saved with the matched call. */
+        const save = () => {
+          const ids = collector.denials.ids();
+          if (run.callId) this.engine.onInline?.(id, { sessionId: this.id, callId: run.callId, ...(ids.length && { denied: ids }) });
+        };
+        const run: InlineRun = {
           ...(callId && { callId }),
           mapper,
           notify: (type, d) => {
@@ -1155,10 +1345,24 @@ class OpenCode2Session implements EngineSession {
             if (cap) resolve({ status: "limit", limit: cap });
             else if (collector.error) resolve({ status: "error", error: collector.error });
             else if (collector.idle) resolve({ status: "done" });
-            else if (collector.interrupted) resolve({ status: "stopped" });
+            // A Deny interrupts the run (reason "shutdown"): not a Stop, the run ends denied.
+            else if (collector.interrupted) resolve(collector.denials.list().length ? { status: "error", error: "The run was interrupted after a denial." } : { status: "stopped" });
           },
           settle: resolve,
-        });
+          deny: (cid) => (collector.deny(cid), save()),
+          ...(hooks.input && { input: hooks.input }),
+          early: new Map(),
+          attach: (cid) => {
+            run.callId = callId = cid;
+            this.inlineWaiting.delete(waiting);
+            this.inlineClaimed.add(cid);
+            if (onAbort) this.inlineStops.set(cid, onAbort);
+            save();
+            for (const part of run.early!.values()) this.session.emit({ ...part, parentId: cid });
+            run.early!.clear();
+          },
+        };
+        this.inlineRuns.set(id, run);
         this.engine.adoptInline(id, this);
         timer = setTimeout(() => resolve({ status: "limit", limit: "time" }), INLINE_TIMEOUT_MS);
         onAbort = () => resolve({ status: "stopped" });
@@ -1176,14 +1380,16 @@ class OpenCode2Session implements EngineSession {
         await client.session.prompt({ sessionID: id, id: messageID, text: spec.text });
         if (run) run.posted = true;
       }
+      if (callId) this.engine.onInline?.(id, { sessionId: this.id, callId });
       const end = await outcome;
       if (end.status !== "done" && end.status !== "error") await client.session.interrupt({ sessionID: id }).catch(() => undefined);
       let text = collector.text();
       if (!text && end.status === "done") text = lastAssistantText2(await loadMessages(client, id).catch(() => []));
-      return result({ ...end, ...clip(text) }, collector);
+      return withDenials(result({ ...end, ...clip(text) }, collector), collector.denials.list());
     } catch (err) {
-      return result({ status: "error", error: (err as Error).message, ...(col && clip(col.text())) }, col);
+      return withDenials(result({ status: "error", error: (err as Error).message, ...(col && clip(col.text())) }, col), col?.denials.list() ?? []);
     } finally {
+      this.inlineWaiting.delete(waiting);
       if (timer) clearTimeout(timer);
       if (onAbort) hooks.signal.removeEventListener("abort", onAbort);
       if (childId) {
@@ -1192,13 +1398,23 @@ class OpenCode2Session implements EngineSession {
         this.engine.releaseInline(gone);
         // Its asks wait for no one any more.
         for (const [rid, r] of this.reqs) if (r.sessionID === gone && this.session.pendingRequest(rid)) this.session.cancel(rid, "The inline task ended");
-        void client?.session.remove({ sessionID: gone }).catch(() => undefined);
+        // A run with a call keeps its session (hidden): its steps show under the call after a reload (the link is saved).
+        if (!callId) void client?.session.remove({ sessionID: gone }).catch(() => undefined);
       }
       if (callId) this.inlineStops.delete(callId);
       // A claim stays while its call still runs (a second run must not take it); finished calls are dropped.
       for (const id of this.inlineClaimed) if (!this.mapper.isRunning(id)) this.inlineClaimed.delete(id);
     }
   };
+
+  /** A new `inline_task` call: a run that found none yet takes it (its event came after the run started). */
+  private lateClaims() {
+    for (const run of this.inlineRuns.values()) {
+      if (run.callId || !run.attach) continue;
+      const id = this.mapper.runningCall(INLINE_TOOL, run.input, this.inlineClaimed, this.inlineWaiting.size === 1);
+      if (id) run.attach(id);
+    }
+  }
 
   /** One event of an inline run's session: its result, its permission asks (answered under its id), its steps under the call. */
   inlineEvent(childId: string, type: string, d: Json) {
@@ -1209,7 +1425,15 @@ class OpenCode2Session implements EngineSession {
     else if (type === "session.step.ended") this.stepPatch(childId, d);
     if (type === "permission.asked") return this.askPermission(d, run.mapper, run.callId);
     if (type === "permission.replied") return this.session.pendingRequest(d.requestID) ? this.session.cancel(d.requestID, ANSWERED) : undefined;
-    if (run.callId) for (const part of run.mapper.event(type, d)) this.session.emit({ ...part, parentId: run.callId });
+    for (const part of run.mapper.event(type, d)) {
+      if (run.callId) this.session.emit({ ...part, parentId: run.callId });
+      else if (run.early) {
+        // No call yet: the newest steps wait for it.
+        run.early.delete(part.id);
+        run.early.set(part.id, part);
+        if (run.early.size > EARLY_STEPS) run.early.delete(run.early.keys().next().value!);
+      }
+    }
   }
 
   /**
@@ -1219,23 +1443,56 @@ class OpenCode2Session implements EngineSession {
   private askForm(form: Json) {
     if (this.session.pendingRequest(form.id) || this.reqs.has(form.id)) return;
     const all: Json[] = form.fields ?? [];
-    const shown = all.filter((f) => !f.hidden);
+    const labelOf = (f: Json | undefined, v: unknown): string =>
+      typeof v === "boolean" ? (v ? "Yes" : "No") : String((f?.options as Json[] | undefined)?.find((o) => o.value === v)?.label ?? v);
+    // A field whose condition fails on a hidden field's default (or on a field that is not shown) is not asked at all.
+    const gone = new Set<string>();
+    const holds = (w: Json) => {
+      const c = all.find((x) => x.key === w.key);
+      if (!c) return undefined;
+      return c.hidden || gone.has(c.key) ? conditionHolds(c.hidden ? c.default : undefined, w) : undefined;
+    };
+    for (let again = true; again; ) {
+      again = false;
+      for (const f of all) if (!f.hidden && !gone.has(f.key) && ((f.when as Json[] | undefined) ?? []).some((w) => holds(w) === false)) (gone.add(f.key), (again = true));
+    }
+    // A field comes after the fields its `when` names (stable), so the form asks the controlling answer first.
+    const shown: Json[] = [];
+    for (let rest = all.filter((f) => !f.hidden && !gone.has(f.key)); rest.length; ) {
+      const wait = (f: Json) => ((f.when as Json[] | undefined) ?? []).some((w) => w.key !== f.key && rest.some((x) => x.key === w.key));
+      const i = Math.max(0, rest.findIndex((f) => !wait(f)));
+      shown.push(...rest.splice(i, 1));
+    }
     if (!shown.length) {
       if (!this.unshown.has(form.id)) this.notice(`form:${form.id}`, `OpenCode asks for input claude-ui cannot show yet (${form.title ?? "a form"}). Answer it in OpenCode.`);
       return void this.unshown.add(form.id);
     }
-    const titleOf = (key: string) => all.find((f) => f.key === key)?.title ?? key;
     const seen = new Map<string, number>();
-    const questions: Question[] = shown.map((f, i) => {
+    const texts = new Map<string, string>();
+    for (const f of shown) {
       const base = f.description ?? f.title ?? f.key;
       // Questions are answered by their text: an equal text gets a number.
       const n = (seen.get(base) ?? 0) + 1;
       seen.set(base, n);
-      const when = (f.when as Json[] | undefined)?.map((w) => `${titleOf(w.key)} ${w.op === "neq" ? "is not" : "is"} ${w.value}`).join(" and ");
-      const header = `${i === 0 && form.metadata?.kind !== "question" ? (form.title ?? "") : (f.title ?? "")}${when ? ` (if ${when})` : ""}`;
+      texts.set(f.key, n > 1 ? `${base} (${n})` : base);
+    }
+    const finite = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? n : undefined);
+    const questions: Question[] = shown.map((f, i) => {
+      const header = i === 0 && form.metadata?.kind !== "question" ? (form.title ?? "") : (f.title ?? "");
       const options: Question["options"] =
         f.type === "boolean" ? [{ label: "Yes", description: "" }, { label: "No", description: "" }] : f.type === "external" ? [{ label: "Done", description: f.url ?? "" }] : (f.options ?? []).map((o: Json) => ({ label: o.label, description: o.description ?? "" }));
-      return { question: n > 1 ? `${base} (${n})` : base, header, options, multiSelect: f.type === "multiselect" };
+      const q: Question = { question: texts.get(f.key)!, header, options, multiSelect: f.type === "multiselect" };
+      const keep = (o: object) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
+      if (f.type === "string" && !options.length) q.input = keep({ type: f.format ?? "text", minLength: finite(f.minLength), maxLength: finite(f.maxLength), pattern: typeof f.pattern === "string" ? f.pattern : undefined, placeholder: typeof f.placeholder === "string" ? f.placeholder : undefined }) as QuestionInput;
+      else if (f.type === "string" && f.custom && (f.format || f.pattern !== undefined || finite(f.minLength) !== undefined || finite(f.maxLength) !== undefined)) q.input = keep({ type: f.format ?? "text", minLength: finite(f.minLength), maxLength: finite(f.maxLength), pattern: typeof f.pattern === "string" ? f.pattern : undefined }) as QuestionInput;
+      else if (f.type === "number" || f.type === "integer") q.input = keep({ type: f.type, minimum: finite(f.minimum), maximum: finite(f.maximum) }) as QuestionInput;
+      // An MCP elicitation field is optional unless `required: true` (what OpenCode 2.3.0 enforces); the `question` tool's fields stay required.
+      if (form.metadata?.kind === "mcp-elicitation" && f.required !== true) q.optional = true;
+      const dflt = f.type === "number" || f.type === "integer" ? finite(f.default) : f.default;
+      if (dflt !== undefined && f.type !== "external") q.default = Array.isArray(dflt) ? dflt.map((v: unknown) => labelOf(f, v)).join(", ") : labelOf(f, dflt);
+      const when = ((f.when as Json[] | undefined) ?? []).filter((w) => texts.has(w.key)).map((w) => ({ question: texts.get(w.key)!, op: w.op === "neq" ? ("neq" as const) : ("eq" as const), value: labelOf(all.find((x) => x.key === w.key), w.value) }));
+      if (when.length) q.when = when;
+      return q;
     });
     this.reqs.set(form.id, { kind: "question", sessionID: form.sessionID, form, questions, fields: shown });
     this.session.request({ part: { type: "question", id: form.id, requestId: form.id, toolUseId: form.metadata?.tool?.id ?? form.id, questions, settled: false, at: Date.now() }, reply: (r) => this.answerQuestion(form.id, r) });
@@ -1250,7 +1507,10 @@ class OpenCode2Session implements EngineSession {
     for (const [i, f] of req.fields.entries()) {
       const q = req.questions[i]!;
       const text = r.answers[q.question]?.trim();
-      if (text === undefined) continue;
+      if (text === undefined || (text === "" && q.optional)) continue;
+      // A free text next to options: an option's label is no text to check.
+      const bad = q.input && f.type !== "external" && !q.options.some((o) => o.label === text) ? checkAnswer(q.input, text) : undefined;
+      if (bad) return { error: `${f.title ?? f.key} ${inputReason(bad, q.input!)}` };
       const labels = r.choices?.[q.question] ?? (q.multiSelect ? splitLabels(text, q.options.map((o) => o.label)) : [text]);
       const value = (label: string) => (f.options as Json[] | undefined)?.find((o) => o.label === label)?.value ?? label;
       if (f.type === "multiselect") answer[f.key] = labels.map(value);
@@ -1258,19 +1518,14 @@ class OpenCode2Session implements EngineSession {
         const yes = /^(yes|true|y)$/i.test(text);
         if (!yes && !/^(no|false|n)$/i.test(text)) return { error: `${f.title ?? f.key} needs Yes or No` };
         answer[f.key] = yes;
-      } else if (f.type === "number" || f.type === "integer") {
-        const n = text === "" ? NaN : Number(text);
-        const bound = (b: unknown) => (typeof b === "number" ? b : undefined);
-        if (!Number.isFinite(n) || (f.type === "integer" && !Number.isInteger(n))) return { error: `${f.title ?? f.key} needs ${f.type === "integer" ? "a whole" : "a"} number` };
-        if ((bound(f.minimum) ?? -Infinity) > n || (bound(f.maximum) ?? Infinity) < n) return { error: `${f.title ?? f.key} must be ${bound(f.minimum) !== undefined && bound(f.maximum) !== undefined ? `between ${f.minimum} and ${f.maximum}` : bound(f.minimum) !== undefined ? `at least ${f.minimum}` : `at most ${f.maximum}`}` };
-        answer[f.key] = n;
-      } else if (f.type === "external") answer[f.key] = true;
+      } else if (f.type === "number" || f.type === "integer") answer[f.key] = Number(text);
+      else if (f.type === "external") answer[f.key] = true;
       else answer[f.key] = value(labels[0] ?? text);
     }
     // Hidden fields answer with their default, when they have one.
     for (const f of (req.form.fields ?? []) as Json[]) if (f.hidden && f.default !== undefined) answer[f.key] = f.default;
     // A field whose condition does not hold is not active: OpenCode refuses an answer for it.
-    const active = (f: Json) => ((f.when as Json[] | undefined) ?? []).every((w) => (answer[w.key] === w.value) === (w.op !== "neq"));
+    const active = (f: Json) => f.type === "external" || ((f.when as Json[] | undefined) ?? []).every((w) => conditionHolds(answer[w.key], w));
     let again = true;
     while (again) {
       again = false;
@@ -1289,6 +1544,9 @@ class OpenCode2Session implements EngineSession {
         .client()
         .then(f)
         .catch((err) => this.notice(`answer_failed:${ascending("msg")}`, `Could not answer OpenCode: ${(err as Error).message}`));
+    // A global form is answered with its folder in a header (as OpenCode's own app does).
+    const dir: unknown = req.form.location?.directory;
+    const where = req.sessionID === "global" && typeof dir === "string" ? { headers: { "x-opencode-directory": encodeURIComponent(dir) } } : undefined;
     if (r.kind === "answer") {
       const a = this.formAnswer(req, r);
       // A value OpenCode would refuse is not sent: the question comes back with the reason.
@@ -1296,9 +1554,9 @@ class OpenCode2Session implements EngineSession {
         this.notice(`form_invalid:${ascending("msg")}`, `${a.error}. Answer again.`);
         return void setTimeout(() => this.reqs.has(id) || this.askForm(req.form), 0);
       }
-      return call((c) => c.session.form.reply({ sessionID: req.sessionID, formID: id, answer: a.answer }));
+      return call((c) => c.session.form.reply({ sessionID: req.sessionID, formID: id, answer: a.answer }, where));
     }
-    if (r.kind !== "cancel" || r.message !== ANSWERED) call((c) => c.session.form.cancel({ sessionID: req.sessionID, formID: id }));
+    if (r.kind !== "cancel" || r.message !== ANSWERED) call((c) => c.session.form.cancel({ sessionID: req.sessionID, formID: id }, where));
   }
 
   /**
@@ -1422,6 +1680,7 @@ class OpenCode2Session implements EngineSession {
             else if (collector.interrupted) resolve({ status: "stopped" });
           },
           settle: resolve,
+          deny: () => undefined,
         });
         this.engine.adoptInline(id, this);
         timer = setTimeout(() => resolve({ status: "limit", limit: "time" }), INLINE_TIMEOUT_MS);
@@ -1466,9 +1725,27 @@ class OpenCode2Session implements EngineSession {
   /** Stop agent of a running inline task's card: the run ends as stopped (its session is interrupted). */
   stopSubagent = async (callId: string) => {
     const stop = this.inlineStops.get(callId);
-    if (!stop) return false;
-    this.inlineStops.delete(callId);
-    stop();
+    if (stop) {
+      this.inlineStops.delete(callId);
+      stop();
+      return true;
+    }
+    // A subagent of the model: its child session is interrupted (OpenCode's end notice then says `cancelled`). A child that is idle (it left a background shell running) has nothing to interrupt: the card stops here.
+    const childId = this.children.childOf(callId) ?? this.mapper.childOf(callId);
+    if (!childId) return false;
+    const client = await this.server.client();
+    // A child session OpenCode no longer has (deleted) cannot be stopped: no running run, as for an unknown id.
+    const r = await client.session.interrupt({ sessionID: childId }).catch(() => undefined);
+    if (!r) return false;
+    if (r.interrupted === false) {
+      // The idle child left background shells running: they are killed with it (their end notices then arrive as usual).
+      const child = this.children.get(childId);
+      if (child)
+        await Promise.all(child.mapper.openShells().map(([, sh]) => client.shell.remove({ id: sh, location: { directory: this.cwd } }).catch(() => undefined)));
+      // The card of a nested subagent is in its parent child's mapper and shows under that child's call.
+      const owner = [...this.children.entries()].find(([, c]) => c.mapper.childOf(callId) === childId);
+      for (const part of (owner?.[1].mapper ?? this.mapper).subagentEnded(childId, "stopped", Date.now())) this.session.emit(owner ? { ...part, parentId: owner[1].callId } : part);
+    }
     return true;
   };
   /** Run in background: the session is free at once; OpenCode runs the command on (its request answers at the end, the card then shows the result). */
@@ -1484,22 +1761,29 @@ class OpenCode2Session implements EngineSession {
     return true;
   };
   /** The shell a card of the Shells list stands for: a background call of the model, or a bash mode command moved to the background (its part id is the shell id). */
-  private shellFor = (id: string) => this.mapper.shellOf(id) ?? (this.backgrounded.has(id) ? id : undefined);
+  private shellFor = (id: string): { sh: string; mapper: OpenCode2Mapper } | undefined => {
+    for (const m of [this.mapper, ...this.children.mappers()]) {
+      const sh = m.shellOf(id);
+      if (sh) return { sh, mapper: m };
+    }
+    return this.backgrounded.has(id) ? { sh: id, mapper: this.mapper } : undefined;
+  };
   /** Kill: OpenCode removes the shell (its end then shows on the card). False for an unknown or ended shell. */
   stopShell = async (id: string) => {
-    const sh = this.shellFor(id);
-    if (!sh || this.mapper.shellEnd(sh)) return false;
+    const f = this.shellFor(id);
+    if (!f || f.mapper.shellEnd(f.sh)) return false;
     const client = await this.server.client();
-    await client.shell.remove({ id: sh, location: { directory: this.cwd } });
+    await client.shell.remove({ id: f.sh, location: { directory: this.cwd } });
     return true;
   };
   /** Output tails shown in the Shells list: the last read while the shell ran, for a killed one (OpenCode forgets its output). */
   private readonly shellTails = new Map<string, string>();
   /** The tail of a background shell's output: read from OpenCode while it runs, the end notice's text after. */
   shellOutput = async (id: string) => {
-    const sh = this.shellFor(id);
-    if (!sh) return undefined;
-    const end = this.mapper.shellEnd(sh);
+    const f = this.shellFor(id);
+    if (!f) return undefined;
+    const sh = f.sh;
+    const end = f.mapper.shellEnd(sh);
     let out = end?.output ?? (end ? this.shellTails.get(sh) : undefined);
     let truncated = false;
     if (out === undefined && end) return undefined;
@@ -1543,6 +1827,8 @@ class OpenCode2EngineImpl implements Engine {
   private readonly sessions = new Map<string, OpenCode2Session>();
   private unsubscribe: (() => void) | undefined;
   private readonly modelLists = new Map<string, Promise<Models>>();
+  /** Set by the catalogue: makes the session a /clear hands over to. */
+  createHeir?: CreateHeir;
 
   constructor(
     readonly server: OpenCodeServer,
@@ -1557,6 +1843,9 @@ class OpenCode2EngineImpl implements Engine {
     readonly onFork?: (forkId: string, link: { sessionId: string; callId: string; prefix: number }) => void,
     /** The fork sessions of the Fork runs of a session. */
     readonly forksOf?: (id: string) => ForkLink[],
+    /** An inline task matched its call: its link is saved (sessions.json `inlineOf`). */
+    readonly onInline?: (inlineId: string, link: { sessionId: string; callId: string; denied?: string[] }) => void,
+    readonly inlinesOf?: (id: string) => InlineLink[],
   ) {}
 
   /** OpenCode's snapshot store (same layout as OpenCode 1): the data folder; `projectID` of the session row and the project's `canonical` folder as the worktree (cached; a failed read is not). */
@@ -1603,10 +1892,21 @@ class OpenCode2EngineImpl implements Engine {
           // A form names its session inside the form.
           const sid: unknown = payload.properties.sessionID ?? payload.properties.form?.sessionID;
           if (typeof sid !== "string") return;
+          // OpenCode 2.3.0 creates an MCP elicitation with the session "global" (its folder is the event's location): the run waiting for that server's tool shows it.
+          if (sid === "global" && payload.type === "form.created" && dir) {
+            const owner = this.globalFormOwner(dir, payload.properties.form);
+            // Undecided: every run of the folder says so (the MCP tool waits for an answer OpenCode cannot get from here).
+            if (!owner) return this.sessions.forEach((o) => o.cwd.replace(/[\\/]+$/, "") === dir.replace(/[\\/]+$/, "") && o.isRunning() && o.unroutedForm(payload.properties.form));
+            return owner.event(payload.type, { ...payload.properties, form: { ...payload.properties.form, location: { directory: dir } } });
+          }
           const own = this.sessions.get(sid);
           if (own) return own.event(payload.type, payload.properties);
+          // A running inline run first: a saved link may have made its session a restored child too.
           const inline = this.inlineOwners.get(sid);
           if (inline) return inline.inlineEvent(sid, payload.type, payload.properties);
+          for (const s of this.sessions.values()) if (s.ownsChild(sid)) return s.childEvent(sid, payload.type, payload.properties);
+          // A subagent's session its call has not named yet: its events wait for the link.
+          if (payload.type.startsWith("session.") && [...this.sessions.values()].some((o) => o.awaitsChild())) this.early.add(sid, payload.type, payload.properties);
           // A subagent's session: only its permission requests and questions are shown (the user must be able to answer them, or the turn waits for ever).
           if (payload.type === "permission.asked" || payload.type === "form.created")
             void this.ownerOf(sid).then((owner) => owner && this.sessions.get(owner)?.event(payload.type, payload.properties));
@@ -1621,10 +1921,26 @@ class OpenCode2EngineImpl implements Engine {
     // lists read before (a session create or the chooser) are read again once it is open.
     if (first) void this.server.streamReady().then(() => this.listsChanged(undefined));
   }
+  /**
+   * The session that shows a global form of `dir`: the only one running there, else the only one running there with a call of the form's MCP server
+   * (`metadata.server`, tool key `<server>_<tool>`). None when that is not decided: the form is not shown (a guess could answer for the wrong run).
+   */
+  globalFormOwner(dir: string, form: Json): OpenCode2Session | undefined {
+    const norm = (d: string) => d.replace(/[\\/]+$/, "");
+    const here = [...this.sessions.values()].filter((o) => norm(o.cwd) === norm(dir) && o.isRunning());
+    if (here.length === 1) return here[0];
+    const server = typeof form?.metadata?.server === "string" ? form.metadata.server.replace(/[^A-Za-z0-9_-]/g, "_") : undefined;
+    const waiting = server ? here.filter((o) => o.runningTools().some((n) => n.startsWith(`${server}_`))) : [];
+    return waiting.length === 1 ? waiting[0] : undefined;
+  }
   remove(s: OpenCode2Session) {
     this.sessions.delete(s.id);
     if (!this.sessions.size) (this.unsubscribe?.(), (this.unsubscribe = undefined));
   }
+
+  /** Events of sessions no call has named yet (a subagent's, announced by its call a moment later). */
+  private readonly early = new EarlyEvents();
+  takeEarly = (sid: string) => this.early.take(sid);
 
   /** The session of ours a session belongs to (itself, or the root of its parent chain), undefined when none is ours. Read once per session id. */
   private readonly owners = new Map<string, Promise<string | undefined>>();
@@ -1760,6 +2076,11 @@ class OpenCode2EngineImpl implements Engine {
     this.defaults.set(cwd, { at: Date.now(), name });
     return name;
   }
+  /** The primary agents (default first) and the subagents of a folder, from the one cached agent list. */
+  async agentSets(cwd: string): Promise<{ primary: Agent2[]; subagents: Agent2[] }> {
+    const primary = await this.primaryFirst(cwd);
+    return { primary, subagents: subagents2(await this.agents(cwd)) };
+  }
   /** The primary agents of a folder, the default agent first (the chooser preselects the first). */
   async primaryFirst(cwd: string): Promise<Agent2[]> {
     const [list, first] = [primaryAgents2(await this.agents(cwd)), await this.defaultAgent(cwd)];
@@ -1788,11 +2109,11 @@ class OpenCode2EngineImpl implements Engine {
     return list;
   }
   /** The rules and agent of a new session in `mode` (`plan` = agent plan in the default mode): the mode's rules with the agent's denials. Rejects when the agents cannot be read. */
-  async createRules(mode: PermissionMode, cwd: string): Promise<{ rules: Rule2[]; agent?: string }> {
+  async createRules(mode: PermissionMode, cwd: string, chosen?: string): Promise<{ rules: Rule2[]; agent?: string }> {
     const list = await this.agents(cwd);
-    const agent = mode === "plan" ? "plan" : await this.defaultAgent(cwd);
+    const agent = mode === "plan" ? "plan" : (chosen ?? (await this.defaultAgent(cwd)));
     const rules = rulesOf(mode === "plan" ? "default" : mode, false, denialsOf2(list.find((a) => a.id === agent)?.permissions ?? []));
-    return { rules, ...(mode === "plan" && { agent }) };
+    return { rules, ...((mode === "plan" || chosen) && { agent }) };
   }
   /** What each new session was created with, until its OpenCode2Session takes it. */
   private readonly created = new Map<string, { rules: Rule2[]; agent?: string }>();
@@ -1837,4 +2158,4 @@ class OpenCode2EngineImpl implements Engine {
 }
 
 export type OpenCode2Engine = OpenCode2EngineImpl;
-export const createOpenCode2Engine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; record?: (id: string) => void; mcp?: OpenCodeMcpRoute; visualizeOn?: () => boolean; onFork?: (forkId: string, link: { sessionId: string; callId: string; prefix: number }) => void; forksOf?: (id: string) => ForkLink[] } = {}): OpenCode2Engine => new OpenCode2EngineImpl(server, o.onTitle, o.record, o.mcp, o.visualizeOn, o.onFork, o.forksOf);
+export const createOpenCode2Engine = (server: OpenCodeServer, o: { onTitle?: (id: string, title: string) => void; record?: (id: string) => void; mcp?: OpenCodeMcpRoute; visualizeOn?: () => boolean; onFork?: (forkId: string, link: { sessionId: string; callId: string; prefix: number }) => void; forksOf?: (id: string) => ForkLink[]; onInline?: (inlineId: string, link: { sessionId: string; callId: string; denied?: string[] }) => void; inlinesOf?: (id: string) => InlineLink[] } = {}): OpenCode2Engine => new OpenCode2EngineImpl(server, o.onTitle, o.record, o.mcp, o.visualizeOn, o.onFork, o.forksOf, o.onInline, o.inlinesOf);

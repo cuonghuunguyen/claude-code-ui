@@ -21,6 +21,8 @@ import { jiraOf, jiraOriginOf, jiraTokenFor, overridesOf, overridesRequest } fro
 import { EFFORT_LABEL, MODE_LABEL } from "./toolbar.tsx";
 
 const GLOBAL = "__global__";
+/** What `git.commitMessageModel` means when the daemon sends none (an older one). */
+const DEFAULT_COMMIT_MODEL = "haiku";
 const DEFAULT_ACCOUNT = "__default__";
 const CONTROL = "w-44 max-md:w-full";
 // Text fields show "Global (<value>)" as placeholder: a URL or template needs more than a select.
@@ -339,6 +341,25 @@ export function ProjectSettingsDialog({ open, cwd, name, side, engines, modelsOf
               "commit",
               t("projectSettings.group.commit"),
               <>
+                <Row ui={ui} id="project-commit-engine" label={t("projectSettings.commitEngine.label")} hint={t("projectSettings.commitEngine.hint")} set={o.commitMessage?.engine !== undefined} reset={{ commitMessage: { engine: undefined } }}>
+                  {(p) => (
+                    <Choice
+                      ui={ui}
+                      id="project-commit-engine"
+                      p={p}
+                      value={o.commitMessage?.engine}
+                      globalValue={ENGINE_NAME[settings.git.commitMessageEngine ?? "claude"]}
+                      options={engines.map((e) => ({ value: e, label: ENGINE_NAME[e] }))}
+                      onChange={(v) => ui.save("project-commit-engine", { commitMessage: { engine: v as Engine | undefined } })}
+                    />
+                  )}
+                </Row>
+                <Row ui={ui} id="project-commit-model" label={t("projectSettings.commitModel.label")} hint={t("projectSettings.commitModel.hint")} set={o.commitMessage?.model !== undefined} reset={{ commitMessage: { model: undefined } }}>
+                  {(p) => <TextField ui={ui} id="project-commit-model" value={o.commitMessage?.model} globalValue={settings.git.commitMessageModel || DEFAULT_COMMIT_MODEL} onSave={(v) => ui.save("project-commit-model", { commitMessage: { model: v } })} p={p} />}
+                </Row>
+                <Row ui={ui} id="project-commit-opencode" label={t("projectSettings.commitOpenCode.label")} hint={t("projectSettings.commitOpenCode.hint")} set={o.commitMessage?.openCodeModel !== undefined} reset={{ commitMessage: { openCodeModel: undefined } }}>
+                  {(p) => <TextField ui={ui} id="project-commit-opencode" value={o.commitMessage?.openCodeModel} globalValue={settings.git.commitMessageOpenCodeModel ?? ""} onSave={(v) => ui.save("project-commit-opencode", { commitMessage: { openCodeModel: v } })} p={p} />}
+                </Row>
                 <InstructionSetting
                   id="project-commit-instruction"
                   label={t("projectSettings.commit.label")}

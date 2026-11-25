@@ -4,7 +4,7 @@ import { existsSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { EFFORTS, type PermissionMode, type SessionListItem } from "@claude-ui/protocol";
 import { EngineError, isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type EngineConfig, type ListCtx, type SavedSession } from "./engine-catalogue.ts";
-import { OPENCODE_MODES, type ForkLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
+import { OPENCODE_MODES, type ForkLink, type InlineLink, type OpenCodeMcpRoute } from "./opencode-engine.ts";
 import { openCodeWanted, OPENCODE_WINDOW } from "./opencode-catalogue.ts";
 import { OpenCodeError, type OpenCodeServer } from "./opencode-server.ts";
 import { capOf, fitCap, writeDigestFiles } from "./quick-compact.ts";
@@ -13,6 +13,7 @@ import { createOpenCode2Engine, loadMessages, loadOpenCode2History, OPENCODE2_CA
 import { createOpenCode2McpConfig, createOpenCode2PluginsConfig, createOpenCode2SkillsConfig } from "./opencode2-config.ts";
 import { createOpenCode2Login } from "./opencode2-providers.ts";
 import { INLINE_META } from "./opencode2-inline.ts";
+import { oneShot2 } from "./opencode2-oneshot.ts";
 import { FORK_META, forkCut } from "./opencode2-fork.ts";
 import { createFolderReloads } from "./folder-reload.ts";
 import { mapLimit } from "./session-scan.ts";
@@ -34,6 +35,8 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
   const meta = new Map<string, { cwd: string; title: string }>();
   /** The fork sessions of the Fork runs of session `id` (sessions.json `forkOf`). */
   const forksOf = (id: string): ForkLink[] => settings.entries().flatMap(([forkId, l]) => (l.forkOf?.sessionId === id ? [{ forkId, callId: l.forkOf.callId, prefix: l.forkOf.prefix }] : []));
+  /** The inline task sessions of session `id` (sessions.json `inlineOf`). */
+  const inlinesOf = (id: string): InlineLink[] => settings.entries().flatMap(([inlineId, l]) => (l.inlineOf?.sessionId === id ? [{ inlineId, callId: l.inlineOf.callId, ...(l.inlineOf.denied && { denied: l.inlineOf.denied }) }] : []));
   const engine = createOpenCode2Engine(server, {
     onTitle: (id, title) => {
       const m = meta.get(id);
@@ -46,6 +49,8 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     visualizeOn: () => appSettings.get().chat.visualize,
     onFork: (id, forkOf) => ctx.saveSettings(() => settings.set(id, { forkOf })),
     forksOf,
+    onInline: (id, inlineOf) => ctx.saveSettings(() => settings.set(id, { inlineOf })),
+    inlinesOf,
   });
   /** A config change saved while a session runs: the reload waits for idle (folder-reload.ts). Nothing to reload while the server is down. */
   const reloads = createFolderReloads({ all: true, reload: async (_cwd, folders) => !server.running() || engine.reloadLocations(folders), changed: (kind, cwd) => ctx.broadcast({ type: "config.changed", kind, cwd }) });
@@ -65,15 +70,21 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
   const failure = (err: unknown) => (err instanceof OpenCodeError ? new EngineError(err.code, err.message) : new EngineError("opencode_failed", (err as Error).message));
   const notFound = async () => (await import("@opencode/client")).isSessionNotFoundError;
 
-  async function createSession(cwd: string, initial: { model?: string; permissionMode: PermissionMode; effort?: SessionSettings["effort"] }): Promise<Session | undefined> {
+  /** The row of a new OpenCode 2 session in `cwd` with the rules of its mode (and agent), recorded; undefined when the folder is being removed meanwhile. */
+  async function createRow(cwd: string, mode: PermissionMode, agent?: string) {
     const client = await server.client();
     // `plan` is the plan agent in the default mode; the rules have the agent's denials (a folder whose agents cannot be read fails the create).
-    const created = await engine.createRules(initial.permissionMode, cwd);
+    const created = await engine.createRules(mode, cwd, agent);
     const row = await client.session.create({ location: { directory: cwd }, permissions: created.rules, ...(created.agent && { agent: created.agent }) });
     engine.noteCreated(row.id, created);
     // A session of OpenCode 2 is recorded at once: an OpenCode 1 binary must not open it. A failed save fails the create (the empty session stays in OpenCode).
     o.record?.(row.id);
-    if (ctx.isRemoving(cwd) || !existsSync(cwd)) return undefined;
+    return ctx.isRemoving(cwd) || !existsSync(cwd) ? undefined : row;
+  }
+
+  async function createSession(cwd: string, initial: { model?: string; permissionMode: PermissionMode; effort?: SessionSettings["effort"] }): Promise<Session | undefined> {
+    const row = await createRow(cwd, initial.permissionMode);
+    if (!row) return undefined;
     const opts = sessionOpts(initial);
     const s = ctx.track(new Session(cwd, opts, { id: row.id }));
     // The entry makes the next list start OpenCode for a user whose last session was Claude's. `fields` empty: only a session without an entry is saved.
@@ -82,6 +93,16 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     ctx.addProject(cwd);
     return s;
   }
+
+  /** `/clear` (docs/spec.md "Sessions"): a new session with the model, mode, effort and agent of the cleared one. Not tracked here: `onCleared` tracks it. */
+  engine.createHeir = async (cwd, carried) => {
+    const row = await createRow(cwd, carried.permissionMode, carried.agent);
+    if (!row) return undefined;
+    // Saved before the session exists: its `opts.agent(id)` gives the carried agent.
+    ctx.saveSettings(() => settings.set(row.id, { model: carried.model, permissionMode: carried.permissionMode, effort: carried.effort, ...(carried.agent && { agent: carried.agent }) }));
+    meta.set(row.id, { cwd, title: row.title ?? "New session" });
+    return new Session(cwd, sessionOpts(carried), { id: row.id });
+  };
 
   let listError: string | undefined;
   /** OpenCode answered a session list once in this run. */
@@ -122,7 +143,7 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
         for (const row of rows) {
           const saved = linked.get(row.id);
           // A fork whose metadata PATCH failed: its link hides it.
-          if (saved?.forkOf) {
+          if (saved?.forkOf || saved?.inlineOf) {
             out.ids.add(row.id);
             continue;
           }
@@ -185,7 +206,7 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     const row = await client.session.get({ sessionID: id }).catch((err) => (isSessionNotFoundError(err) ? undefined : Promise.reject(err)));
     const cwd = row && ctx.allowed(known?.cwd ?? row.location.directory);
     if (!row || !cwd || ctx.isRemoving(cwd)) return undefined;
-    const history = await loadOpenCode2History(client, id, cwd, (sid) => engine.isOurs(id, sid), forksOf(id));
+    const history = await loadOpenCode2History(client, id, cwd, (sid) => engine.isOurs(id, sid), forksOf(id), inlinesOf(id));
     meta.set(id, { cwd, title: row.title ?? "New session" });
     const saved = settings.get(id);
     const permissionMode = OPENCODE_MODES.includes(saved?.permissionMode as never) ? (saved!.permissionMode as SessionSettings["permissionMode"]) : undefined;
@@ -313,8 +334,8 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
       }
       meta.delete(id);
       rmSync(openCodeDigestDir(id), { recursive: true, force: true });
-      // Its Fork runs' forks go with it (OpenCode 1 does the same).
-      const forks = forksOf(id).map((f) => f.forkId);
+      // Its Fork runs' forks and its kept inline task sessions go with it (OpenCode 1 does the same).
+      const forks = [...forksOf(id).map((f) => f.forkId), ...inlinesOf(id).map((l) => l.inlineId)];
       if (forks.length) {
         const client = await server.client().catch(() => undefined);
         // One already gone (or a failed remove) is no failure of the delete.
@@ -325,7 +346,12 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     forkForAside: (owner, title) => forkForAside(owner, title).catch((err) => Promise.reject(failure(err))),
     quickCompact: (source) => quickCompact(source).catch((err) => Promise.reject(failure(err))),
     commands: (cwd) => engine.commands(cwd),
-    agents: async (cwd) => (await engine.primaryFirst(cwd)).map(({ id, description }) => ({ name: id, ...(description && { description }) })),
+    agents: async (cwd) => {
+      const info = ({ id, description }: { id: string; description?: string }) => ({ name: id, ...(description && { description }) });
+      const both = await engine.agentSets(cwd);
+      return { agents: both.primary.map(info), subagents: both.subagents.map(info) };
+    },
     models: (cwd) => engine.modelInfos(cwd),
+    oneShot: async (r) => oneShot2(await server.client().catch((err) => Promise.reject(failure(err))), r),
   };
 }

@@ -31,3 +31,7 @@ export const saveGroup = (id: string) => {
   landOnGroup = true;
 };
 
+
+/** An event asking App to open Settings at a group (the commit box's "Open settings" link has no App callback). */
+export const OPEN_SETTINGS_EVENT = "claude-ui:open-settings";
+export const askSettings = (group: string) => dispatchEvent(new CustomEvent<string>(OPEN_SETTINGS_EVENT, { detail: group }));

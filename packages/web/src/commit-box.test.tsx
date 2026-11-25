@@ -7,6 +7,8 @@ import { askCommitBox } from "./commit-ask.ts";
 import { CommitBox } from "./commit-box.tsx";
 import { commitPaths } from "./git-changes.ts";
 import { forgetRemoteOps, remoteOpOf } from "./git-remote-ops.ts";
+import { setCommitGenerator } from "./commit-generator.ts";
+import type { Settings } from "@claude-ui/protocol";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => {
@@ -161,7 +163,7 @@ const generate = () => byId("commit-generate") as HTMLButtonElement;
 
 it("Generate sends the checked paths and the project, fills the message from the reply; disabled with nothing checked", async () => {
   const m = mount({ checked: ["/p/a.txt", "/p/n2.txt"], generate: async () => ({ message: "feat: add a\n\nbody" }) });
-  expect(generate().getAttribute("aria-label")).toBe("Generate commit message");
+  expect(generate().getAttribute("aria-label")).toBe("Generate commit message with Claude");
   await act(async () => generate().click());
   await flush();
   expect(m.sent.find((x) => x.type === "git.commitMessage")).toEqual({ type: "git.commitMessage", cwd: "/p", paths: ["a.txt", "n2.txt", "n1.txt"], project: "/proj" });
@@ -184,7 +186,7 @@ it("while generating the box is read-only and busy and the button is Stop; Stop 
   await act(async () => generate().click());
   expect(m.sent.filter((x) => x.type === "git.commitMessageCancel")).toEqual([{ type: "git.commitMessageCancel", cwd: "/p" }]);
   expect(ta.readOnly).toBe(false);
-  expect(generate().getAttribute("aria-label")).toBe("Generate commit message");
+  expect(generate().getAttribute("aria-label")).toBe("Generate commit message with Claude");
   await act(async () => d.resolve({ message: "late" }));
   await flush();
   expect(ta.value).toBe("draft text");
@@ -206,7 +208,7 @@ it("a failed generation shows an alert and keeps the typed text; a cancelled rep
   await act(async () => second!.reject(Object.assign(new Error("cancelled"), { code: "cancelled" })));
   await flush();
   expect(document.querySelector('[role="alert"]')).toBeNull();
-  expect(generate().getAttribute("aria-label")).toBe("Generate commit message");
+  expect(generate().getAttribute("aria-label")).toBe("Generate commit message with Claude");
 });
 
 it("Mod+Enter commits, Alt+M toggles Amend", async () => {
@@ -233,4 +235,42 @@ it("the app's Commit key focuses the message; Push opens the push dialog of HEAD
   await flush();
   expect(m.sent.slice(-2)).toEqual([{ type: "git.log", cwd: "/p", limit: 1 }, { type: "git.branch", cwd: "/p", ref: "refs/heads/main" }]);
   expect(byId("git-command").textContent).toContain("push origin refs/heads/main:refs/heads/main");
+});
+
+const settingsOf = (git: Partial<Settings["git"]>, overrides: Settings["projects"]["overrides"] = {}) => ({ git: { commitMessageEngine: "claude", commitMessageModel: "haiku", commitMessageOpenCodeModel: "", ...git }, projects: { overrides } }) as unknown as Settings;
+
+it("engine OpenCode without a model: Generate is off, the hint links to Settings › Git; a Project's own model or engine lifts it", async () => {
+  const opened = vi.fn();
+  addEventListener("claude-ui:open-settings", (e) => opened((e as CustomEvent<string>).detail), { once: true });
+  setCommitGenerator(settingsOf({ commitMessageEngine: "opencode" }));
+  const m = mount({ checked: ["/p/a.txt"], generate: async () => ({ message: "x" }) });
+  expect(generate().disabled).toBe(true);
+  expect(generate().getAttribute("aria-label")).toBe("Generate commit message with OpenCode");
+  expect(byId("commit-generate-nomodel").textContent).toContain("Pick an OpenCode model");
+  await act(async () => byId("commit-generate-settings").click());
+  expect(opened).toHaveBeenCalledWith("git");
+  await act(async () => setCommitGenerator(settingsOf({ commitMessageEngine: "opencode" }, { local: { "/proj": { commitMessage: { openCodeModel: "deepseek/flash-1" } } } })));
+  expect(generate().disabled).toBe(false);
+  expect(document.querySelector("[data-testid=commit-generate-nomodel]")).toBeNull();
+  await act(async () => setCommitGenerator(settingsOf({ commitMessageEngine: "opencode" }, { local: { "/proj": { commitMessage: { engine: "claude" } } } })));
+  expect(generate().disabled).toBe(false);
+  expect(generate().getAttribute("aria-label")).toBe("Generate commit message with Claude");
+  expect(m.sent.some((x) => x.type === "git.commitMessage")).toBe(false);
+  setCommitGenerator(settingsOf({}));
+});
+
+it("a fallback reply says Generated with OpenCode; the daemon's commit_model_missing shows the same hint as the settings do", async () => {
+  setCommitGenerator(settingsOf({}));
+  const answers: unknown[] = [{ message: "fix: y", engine: "opencode", fellBack: true }, Object.assign(new Error("Pick an OpenCode model"), { code: "commit_model_missing" })];
+  mount({ checked: ["/p/a.txt"], generate: async () => { const a = answers.shift(); if (a instanceof Error) throw a; return a; } });
+  await act(async () => generate().click());
+  await flush();
+  expect(byId("commit-generated-with").textContent).toBe("Generated with OpenCode");
+  expect((byId("commit-message") as HTMLTextAreaElement).value).toBe("fix: y");
+  await act(async () => generate().click());
+  await flush();
+  expect(document.querySelector("[data-testid=commit-generated-with]")).toBeNull();
+  expect(byId("commit-generate-nomodel")).toBeTruthy();
+  expect(document.querySelector("[data-testid=commit-generate-error]")).toBeNull();
+  expect(generate().disabled).toBe(true);
 });
