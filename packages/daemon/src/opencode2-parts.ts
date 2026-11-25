@@ -2,7 +2,7 @@
 // ids. User message = one `user_text` (id = message id); text and reasoning = `<assistant message id>:<text|reasoning>:<ordinal>` (the ordinal counts per kind inside
 // the message, as the `session.text.*` events do); a tool call's id = its call id. Shapes recorded in development-docs (planner-spike/v2-events.json).
 import type { Part, TodoItem, ToolStatus } from "@claude-ui/protocol";
-import { canon, mapTool } from "./opencode-parts.ts";
+import { canon, mapTool, pickCall } from "./opencode-parts.ts";
 import { FORK_TOOL } from "./opencode-fork.ts";
 
 /** `SessionStructuredError` of OpenCode 2. */
@@ -29,7 +29,7 @@ export type OpenCode2Message = {
   /** `compaction`: why it ran and the summary it wrote. */
   reason?: string;
   summary?: string;
-  /** `synthetic`: the notice of a background shell's end (`metadata.source` `shell`). */
+  /** `synthetic`: the notice of a background shell's end (`metadata.source` `shell`) or of a subagent's (`subagent`). */
   metadata?: Json;
   time?: Json;
 };
@@ -50,6 +50,10 @@ const compactionParts = (id: string, reason: string | undefined, summary: string
 
 /** How a background shell of the model ended: the card's status, the exit code and the output OpenCode's end notice carried (none for a killed one). */
 type ShellEnd = { status: "done" | "error" | "stopped"; exit?: number; output?: string; at?: number };
+/** How a subagent ended, from OpenCode's end notice (`metadata.source` `subagent`): the card's status and when. */
+type SubagentEnd = { status: "done" | "error" | "stopped"; at?: number };
+/** The card status of a subagent notice `state`; none for `running` (the child went idle with work left: its end notice comes later). */
+const SUBAGENT_STATES: Record<string, SubagentEnd["status"]> = { completed: "done", error: "error", cancelled: "stopped" };
 /** Ends of foreign shells (another session's) one mapper keeps. */
 const SHELL_ENDS_KEPT = 100;
 /** The id of the shell a background call started, from the call's result text. */
@@ -112,6 +116,8 @@ export class OpenCode2Mapper {
   /** The shell id of background call `callId`. */
   shellOf = (callId: string) => this.shellOfCall.get(callId);
   shellEnd = (shellId: string) => this.shellEnds.get(shellId);
+  /** A call of this session started shell `shellId`. */
+  hasShell = (shellId: string) => [...this.shellOfCall.values()].includes(shellId);
   /** `[call id, shell id]` of the background calls whose shell has not ended. */
   openShells = () => [...this.shellOfCall].filter(([callId, sh]) => !this.shellEnds.has(sh) && this.calls.has(callId));
   /** `shell.exited` (killed, or finished with `exit`): the call's card shows how it ended. Another session's shell changes nothing. */
@@ -147,6 +153,45 @@ export class OpenCode2Mapper {
     return [next];
   }
 
+  /** `subagent` calls: call id -> child session id (live `session.tool.progress`, the call's result, the stored call), how each child ended, and links not yet taken. */
+  private readonly childOfCall = new Map<string, string>();
+  private readonly subagentEnds = new Map<string, SubagentEnd>();
+  private readonly fresh: { childId: string; callId: string }[] = [];
+  /** The child session of `subagent` call `callId`. */
+  childOf = (callId: string) => this.childOfCall.get(callId);
+  /** The links learned since the last call, each once: the child session runs for the call. */
+  takeLinks() {
+    return this.fresh.splice(0);
+  }
+  private linkChild(callId: string, childId: unknown) {
+    if (typeof childId !== "string" || !childId || this.childOfCall.get(callId) === childId) return;
+    this.childOfCall.set(callId, childId);
+    this.fresh.push({ childId, callId });
+  }
+  /** Running `subagent` calls whose child session is not known yet (their child's first events may come before the link). */
+  unlinkedSubagents = () => [...this.calls.values()].filter((c) => c.type === "subagent" && c.agentType !== "fork" && this.raw.get(c.id)?.name === "subagent" && !this.childOfCall.has(c.id) && (c.status === "running" || c.status === "pending")).length;
+  /** The child ended (OpenCode's end notice, or a Stop that found it idle): the card shows how. The first end stays. */
+  subagentEnded(childId: string, status: SubagentEnd["status"], at: number | undefined): Part[] {
+    if (!this.subagentEnds.has(childId)) this.subagentEnds.set(childId, { status, ...(at && { at }) });
+    return this.subagentCard(childId);
+  }
+  /** The end notice of a subagent (live inbox item or stored message). `running` is no end. */
+  private subagentNotice(m: Json, text: string, at: number | undefined): Part[] {
+    // The state is the notice text's attribute: OpenCode 2.3.0 puts `completed` in `metadata.state` also when the text says `running` (the child went idle with work left).
+    const status = SUBAGENT_STATES[/^<subagent\b[^>]*\sstate="(\w+)"/.exec(text)?.[1] ?? String(m?.state)];
+    return typeof m?.childID === "string" && status ? this.subagentEnded(m.childID, status, at) : [];
+  }
+  /** The card of the call whose child is `childId`, in its ended state. */
+  private subagentCard(childId: string): Part[] {
+    const callId = [...this.childOfCall].find(([, c]) => c === childId)?.[0];
+    const call = callId ? this.calls.get(callId) : undefined;
+    const end = this.subagentEnds.get(childId);
+    if (!call || call.type !== "subagent" || !end) return [];
+    const next = { ...call, status: end.status, ...(end.at && { endedAt: end.at }) };
+    this.calls.set(call.id, next);
+    return [next];
+  }
+
   /** The OpenCode name and input of each call (the card has the mapped ones): later events of a call carry only its id. */
   private readonly raw = new Map<string, { name: string; input: Json }>();
   call = (callId: string) => this.calls.get(callId);
@@ -163,9 +208,8 @@ export class OpenCode2Mapper {
     return [...this.calls.values()].reverse().find((c) => c.type === "subagent" && c.agentType === "fork" && (c.status === "running" || c.status === "pending") && !skip.has(c.id) && JSON.stringify(canon(this.raw.get(c.id)?.input ?? {})) === want)?.id;
   }
   /** The newest running call of `tool` (its card name) whose input equals `input` and is not in `skip` (the call an inline run belongs to). */
-  runningCall(tool: string, input: Record<string, unknown> | undefined, skip: ReadonlySet<string>): string | undefined {
-    const want = JSON.stringify(canon(input ?? {}));
-    return [...this.calls.values()].reverse().find((c) => c.type === "tool_call" && c.tool === tool && (c.status === "running" || c.status === "pending") && !skip.has(c.id) && JSON.stringify(canon(c.input)) === want)?.id;
+  runningCall(tool: string, input: Record<string, unknown> | undefined, skip: ReadonlySet<string>, lone = true): string | undefined {
+    return pickCall([...this.calls.values()].flatMap((c) => (c.type === "tool_call" && c.tool === tool && (c.status === "running" || c.status === "pending") && !skip.has(c.id) ? [{ id: c.id, input: c.input as Record<string, unknown> }] : [])), input, lone);
   }
   /** Usage and cost summed over the steps since the last `resetTurn`. */
   turn() {
@@ -200,6 +244,8 @@ export class OpenCode2Mapper {
   history(messages: readonly OpenCode2Message[]): Part[] {
     // The end notices of background shells come after the calls: read first, so each call shows its shell's end.
     for (const m of messages) if (m.type === "synthetic" && m.metadata?.source === "shell") this.shellNotice({ ...m.metadata, output: noticeOutput(m.text ?? "") }, m.time?.created);
+    // The subagent notices too: a call that returned (the child runs on) ends with the notice.
+    for (const m of messages) if (m.type === "synthetic" && m.metadata?.source === "subagent") this.subagentNotice(m.metadata, m.text ?? "", m.time?.created);
     return messages.flatMap((m) => {
       if (m.type === "user") return this.user(m);
       if (m.type === "shell" && m.shellID) return [bashPart({ id: m.shellID, command: m.command ?? "", status: m.status ?? "exited", exit: m.exit }, m.output?.output ?? "")];
@@ -231,6 +277,7 @@ export class OpenCode2Mapper {
     const item = data.item as Json | undefined;
     // A background shell's end notice starts OpenCode's next execution: no bubble, the call's card ends.
     if (item?.type === "synthetic" && item.payload?.metadata?.source === "shell") return this.shellNotice({ ...item.payload.metadata, output: noticeOutput(String(item.payload.text ?? "")) }, Date.now());
+    if (item?.type === "synthetic" && item.payload?.metadata?.source === "subagent") return this.subagentNotice(item.payload.metadata, String(item.payload.text ?? ""), Date.now());
     if (item?.type !== "user" || this.own.has(data.inboxID)) return [];
     return [{ type: "user_text", id: data.inboxID, text: String(item.payload?.text ?? ""), images: [] }];
   }
@@ -251,7 +298,14 @@ export class OpenCode2Mapper {
     const times = { ...(time?.ran && { startedAt: time.ran }), ...(time?.completed && { endedAt: time.completed }) };
     const parsed = status === "streaming" ? {} : (input ?? {});
     if (name === "subagent") {
-      const sub = { type: "subagent" as const, id: callId, toolUseId: callId, description: String(parsed.description ?? ""), status: st, startedAt: time?.ran ?? time?.created ?? this.calls.get(callId)?.startedAt ?? 0, ...(time?.completed && { endedAt: time.completed }) };
+      this.linkChild(callId, state.metadata?.sessionID);
+      const child = this.childOfCall.get(callId);
+      // The call returns at once and the child runs on (`metadata.status` `running`): the card runs until OpenCode's end notice, the call's own end is only "started".
+      const background = st === "done" && state.metadata?.status === "running";
+      const ended = background && child ? this.subagentEnds.get(child) : undefined;
+      if (background) st = ended?.status ?? "running";
+      const endedAt = ended?.at ?? (background && !ended ? undefined : time?.completed);
+      const sub = { type: "subagent" as const, id: callId, toolUseId: callId, description: String(parsed.description ?? ""), status: st, startedAt: time?.ran ?? time?.created ?? this.calls.get(callId)?.startedAt ?? 0, ...(endedAt && { endedAt }) };
       this.calls.set(callId, sub);
       return [sub];
     }
@@ -317,6 +371,8 @@ export class OpenCode2Mapper {
       case "session.tool.progress": {
         const shellID = d.metadata?.shellID;
         if (typeof shellID === "string" && this.raw.get(d.id)?.name === "shell") this.shellOfCall.set(d.id, shellID);
+        // A subagent call names its child session before the child's first event.
+        if (this.raw.get(d.id)?.name === "subagent") this.linkChild(d.id, d.metadata?.sessionID);
         return [];
       }
       case "session.tool.called": {

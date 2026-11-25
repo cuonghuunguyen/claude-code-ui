@@ -123,7 +123,13 @@ const shells = new Map();
 const shellOut = new Map();
 for (const x of data.shells ?? []) {
   const sh = { id: x.id, status: "running", command: x.command, cwd: sessions.get(x.sessionID)?.directory, shell: "/bin/sh", metadata: { sessionID: x.sessionID }, time: { started: 1 } };
-  shells.set(x.id, { command: x.command, info: sh, kill() {}, exit() {} });
+  // Kill and exit act as those of a started shell (`agentShell`); they run after start, when `emit` exists.
+  shells.set(x.id, {
+    command: x.command,
+    info: sh,
+    kill: () => (shells.delete(x.id), synthetic(x.sessionID, x.id, x.command, "error", "Shell.NotFoundError", {}, sh.cwd), emit("shell.exited", { id: x.id, status: "killed" }, sh.cwd), emit("shell.deleted", { id: x.id }, sh.cwd), shellOut.delete(x.id)),
+    exit: (exit, output) => (shellOut.set(x.id, output), emit("shell.exited", { id: x.id, status: "exited", exit }, sh.cwd), synthetic(x.sessionID, x.id, x.command, "completed", output, { truncated: false, exit }, sh.cwd), shells.delete(x.id)),
+  });
   shellOut.set(x.id, x.output ?? "");
 }
 let nextTurn = 0;

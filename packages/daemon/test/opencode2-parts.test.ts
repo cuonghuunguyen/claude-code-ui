@@ -138,3 +138,46 @@ it("a mapper without the todos option (inline and Fork runs) emits no todo_updat
   expect(parts.some((p) => p.type === "todo_update")).toBe(false);
   expect(parts.some((p) => p.type === "tool_call")).toBe(true);
 });
+
+it("a subagent call links its child session live and stored; the card runs after the call returned until an end notice says completed, error or cancelled (running is no end)", () => {
+  const meta = { sessionID: "ses_c", status: "running", truncated: false };
+  const live = new OpenCode2Mapper();
+  live.event("session.tool.input.started", { ...base, id: "call_s", name: "subagent" });
+  live.event("session.tool.called", { ...base, id: "call_s", input: { description: "Look", prompt: "p" } });
+  live.event("session.tool.progress", { ...base, id: "call_s", metadata: { sessionID: "ses_c", status: "running" } });
+  expect(live.takeLinks()).toEqual([{ childId: "ses_c", callId: "call_s" }]);
+  expect(live.takeLinks()).toEqual([]);
+  const back = live.event("session.tool.success", { ...base, id: "call_s", content: [], metadata: meta });
+  expect(back[0]).toMatchObject({ type: "subagent", id: "call_s", status: "running" });
+  const notice = (state: string) => ({ item: { type: "synthetic", payload: { text: "n", metadata: { source: "subagent", childID: "ses_c", state } } } });
+  expect(live.inbox(notice("running"))).toEqual([]);
+  expect(live.inbox(notice("cancelled"))[0]).toMatchObject({ id: "call_s", status: "stopped" });
+  // The first end stays: a later notice of the same child changes nothing.
+  expect(live.inbox(notice("completed"))[0]).toMatchObject({ status: "stopped" });
+
+  // Stored: the call's own `state.metadata.sessionID` is the link, the notice is read before the calls.
+  const stored = new OpenCode2Mapper();
+  const parts = stored.history([
+    { id: A, type: "assistant", content: [{ type: "tool", id: "call_s", name: "subagent", state: { status: "completed", input: { description: "Look", prompt: "p" }, metadata: meta, content: [] }, time: { created: 1, completed: 2 } }] },
+    { id: "msg_n", type: "synthetic", metadata: { source: "subagent", childID: "ses_c", state: "error" }, time: { created: 9 } },
+  ]);
+  expect(stored.takeLinks()).toEqual([{ childId: "ses_c", callId: "call_s" }]);
+  expect(parts[0]).toMatchObject({ type: "subagent", id: "call_s", status: "error", endedAt: 9 });
+  // No notice yet: the child still runs.
+  expect(new OpenCode2Mapper().history([{ id: A, type: "assistant", content: [{ type: "tool", id: "call_s", name: "subagent", state: { status: "completed", input: { description: "Look" }, metadata: meta, content: [] } }] }])[0]).toMatchObject({ status: "running" });
+});
+
+it("a subagent notice's state is its text's: the recorded notice of an idle child with a shell left says running in the text and completed in the metadata, and is no end", () => {
+  const m = new OpenCode2Mapper();
+  m.event("session.tool.input.started", { ...base, id: "call_s", name: "subagent" });
+  m.event("session.tool.called", { ...base, id: "call_s", input: { description: "Look", prompt: "p" } });
+  m.event("session.tool.success", { ...base, id: "call_s", content: [], metadata: { sessionID: "ses_c", status: "running" } });
+  const notice = (state: string) => ({ item: { type: "synthetic", payload: { text: `<subagent sessionID="ses_c" state="${state}" description="Look">\ndone\n</subagent>`, metadata: { source: "subagent", childID: "ses_c", state: "completed" } } } });
+  expect(m.inbox(notice("running"))).toEqual([]);
+  expect(m.inbox(notice("completed"))[0]).toMatchObject({ id: "call_s", status: "done" });
+  // Stored: the same two notices; the last real end closes the card.
+  const call = { id: A, type: "assistant", content: [{ type: "tool", id: "call_s", name: "subagent", state: { status: "completed", input: { description: "Look" }, metadata: { sessionID: "ses_c", status: "running" }, content: [] } }] } as OpenCode2Message;
+  const syn = (state: string, at: number): OpenCode2Message => ({ id: `msg_${state}`, type: "synthetic", text: notice(state).item.payload.text, metadata: notice(state).item.payload.metadata, time: { created: at } });
+  expect(new OpenCode2Mapper().history([call, syn("running", 5)])[0]).toMatchObject({ status: "running" });
+  expect(new OpenCode2Mapper().history([call, syn("running", 5), syn("completed", 9)])[0]).toMatchObject({ status: "done", endedAt: 9 });
+});
