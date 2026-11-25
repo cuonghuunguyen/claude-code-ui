@@ -1065,6 +1065,7 @@ class OpenCode2Session implements EngineSession {
     this.limit = undefined;
     // After idle, like claude-engine: the queue hold of onLimitStop lands before the queue's deferred kick. Never for a stopped turn.
     if (limit && !this.aborted) this.opts.onLimitStop?.(this.id, limit.resetsAt, true);
+    else this.opts.onTurnEnded?.(this.id);
     void this.emitUsage();
   }
 

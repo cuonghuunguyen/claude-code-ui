@@ -375,6 +375,7 @@ export function createDaemon(opts: {
       // Queued messages wait for the reset (after an automatic continue), else for the user: sending into the limit would burn them one by one.
       queue.hold(id, at ? at + (opts.autoContinue?.graceMs ?? RESET_GRACE_MS) + (opts.autoContinue?.gapMs ?? CONTINUE_GAP_MS) : undefined);
     },
+    onTurnEnded: (id: string) => autoContinue.turnEnded(id),
     allowBypass: opts.allowBypass,
     onFileEdit: (path: string, original: string) => localHistory.before(path, "agent", original),
     // `live` of the session list changed (CLI started or dropped).
