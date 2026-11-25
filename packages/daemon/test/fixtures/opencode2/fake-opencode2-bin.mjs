@@ -238,7 +238,7 @@ async function runTurn(sid, userId, steps) {
       asked.delete(vars.$PERM);
     } else if (step.form) {
       const form = { id: vars.$FORM, sessionID: step.form.sessionID ?? sid, title: step.form.title ?? "Questions", metadata: step.form.kind ? { kind: step.form.kind } : { kind: "question", tool: { messageID: vars.$A1, id: vars.$CALL } }, fields: step.form.fields };
-      forms.set(form.id, { form, turn });
+      forms.set(form.id, { form, turn, dir });
       emit("form.created", { form }, dir);
     } else if (step.wait === "form") {
       const r = await Promise.race([new Promise((x) => (formDone = x)), stop]);
@@ -553,6 +553,13 @@ const server = createServer((req, res) => {
       const list = [...sessions.values()].filter((s) => (!d || s.directory === d) && (!roots || !s.parentID)).sort((a, b) => b.time.updated - a.time.updated);
       const limit = Number(url.searchParams.get("limit") ?? 100);
       return json(res, 200, { data: list.slice(0, limit), cursor: { previous: null, next: null } });
+    }
+    // A form of session "global" (an MCP elicitation, as 2.3.0 creates it): answered by `POST|DELETE /api/session/global/form/:id[/reply]` with the folder in `x-opencode-directory`; without it, or for another folder: 404.
+    if ((m = /^\/api\/session\/global\/form\/([^/]+)(\/reply)?$/.exec(p))) {
+      const f = forms.get(m[1]);
+      if (!f || f.form.sessionID !== "global" || req.headers["x-opencode-directory"] !== encodeURIComponent(f.dir)) return json(res, 404, { message: `Form not found: ${m[1]}` });
+      f.turn.form(m[2] ? { answer: body.answer } : { cancel: true });
+      return (res.writeHead(204), res.end());
     }
     if ((m = /^\/api\/session\/([^/]+)(?:\/(.+))?$/.exec(p))) {
       // FAKE_OPENCODE2_FAIL: JSON `{<session id>: n}`: the first n reads of that session (GET /api/session/:id) answer 500.

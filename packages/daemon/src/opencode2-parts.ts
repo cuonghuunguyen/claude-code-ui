@@ -142,6 +142,8 @@ export class OpenCode2Mapper {
     const c = this.calls.get(id);
     return !!c && (c.type === "tool_call" || c.agentType === "fork") && (c.status === "running" || c.status === "pending");
   };
+  /** The OpenCode names (tool keys) of the calls still pending or running. */
+  runningTools = (): string[] => [...this.calls.keys()].filter(this.isRunning).map((id) => this.raw.get(id)?.name ?? "");
   /** The newest running Fork run call (`fork` tool) whose input equals `input` and is not in `skip`. */
   runningFork(input: Record<string, unknown> | undefined, skip: ReadonlySet<string>): string | undefined {
     const want = JSON.stringify(canon(input ?? {}));

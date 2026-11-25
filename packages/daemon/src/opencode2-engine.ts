@@ -331,6 +331,9 @@ class OpenCode2Session implements EngineSession {
   get id() {
     return this.session.id;
   }
+  /** Whether a turn runs. */
+  isRunning = () => this.session.currentState() === "running";
+  runningTools = () => this.mapper.runningTools();
   get cwd() {
     return this.session.cwd;
   }
@@ -1286,7 +1289,8 @@ class OpenCode2Session implements EngineSession {
       if (f.type === "string" && !options.length) q.input = keep({ type: f.format ?? "text", minLength: finite(f.minLength), maxLength: finite(f.maxLength), pattern: typeof f.pattern === "string" ? f.pattern : undefined, placeholder: typeof f.placeholder === "string" ? f.placeholder : undefined }) as QuestionInput;
       else if (f.type === "string" && f.custom && (f.format || f.pattern !== undefined || finite(f.minLength) !== undefined || finite(f.maxLength) !== undefined)) q.input = keep({ type: f.format ?? "text", minLength: finite(f.minLength), maxLength: finite(f.maxLength), pattern: typeof f.pattern === "string" ? f.pattern : undefined }) as QuestionInput;
       else if (f.type === "number" || f.type === "integer") q.input = keep({ type: f.type, minimum: finite(f.minimum), maximum: finite(f.maximum) }) as QuestionInput;
-      if (f.required === false) q.optional = true;
+      // OpenCode 2 enforces only `required: true`.
+      if (f.required !== true) q.optional = true;
       const dflt = f.type === "number" || f.type === "integer" ? finite(f.default) : f.default;
       if (dflt !== undefined && f.type !== "external") q.default = Array.isArray(dflt) ? dflt.map((v: unknown) => labelOf(f, v)).join(", ") : labelOf(f, dflt);
       const when = ((f.when as Json[] | undefined) ?? []).filter((w) => texts.has(w.key)).map((w) => ({ question: texts.get(w.key)!, op: w.op === "neq" ? ("neq" as const) : ("eq" as const), value: labelOf(all.find((x) => x.key === w.key), w.value) }));
@@ -1343,6 +1347,9 @@ class OpenCode2Session implements EngineSession {
         .client()
         .then(f)
         .catch((err) => this.notice(`answer_failed:${ascending("msg")}`, `Could not answer OpenCode: ${(err as Error).message}`));
+    // A global form is answered with its folder in a header (as OpenCode's own app does).
+    const dir: unknown = req.form.location?.directory;
+    const where = req.sessionID === "global" && typeof dir === "string" ? { headers: { "x-opencode-directory": encodeURIComponent(dir) } } : undefined;
     if (r.kind === "answer") {
       const a = this.formAnswer(req, r);
       // A value OpenCode would refuse is not sent: the question comes back with the reason.
@@ -1350,9 +1357,9 @@ class OpenCode2Session implements EngineSession {
         this.notice(`form_invalid:${ascending("msg")}`, `${a.error}. Answer again.`);
         return void setTimeout(() => this.reqs.has(id) || this.askForm(req.form), 0);
       }
-      return call((c) => c.session.form.reply({ sessionID: req.sessionID, formID: id, answer: a.answer }));
+      return call((c) => c.session.form.reply({ sessionID: req.sessionID, formID: id, answer: a.answer }, where));
     }
-    if (r.kind !== "cancel" || r.message !== ANSWERED) call((c) => c.session.form.cancel({ sessionID: req.sessionID, formID: id }));
+    if (r.kind !== "cancel" || r.message !== ANSWERED) call((c) => c.session.form.cancel({ sessionID: req.sessionID, formID: id }, where));
   }
 
   /**
@@ -1657,6 +1664,11 @@ class OpenCode2EngineImpl implements Engine {
           // A form names its session inside the form.
           const sid: unknown = payload.properties.sessionID ?? payload.properties.form?.sessionID;
           if (typeof sid !== "string") return;
+          // OpenCode 2.3.0 creates an MCP elicitation with the session "global" (its folder is the event's location): the run waiting for that server's tool shows it.
+          if (sid === "global" && payload.type === "form.created" && dir) {
+            const owner = this.globalFormOwner(dir, payload.properties.form);
+            return owner?.event(payload.type, { ...payload.properties, form: { ...payload.properties.form, location: { directory: dir } } });
+          }
           const own = this.sessions.get(sid);
           if (own) return own.event(payload.type, payload.properties);
           const inline = this.inlineOwners.get(sid);
@@ -1674,6 +1686,18 @@ class OpenCode2EngineImpl implements Engine {
     // OpenCode lists a folder's built-in agents and commands before its own ones, then says `agent.updated`: an event sent before this stream opened is lost, so the
     // lists read before (a session create or the chooser) are read again once it is open.
     if (first) void this.server.streamReady().then(() => this.listsChanged(undefined));
+  }
+  /**
+   * The session that shows a global form of `dir`: the only one running there, else the only one running there with a call of the form's MCP server
+   * (`metadata.server`, tool key `<server>_<tool>`). None when that is not decided: the form is not shown (a guess could answer for the wrong run).
+   */
+  private globalFormOwner(dir: string, form: Json): OpenCode2Session | undefined {
+    const norm = (d: string) => d.replace(/[\\/]+$/, "");
+    const here = [...this.sessions.values()].filter((o) => norm(o.cwd) === norm(dir) && o.isRunning());
+    if (here.length === 1) return here[0];
+    const server = typeof form?.metadata?.server === "string" ? form.metadata.server.replace(/[^A-Za-z0-9_-]/g, "_") : undefined;
+    const waiting = server ? here.filter((o) => o.runningTools().some((n) => n.startsWith(`${server}_`))) : [];
+    return waiting.length === 1 ? waiting[0] : undefined;
   }
   remove(s: OpenCode2Session) {
     this.sessions.delete(s.id);

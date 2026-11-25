@@ -1118,8 +1118,8 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     await until(() => !!s.find("question"));
     const q = s.find("question")!;
     expect(q.questions).toEqual([
-      { question: "Pick a color?", header: "Color", options: [{ label: "Red", description: "r" }, { label: "Blue", description: "b" }], multiSelect: false },
-      { question: "Which?", header: "Pick", options: [{ label: "A", description: "a" }, { label: "B", description: "b" }], multiSelect: true },
+      { question: "Pick a color?", header: "Color", options: [{ label: "Red", description: "r" }, { label: "Blue", description: "b" }], multiSelect: false, optional: true },
+      { question: "Which?", header: "Pick", options: [{ label: "A", description: "a" }, { label: "B", description: "b" }], multiSelect: true, optional: true },
     ]);
     expect(q.toolUseId).toBe(s.find("tool_call")!.toolUseId);
     // A reconnect reads the session again: the question OpenCode still waits for stays open.
@@ -1140,10 +1140,10 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
   });
 
   // A form of OpenCode with these fields, asked by the turn (`kind` other than question: no call of the question tool).
-  const formTurn = (fields: object[], kind?: string) => {
+  const formTurn = (fields: object[], kind?: string, sessionID?: string) => {
     const file = join(mkdtempSync(join(tmpdir(), "oc2-form-")), "turn.json");
     const step = (event: string, data: object) => ({ event, data: { sessionID: "$SESSION", ...data } });
-    writeFileSync(file, JSON.stringify([step("session.execution.started", {}), step("session.step.started", { agent: "build", model: { id: "m", providerID: "fake" }, assistantMessageID: "$A1" }), { form: { fields, ...(kind && { kind }) } }, { wait: "form" }, step("session.step.ended", { assistantMessageID: "$A1", finish: "stop", tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0, files: [] }), step("session.execution.succeeded", {})]));
+    writeFileSync(file, JSON.stringify([step("session.execution.started", {}), step("session.step.started", { agent: "build", model: { id: "m", providerID: "fake" }, assistantMessageID: "$A1" }), { form: { fields, ...(kind && { kind }), ...(sessionID && { sessionID }) } }, { wait: "form" }, step("session.step.ended", { assistantMessageID: "$A1", finish: "stop", tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0, files: [] }), step("session.execution.succeeded", {})]));
     return file;
   };
   const opts = [{ value: "v1", label: "One", description: "first" }, { value: "v2", label: "Two" }];
@@ -1155,6 +1155,7 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     ["a hidden field is not shown and answers with its default", [{ key: "h", type: "string", title: "H", hidden: true, default: "dflt" }, { key: "a", type: "string", title: "A" }], undefined, [{ question: "A", header: "A", options: [], multiSelect: false, input: { type: "text" } }], { A: "x" }, { h: "dflt", a: "x" }],
     ["a field with a condition carries it and is left out of the answer when the condition fails", [{ key: "b", type: "boolean", title: "Deploy" }, { key: "w", type: "string", title: "Where", when: [{ key: "b", op: "eq", value: true }] }], undefined, [{ question: "Deploy", header: "Deploy", options: [{ label: "Yes", description: "" }, { label: "No", description: "" }], multiSelect: false }, { question: "Where", header: "Where", options: [], multiSelect: false, input: { type: "text" }, when: [{ question: "Deploy", op: "eq", value: "Yes" }] }], { Deploy: "No", Where: "prod" }, { b: false }],
     ["a field whose condition fails on a hidden field's default is not asked", [{ key: "h", type: "boolean", title: "H", hidden: true, default: false }, { key: "w", type: "string", title: "W", when: [{ key: "h", op: "eq", value: true }] }, { key: "a", type: "string", title: "A" }], undefined, [{ question: "A", header: "A", options: [], multiSelect: false, input: { type: "text" } }], { A: "x" }, { h: false, a: "x" }],
+    ["a field with required: true needs an answer: not optional", [{ key: "r", type: "string", title: "R", required: true }], undefined, [{ question: "R", header: "R", options: [], multiSelect: false, input: { type: "text" }, optional: false }], { R: "x" }, { r: "x" }],
     ["a field that depends on a later one comes after it", [{ key: "w", type: "string", title: "Why", when: [{ key: "k", op: "eq", value: "x" }] }, { key: "k", type: "string", title: "Kind", options: [{ value: "x", label: "X" }, { value: "y", label: "Y" }] }], undefined, [{ question: "Kind", header: "Kind", options: [{ label: "X", description: "" }, { label: "Y", description: "" }], multiSelect: false }, { question: "Why", header: "Why", options: [], multiSelect: false, input: { type: "text" }, when: [{ question: "Kind", op: "eq", value: "X" }] }], { Kind: "X", Why: "b" }, { k: "x", w: "b" }],
     ["a condition on a multi-select holds when the list includes the value (OpenCode 2's rule)", [{ key: "m", type: "multiselect", title: "M", options: opts }, { key: "w", type: "string", title: "W", when: [{ key: "m", op: "eq", value: "v1" }] }], undefined, [{ question: "M", header: "M", options: [{ label: "One", description: "first" }, { label: "Two", description: "" }], multiSelect: true }, { question: "W", header: "W", options: [], multiSelect: false, input: { type: "text" }, when: [{ question: "M", op: "eq", value: "One" }] }], { M: "One, Two", W: "k" }, { m: ["v1", "v2"], w: "k" }],
     ["a free text next to options carries the format; an infinite number default is no default", [{ key: "d", type: "string", title: "D", description: "When?", format: "date", custom: true, options: [{ value: "t", label: "Today" }] }, { key: "n", type: "number", title: "N", default: "Infinity" }], undefined, [{ question: "When?", header: "D", options: [{ label: "Today", description: "" }], multiSelect: false, input: { type: "date" } }, { question: "N", header: "N", options: [], multiSelect: false, input: { type: "number" } }], { "When?": "Today", N: "1" }, { d: "t", n: 1 }],
@@ -1172,11 +1173,24 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     await s.prompt("ask");
     await until(() => !!s.find("question"));
     const q = s.find("question")!;
-    expect(q.questions).toEqual(questions);
+    // OpenCode 2 enforces only `required: true`: every other field is optional (a row marks a required one with `optional: false`).
+    expect(q.questions).toEqual((questions as { optional?: boolean }[]).map(({ optional, ...x }) => ({ ...x, ...(optional === false ? {} : { optional: true }) })));
     if (kind) expect(q.toolUseId).toBe(q.requestId);
     await d.ok({ type: "question.respond", requestId: q.requestId, answers });
     await until(() => s.parts().some((p) => p.type === "turn_result"));
     expect(d.requests("POST", new RegExp(`/form/${q.requestId}/reply$`))[0]!.body).toEqual({ answer: body });
+  });
+
+  it("a global form of an MCP elicitation (session \"global\", 2.3.0) is shown by the run that waits and answered with its folder in a header", async () => {
+    const d = await boot({ env: { FAKE_OPENCODE2_SCRIPT: formTurn([{ key: "due", type: "string", title: "Due", format: "date", required: true }, { key: "note", type: "string", title: "Note" }], "mcp-elicitation", "global") } });
+    const s = await d.open();
+    await s.prompt("ask");
+    await until(() => !!s.find("question"));
+    const q = s.find("question")!;
+    expect(q.questions.map((x) => [x.question, x.optional ?? false, x.input?.type])).toEqual([["Due", false, "date"], ["Note", true, "text"]]);
+    await d.ok({ type: "question.respond", requestId: q.requestId, answers: { Due: "2026-12-01", Note: "" } });
+    await until(() => s.parts().some((p) => p.type === "turn_result"));
+    expect(d.requests("POST", /\/session\/global\/form\/[^/]+\/reply$/)[0]!.body).toEqual({ answer: { due: "2026-12-01" } });
   });
 
   it("a number or string that breaks its rule is not sent: a warning names the field and the question comes back", async () => {
