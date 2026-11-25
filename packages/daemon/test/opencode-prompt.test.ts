@@ -140,6 +140,22 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     expect(sent.model).toBeUndefined();
   });
 
+  it("an @<subagent> in a prompt adds an agent part with its offsets, the session agent stays; the agents part lists the subagents", async () => {
+    const d = await boot({ script: ["text", "text"] });
+    const s = await d.open();
+    await until(() => !!s.find("agents"));
+    expect(s.find("agents")!.subagents).toEqual([{ name: "general" }]);
+    await s.prompt("@general look");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 1);
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result"));
+    await s.prompt("plain @nobody");
+    await until(() => d.requests("POST", `/session/${s.id}/prompt_async`).length === 2);
+    const [first, second] = d.requests("POST", `/session/${s.id}/prompt_async`).map((r) => r.body);
+    expect(first).toMatchObject({ agent: "build", parts: [{ type: "text", text: "@general look" }, { type: "agent", name: "general", source: { value: "@general", start: 0, end: 8 } }] });
+    expect(first.parts[1].id).toMatch(/^prt_/);
+    expect(second.parts.map((p: { type: string }) => p.type)).toEqual(["text"]);
+  });
+
   it("the visualize skill goes as `system` of a prompt while the setting is on, not when it is off", async () => {
     const d = await boot({ script: ["text", "text"] });
     const s = await d.open();

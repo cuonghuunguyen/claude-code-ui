@@ -310,7 +310,11 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     },
     forkForAside: (owner, title) => forkForAside(owner, title).catch((err) => Promise.reject(failure(err))),
     commands: (cwd) => engine.commands(cwd),
-    agents: async (cwd) => (await engine.primaryFirst(cwd)).map(({ id, description }) => ({ name: id, ...(description && { description }) })),
+    agents: async (cwd) => {
+      const info = ({ id, description }: { id: string; description?: string }) => ({ name: id, ...(description && { description }) });
+      const both = await engine.agentSets(cwd);
+      return { agents: both.primary.map(info), subagents: both.subagents.map(info) };
+    },
     models: (cwd) => engine.modelInfos(cwd),
   };
 }

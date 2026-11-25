@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeMention, insertAtCaret, insertCommand, insertMention, splitUploads } from "./mentions.ts";
+import { activeMention, insertAtCaret, insertCommand, insertMention, matchAgents, splitUploads } from "./mentions.ts";
 
 describe("activeMention", () => {
   it("is the @word that ends at the caret, at the start or after whitespace", () => {
@@ -78,5 +78,15 @@ describe("insertCommand", () => {
     // A leading file path is no command: it stays.
     expect(insertCommand("/etc/hosts is wrong", "/name")).toEqual({ text: "/name /etc/hosts is wrong", caret: 6 });
     expect(insertCommand("", "/name")).toEqual({ text: "/name ", caret: 6 });
+  });
+});
+
+describe("matchAgents", () => {
+  const list = [{ name: "general" }, { name: "explore" }, { name: "deep-explorer" }];
+  it("lists all for an empty query, names that start with it first, then names that contain it; none for a path", () => {
+    expect(matchAgents(list, "").map((a) => a.name)).toEqual(["general", "explore", "deep-explorer"]);
+    expect(matchAgents(list, "EX").map((a) => a.name)).toEqual(["explore", "deep-explorer"]);
+    expect(matchAgents(list, "explore/")).toEqual([]);
+    expect(matchAgents(list, "explore.md")).toEqual([]);
   });
 });

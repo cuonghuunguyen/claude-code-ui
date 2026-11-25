@@ -721,6 +721,8 @@ export default {
   "app.main.worktreeNotCreated": "Chưa tạo được worktree: {message}",
   "app.main.openProject": "Mở dự án",
   "app.prompt.commandsAndSkills": "Lệnh và skill",
+  "app.prompt.agentsAndFiles": "Agent và tệp",
+  "app.prompt.subagent": "subagent",
   "app.prompt.shellCommand": "Lệnh shell",
   "app.prompt.bashQueue": "Xếp lệnh shell vào hàng đợi: lệnh chạy khi công việc hiện tại kết thúc",
   "app.prompt.bashRun": "Chạy lệnh shell (Esc để thoát)",

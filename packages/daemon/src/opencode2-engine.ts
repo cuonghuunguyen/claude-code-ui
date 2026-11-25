@@ -5,7 +5,7 @@
 import { limitOfFailure, type LimitStop } from "./opencode-limit.ts";
 import { randomUUID } from "node:crypto";
 import type { OpenCodeClient } from "@opencode/client";
-import { checkAnswer, permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type Part, type PermissionMode, type PermissionUpdate, type Question, type QuestionInput, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
+import { agentMentions, checkAnswer, permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type Part, type PermissionMode, type PermissionUpdate, type Question, type QuestionInput, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT } from "./aside.ts";
 import { DAEMON_SERVER } from "./daemon-mcp.ts";
 import { DeniedRetryError } from "./denied-retry.ts";
@@ -87,6 +87,8 @@ export const modeOfRules = (rules: readonly Rule2[] | undefined): PermissionMode
 export type Agent2 = { id: string; name?: string; description?: string; mode?: string; hidden?: boolean; permissions?: Rule2[] };
 /** The agents a user chooses from (OpenCode's own filter): primary or all, not hidden. */
 export const primaryAgents2 = (list: readonly Agent2[]) => list.filter((a) => !a.hidden && a.mode !== "subagent");
+/** The agents a prompt can `@`-mention: not hidden, mode subagent or all. */
+export const subagents2 = (list: readonly Agent2[]) => list.filter((a) => !a.hidden && (a.mode === "subagent" || a.mode === "all"));
 /** An agent's denials: from its first deny of an action on, every rule of that action (so the exceptions after it hold: plan's plan-file `edit` allow). */
 export const denialsOf2 = (rules: readonly Rule2[]): Rule2[] => {
   const first = new Map<string, number>();
@@ -597,9 +599,10 @@ class OpenCode2Session implements EngineSession {
   };
   /** The `agents` part, the default agent first; `failed: true` when OpenCode did not answer (the web offers a retry, which calls this again). */
   refreshAgents = async () => {
-    const list = await this.engine.primaryFirst(this.cwd).catch(() => undefined);
-    if (!list) return void this.session.emit({ type: "agents", id: "agents", agents: [], failed: true });
-    this.session.emit({ type: "agents", id: "agents", agents: list.map(({ id, description }) => ({ name: id, ...(description && { description }) })) });
+    const both = await this.engine.agentSets(this.cwd).catch(() => undefined);
+    if (!both) return void this.session.emit({ type: "agents", id: "agents", agents: [], failed: true });
+    const info = ({ id, description }: Agent2) => ({ name: id, ...(description && { description }) });
+    this.session.emit({ type: "agents", id: "agents", agents: both.primary.map(info), subagents: both.subagents.map(info) });
   };
 
   settings(): SessionSettings {
@@ -1017,12 +1020,16 @@ class OpenCode2Session implements EngineSession {
     const live = () => this.stops === stops;
     const client = await this.server.client();
     if (!(await this.prepare(client, live))) return;
+    // `@<subagent>` tokens of a plain prompt (text not starting with `/`): recorded on the message with their offsets; the session's agent stays. Read before the turn counts as posted; no list (OpenCode unreachable): no mention.
+    const names = text.includes("@") && !text.trimStart().startsWith("/") ? subagents2(await this.engine.agents(this.cwd).catch(() => [])).map((a) => a.id) : [];
+    if (!live()) return;
     this.turnPosted = true;
     const files = images.map((uri) => ({ uri, source: { type: "inline" as const }, name: "image" }));
     // A hidden message for the model right before the prompt: `resume: false` starts no turn of its own, the prompt's turn reads it.
     if (directive) await client.session.synthetic({ sessionID: this.id, text: directive, delivery: "steer", resume: false });
+    const agents = agentMentions(text, names).map((m) => ({ name: m.name, mention: { start: m.start, end: m.end, text: m.value } }));
     this.posts++;
-    const post = client.session.prompt({ sessionID: this.id, id: messageID, text, ...(files.length && { files }) });
+    const post = client.session.prompt({ sessionID: this.id, id: messageID, text, ...(files.length && { files }), ...(agents.length && { agents }) });
     this.posting.add(post);
     try {
       await post;
@@ -2068,6 +2075,11 @@ class OpenCode2EngineImpl implements Engine {
     })();
     this.defaults.set(cwd, { at: Date.now(), name });
     return name;
+  }
+  /** The primary agents (default first) and the subagents of a folder, from the one cached agent list. */
+  async agentSets(cwd: string): Promise<{ primary: Agent2[]; subagents: Agent2[] }> {
+    const primary = await this.primaryFirst(cwd);
+    return { primary, subagents: subagents2(await this.agents(cwd)) };
   }
   /** The primary agents of a folder, the default agent first (the chooser preselects the first). */
   async primaryFirst(cwd: string): Promise<Agent2[]> {

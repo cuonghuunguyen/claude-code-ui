@@ -78,7 +78,7 @@ export interface EngineCatalogue {
   /** A fork of the session for an Aside, or the reason there is none. Throws when the fork failed. */
   forkForAside(owner: Session, title: string): Promise<{ id: string } | { unavailable: string }>;
   commands(cwd: string): Promise<SlashCommand[]>;
-  agents(cwd: string): Promise<{ name: string; description?: string }[]>;
+  agents(cwd: string): Promise<{ agents: { name: string; description?: string }[]; subagents?: { name: string; description?: string }[] }>;
   models(cwd?: string): Promise<ModelInfo[]>;
   /** One of the Engine's sessions went idle, was closed by a worktree remove, or was deleted. */
   settled?(): void;

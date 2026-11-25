@@ -123,7 +123,7 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
       if (typeof msg.sessionId === "string") void (await find(r, msg.sessionId))?.refreshAgents();
       const catalogue = catalogues.byName(msg.engine ?? DEFAULT_ENGINE);
       if (!catalogue) return r.fail("bad_request", `no engine ${msg.engine}`);
-      return r.reply({ agents: await catalogue.agents(cwd) });
+      return r.reply(await catalogue.agents(cwd));
     } catch (e) {
       return r.fail("agents_failed", (e as Error).message);
     }

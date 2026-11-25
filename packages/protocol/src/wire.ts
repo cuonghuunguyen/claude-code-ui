@@ -678,7 +678,7 @@ export type DefaultModeResult = { mode: PermissionMode };
 /** session.commands. */
 export type CommandsResult = { commands: SlashCommand[] };
 /** session.agents. */
-export type AgentsResult = { agents: AgentInfo[] };
+export type AgentsResult = { agents: AgentInfo[]; /** OpenCode subagents for the `@` picker; absent for Claude. */ subagents?: AgentInfo[] };
 export type UploadResult = { path: string };
 /** fs.upload / session.create `draft`: a secret token, 32 random bytes as lowercase hex. */
 export const DRAFT_TOKEN = /^[0-9a-f]{64}$/;

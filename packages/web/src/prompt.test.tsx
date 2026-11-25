@@ -477,6 +477,30 @@ it("the @-mention picker searches again once the daemon reconnects", async () =>
   expect(el.querySelector('[data-testid="mention-picker"]')?.textContent).toContain("spec.md");
 });
 
+it("GH-983: the @-mention picker lists OpenCode subagents above files; Enter inserts `@name `; a Claude view has no agent row", async () => {
+  const onSearch = async () => ["explore.md", "docs/spec.md"];
+  const view = { ...emptySession(), subagents: [{ name: "explore", description: "Fast read-only search" }, { name: "general" }] };
+  const { el, box, $ } = await render({ onSearch }, view);
+  await type(box, "@ex");
+  const options = () => [...el.querySelectorAll("[role=option]")].map((o) => o.textContent);
+  expect(options()).toEqual(["@exploreFast read-only search", "@explore.md", "@docs/spec.md"]);
+  expect(el.querySelector('[data-testid="mention-picker"]')?.getAttribute("aria-label")).toBe("Agents and files");
+  expect(el.querySelector('[data-testid="mention-agent"]')?.getAttribute("aria-label")).toBe("@explore, subagent: Fast read-only search");
+  await key(box, { key: "Enter" });
+  expect(box.value).toBe("@explore ");
+  expect($("mention-picker")).toBeNull();
+  // A file row below the agent row: ArrowDown reaches it and Enter inserts that path.
+  await type(box, "@ex");
+  await key(box, { key: "ArrowDown" });
+  await key(box, { key: "Enter" });
+  expect(box.value).toBe("@explore.md ");
+  unmount();
+  const claude = await render({ onSearch }, emptySession());
+  await type(claude.box, "@ex");
+  expect(claude.el.querySelectorAll('[data-testid="mention-agent"]')).toHaveLength(0);
+  expect(claude.el.querySelector('[data-testid="mention-picker"]')?.getAttribute("aria-label")).toBe("Files");
+});
+
 it("on a touch screen a stop does not move focus to the prompt box (no soft keyboard)", async () => {
   const mm = window.matchMedia;
   window.matchMedia = ((q: string) => ({ matches: q.includes("pointer: coarse"), media: q, addEventListener() {}, removeEventListener() {} })) as never;

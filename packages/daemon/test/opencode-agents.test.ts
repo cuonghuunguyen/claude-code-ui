@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentOf, denialsOf, modeBlock, modeOf, primaryAgents, type OpenCodeAgent, type Rule } from "../src/opencode-engine.ts";
+import { agentOf, denialsOf, modeBlock, modeOf, primaryAgents, subagents, type OpenCodeAgent, type Rule } from "../src/opencode-engine.ts";
 
 const r = (permission: string, pattern: string, action: Rule["action"]): Rule => ({ permission, pattern, action });
 const flat = (rules: Rule[]) => rules.map((x) => `${x.permission}:${x.pattern}:${x.action}`);
@@ -24,6 +24,8 @@ describe("OpenCode agents", () => {
       { name: "any", mode: "all", hidden: null, permission: [] },
     ];
     expect(primaryAgents(list).map((a) => a.name)).toEqual(["build", "plan", "review", "any"]);
+    // The `@` picker: subagents and mode `all`; never hidden or primary-only.
+    expect(subagents(list).map((a) => a.name)).toEqual(["explore", "general", "helper", "any"]);
   });
 
   it("denialsOf returns plan's edit rules in order and nothing for build", () => {

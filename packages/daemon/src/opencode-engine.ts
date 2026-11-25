@@ -2,7 +2,7 @@
 // stream of the server feeds every open session; prompts, permissions and questions go back as HTTP calls.
 import { limitOfApiError, type LimitStop } from "./opencode-limit.ts";
 import { randomUUID } from "node:crypto";
-import { permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
+import { agentMentions, permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT } from "./aside.ts";
 import { DeniedRetryError } from "./denied-retry.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
@@ -32,6 +32,8 @@ export type Rule = { permission: string; pattern: string; action: "allow" | "ask
 export type OpenCodeAgent = { name: string; description?: string; mode?: string; hidden?: boolean | null; permission: Rule[] };
 /** The agents a user chooses from (OpenCode's own filter): primary or all, not hidden. */
 export const primaryAgents = (list: OpenCodeAgent[]) => list.filter((a) => !a.hidden && a.mode !== "subagent");
+/** The agents a prompt can `@`-mention: not hidden, not primary-only (mode subagent or all). */
+export const subagents = (list: OpenCodeAgent[]) => list.filter((a) => !a.hidden && (a.mode === "subagent" || a.mode === "all"));
 /**
  * The rules of `permission` that must win over the permission mode: for each key, its deny rules and the rules that follow its first deny (the
  * exceptions to it: plan's plan-file `edit` allow). An agent's allow rules before that (`bash * allow`) are not appended: they would turn
@@ -418,9 +420,10 @@ class OpenCodeSession implements EngineSession {
 
   /** The `agents` part; `failed: true` when OpenCode did not answer (the web offers a retry, which calls this again). Never waits for the caller. */
   refreshAgents = async () => {
-    const list = await this.engine.primaryFirst(this.cwd).catch(() => undefined);
-    if (!list) return void this.session.emit({ type: "agents", id: "agents", agents: [], failed: true });
-    this.session.emit({ type: "agents", id: "agents", agents: list.map(({ name, description }) => ({ name, ...(description && { description }) })) });
+    const both = await this.engine.agentSets(this.cwd).catch(() => undefined);
+    if (!both) return void this.session.emit({ type: "agents", id: "agents", agents: [], failed: true });
+    const info = ({ name, description }: OpenCodeAgent) => ({ name, ...(description && { description }) });
+    this.session.emit({ type: "agents", id: "agents", agents: both.primary.map(info), subagents: both.subagents.map(info) });
   };
   private emitAgents = () => this.refreshAgents();
 
@@ -757,8 +760,11 @@ class OpenCodeSession implements EngineSession {
           .catch(unlessStopped);
         return;
       }
+      // `@<subagent>` tokens of a plain prompt (not a `/visualize` directive): an agent part each, after the text; the session's agent stays.
+      const mentioned = text.trimStart().startsWith("/") ? [] : agentMentions(text, subagents(await known).map((a) => a.name));
       const parts = [
         ...(text ? [{ id: ascending("prt"), type: "text", text }] : []),
+        ...mentioned.map((m) => ({ id: ascending("prt"), type: "agent", name: m.name, source: { value: m.value, start: m.start, end: m.end } })),
         ...images.map((url) => ({ type: "file", mime: dataUrlMime(url), url, filename: "image" })),
       ];
       // No caller timeout: a slow answer (a cold folder) is not a failed prompt; the turn runs whatever the answer's delay.
@@ -1595,6 +1601,11 @@ class OpenCodeEngineImpl implements Engine {
   async primaryFirst(cwd: string): Promise<OpenCodeAgent[]> {
     const [list, first] = [primaryAgents(await this.agents(cwd)), await this.defaultAgent(cwd)];
     return [...list.filter((a) => a.name === first), ...list.filter((a) => a.name !== first)];
+  }
+  /** The primary agents (default first) and the subagents of a folder, from the one cached `GET /agent`. */
+  async agentSets(cwd: string): Promise<{ primary: OpenCodeAgent[]; subagents: OpenCodeAgent[] }> {
+    const primary = await this.primaryFirst(cwd);
+    return { primary, subagents: subagents(await this.agents(cwd)) };
   }
   /** `GET /agent` of a folder (project agents differ per folder), cached 60 s; dropped when the server restarts. */
   agents(cwd: string): Promise<OpenCodeAgent[]> {

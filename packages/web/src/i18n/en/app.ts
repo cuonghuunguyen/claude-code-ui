@@ -719,6 +719,8 @@ export default {
   "app.main.worktreeNotCreated": "Worktree not created: {message}",
   "app.main.openProject": "Open project",
   "app.prompt.commandsAndSkills": "Commands and skills",
+  "app.prompt.agentsAndFiles": "Agents and files",
+  "app.prompt.subagent": "subagent",
   "app.prompt.shellCommand": "Shell command",
   "app.prompt.bashQueue": "Queue a shell command: it runs when the current work ends",
   "app.prompt.bashRun": "Run a shell command (Esc to exit)",
