@@ -12,6 +12,10 @@ describe("agentMentions", () => {
   it("is no mention for a folder, a file, a longer name, an email-like prefix or an unknown name", () => {
     for (const t of ["@explore/src", "@explore.md", "@explorer", "a@explore", "@nobody"]) expect(at(t)).toEqual([]);
   });
+  it("accepts an opening bracket or quote before, and an ellipsis after", () => {
+    expect(at('(@explore) "@general"')).toEqual([["explore", 1, 9, "@explore"], ["general", 12, 20, "@general"]]);
+    expect(at("@explore...")).toEqual([["explore", 0, 8, "@explore"]]);
+  });
   it("keeps the first occurrence per name only", () => {
     expect(at("@explore and @explore")).toEqual([["explore", 0, 8, "@explore"]]);
   });

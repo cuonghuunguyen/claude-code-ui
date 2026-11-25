@@ -2,7 +2,7 @@
 export type AgentMention = { name: string; start: number; end: number; value: string };
 
 const NAME_CHAR = /[\w.-]/;
-const AFTER = /[\s.,;:!?)\]]/;
+const AFTER = /[\s.,;:!?)\]"']/;
 
 /** The ranges of pasted-content blocks (the CLI's wrapper around a pasted text): a mention inside is not one. */
 const pastedRanges = (text: string): [number, number][] => {
@@ -19,7 +19,7 @@ const pastedRanges = (text: string): [number, number][] => {
 
 /**
  * The `@<name>` tokens of OpenCode subagents in a prompt, the first of each name, in order of appearance. A token starts the text or follows
- * whitespace, and ends the text, whitespace or one of `.,;:!?)]`. `@name/` (a folder), `@name.ext` (a file), `@names` and `a@name` are no mention.
+ * whitespace or one of `(["'`, and ends the text, whitespace or one of `.,;:!?)]"'`. `@name/` (a folder), `@name.ext` (a file), `@names` and `a@name` are no mention.
  * One rule for the daemon (the part sent to OpenCode) and the web (the bubble).
  */
 export function agentMentions(text: string, names: readonly string[]): AgentMention[] {
@@ -29,7 +29,7 @@ export function agentMentions(text: string, names: readonly string[]): AgentMent
   const out: AgentMention[] = [];
   const seen = new Set<string>();
   for (let at = text.indexOf("@"); at >= 0; at = text.indexOf("@", at + 1)) {
-    if (at > 0 && !/\s/.test(text[at - 1]!)) continue;
+    if (at > 0 && !/[\s(["']/.test(text[at - 1]!)) continue;
     if (skip.some(([a, b]) => at >= a && at < b)) continue;
     let end = at + 1;
     while (end < text.length && NAME_CHAR.test(text[end]!)) end++;
@@ -45,7 +45,7 @@ export function agentMentions(text: string, names: readonly string[]): AgentMent
     const next = text[end];
     if (next !== undefined && !AFTER.test(next)) continue;
     // `@name.` at a word: a dot followed by a name character is a file extension (`@explore.md`).
-    if (next === "." && end + 1 < text.length && NAME_CHAR.test(text[end + 1]!)) continue;
+    if (next === "." && end + 1 < text.length && /[\w-]/.test(text[end + 1]!)) continue;
     if (seen.has(name)) continue;
     seen.add(name);
     out.push({ name, start: at, end, value: `@${name}` });

@@ -489,6 +489,11 @@ it("GH-983: the @-mention picker lists OpenCode subagents above files; Enter ins
   await key(box, { key: "Enter" });
   expect(box.value).toBe("@explore ");
   expect($("mention-picker")).toBeNull();
+  // A file row below the agent row: ArrowDown reaches it and Enter inserts that path.
+  await type(box, "@ex");
+  await key(box, { key: "ArrowDown" });
+  await key(box, { key: "Enter" });
+  expect(box.value).toBe("@explore.md ");
   unmount();
   const claude = await render({ onSearch }, emptySession());
   await type(claude.box, "@ex");

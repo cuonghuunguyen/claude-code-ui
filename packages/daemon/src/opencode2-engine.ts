@@ -1020,12 +1020,13 @@ class OpenCode2Session implements EngineSession {
     const live = () => this.stops === stops;
     const client = await this.server.client();
     if (!(await this.prepare(client, live))) return;
+    // `@<subagent>` tokens of a plain prompt (text not starting with `/`): recorded on the message with their offsets; the session's agent stays. Read before the turn counts as posted; no list (OpenCode unreachable): no mention.
+    const names = text.includes("@") && !text.trimStart().startsWith("/") ? subagents2(await this.engine.agents(this.cwd).catch(() => [])).map((a) => a.id) : [];
+    if (!live()) return;
     this.turnPosted = true;
     const files = images.map((uri) => ({ uri, source: { type: "inline" as const }, name: "image" }));
     // A hidden message for the model right before the prompt: `resume: false` starts no turn of its own, the prompt's turn reads it.
     if (directive) await client.session.synthetic({ sessionID: this.id, text: directive, delivery: "steer", resume: false });
-    // `@<subagent>` tokens of a plain prompt: recorded on the message with their offsets; the session's agent stays. No list (OpenCode unreachable): no mention.
-    const names = text.trimStart().startsWith("/") ? [] : subagents2(await this.engine.agents(this.cwd).catch(() => [])).map((a) => a.id);
     const agents = agentMentions(text, names).map((m) => ({ name: m.name, mention: { start: m.start, end: m.end, text: m.value } }));
     this.posts++;
     const post = client.session.prompt({ sessionID: this.id, id: messageID, text, ...(files.length && { files }), ...(agents.length && { agents }) });
