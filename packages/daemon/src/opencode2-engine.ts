@@ -205,7 +205,7 @@ class OpenCode2Session implements EngineSession {
   private permissionMode: PermissionMode;
   private effort: Effort;
   staleLogin = false;
-  private readonly mapper = new OpenCode2Mapper();
+  private readonly mapper = new OpenCode2Mapper({ todos: true });
   /** The rules OpenCode has for this session, as JSON. */
   private written: string;
   /** The model or effort changed here since it was last sent to OpenCode (or the session was made with one). */

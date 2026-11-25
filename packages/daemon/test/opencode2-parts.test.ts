@@ -91,3 +91,50 @@ it("a Fork card that ends live keeps the start time of its running card (the end
     vi.useRealTimers();
   }
 });
+
+const TODOS = [
+  { content: "a", status: "pending" },
+  { content: "b", status: "in_progress" },
+  { content: "c", status: "completed" },
+  { content: "d", status: "cancelled" },
+  { content: "", status: "pending" },
+  { content: "e", status: "weird" },
+];
+const ITEMS = [
+  { content: "a", status: "pending" },
+  { content: "b", status: "in_progress" },
+  { content: "c", status: "completed" },
+  { content: "d", status: "completed" },
+  { content: "e", status: "pending" },
+];
+
+it("a completed todowrite call of the session is also a todo_update, live; a failed one is not", () => {
+  const m = new OpenCode2Mapper({ todos: true });
+  const run = (id: string, end: string) => {
+    const before = [...m.event("session.tool.input.started", { ...base, id, name: "todowrite" }), ...m.event("session.tool.called", { ...base, id, input: { todos: TODOS } })];
+    return { before, after: m.event(end, { ...base, id, content: [], error: { message: "x" }, metadata: {} }) };
+  };
+  const ok = run("call_t", "session.tool.success");
+  expect(ok.before.some((p) => p.type === "todo_update")).toBe(false);
+  const card = ok.after.find((p) => p.type === "tool_call") as any;
+  expect(card.tool).toBe("TodoWrite");
+  expect(card.input.todos).toEqual(ITEMS);
+  expect(ok.after.some((p) => p.type === "tool_result")).toBe(true);
+  expect(ok.after.find((p) => p.type === "todo_update")).toEqual({ type: "todo_update", id: "call_t:todos", items: ITEMS });
+  expect(run("call_u", "session.tool.failed").after.some((p) => p.type === "todo_update")).toBe(false);
+});
+
+it("a completed todowrite call in history is a todo_update with the same id", () => {
+  const msg: OpenCode2Message = { id: A, type: "assistant", content: [{ type: "tool", id: "call_t", name: "todowrite", state: { status: "completed", input: { todos: TODOS }, content: [] }, time: { created: 1 } }] };
+  const parts = new OpenCode2Mapper({ todos: true }).history([msg]);
+  expect(parts.find((p) => p.type === "todo_update")).toEqual({ type: "todo_update", id: "call_t:todos", items: ITEMS });
+});
+
+it("a mapper without the todos option (inline and Fork runs) emits no todo_update", () => {
+  const m = new OpenCode2Mapper();
+  m.event("session.tool.input.started", { ...base, id: "call_t", name: "todowrite" });
+  m.event("session.tool.called", { ...base, id: "call_t", input: { todos: TODOS } });
+  const parts = m.event("session.tool.success", { ...base, id: "call_t", content: [], metadata: {} });
+  expect(parts.some((p) => p.type === "todo_update")).toBe(false);
+  expect(parts.some((p) => p.type === "tool_call")).toBe(true);
+});
