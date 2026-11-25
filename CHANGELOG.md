@@ -2,6 +2,32 @@
 
 All notable changes to `claude-code-ui` (npm). Versions follow [Semantic Versioning](https://semver.org/).
 
+## 1.6.0 - 2026-11-25
+
+### Added
+
+- OpenCode: `/clear`, `/new` and `/reset` start a new session with the model, agent, permission mode and effort of the old one; the old session stays in the list ([#972](https://github.com/cuonghuunguyen/claude-code-ui/issues/972)).
+- OpenCode 2: a subagent card shows the steps of the subagent, including its permission asks, stays running until OpenCode ends it, and **Stop agent** interrupts it; its background commands show in **Shells** ([#975](https://github.com/cuonghuunguyen/claude-code-ui/issues/975), [#977](https://github.com/cuonghuunguyen/claude-code-ui/issues/977)).
+- OpenCode: inline task steps and the **Denied** mark stay after a reload ([#980](https://github.com/cuonghuunguyen/claude-code-ui/issues/980)).
+- OpenCode 2: the todo list shows in the todo dock, live and in history ([#974](https://github.com/cuonghuunguyen/claude-code-ui/issues/974)).
+- OpenCode 2: question forms have typed fields (date, date and time, email, URL, number, range and more) with an error line and a blocked **Submit** until valid; a form from an MCP server reaches the right session ([#976](https://github.com/cuonghuunguyen/claude-code-ui/issues/976)).
+- OpenCode: a retry line shows the link that OpenCode gives with the reason (OpenCode 1) ([#982](https://github.com/cuonghuunguyen/claude-code-ui/issues/982)).
+- OpenCode: after a provider usage or rate limit, the session continues when the limit resets, at most 3 tries ([#973](https://github.com/cuonghuunguyen/claude-code-ui/issues/973)).
+- OpenCode: `@` in the prompt box lists the subagents; a mentioned subagent gets the task ([#983](https://github.com/cuonghuunguyen/claude-code-ui/issues/983)).
+- OpenCode: the MCP dialog adds and removes servers of the user config next to the Project ones; Plugins uninstalls plugins of the user config ([#978](https://github.com/cuonghuunguyen/claude-code-ui/issues/978)).
+- Commit message generator: **Settings › Git** picks Claude or OpenCode and the model of each; a Project can override them. When Claude is not logged in, OpenCode writes the message if its model is set ([#984](https://github.com/cuonghuunguyen/claude-code-ui/issues/984)).
+- Sidebar: **Create worktree** for any Side of a merged repository group, from the group menu and from the main row of each Side ([#991](https://github.com/cuonghuunguyen/claude-code-ui/issues/991)).
+
+### Changed
+
+- Sidebar: rows show the branch only; the kind (main checkout or worktree) and the Side are icons, with the details in the tooltip. Main checkouts come first, and worktrees without sessions take one line ([#986](https://github.com/cuonghuunguyen/claude-code-ui/issues/986)).
+- Sidebar: **Clean up** of a merged repository group covers the worktrees and workers of every Side, and the group menu has **Project settings** for each Side ([#986](https://github.com/cuonghuunguyen/claude-code-ui/issues/986)).
+- The web app opens faster: **Find in files** loads when first opened, and the first load is about 30 KB smaller.
+
+### Fixed
+
+- OpenCode: **Stop** no longer leaves a question or permission card that nobody can answer and that blocks an OpenCode restart.
+
 ## 1.5.0 - 2026-11-23
 
 ### Added

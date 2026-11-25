@@ -15,6 +15,7 @@ Three dialogs manage Claude Code's MCP servers, skills and plugins, the same way
 - See each server and its status. Open one to see its tools.
 - Turn a server on or off, reconnect it, sign in to it, or remove it.
 - **Add MCP server:** give a name, pick the **Transport** (stdio, SSE or HTTP) and the **Scope**, then **Add server**.
+- OpenCode sessions: the dialog also offers the **User** scope, the global OpenCode config. See [OpenCode engine](opencode).
 - If a server needs a browser sign-in, finish it and paste the **Callback URL** back into the dialog when asked.
 
 ## Slash commands

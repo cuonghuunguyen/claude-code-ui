@@ -33,13 +33,13 @@ Khi Claude đang làm việc, lệnh `!` chờ trong hàng đợi như một tin
 - Gõ `/` để liệt kê lệnh và skill. Chọn một mục bằng phím mũi tên và <kbd>Enter</kbd>. <kbd>Tab</kbd> chèn nó vào.
 - Lệnh `/command` cũng dùng được giữa tin nhắn, như trong Claude Code.
 - Một số lệnh mở hộp thoại thay vì được gửi: `/mcp`, `/skills` (hoặc `/help`), `/plugins`, `/resume`. Xem [MCP, skill & plugin](/vi/features/config-dialogs).
-- `/clear` bắt đầu một phiên mới trong cùng tab.
+- `/clear` bắt đầu một phiên mới trong cùng tab. Trong phiên OpenCode, `/new` và `/reset` cũng vậy; phiên mới giữ model, agent, chế độ quyền và effort.
 - `/btw <question>` đặt một [câu hỏi bên lề](/vi/features/aside) trong cửa sổ nổi, kể cả khi Claude đang làm việc.
 - `/tasks` (hoặc `/bashes`) mở danh sách [Shell nền](/vi/features/background-shells).
 
 ## Tệp và ảnh {#files-and-images}
 
-- Gõ `@` và một phần tên tệp để nhắc đến tệp.
+- Gõ `@` và một phần tên tệp để nhắc đến tệp. Trong phiên OpenCode, danh sách bắt đầu bằng các subagent (ví dụ `explore`); subagent được nhắc đến sẽ nhận việc ([Engine OpenCode](opencode)).
 - Dán hoặc thả ảnh vào hộp, hoặc bấm **+** (**Thêm ảnh và tệp**). PNG, JPEG, GIF và WebP được gửi đến Claude dưới dạng ảnh.
 - Các tệp khác được tải lên và thêm vào prompt dưới dạng đường dẫn.
 - Tệp bạn đã sao chép trong Explorer hoặc Finder cũng dùng được: dán (<kbd>Ctrl</kbd>+<kbd>V</kbd>, <kbd>⌘</kbd> <kbd>V</kbd> trên Mac) hoặc kéo thả vào hộp. Thư mục bị bỏ qua với thông báo "Không thể đính kèm thư mục; hãy nhắc đến thư mục bằng @." và các tệp khác vẫn được đính kèm.

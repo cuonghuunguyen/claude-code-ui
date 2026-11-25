@@ -21,6 +21,10 @@ In [Changes](changes), mode **Uncommitted**, a commit box sits above the file li
 
 **Generate commit message** asks Claude with a built-in instruction. Change it in **Settings › Git › Commit message instruction**. The same group has **Commit message instruction for** *project*, which wins for that project. Empty: the built-in text. See [Settings › Git](../reference/settings#git).
 
+### Commit message engine
+
+**Settings › Git** picks the engine that writes the message: Claude (default, model `haiku`) or OpenCode (needs an OpenCode model). A Project can override the engine and both models in its Project settings; this works on Sides and worktrees too. OpenCode writes in a temporary session without tools; the session is deleted afterwards. If Claude is not logged in and an OpenCode model is set, OpenCode writes the message once and the box shows "Generated with OpenCode". With the engine OpenCode and no model, the commit box shows a hint with a link to the setting.
+
 ## Roll back changes
 
 **Rollback** puts files back to the last commit.

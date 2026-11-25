@@ -47,6 +47,14 @@ Tóm tắt ticket dài sẽ được rút ngắn, nên tên được tạo luôn
 
 **Shift+click** vào nút, hoặc chọn **Worktree mới** trong menu dự án, để tạo ngay một worktree với tên tự tạo.
 
+### Nhóm kho gộp {#merged-repository-group}
+
+Một kho mở trên nhiều Side hiện thành một nhóm trong thanh bên. Dòng chỉ hiện nhánh. Biểu tượng cho biết loại (ngôi nhà: checkout chính, nhánh: worktree) và, trong nhóm gộp, Side; tooltip có Side, loại, tên nhánh đầy đủ và đường dẫn. Checkout chính của mọi Side nằm trước. Worktree chưa có phiên chiếm một dòng; bấm vào mở phiên mới trong đó.
+
+- Menu nhóm có **Cài đặt dự án · *Side*…** và **Tạo worktree · *Side*…** cho từng Side. Dòng chính của mỗi Side có **Tạo worktree…** và **Dọn dẹp** riêng. Nút **+ worktree** dùng Side đầu tiên; nhãn của nó nêu tên Side đó.
+- **Dọn dẹp** từ nhóm bao gồm worktree và worker của mọi Side ([Dọn dẹp](clean-up)).
+- Hộp thoại Tạo worktree nêu Side ở chân khi kho nằm trên nhiều Side.
+
 Chip **Chạy phiên trong** của phiên mới gọi bản checkout chính là **Worktree chính**.
 
 Để xóa nhiều worktree cùng lúc, xem [Dọn dẹp](/vi/features/clean-up). Để xóa một worktree, bấm biểu tượng thùng rác của nó (trên điện thoại: menu của nó › **Xóa worktree…**). Hộp thoại mở ngay với **Đang kiểm tra…**. Sau khi bạn xác nhận, dòng hiện **Đang gỡ…** trong khi việc gỡ chạy nền.
