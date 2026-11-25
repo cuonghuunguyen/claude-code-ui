@@ -29,8 +29,18 @@ const TAIL_BYTES = 256 * 1024;
 /** `listed`: the transcript scan's mtime and size when the file was read (lastMessageAt skips the open while they hold). */
 const lastMessageCache = new Map<string, { version: string; listed?: string; at: number | undefined }>();
 
-// ponytail: the SDK's project folder name for cwds up to 200 chars; longer ones get a hash suffix and are not found.
-export const transcriptFile = (projectsDir: string, cwd: string, sessionId: string) => join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${sessionId}.jsonl`);
+/**
+ * The SDK's project folder name of `cwd`: every non-alphanumeric character is `-`; a name over 200 characters is cut to 200 and
+ * gets `-<abs(31-hash of cwd) in base 36>` (the SDK's own rule; the CLI stores the transcript there).
+ */
+export function projectFolder(cwd: string): string {
+  const name = cwd.replace(/[^a-zA-Z0-9]/g, "-");
+  if (name.length <= 200) return name;
+  let h = 0;
+  for (let i = 0; i < cwd.length; i++) h = ((h << 5) - h + cwd.charCodeAt(i)) | 0;
+  return `${name.slice(0, 200)}-${Math.abs(h).toString(36)}`;
+}
+export const transcriptFile = (projectsDir: string, cwd: string, sessionId: string) => join(projectsDir, projectFolder(cwd), `${sessionId}.jsonl`);
 
 /**
  * Permission mode of the last prompt and effort of the last reply in a session's raw transcript (getSessionMessages() drops

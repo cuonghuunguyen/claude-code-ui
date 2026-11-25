@@ -1,3 +1,8 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { getSessionInfo } from "@anthropic-ai/claude-agent-sdk";
+import { transcriptFile } from "./claude-catalogue.ts";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it } from "vitest";
 import { claudeDigestEvents, syntheticTranscript } from "./quick-compact-claude.ts";
@@ -25,5 +30,25 @@ describe("quick compact, Claude", () => {
     expect(lines).toHaveLength(2);
     expect(lines[0]).toMatchObject({ type: "user", parentUuid: null, sessionId: "new", cwd: "/p", message: { role: "user", content: "DIGEST" } });
     expect(lines[1]).toMatchObject({ type: "assistant", parentUuid: lines[0].uuid, sessionId: "new", message: { model: "<synthetic>" } });
+  });
+});
+
+describe("transcript location of a long project path", () => {
+  it("is where the SDK looks for a cwd over 200 encoded characters", async () => {
+    const config = mkdtempSync(join(tmpdir(), "qc-long-"));
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = config;
+    try {
+      const cwd = join(config, ...Array.from({ length: 12 }, (_, i) => `a-long-folder-name-${i}-${"x".repeat(12)}`));
+      expect(cwd.replace(/[^a-zA-Z0-9]/g, "-").length).toBeGreaterThan(200);
+      const id = "11111111-2222-4333-8444-555555555555";
+      const file = transcriptFile(join(config, "projects"), cwd, id);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, syntheticTranscript({ id, cwd, digest: "DIGEST", now: new Date(0) }));
+      expect((await getSessionInfo(id, { dir: cwd }))?.sessionId).toBe(id);
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prev;
+    }
   });
 });

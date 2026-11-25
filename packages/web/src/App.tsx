@@ -1121,6 +1121,8 @@ export function App() {
       open(r.session.id);
     } finally {
       quickCompacting.current.delete(sourceId);
+      // The progress toast ends with the run: the new session is open, or the error shows in its place.
+      closeToast();
     }
   }
   function closeAside(id: string) {
