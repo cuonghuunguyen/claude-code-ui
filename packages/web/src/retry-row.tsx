@@ -58,7 +58,7 @@ export function RetryRow({ retry, className }: { retry: { attempt: number; messa
             title={retry.action.title}
             aria-label={tr("app.timeline.retryAction", { label: upperFirst(retry.action.label) })}
             data-testid="retry-action"
-            className="inline-flex min-h-11 items-center gap-1 text-primary text-xs underline underline-offset-2 hover:no-underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:min-h-0"
+            className="inline-flex min-h-11 items-center gap-1 text-info text-xs underline underline-offset-2 hover:no-underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:min-h-0"
           >
             {upperFirst(retry.action.label)}
             <ExternalLinkIcon aria-hidden="true" className="size-3" />
