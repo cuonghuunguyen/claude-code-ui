@@ -11,6 +11,23 @@ wss.on("connection", (s) => s.send(HELLO));
 const url = `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`;
 afterAll(() => void wss.close());
 
+// Counts the client's dials. Not the server's upgrade requests: Node's WebSocket (undici 8+) sends a
+// rejected 401 handshake twice, as fetch's authentication retry; a browser sends it once.
+const countDials = () => {
+  const n = { dials: 0 };
+  const Native = globalThis.WebSocket;
+  vi.stubGlobal(
+    "WebSocket",
+    class extends Native {
+      constructor(...args: ConstructorParameters<typeof WebSocket>) {
+        super(...args);
+        n.dials++;
+      }
+    },
+  );
+  return n;
+};
+
 const until = (pred: () => boolean) =>
   new Promise<void>((resolve) => {
     const t = setInterval(() => pred() && (clearInterval(t), resolve()), 5);
@@ -120,16 +137,17 @@ describe("connect", () => {
   it("stops redialing and reports unauthorized when the daemon rejects the token; a down daemon stays reconnecting", async () => {
     // The daemon's answers: every upgrade 401, the /auth probe 401 unless the token is "good".
     const http = createServer((req, res) => res.writeHead(req.headers.authorization === "Bearer good" ? 204 : 401).end());
-    let upgrades = 0;
-    http.on("upgrade", (_req, socket) => (upgrades++, socket.end("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")));
+    http.on("upgrade", (_req, socket) => socket.end("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n"));
     await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
     const port = (http.address() as AddressInfo).port;
     const statuses: ConnectionStatus[] = [];
+    const n = countDials();
     const c = connect({ url: `ws://127.0.0.1:${port}/ws`, token: "bad", onEvent: () => {}, onStatus: (s) => statuses.push(s) });
     await until(() => statuses.includes("unauthorized"));
     await new Promise((r) => setTimeout(r, 1500));
+    vi.unstubAllGlobals();
     expect(statuses).toEqual(["unauthorized"]);
-    expect(upgrades).toBe(1);
+    expect(n.dials).toBe(1);
     c.close();
 
     // Token accepted by the probe, upgrade still failing (e.g. daemon restarting): keep reconnecting.
@@ -284,16 +302,17 @@ describe("redial on wake", () => {
 
   it("does not dial after the daemon rejected the token", async () => {
     const http = createServer((_req, res) => res.writeHead(401).end());
-    let upgrades = 0;
-    http.on("upgrade", (_req, socket) => (upgrades++, socket.end("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")));
+    http.on("upgrade", (_req, socket) => socket.end("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n"));
     await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
     const w = fakeWake();
     const statuses: ConnectionStatus[] = [];
+    const n = countDials();
     const c = connect({ url: `ws://127.0.0.1:${(http.address() as AddressInfo).port}/ws`, token: "bad", onEvent: () => {}, onStatus: (s) => statuses.push(s), wakeEvents: w.events });
     await until(() => statuses.includes("unauthorized"));
     w.wake(true);
     await new Promise((r) => setTimeout(r, 200));
-    expect(upgrades).toBe(1);
+    vi.unstubAllGlobals();
+    expect(n.dials).toBe(1);
     expect(statuses).toEqual(["unauthorized"]);
     c.close();
     http.close();

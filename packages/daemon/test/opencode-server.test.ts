@@ -508,7 +508,7 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     try {
       expect(await server.check()).toBe(2);
       const off1 = server.events({ event: () => {}, resync: () => {} }, 1);
-      // The refusals back off 100, 200, 400, 800, 1600, 3200 ms: at 6.8 s the pump sleeps for the 6.4 s delay (until 12.7 s), longer than the 4 s a prompt waits.
+      // The refusals back off 100, 200, 400, 800, 1600, 3200 ms: at 6.8 s the pump sleeps for the 6.4 s delay (until 12.7 s), longer than the 4 s a prompt waits, or (each refusal runs `--version`) is still checking the binary before that sleep.
       await new Promise((r) => setTimeout(r, 6800));
       const off2 = server.events({ event: () => {}, resync: () => {} }, 2);
       await server.streamReady();

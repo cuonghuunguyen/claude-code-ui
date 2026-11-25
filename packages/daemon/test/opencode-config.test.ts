@@ -528,7 +528,9 @@ describe("OpenCode skills dialog", { timeout: TEST_MS }, () => {
   });
   it("skills.list answers a retryable error within the caller timer and never aborts the read", async () => {
     const d = await bootSkills(SKILL_FILE, 200);
-    const port = (await d.skills(), d.log().find((l) => l.type === "start")!.port);
+    // Warm up: a cold start of the fake OpenCode can take longer than the 200 ms wait, so its first lists may answer opencode_loading.
+    for (let i = 0; (await d.request({ type: "skills.list", cwd: d.project, engine: "opencode" })).type === "error"; i++) expect(i).toBeLessThan(20);
+    const port = d.log().find((l) => l.type === "start")!.port;
     await fetch(`http://127.0.0.1:${port}/__delay`, { method: "POST", body: JSON.stringify({ path: "/skill", ms: 800 }) });
     const t0 = Date.now();
     expect(await d.request({ type: "skills.list", cwd: d.project, engine: "opencode" })).toMatchObject({ type: "error", code: "opencode_loading" });

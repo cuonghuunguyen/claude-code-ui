@@ -341,14 +341,18 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
   let streamAbort: AbortController | undefined;
   let connected: Promise<void> = Promise.resolve();
   let markConnected = () => {};
-  /** Ends the reconnect wait of the pump at once (a consumer of a major nobody used so far came). */
-  let wake = () => {};
+  /** Ends the reconnect wait of the pump at once (a consumer of a major nobody used so far came). Called while the pump connects (not waiting), it skips the next wait:
+   * the attempt in flight may have been for the other major only. */
+  let woken = false;
+  const idle = () => (woken = true);
+  let wake: () => void = idle;
   const sleep = (ms: number) =>
     new Promise<void>((r) => {
+      if (woken) return (woken = false), r();
       const timer = setTimeout(done, ms);
       function done() {
         clearTimeout(timer);
-        wake = () => {};
+        wake = idle;
         r();
       }
       wake = done;
@@ -388,6 +392,8 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     let again = false;
     connected = new Promise<void>((r) => (markConnected = r));
     while (handlers.size) {
+      // This attempt sees every consumer registered so far.
+      woken = false;
       try {
         // The stream of the binary in use: the major of the running server, else of the last check, else of the first consumer (a consumer left from before a path change must not keep asking for the old major).
         const mine = new Set(handlers.values());
