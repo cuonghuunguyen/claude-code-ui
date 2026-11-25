@@ -84,8 +84,6 @@ export default {
   "sidebar.createWorktreeIn": "Create worktree in {name} (Shift+click: new worktree with a generated name)",
   "sidebar.newSessionIn": "New session in {name}",
   "sidebar.removeNamedFromList": "Remove {name} from the list (files stay)",
-  "sidebar.kindLocal": "local",
-  "sidebar.kindWorktree": "worktree",
   "sidebar.outsideRoots": "(outside the allowed roots)",
   "sidebar.outsideRootsTitle": "{path}: Outside the allowed roots (--roots)",
   "sidebar.removing": "Removing…",

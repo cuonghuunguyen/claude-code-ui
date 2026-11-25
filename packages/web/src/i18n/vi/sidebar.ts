@@ -86,8 +86,6 @@ export default {
   "sidebar.createWorktreeIn": "Tạo worktree trong {name} (Shift+nhấp: worktree mới với tên tự tạo)",
   "sidebar.newSessionIn": "Phiên mới trong {name}",
   "sidebar.removeNamedFromList": "Gỡ {name} khỏi danh sách (giữ tệp)",
-  "sidebar.kindLocal": "cục bộ",
-  "sidebar.kindWorktree": "worktree",
   "sidebar.outsideRoots": "(ngoài thư mục gốc được phép)",
   "sidebar.outsideRootsTitle": "{path}: Ngoài thư mục gốc được phép (--roots)",
   "sidebar.removing": "Đang gỡ…",

@@ -349,7 +349,7 @@ describe("worktrees", () => {
     const { el, groups } = await render(props);
     expect(groups().map((g) => g.dataset.cwd)).toEqual(["/home/u/web"]);
     const rows = worktreeRows(el);
-    expect(rows.map((r) => r.querySelector('[data-testid="worktree-toggle"]')!.textContent)).toEqual(["local : main", "worktree : far(outside the allowed roots)", "worktree : fix-login"]);
+    expect(rows.map((r) => r.querySelector('[data-testid="worktree-toggle"]')!.textContent)).toEqual(["main", "far(outside the allowed roots)", "fix-login"]);
     expect(rows.map(titles)).toEqual([["Fix login"], [], ["Worktree job"]]);
     expect(await tip(rowToggle(el, "/home/u/orca/web/fix"))).toContain("/home/u/orca/web/fix");
     expect(rows[1]!.textContent).toContain("No sessions yet");
@@ -455,13 +455,13 @@ describe("worktrees", () => {
   it("a row's New session starts in that worktree; a row outside the roots has none and says why", async () => {
     const { el, onNew } = await render(props);
     const action = (path: string) => el.querySelector<HTMLElement>(`[data-path="${path}"] [data-testid="worktree-new-session"]`);
-    expect(action("/home/u/orca/web/fix")!.getAttribute("aria-label")).toBe("New session in worktree : fix-login");
+    expect(action("/home/u/orca/web/fix")!.getAttribute("aria-label")).toBe("New session in Worktree : fix-login");
     await act(async () => action("/home/u/orca/web/fix")!.click());
     expect(onNew).toHaveBeenCalledWith("/home/u/orca/web/fix");
     expect(action("/srv/web-far")).toBeNull();
     expect(await tip(rowToggle(el, "/srv/web-far"))).toContain("/srv/web-far: Outside the allowed roots (--roots)");
     expect(el.querySelector('[data-path="/srv/web-far"] [data-testid="worktree-outside"]')).not.toBeNull();
-    expect(rowToggle(el, "/srv/web-far").textContent).toBe("worktree : far(outside the allowed roots)");
+    expect(rowToggle(el, "/srv/web-far").textContent).toBe("far(outside the allowed roots)");
     expect(el.querySelector('[data-path="/home/u/orca/web/fix"] [data-testid="worktree-outside"]')).toBeNull();
   });
 
@@ -488,7 +488,7 @@ describe("worktrees", () => {
     ];
     const { el, onRemoveWorktree } = await render({ list, projects: ["/home/u/web"], worktrees: { "/home/u/web": all } });
     const remove = (path: string) => el.querySelector<HTMLElement>(`[data-path="${path}"] [data-testid="worktree-remove"]`);
-    expect(remove(managed)!.getAttribute("aria-label")).toBe("Remove worktree : worktree-fix");
+    expect(remove(managed)!.getAttribute("aria-label")).toBe("Remove Worktree : worktree-fix");
     for (const p of [managed, "/home/u/orca/web/fix", "/home/u/web/.claude/worktrees/a/b", "/home/u/web/.claude/other"]) expect(remove(p), p).not.toBeNull();
     for (const p of ["/home/u/web", "/srv/web-far", "/home/u/locked"]) expect(remove(p), p).toBeNull();
     await act(async () => remove("/home/u/orca/web/fix")!.click());
@@ -583,7 +583,7 @@ describe("session limit", () => {
     const list = [...many(7), ...many(7, "/home/u/orca/web/fix").map((s) => ({ ...s, id: `w${s.id}` })), ...many(7, "/home/u/api").map((s) => ({ ...s, id: `x${s.id}` }))];
     const { el, rows } = await render({ list, projects: ["/home/u/web", "/home/u/api"], worktrees: { "/home/u/web": wts } });
     expect(rows()).toHaveLength(15);
-    expect(more(el).map((b) => b.getAttribute("aria-label"))).toEqual(["Load more sessions in local : main", "Load more sessions in worktree : fix", "Load more sessions in api"]);
+    expect(more(el).map((b) => b.getAttribute("aria-label"))).toEqual(["Load more sessions in Main checkout : main", "Load more sessions in Worktree : fix", "Load more sessions in api"]);
     await act(async () => more(el)[0]!.click());
     expect(rows()).toHaveLength(17);
     expect(more(el)).toHaveLength(2);
@@ -728,7 +728,7 @@ describe("one repository on several Sides is one group (GH-591)", () => {
     // Mains first (this machine, WSL, SSH), then the linked worktree; the text is the branch, no row starts with a Side title.
     expect(wtRows(el).map(text)).toEqual(["main", "main", "release", "feat/x"]);
     // The Side title and the kind (local / worktree) stay in the accessible name.
-    expect(wtRows(el).map(label)).toEqual(["macOS · local : main", "WSL: Ubuntu · local : main", "SSH: dev · local : release", "macOS · worktree : feat/x"]);
+    expect(wtRows(el).map(label)).toEqual(["macOS · Main checkout : main", "WSL: Ubuntu · Main checkout : main", "SSH: dev · Main checkout : release", "macOS · Worktree : feat/x"]);
     expect(wtRows(el).map((r) => r.querySelector('[data-testid="side-icon"]')?.getAttribute("data-kind"))).toEqual(["local", "wsl", "ssh", "local"]);
     // The main checkout has the house mark, a worktree does not.
     expect(wtRows(el).map((r) => !!r.querySelector('[data-testid="main-mark"]'))).toEqual([true, true, true, false]);
@@ -759,7 +759,7 @@ describe("one repository on several Sides is one group (GH-591)", () => {
     await act(async () => btn.click());
     expect(onNew).toHaveBeenCalledWith(`${mac}/.claude/worktrees/idle`);
     // The WSL main checkout has no session now and keeps its toggle and empty line.
-    const wslMain = wtRows(el).find((r) => label(r) === "WSL: Ubuntu · local : main")!;
+    const wslMain = wtRows(el).find((r) => label(r) === "WSL: Ubuntu · Main checkout : main")!;
     expect(wslMain.querySelector('[data-testid="worktree-toggle"]')!.getAttribute("aria-expanded")).toBe("true");
     expect(wslMain.textContent).toContain("No sessions yet");
   });
@@ -786,7 +786,7 @@ describe("one repository on several Sides is one group (GH-591)", () => {
     await act(async () => document.querySelector<HTMLElement>('[data-testid="group-menu-cleanup"]')!.click());
     expect(onCleanUp).toHaveBeenLastCalledWith({ kind: "repository", cwds: [mac, wsl, ssh], name: "app" });
     await closeMenu();
-    const row = wtRows(el).find((r) => label(r) === "SSH: dev · local : release")!;
+    const row = wtRows(el).find((r) => label(r) === "SSH: dev · Main checkout : release")!;
     await act(async () => row.querySelector<HTMLElement>('[data-testid="worktree-menu"]')!.click());
     await vi.waitFor(() => expect(document.querySelector('[data-testid="worktree-menu-cleanup"]')).not.toBeNull());
     await act(async () => document.querySelector<HTMLElement>('[data-testid="worktree-menu-cleanup"]')!.click());
@@ -811,7 +811,7 @@ describe("one repository on several Sides is one group (GH-591)", () => {
     const { el, onNew } = await render({ ...props, sideState: sideState as never });
     const status = el.querySelectorAll('[data-testid="sidebar-side-status"]');
     expect(status).toHaveLength(1);
-    const row = wtRows(el).find((r) => label(r) === "SSH: dev · local : release")!;
+    const row = wtRows(el).find((r) => label(r) === "SSH: dev · Main checkout : release")!;
     expect(row.contains(status[0]!)).toBe(true);
     expect(el.querySelector("h3")!.contains(status[0]!)).toBe(false);
     expect(status[0]!.textContent).toContain("SSH: dev stopped");
@@ -874,7 +874,7 @@ describe("one repository on several Sides is one group (GH-591)", () => {
     const { el, groups } = await render({ ...props, list: [item("m", mac, "A", 5), item("n", second, "B", 6)], projects: [mac, second], worktrees: wt, origins: { [mac]: KEY, [second]: KEY }, side: () => undefined, sideState: { of: () => undefined, act: vi.fn() } });
     expect(groups()).toHaveLength(1);
     expect(el.querySelector('[data-testid="sides-chip"]')).toBeNull();
-    expect(wtRows(el).map(label)).toEqual(["local : main", "local : main · app-2", "worktree : feat/x"]);
+    expect(wtRows(el).map(label)).toEqual(["Main checkout : main", "Main checkout : main · app-2", "Worktree : feat/x"]);
   });
 
   it("below md the row shows the Side icon and the branch tail; the full label is the accessible name", async () => {
@@ -884,7 +884,7 @@ describe("one repository on several Sides is one group (GH-591)", () => {
       const { el } = await render(props);
       const toggles = wtRows(el).map((r) => r.querySelector<HTMLElement>('[data-testid="worktree-toggle"]')!);
       expect(toggles.map((b) => b.textContent)).toEqual(["main", "main", "release", "x"]);
-      expect(toggles[3]!.getAttribute("aria-label")).toBe("macOS · worktree : feat/x");
+      expect(toggles[3]!.getAttribute("aria-label")).toBe("macOS · Worktree : feat/x");
       expect(el.querySelector('[data-testid="sides-chip"]')!.textContent).toBe("3 sides");
     } finally {
       window.matchMedia = mm;
@@ -906,7 +906,7 @@ describe("one repository on several Sides is one group (GH-591)", () => {
   // Last: it leaves a menu popup behind, which keeps the next test from opening another menu.
   it("the main row of a project has its own menu: Project settings for that Side and Remove from list for that project only", async () => {
     const { el, onProjectSettings, onRemove } = await render(props);
-    const row = wtRows(el).find((r) => label(r) === "WSL: Ubuntu · local : main")!;
+    const row = wtRows(el).find((r) => label(r) === "WSL: Ubuntu · Main checkout : main")!;
     await act(async () => row.querySelector<HTMLElement>('[data-testid="worktree-menu"]')!.click());
     await vi.waitFor(() => expect(document.querySelector('[data-testid="worktree-menu-project-settings"]')).not.toBeNull());
     await act(async () => document.querySelector<HTMLElement>('[data-testid="worktree-menu-project-settings"]')!.click());
@@ -970,9 +970,10 @@ describe("project row below md (GH-132): name, chevron and New session inline; t
     // Only the part after the last "/" is visible; the full branch is the accessible name and the tooltip.
     const toggle = row(managed).querySelector<HTMLElement>('[data-testid="worktree-toggle"]')!;
     expect(toggle.textContent).toBe("GH-1-fix");
-    expect(toggle.getAttribute("aria-label")).toBe("worktree : team/GH-1-fix");
+    expect(toggle.getAttribute("aria-label")).toBe("Worktree : team/GH-1-fix");
     // Narrow, cut to the tail: the tooltip still has the full branch.
-    expect(await tip(toggle)).toContain("worktree : team/GH-1-fix");
+    // The row text has no kind word; the tooltip names the kind, the full branch and the path.
+    expect(await tip(toggle)).toBe("Worktreeteam/GH-1-fix/home/u/web/.claude/worktrees/fix");
     await act(async () => row(managed).querySelector<HTMLElement>('[data-testid="worktree-new-session"]')!.click());
     expect(onNew).toHaveBeenCalledWith(managed);
     expect(row("/home/u/web").querySelector('[data-testid="worktree-menu"]')).not.toBeNull();
@@ -1463,7 +1464,7 @@ it("GH-358 a worktree row's menu counts only its own sessions and offers Delete 
   await ctx(toggle);
   expect(tid("worktree-context-archive-7").textContent).toBe("7 days (1)…");
   await act(async () => tid("worktree-context-archive-7").click());
-  expect(onArchiveIdle).toHaveBeenLastCalledWith(["w"], "worktree : fix", 7);
+  expect(onArchiveIdle).toHaveBeenLastCalledWith(["w"], "Worktree : fix", 7);
   await ctx(toggle);
   await act(async () => tid("worktree-context-remove").click());
   expect(onRemoveWorktree).toHaveBeenCalledWith("/home/u/web", managed);

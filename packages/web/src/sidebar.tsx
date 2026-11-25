@@ -41,8 +41,8 @@ function Tip({ tip, trigger }: { tip: ReactNode; trigger: ReactElement }) {
   );
 }
 
-/** Row actions on a desktop pointer: no width is reserved for them, they appear over the end of the row on hover or focus with a fade so the text under them does not clash. Touch and narrow screens reserve the width (always visible). */
-const OVERLAY = "md:bg-linear-to-l md:from-secondary md:from-75% md:to-transparent md:pl-4 max-md:bg-none pointer-coarse:bg-none pointer-coarse:pl-0";
+/** Row actions on a desktop pointer: no width is reserved for them, they appear over the end of the row on hover or focus with a fade so the text under them does not clash; a click on the fade reaches the row (the span ignores the pointer, its buttons do not). Touch and narrow screens reserve the width (always visible). */
+const OVERLAY = "md:pointer-events-none md:*:pointer-events-auto md:bg-linear-to-l md:from-secondary md:from-75% md:to-transparent md:pl-4 max-md:bg-none pointer-coarse:bg-none pointer-coarse:pl-0";
 
 /** Only states that need attention get an indicator; idle, error and closed rows stay plain. */
 function StateIcon({ state }: { state: SessionState }) {
@@ -749,7 +749,7 @@ export function SessionList({
               {open &&
                 g.worktrees.map((r) => {
                   const rowOpen = isOpen(rowKey(r.path));
-                  const kind = t(r.main ? "sidebar.kindLocal" : "sidebar.kindWorktree");
+                  const kind = t(r.main ? "sidebar.kindMain" : "sidebar.kindWorktreeCap");
                   const branch = r.branch ?? lastSegment(r.path);
                   // The project the row belongs to; in a merged group with several Sides the row names its Side first (title or short label), the kind moves to the tooltip.
                   const project = r.project ?? g.cwd;
@@ -760,8 +760,8 @@ export function SessionList({
                   const sameTail = (g.repo ? g.worktrees.filter((w) => w.side === r.side) : (worktrees?.[g.cwd] ?? g.worktrees)).filter((w) => lastSegment(w.branch ?? lastSegment(w.path)) === lastSegment(branch)).length > 1;
                   const shortBranch = sameTail ? branch : lastSegment(branch);
                   const label = `${rowSide ? `${rowSide.label} · ` : ""}${kind} : ${branch}${clone}`;
-                  // With several Sides the Side is an icon and a tooltip: the whole width goes to the branch.
-                  const text = rowSide || narrow ? `${narrow ? shortBranch : branch}${clone}` : label;
+                  // The row text is the branch only: the kind is the row icon (house, branch), the Side an icon; the name and the tooltip say both.
+                  const text = `${narrow ? shortBranch : branch}${clone}`;
                   const busy = isBusy(r);
                   // A linked worktree with no session at all is one line: no chevron, a click starts a session there.
                   const compact = !r.main && !r.outsideRoots && !r.sessions.length && !(baseGroup(g.cwd)?.worktrees.find((x) => x.path === r.path)?.sessions.length);
@@ -770,7 +770,7 @@ export function SessionList({
                         className={cn("flex h-7 w-full items-center gap-2 rounded-md pl-6 text-left text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11 max-md:pr-26 pointer-coarse:pr-26", r.outsideRoots ? "pr-8" : "pr-1.5", "text-muted-foreground")}
                         aria-expanded={compact ? undefined : rowOpen}
                         onClick={() => (compact ? onNew(r.path) : toggle(rowKey(r.path)))}
-                        aria-label={narrow || rowSide ? `${label}${r.outsideRoots ? ` ${t("sidebar.outsideRoots")}` : ""}` : undefined}
+                        aria-label={`${label}${r.outsideRoots ? ` ${t("sidebar.outsideRoots")}` : ""}`}
                         aria-describedby={compact ? emptyId : undefined}
                         data-testid="worktree-toggle"
                         data-empty={compact || undefined}
@@ -796,14 +796,8 @@ export function SessionList({
                           trigger={rowButton}
                           tip={
                             <>
-                              {rowSide ? (
-                                <>
-                                  <span>{`${rowSide.label} · ${t(r.main ? "sidebar.kindMain" : "sidebar.kindWorktreeCap")}`}</span>
-                                  <span className="font-medium">{`${branch}${clone}`}</span>
-                                </>
-                              ) : (
-                                <span className="font-medium">{label}</span>
-                              )}
+                              <span>{`${rowSide ? `${rowSide.label} · ` : ""}${kind}`}</span>
+                              <span className="font-medium">{`${branch}${clone}`}</span>
                               <span className="opacity-70">{r.outsideRoots ? t("sidebar.outsideRootsTitle", { path: r.path }) : r.path}</span>
                             </>
                           }
