@@ -67,15 +67,21 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
   const failure = (err: unknown) => (err instanceof OpenCodeError ? new EngineError(err.code, err.message) : new EngineError("opencode_failed", (err as Error).message));
   const notFound = async () => (await import("@opencode/client")).isSessionNotFoundError;
 
-  async function createSession(cwd: string, initial: { model?: string; permissionMode: PermissionMode; effort?: SessionSettings["effort"] }): Promise<Session | undefined> {
+  /** The row of a new OpenCode 2 session in `cwd` with the rules of its mode (and agent), recorded; undefined when the folder is being removed meanwhile. */
+  async function createRow(cwd: string, mode: PermissionMode, agent?: string) {
     const client = await server.client();
     // `plan` is the plan agent in the default mode; the rules have the agent's denials (a folder whose agents cannot be read fails the create).
-    const created = await engine.createRules(initial.permissionMode, cwd);
+    const created = await engine.createRules(mode, cwd, agent);
     const row = await client.session.create({ location: { directory: cwd }, permissions: created.rules, ...(created.agent && { agent: created.agent }) });
     engine.noteCreated(row.id, created);
     // A session of OpenCode 2 is recorded at once: an OpenCode 1 binary must not open it. A failed save fails the create (the empty session stays in OpenCode).
     o.record?.(row.id);
-    if (ctx.isRemoving(cwd) || !existsSync(cwd)) return undefined;
+    return ctx.isRemoving(cwd) || !existsSync(cwd) ? undefined : row;
+  }
+
+  async function createSession(cwd: string, initial: { model?: string; permissionMode: PermissionMode; effort?: SessionSettings["effort"] }): Promise<Session | undefined> {
+    const row = await createRow(cwd, initial.permissionMode);
+    if (!row) return undefined;
     const opts = sessionOpts(initial);
     const s = ctx.track(new Session(cwd, opts, { id: row.id }));
     // The entry makes the next list start OpenCode for a user whose last session was Claude's. `fields` empty: only a session without an entry is saved.
@@ -84,6 +90,16 @@ export function createOpenCode2Catalogue(ctx: CatalogueContext, o: OpenCode2Cata
     ctx.addProject(cwd);
     return s;
   }
+
+  /** `/clear` (docs/spec.md "Sessions"): a new session with the model, mode, effort and agent of the cleared one. Not tracked here: `onCleared` tracks it. */
+  engine.createHeir = async (cwd, carried) => {
+    const row = await createRow(cwd, carried.permissionMode, carried.agent);
+    if (!row) return undefined;
+    // Saved before the session exists: its `opts.agent(id)` gives the carried agent.
+    ctx.saveSettings(() => settings.set(row.id, { model: carried.model, permissionMode: carried.permissionMode, effort: carried.effort, ...(carried.agent && { agent: carried.agent }) }));
+    meta.set(row.id, { cwd, title: row.title ?? "New session" });
+    return new Session(cwd, sessionOpts(carried), { id: row.id });
+  };
 
   let listError: string | undefined;
   /** OpenCode answered a session list once in this run. */

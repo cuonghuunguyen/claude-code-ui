@@ -412,6 +412,55 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     expect(s.parts().filter((p) => p.type === "user_text").map((p) => (p as { text: string }).text)).toEqual(["run ls"]);
   });
 
+  it("/clear (and /new, /reset) makes a new session with the model, mode, effort and agent; the old one keeps its history and logs session_cleared; it is refused while a turn runs, a failed create is a notice, /clear with text is a prompt", async () => {
+    const agents = [{ name: "build", mode: "primary", permission: [] }, { name: "docs", mode: "primary", permission: [{ permission: "edit", pattern: "*", action: "deny" }] }];
+    const d = await boot({ script: ["text", "text", "bash"], data: { agents }, env: { FAKE_OPENCODE_SESSION_FAIL_AFTER: "3", FAKE_OPENCODE_SESSION_CREATE_DELAY_MS: "400" } });
+    const s = await d.open();
+    const mode = (await d.ok({ type: "session.list" })).sessions.find((x: { id: string }) => x.id === s.id).permissionMode;
+    await d.ok({ type: "session.setModel", sessionId: s.id, model: "acme/x/y" });
+    await d.ok({ type: "session.setEffort", sessionId: s.id, effort: "high" });
+    await d.ok({ type: "session.setAgent", sessionId: s.id, agent: "docs" });
+    await s.prompt("one");
+    await until(() => !!s.find("turn_result") && s.states().at(-1) === "idle");
+    expect(await s.prompt("/clear")).toEqual({ local: true });
+    const heirId = (s.find("session_cleared") as { sessionId: string }).sessionId;
+    expect(heirId).not.toBe(s.id);
+    // The old session is untouched: its messages stay, no `/clear` prompt reached the model, no echo.
+    expect(s.parts().filter((p) => p.type === "user_text").map((p) => (p as { text: string }).text)).toEqual(["one"]);
+    expect(d.requests("POST", `/session/${s.id}/prompt_async`)).toHaveLength(1);
+    expect(s.states().at(-1)).toBe("idle");
+    const posts = d.requests("POST", "/session");
+    expect(posts).toHaveLength(2);
+    expect(posts[1]!.body.permission.map((r: { pattern: string }) => r.pattern)).toContain("agent:docs");
+    const listed = (await d.ok({ type: "session.list" })).sessions;
+    expect(listed.map((x: { id: string }) => x.id)).toEqual(expect.arrayContaining([s.id, heirId]));
+    expect(listed.find((x: { id: string }) => x.id === heirId)).toMatchObject({ model: "acme/x/y", effort: "high", agent: "docs", permissionMode: mode, engine: "opencode" });
+    expect(s.find("commands")!.commands.map((c) => c.name)).toContain("clear");
+    // /new and /reset are /clear; the failed third create (the fake refuses after three) is a notice and no hand-over.
+    expect(await s.prompt("/new")).toEqual({ local: true });
+    expect(s.parts().filter((p) => p.type === "session_cleared")).toHaveLength(2);
+    expect(await s.prompt("/reset")).toEqual({ local: true });
+    expect(s.parts().filter((p) => p.type === "session_cleared")).toHaveLength(2);
+    expect(s.find("notice", (p) => /^\/clear failed: .*create refused/.test(p.text))).toBeTruthy();
+    // While the heir is being made another prompt is refused (a turn here would run on a session the tabs leave).
+    const racing = s.prompt("/clear");
+    await new Promise((r) => setTimeout(r, 100));
+    expect(await s.prompt("hi from another tab")).toEqual({ local: true });
+    expect(s.find("notice", (p) => p.text.startsWith("Starting a new session"))).toBeTruthy();
+    await racing;
+    expect(s.parts().some((p) => p.type === "user_text" && p.text === "hi from another tab")).toBe(false);
+    // With text it is a plain prompt; while a turn runs /clear is refused.
+    await s.prompt("/clear now");
+    await until(() => s.parts().some((p) => p.type === "user_text" && p.text === "/clear now"));
+    await until(() => s.states().at(-1) === "idle" && !!s.find("turn_result", () => true));
+    await s.prompt("run ls");
+    await until(() => !!s.find("permission_request"));
+    const creates = d.requests("POST", "/session").length;
+    await s.prompt("/clear");
+    await until(() => !!s.find("notice", (p) => p.text === "Stop the turn first"));
+    expect(d.requests("POST", "/session")).toHaveLength(creates);
+  });
+
   it("/compact uses the chosen model", async () => {
     const d = await boot({ script: ["compact"] });
     const s = await d.open();
@@ -799,9 +848,9 @@ describe("OpenCode prompting", { timeout: TEST_MS }, () => {
     const d = await boot({ script: ["text"] });
     const s = await d.open();
     await until(() => !!s.find("commands"));
-    expect(s.find("commands")!.commands.map((c) => c.name)).toEqual(["compact", "undo", "redo", "visualize", "init", "review", "fail"]);
-    expect(s.find("commands")!.commands[4]).toEqual({ name: "init", description: "guided AGENTS.md setup", argumentHint: "$ARGUMENTS" });
-    expect(s.find("commands")!.commands[5]).toMatchObject({ description: "", argumentHint: "" });
+    expect(s.find("commands")!.commands.map((c) => c.name)).toEqual(["compact", "undo", "redo", "clear", "visualize", "init", "review", "fail"]);
+    expect(s.find("commands")!.commands[5]).toEqual({ name: "init", description: "guided AGENTS.md setup", argumentHint: "$ARGUMENTS" });
+    expect(s.find("commands")!.commands[6]).toMatchObject({ description: "", argumentHint: "" });
     expect((await d.ok({ type: "session.commands", cwd: d.project, engine: "opencode" })).commands.map((c: { name: string }) => c.name)).toContain("review");
 
     await s.prompt("/review main");
@@ -1254,6 +1303,32 @@ describe("OpenCode orchestration", { timeout: TEST_MS }, () => {
     // OpenCode connects again (restart, dispose): a new initialize replaces the MCP session.
     const again = await mcpClient(body.config.url, bearer);
     expect(json(await again.callTool({ name: "worker_list", arguments: {} })).workers).toHaveLength(1);
+  });
+
+  it("/clear in a coordinator: the workers and the tools go to the new session; the old session's tools connection is dropped and a prompt there makes a fresh one that sees no workers", async () => {
+    const d = await boot({ script: ["text"] });
+    await on(d);
+    const s = await d.open();
+    const first = await attached(d, s.id);
+    const old = await mcpClient(first.config.url, first.config.headers.authorization);
+    const w = json(await old.callTool({ name: "worker_start", arguments: { name: "w1", cwd: d.project, prompt: "do it" } }));
+    expect(await s.prompt("/clear")).toEqual({ local: true });
+    const heir = (s.find("session_cleared") as { sessionId: string }).sessionId;
+    // The heir's tools list the worker.
+    const hb = await attached(d, heir);
+    const heirClient = await mcpClient(hb.config.url, hb.config.headers.authorization);
+    expect(json(await heirClient.callTool({ name: "worker_list", arguments: {} })).workers.map((x: any) => x.sessionId)).toEqual([w.sessionId]);
+    // The old session's connection left OpenCode and its route is gone: it no longer acts for the heir.
+    await until(() => d.requests("POST", `/mcp/${mcpName(s.id)}/disconnect`).length === 1);
+    await expect(old.callTool({ name: "worker_list", arguments: {} })).rejects.toThrow();
+    // A prompt on the old session attaches again, on a binding of its own: no workers.
+    await s.prompt("hi");
+    await until(() => d.requests("POST", "/mcp").filter((r) => r.body.name === mcpName(s.id)).length === 2);
+    const again = d.requests("POST", "/mcp").filter((r) => r.body.name === mcpName(s.id))[1]!.body;
+    expect(again.config.headers.authorization).not.toBe(first.config.headers.authorization);
+    const fresh = await mcpClient(again.config.url, again.config.headers.authorization);
+    expect(json(await fresh.callTool({ name: "worker_list", arguments: {} })).workers).toEqual([]);
+    expect(json(await heirClient.callTool({ name: "worker_list", arguments: {} })).workers).toHaveLength(1);
   });
 
   it("with a slow MCP load the attach waits instead of timing out: no warning, the server is attached before the prompt, the turn gets its reply (GH-681)", async () => {

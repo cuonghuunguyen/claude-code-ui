@@ -217,8 +217,32 @@ export const LOCAL_COMMANDS: SlashCommand[] = [
   { name: "compact", description: "Summarize the conversation to free context", argumentHint: "" },
   { name: "undo", description: "Undo the last message and its file changes", argumentHint: "" },
   { name: "redo", description: "Redo the last undone message", argumentHint: "" },
+  { name: "clear", description: "Start a new session; this one stays in the history (also /new, /reset)", argumentHint: "" },
 ];
-const LOCAL_NAMES = LOCAL_COMMANDS.map((c) => c.name);
+/** `/new` and `/reset` are `/clear` (as in Claude's list); a server command of any of these names is shadowed. */
+export const CLEAR_ALIASES = ["clear", "new", "reset"];
+const LOCAL_NAMES = [...LOCAL_COMMANDS.map((c) => c.name), ...CLEAR_ALIASES];
+/** Makes the new OpenCode session of a /clear in the folder with the settings of the old one (not tracked: `onCleared` tracks it); undefined when the folder is being removed. */
+export type CreateHeir = (cwd: string, settings: SessionSettings) => Promise<Session | undefined>;
+/**
+ * OpenCode `/clear`: a new OpenCode session takes over the chat view (the same `onCleared` + `session_cleared` hand-over as Claude's); the old one stays untouched and idle.
+ * Refused while a turn runs. A failure is a notice on the old session (no `session_cleared`).
+ */
+export async function clearSession(session: Session, opts: SessionOpts, settings: SessionSettings, createHeir: CreateHeir | undefined, notice: (text: string) => void, handedOver: () => void): Promise<void> {
+  if (session.currentState() !== "idle" || session.pendingCount()) return notice("Stop the turn first");
+  try {
+    if (!createHeir) throw new Error("not supported");
+    const heir = await createHeir(session.cwd, settings);
+    if (!heir) throw new Error("the folder is gone");
+    opts.onCleared?.(heir, session);
+    session.emit({ type: "session_cleared", id: randomUUID(), sessionId: heir.id });
+    // The prompts the server moved to the heir on `session_cleared` start on its idle state.
+    heir.setState("idle");
+    handedOver();
+  } catch (err) {
+    notice(`/clear failed: ${(err as Error).message}`);
+  }
+}
 /** `/visualize [what]`: the daemon's own command, listed while the setting is on and OpenCode has no `visualize` of its own (docs/spec.md "Inline visualizations"). */
 const VISUALIZE_COMMAND: SlashCommand = { name: "visualize", description: "Draw the answer as an inline visualization", argumentHint: "[what to draw]" };
 export const withVisualize = (list: SlashCommand[], on: boolean) => (on && !list.some((c) => c.name === "visualize") ? [...list.slice(0, LOCAL_COMMANDS.length), VISUALIZE_COMMAND, ...list.slice(LOCAL_COMMANDS.length)] : list);
@@ -517,6 +541,7 @@ class OpenCodeSession implements EngineSession {
   private attach(): Promise<void> {
     let attaching: McpServerKey = "orchestration";
     return (this.attaching ??= (async () => {
+      await this.released;
       const route = this.engine.mcp;
       const url = route?.url();
       const keys = url ? mcpKeys(this.opts, this.id) : [];
@@ -540,6 +565,13 @@ class OpenCodeSession implements EngineSession {
   }
 
   prompt(text: string, images: string[] = []): string | undefined {
+    if (!images.length && /^\/(clear|new|reset)$/.test(text.trim())) {
+      // Nothing is posted to OpenCode; the reply waits for the hand-over (the spinner of the web client).
+      this.localRun = this.clearing ??= this.startOver().finally(() => (this.clearing = undefined));
+      return undefined;
+    }
+    // The heir is being made: a turn here would run on a session the tabs are about to leave.
+    if (this.clearing) return void ((this.localRun = undefined), this.notice(`local:${ascending("msg")}`, "Starting a new session; send again in a moment"));
     const local = !images.length && /^\/(compact|undo|redo)$/.exec(text.trim())?.[1];
     if (local) {
       // Only /undo is awaited by its reply (the undone prompt goes back to the box); /compact and /redo run on their own.
@@ -561,6 +593,21 @@ class OpenCodeSession implements EngineSession {
   }
 
   private localRun?: Promise<{ text: string; images: string[] } | undefined>;
+  private clearing?: Promise<undefined>;
+  private startOver = (): Promise<undefined> => clearSession(this.session, this.opts, this.settings(), this.engine.createHeir, (text) => this.notice(`local:${ascending("msg")}`, text), () => this.releaseTools()).then(() => undefined);
+  /** The disconnect of the tools after a /clear: the next attach waits for it. */
+  private released: Promise<unknown> | undefined;
+  /**
+   * After a /clear the orchestration binding of this session's live tools server went to the heir. The connection leaves OpenCode and its route is dropped:
+   * the next attach connects again with a token and a binding of this session's own (else its tools would act for the heir).
+   */
+  private releaseTools() {
+    this.engine.mcp?.drop(this.id);
+    const keys = [...this.mcpOn];
+    this.mcpOn = new Set();
+    if (!keys.length || !this.server.running()) return;
+    this.released = Promise.all(keys.map((key) => this.server.request(`/mcp/${mcpName(this.id, key)}/disconnect`, { method: "POST", directory: this.cwd, timeoutMs: 0 }).catch(() => {}))).finally(() => (this.released = undefined));
+  }
   /** The run of the `/undo` just taken by prompt(): its undone prompt (no draft when nothing was undone). */
   localDraft = () => this.localRun ?? Promise.resolve(undefined);
 
@@ -1431,6 +1478,8 @@ class OpenCodeEngineImpl implements Engine {
   private readonly providerLists = new Map<string, Promise<ProviderList>>();
   /** Names of the daemon's own MCP servers attached to OpenCode (`mcpName()`): the MCP servers dialog leaves them out. */
   readonly attached = new Set<string>();
+  /** Set by the catalogue: makes the session a /clear hands over to. */
+  createHeir?: CreateHeir;
 
   constructor(
     readonly server: OpenCodeServer,
