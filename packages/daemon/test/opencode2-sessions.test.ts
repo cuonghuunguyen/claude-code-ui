@@ -1009,6 +1009,38 @@ describe("OpenCode 2 sessions: rewind, /undo, /redo, /compact, bash mode and que
     await until(() => e.parts().some((p) => p.type === "notice" && /Nothing to compact yet/.test((p as { text: string }).text)));
   });
 
+  it("/clear (and /new, /reset) makes a new session with the model, mode, effort and agent and records it; the old one keeps its history and logs session_cleared; while a turn runs it is refused; with text it is a prompt", async () => {
+    const d = await boot({ script: ["shell"] });
+    const s = await d.open();
+    await d.ok({ type: "session.setModel", sessionId: s.id, model: "acme/x/y" });
+    await d.ok({ type: "session.setEffort", sessionId: s.id, effort: "high" });
+    await d.ok({ type: "session.setAgent", sessionId: s.id, agent: "plan" });
+    expect(await s.prompt("/clear")).toMatchObject({ local: true });
+    const heirId = (s.find("session_cleared") as { sessionId: string }).sessionId;
+    expect(heirId).not.toBe(s.id);
+    expect(s.parts().some((p) => p.type === "user_text")).toBe(false);
+    expect(d.requests("POST", new RegExp(`^/api/session/${s.id}/(prompt|command)`))).toHaveLength(0);
+    const posts = d.requests("POST", "/api/session");
+    expect(posts).toHaveLength(2);
+    expect(posts[1]!.body).toMatchObject({ location: { directory: d.project }, agent: "plan" });
+    const listed = (await d.ok({ type: "session.list" })).sessions;
+    expect(listed.map((x: { id: string }) => x.id)).toEqual(expect.arrayContaining([s.id, heirId]));
+    expect(listed.find((x: { id: string }) => x.id === heirId)).toMatchObject({ model: "acme/x/y", effort: "high", agent: "plan", engine: "opencode" });
+    expect(s.find("commands")!.commands.map((c) => c.name)).toContain("clear");
+    expect(await s.prompt("/new")).toMatchObject({ local: true });
+    expect(await s.prompt("/reset")).toMatchObject({ local: true });
+    expect(s.parts().filter((p) => p.type === "session_cleared")).toHaveLength(3);
+    // While a turn runs /clear is refused; with text it is a plain prompt (shown, sent to the model).
+    await s.prompt("make b.txt");
+    await until(() => !!s.find("permission_request"));
+    const creates = d.requests("POST", "/api/session").length;
+    await s.prompt("/clear");
+    await until(() => !!s.find("notice", (p) => p.text === "Stop the turn first"));
+    await s.prompt("/clear now");
+    await until(() => s.parts().some((p) => p.type === "user_text" && p.text === "/clear now"));
+    expect(d.requests("POST", "/api/session")).toHaveLength(creates);
+  });
+
   it("bash mode runs the command in OpenCode without a model turn: a bash part with its output and exit code, the session recorded first; Stop kills a running command; Run in background frees the session", async () => {
     const { d, s } = await opened();
     expect(d.recorded()).toEqual({});
@@ -1262,7 +1294,7 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
     const s = await d.open();
     await until(() => names(s.find("commands")?.commands).includes("hello"));
     await d.fake(`/__lists?dir=${encodeURIComponent(link)}`);
-    await until(() => names(s.find("commands")?.commands).join() === "compact,undo,redo,visualize,deploy");
+    await until(() => names(s.find("commands")?.commands).join() === "compact,undo,redo,clear,visualize,deploy");
   });
 
   it("a /name typed before OpenCode's command list loaded runs the command once the list came; an unknown one goes as a prompt", async () => {
@@ -1348,7 +1380,7 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
     const d = await boot({ data: { commands: ["init", "review", "hello", "fail"].map((name) => ({ name })), commands2: [{ name: "deploy", description: "Deploy it" }] } });
     await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
     const s = await d.open();
-    const menu = ["compact", "undo", "redo", "visualize", "init", "review", "hello", "fail"];
+    const menu = ["compact", "undo", "redo", "clear", "visualize", "init", "review", "hello", "fail"];
     await until(() => names(s.find("commands")?.commands).join() === menu.join());
     expect(names((await d.ok({ type: "session.commands", cwd: d.project, engine: "opencode" })).commands)).toEqual(menu);
     await s.prompt("first");
@@ -1367,14 +1399,14 @@ describe("OpenCode 2 sessions: agents and slash commands", { timeout: TEST_MS },
     await until(() => !!s.find("notice", (n) => /^\/fail failed: .*Usage: \/fail <what>/.test(n.text)) && s.states().at(-1) === "idle");
     expect(s.parts().filter((p) => p.type === "turn_result")).toHaveLength(results);
     await d.fake("/__lists");
-    await until(() => names(s.find("commands")?.commands).join() === "compact,undo,redo,visualize,deploy");
+    await until(() => names(s.find("commands")?.commands).join() === "compact,undo,redo,clear,visualize,deploy");
   });
 
   it("with visualizations on, the menu offers /visualize and each prompt carries the claude-ui-visualize instruction entry; off removes it; /visualize what shows the typed text and adds the hidden directive", async () => {
     const d = await boot({ data: { commands: [{ name: "init" }] } });
     await d.ok({ type: "settings.set", patch: { sessions: { engine: "opencode" } } });
     const s = await d.open();
-    const menu = (on: boolean) => ["compact", "undo", "redo", ...(on ? ["visualize"] : []), "init"];
+    const menu = (on: boolean) => ["compact", "undo", "redo", "clear", ...(on ? ["visualize"] : []), "init"];
     await until(() => names(s.find("commands")?.commands).join() === menu(true).join());
     const entry = () => d.log().filter((l) => l.type === "request" && l.path === `/api/experimental/session/${s.id}/instructions/entries/claude-ui-visualize`);
     const results = () => s.parts().filter((p) => p.type === "turn_result").length;

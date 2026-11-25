@@ -102,15 +102,21 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
   }
   const refreshProviders = () => ((providersStale = true), flushProviders());
 
-  /** A new OpenCode session in `cwd` with the rules of its mode (tracked, its project added); undefined when the folder is being removed meanwhile. Throws OpenCode's error. */
-  async function createOpenCodeSession(cwd: string, initial: { model?: string; permissionMode: PermissionMode; effort?: SessionSettings["effort"] }): Promise<Session | undefined> {
+  /** The OpenCode session row of a new session in `cwd` with the rules of its mode (and agent); undefined when the folder is being removed meanwhile. Throws OpenCode's error. */
+  async function createOpenCodeRow(cwd: string, mode: PermissionMode, agent?: string): Promise<OpenCodeSessionRow | undefined> {
     // No timeout: the first request of a cold folder boots its instance (> 3 s) and the user waits for the session; a timeout would lose the created session for good.
     // `resend`: a create cut off by a server that died is sent again to the next server; at worst (it died after creating) an empty session is left over.
-    const permission = await openCodeEngine.block(initial.permissionMode, cwd); // may reject: before the counter goes up
+    const permission = await openCodeEngine.block(mode, cwd, agent); // may reject: before the counter goes up
     openCodeCreating++;
     const row = await openCode.request<OpenCodeSessionRow>("/session", { method: "POST", directory: cwd, timeoutMs: 0, resend: true, body: { permission } }).finally(() => openCodeCreating--);
     openCodeEngine.noteCreated(row.id, permission);
-    if (ctx.isRemoving(cwd) || !existsSync(cwd)) return undefined;
+    return ctx.isRemoving(cwd) || !existsSync(cwd) ? undefined : row;
+  }
+
+  /** A new OpenCode session in `cwd` with the rules of its mode (tracked, its project added); undefined when the folder is being removed meanwhile. Throws OpenCode's error. */
+  async function createOpenCodeSession(cwd: string, initial: { model?: string; permissionMode: PermissionMode; effort?: SessionSettings["effort"] }): Promise<Session | undefined> {
+    const row = await createOpenCodeRow(cwd, initial.permissionMode);
+    if (!row) return undefined;
     const opts = sessionOpts(initial);
     const s = ctx.track(new Session(cwd, opts, { id: row.id }));
     // The entry makes the next list start OpenCode for a user whose last engine is Claude. `fields` empty: only a session without an entry is saved (as Claude does on its first query).
@@ -119,6 +125,16 @@ export function createOpenCodeCatalogue(ctx: CatalogueContext, o: OpenCodeCatalo
     ctx.addProject(cwd);
     return s;
   }
+
+  /** `/clear` (docs/spec.md "Sessions"): a new session with the model, mode, effort and agent of the cleared one. Not tracked here: `onCleared` tracks it. */
+  openCodeEngine.createHeir = async (cwd, carried) => {
+    const row = await createOpenCodeRow(cwd, carried.permissionMode, carried.agent);
+    if (!row) return undefined;
+    // Saved before the session exists: its `opts.agent(id)` gives the carried agent.
+    ctx.saveSettings(() => settings.set(row.id, { model: carried.model, permissionMode: carried.permissionMode, effort: carried.effort, ...(carried.agent && { agent: carried.agent }) }));
+    openCodeMeta.set(row.id, { cwd, title: row.title ?? "New session" });
+    return new Session(cwd, sessionOpts(carried), { id: row.id });
+  };
 
   /** The error text of the last failed OpenCode listing: logged once per change, not on every list. */
   let openCodeListError: string | undefined;
