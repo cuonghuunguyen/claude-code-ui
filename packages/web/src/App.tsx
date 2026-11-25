@@ -3989,6 +3989,7 @@ export function App() {
       <OnFirstOpen open={!!creatingWt} fallback={<DialogFallback size="worktree" />}><CreateWorktreeDialog
         project={creatingWt}
         side={creatingWt === undefined ? undefined : sideOfCwd(cwdSides, creatingWt)}
+        sideLabel={creatingWt === undefined ? undefined : sideOf.badge(creatingWt)?.label}
         request={(m) => client.current!.request(m)}
         onClose={() => setCreatingWt(undefined)}
         onCreated={(project, r) => void openInWorktree(project, r.path)}

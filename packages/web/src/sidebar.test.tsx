@@ -759,7 +759,7 @@ describe("one repository on several Sides is one group (GH-591)", () => {
     await act(async () => btn.click());
     expect(onNew).toHaveBeenCalledWith(`${mac}/.claude/worktrees/idle`);
     // The WSL main checkout has no session now and keeps its toggle and empty line.
-    const wslMain = wtRows(el).find((r) => label(r) === "WSL: Ubuntu · Main checkout : main")!;
+    const wslMain = wtRows(el).find((r) => label(r).startsWith("WSL: Ubuntu · Main checkout"))!;
     expect(wslMain.querySelector('[data-testid="worktree-toggle"]')!.getAttribute("aria-expanded")).toBe("true");
     expect(wslMain.textContent).toContain("No sessions yet");
   });
@@ -776,6 +776,30 @@ describe("one repository on several Sides is one group (GH-591)", () => {
     await act(async () => items[2]!.click());
     expect(onProjectSettings).toHaveBeenCalledWith(ssh, "SSH: dev");
     await closeMenu();
+  });
+
+  it("Create worktree: the group menu has one item per Side (only Sides whose main checkout is inside the roots), the main row of a Side has its own; each acts on that Side's project", async () => {
+    const outside = { ...worktrees, [wsl]: [{ path: wsl, branch: "main", main: true, outsideRoots: true }] };
+    const { el, onNewWorktree } = await render({ ...props, worktrees: outside });
+    const header = el.querySelector<HTMLElement>('[data-testid="group-toggle"]')!;
+    await act(async () => header.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })));
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="group-menu-create-worktree-1"]')).not.toBeNull());
+    expect(texts().filter((x) => x?.startsWith("Create worktree"))).toEqual(["Create worktree · macOS…", "Create worktree · SSH: dev…"]);
+    await act(async () => tid("group-menu-create-worktree-1").click());
+    expect(onNewWorktree).toHaveBeenLastCalledWith(ssh, false);
+    const main = wtRows(el).find((r) => label(r) === "SSH: dev · Main checkout : release")!;
+    await act(async () => main.querySelector<HTMLElement>('[data-testid="worktree-menu"]')!.click());
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="worktree-menu-create-worktree"]')).not.toBeNull());
+    await act(async () => tid("worktree-menu-create-worktree").click());
+    expect(onNewWorktree).toHaveBeenLastCalledWith(ssh, false);
+  });
+
+  it("the header + worktree button keeps the primary Side and names it", async () => {
+    const { el, onNewWorktree } = await render(props);
+    const btn = el.querySelector<HTMLElement>('[data-testid="project-new-worktree"]')!;
+    expect(btn.getAttribute("aria-label")).toBe("Create worktree in app on macOS (Shift+click: new worktree with a generated name)");
+    await act(async () => btn.click());
+    expect(onNewWorktree).toHaveBeenLastCalledWith(mac, false);
   });
 
   it("the group's Clean up covers the whole repository; a non-primary main row has its own Clean up for that project", async () => {

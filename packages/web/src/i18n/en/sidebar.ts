@@ -82,6 +82,7 @@ export default {
   "sidebar.allArchived": "All sessions are archived.",
   "sidebar.idleCount": "+{count} idle",
   "sidebar.createWorktreeIn": "Create worktree in {name} (Shift+click: new worktree with a generated name)",
+  "sidebar.createWorktreeInSide": "Create worktree in {name} on {side} (Shift+click: new worktree with a generated name)",
   "sidebar.newSessionIn": "New session in {name}",
   "sidebar.removeNamedFromList": "Remove {name} from the list (files stay)",
   "sidebar.outsideRoots": "(outside the allowed roots)",
@@ -95,6 +96,7 @@ export default {
   // sidebar-menus.ts / sidebar.tsx menus
   "sidebar.menu.newSession": "New session",
   "sidebar.menu.createWorktree": "Create worktree…",
+  "sidebar.menu.createWorktreeSide": "Create worktree · {side}…",
   "label.name": "Name",
   "label.icon": "Icon",
   "label.none": "None",

@@ -20,6 +20,8 @@ type Props = {
   project?: string;
   /** Side id of the project (default `local`): its Jira overrides are keyed by it. */
   side?: string;
+  /** Title of that Side, set when several Sides exist: the footer names it after the project. */
+  sideLabel?: string;
   request: <T>(m: Request) => Promise<T>;
   onClose: () => void;
   /** The worktree is ready: the app opens a new session tab in it. */
@@ -36,7 +38,7 @@ const INPUT = "h-8 w-full rounded-md border bg-background px-2 text-sm outline-n
 const SEARCH_DELAY = 300;
 type Create = { branch: string; base?: string } | { checkout: string };
 
-function Body({ project, side = LOCAL_SIDE, request, onClose, onCreated, onJiraSettings }: Props & { project: string }) {
+function Body({ project, side = LOCAL_SIDE, sideLabel, request, onClose, onCreated, onJiraSettings }: Props & { project: string }) {
   const t = useT();
   const ask = useRef(request);
   ask.current = request;
@@ -238,7 +240,7 @@ function Body({ project, side = LOCAL_SIDE, request, onClose, onCreated, onJiraS
       testId="create-worktree"
       footer={
         <>
-          <span className="min-w-0 flex-1 truncate text-muted-foreground text-xs">{projectName(project)}</span>
+          <span className="min-w-0 flex-1 truncate text-muted-foreground text-xs">{[projectName(project), sideLabel].filter(Boolean).join(" · ")}</span>
           <Button variant="ghost" className="cursor-pointer max-md:h-11" onClick={onClose} disabled={creating} data-testid="create-worktree-cancel">
             {t("sidebar.cancel")}
           </Button>
