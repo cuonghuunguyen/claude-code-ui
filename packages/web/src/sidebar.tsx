@@ -679,25 +679,25 @@ export function SessionList({
           const sidesLabel = g.repo && g.sides!.length > 1 ? t("sidebar.sidesCount", { count: g.sides!.length }) : undefined;
           const groupSides = sidesOf(g);
           const toggleButton = (
-                <button
-                  className="flex h-7 w-full items-center gap-2 rounded-md pr-1.5 pl-1.5 text-left max-md:pr-26 pointer-coarse:pr-38 max-md:pointer-coarse:pr-26 text-muted-foreground text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11"
-                  aria-expanded={open}
-                  aria-label={sidesLabel ? t("sidebar.sidesNames", { name: projectName(g.cwd), count: g.sides!.length, sides: groupSides.map((x) => x.title).join(", ") }) : sideOf(g.cwd) ? `${projectName(g.cwd)} (${sideOf(g.cwd)!.label})` : undefined}
-                  onClick={() => toggle(groupKey(g))}
-                  data-testid="group-toggle" data-part="group-toggle"
-                >
-                  <ProjectAvatar cwd={g.cwd} />
-                  <span className="min-w-0 truncate font-medium">{projectName(g.cwd)}</span>
-                  {sidesLabel ? (
-                    <span className="inline-flex h-4 shrink-0 select-none items-center gap-1 whitespace-nowrap rounded-xs border-[0.5px] bg-muted px-1 font-[530] text-[11px] text-muted-foreground leading-none tabular-nums" data-testid="sides-chip">
-                      {sidesLabel}
-                    </span>
-                  ) : (
-                    <SideBadge cwd={g.cwd} short />
-                  )}
-                  {filtering && !!g.idle && <span className="shrink-0 font-normal text-faint text-xs" data-testid="idle-count">{t("sidebar.idleCount", { count: g.idle })}</span>}
-                  <ChevronRightIcon className={cn("ml-auto size-4 shrink-0 text-faint transition-transform motion-reduce:transition-none", open && "rotate-90")} aria-hidden />
-                </button>
+            <button
+              className="flex h-7 w-full items-center gap-2 rounded-md pr-1.5 pl-1.5 text-left max-md:pr-26 pointer-coarse:pr-38 max-md:pointer-coarse:pr-26 text-muted-foreground text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11"
+              aria-expanded={open}
+              aria-label={sidesLabel ? t("sidebar.sidesNames", { name: projectName(g.cwd), count: g.sides!.length, sides: groupSides.map((x) => x.title).join(", ") }) : sideOf(g.cwd) ? `${projectName(g.cwd)} (${sideOf(g.cwd)!.label})` : undefined}
+              onClick={() => toggle(groupKey(g))}
+              data-testid="group-toggle" data-part="group-toggle"
+            >
+              <ProjectAvatar cwd={g.cwd} />
+              <span className="min-w-0 truncate font-medium">{projectName(g.cwd)}</span>
+              {sidesLabel ? (
+                <span className="inline-flex h-4 shrink-0 select-none items-center gap-1 whitespace-nowrap rounded-xs border-[0.5px] bg-muted px-1 font-[530] text-[11px] text-muted-foreground leading-none tabular-nums" data-testid="sides-chip">
+                  {sidesLabel}
+                </span>
+              ) : (
+                <SideBadge cwd={g.cwd} short />
+              )}
+              {filtering && !!g.idle && <span className="shrink-0 font-normal text-faint text-xs" data-testid="idle-count">{t("sidebar.idleCount", { count: g.idle })}</span>}
+              <ChevronRightIcon className={cn("ml-auto size-4 shrink-0 text-faint transition-transform motion-reduce:transition-none", open && "rotate-90")} aria-hidden />
+            </button>
           );
           return (
             <section key={groupKey(g)} data-testid="session-group" data-cwd={g.cwd}>
@@ -766,26 +766,26 @@ export function SessionList({
                   // A linked worktree with no session at all is one line: no chevron, a click starts a session there.
                   const compact = !r.main && !r.outsideRoots && !r.sessions.length && !(baseGroup(g.cwd)?.worktrees.find((x) => x.path === r.path)?.sessions.length);
                   const rowButton = (
-                        <button
-                          className={cn("flex h-7 w-full items-center gap-2 rounded-md pl-6 text-left text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11 max-md:pr-26 pointer-coarse:pr-26", r.outsideRoots ? "pr-8" : "pr-1.5", "text-muted-foreground")}
-                          aria-expanded={compact ? undefined : rowOpen}
-                          onClick={() => (compact ? onNew(r.path) : toggle(rowKey(r.path)))}
-                          aria-label={narrow || rowSide ? `${label}${r.outsideRoots ? ` ${t("sidebar.outsideRoots")}` : ""}` : undefined}
-                          aria-describedby={compact ? emptyId : undefined}
-                          data-testid="worktree-toggle"
-                          data-empty={compact || undefined}
-                        >
-                          {busy ? <LoaderCircleIcon className="size-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden /> : r.main ? <HouseIcon className="size-4 shrink-0 text-foreground" aria-hidden data-testid="main-mark" /> : <GitBranchIcon className="size-4 shrink-0 text-faint" aria-hidden />}
-                          {rowSide && <SideIcon cwd={project} />}
-                          <span className={cn("min-w-0 truncate", r.main ? "font-medium text-foreground" : compact ? "font-normal" : "font-medium")}>{text}</span>
-                          {busy && (
-                            <span className="shrink-0 text-xs" data-testid="worktree-removing">
-                              {t("sidebar.removing")}
-                            </span>
-                          )}
-                          {!narrow && r.outsideRoots && <span className="sr-only">{t("sidebar.outsideRoots")}</span>}
-                          {!compact && <ChevronRightIcon className={cn("ml-auto size-4 shrink-0 text-faint transition-transform motion-reduce:transition-none", rowOpen && "rotate-90")} aria-hidden />}
-                        </button>
+                      <button
+                        className={cn("flex h-7 w-full items-center gap-2 rounded-md pl-6 text-left text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11 max-md:pr-26 pointer-coarse:pr-26", r.outsideRoots ? "pr-8" : "pr-1.5", "text-muted-foreground")}
+                        aria-expanded={compact ? undefined : rowOpen}
+                        onClick={() => (compact ? onNew(r.path) : toggle(rowKey(r.path)))}
+                        aria-label={narrow || rowSide ? `${label}${r.outsideRoots ? ` ${t("sidebar.outsideRoots")}` : ""}` : undefined}
+                        aria-describedby={compact ? emptyId : undefined}
+                        data-testid="worktree-toggle"
+                        data-empty={compact || undefined}
+                      >
+                        {busy ? <LoaderCircleIcon className="size-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden /> : r.main ? <HouseIcon className="size-4 shrink-0 text-foreground" aria-hidden data-testid="main-mark" /> : <GitBranchIcon className="size-4 shrink-0 text-faint" aria-hidden />}
+                        {rowSide && <SideIcon cwd={project} />}
+                        <span className={cn("min-w-0 truncate", r.main ? "font-medium text-foreground" : compact ? "font-normal" : "font-medium")}>{text}</span>
+                        {busy && (
+                          <span className="shrink-0 text-xs" data-testid="worktree-removing">
+                            {t("sidebar.removing")}
+                          </span>
+                        )}
+                        {!narrow && r.outsideRoots && <span className="sr-only">{t("sidebar.outsideRoots")}</span>}
+                        {!compact && <ChevronRightIcon className={cn("ml-auto size-4 shrink-0 text-faint transition-transform motion-reduce:transition-none", rowOpen && "rotate-90")} aria-hidden />}
+                      </button>
                   );
                   return (
                     <div key={r.path} data-testid="worktree-row" data-path={r.path}>
@@ -808,7 +808,7 @@ export function SessionList({
                             </>
                           }
                         />
-                        {/* Touch has no tooltip: outside the roots a lock takes New session's place (same slot, so the chevrons stay in one column). */}
+                        {/* Touch has no tooltip: outside the roots a lock takes New session's place (same slot as the touch actions). */}
                         {r.outsideRoots ? (
                           <span className="pointer-events-none absolute inset-y-0 right-0.5 flex items-center" aria-hidden>
                             <span className="grid size-6 place-items-center max-md:size-11 pointer-coarse:size-11">
