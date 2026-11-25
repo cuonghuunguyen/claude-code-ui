@@ -160,6 +160,8 @@ export type OpenCode2History = {
   permissions: Json[];
   /** The question forms OpenCode waits for (of the session and its subagents). */
   forms?: Json[];
+  /** The forms of the folder that belong to no session (OpenCode 2.3.0: an MCP elicitation has the session `global`). */
+  globalForms?: Json[];
   /** The session's own permission rules in OpenCode. */
   rules?: Rule2[];
   /** The message OpenCode's staged revert cuts at: it and everything after are hidden (OpenCode still lists them until a prompt commits the revert). */
@@ -197,7 +199,7 @@ export async function loadOpenCode2History(client: OpenCodeClient, id: string, c
   const cut = revert ? all.findIndex((m) => m.id === revert) : -1;
   // A fork whose session is gone (deleted in OpenCode) shows as its call only.
   const forks = await mapLimit([...forkLinks], 4, async (f) => ({ ...f, messages: await loadMessages(client, f.forkId).catch(() => undefined) }));
-  return { messages: cut < 0 ? all : all.slice(0, cut), forks, busy: id in active, permissions: await ours(requests), forms: await ours(forms), rules: (info.permissions ?? []) as Rule2[], ...(revert && { revert }), ...(info.agent && { agent: info.agent }) };
+  return { messages: cut < 0 ? all : all.slice(0, cut), forks, busy: id in active, permissions: await ours(requests), forms: await ours(forms.filter((f) => f.sessionID !== "global")), globalForms: forms.filter((f) => f.sessionID === "global"), rules: (info.permissions ?? []) as Rule2[], ...(revert && { revert }), ...(info.agent && { agent: info.agent }) };
 }
 
 type TurnEnd = { done: Promise<void>; resolve: () => void };
@@ -331,6 +333,12 @@ class OpenCode2Session implements EngineSession {
   get id() {
     return this.session.id;
   }
+  /** A global form that no session could be chosen for: a notice, once. */
+  unroutedForm(form: Json) {
+    if (this.unshown.has(form.id)) return;
+    this.unshown.add(form.id);
+    this.notice(`form:${form.id}`, `An MCP server asks for input (${form.title ?? "a form"}) and claude-ui cannot tell which session it belongs to. Answer it in OpenCode.`);
+  }
   /** Whether a turn runs. */
   isRunning = () => this.session.currentState() === "running";
   runningTools = () => this.mapper.runningTools();
@@ -431,6 +439,10 @@ class OpenCode2Session implements EngineSession {
       else this.askPermission(p);
     }
     for (const f of h.forms ?? []) (live.add(f.id), this.askForm(f));
+    // A global form shown here stays; one not shown yet (a restart of the daemon) goes to the session it belongs to.
+    for (const f of h.globalForms ?? []) {
+      if (this.reqs.has(f.id) || this.engine.globalFormOwner(this.cwd, f) === this) (live.add(f.id), this.askForm({ ...f, location: { directory: this.cwd } }));
+    }
     for (const id of [...this.reqs.keys()]) if (!live.has(id) && this.session.pendingRequest(id)) this.session.cancel(id, ANSWERED);
   }
 
@@ -1313,8 +1325,8 @@ class OpenCode2Session implements EngineSession {
       if (f.type === "string" && !options.length) q.input = keep({ type: f.format ?? "text", minLength: finite(f.minLength), maxLength: finite(f.maxLength), pattern: typeof f.pattern === "string" ? f.pattern : undefined, placeholder: typeof f.placeholder === "string" ? f.placeholder : undefined }) as QuestionInput;
       else if (f.type === "string" && f.custom && (f.format || f.pattern !== undefined || finite(f.minLength) !== undefined || finite(f.maxLength) !== undefined)) q.input = keep({ type: f.format ?? "text", minLength: finite(f.minLength), maxLength: finite(f.maxLength), pattern: typeof f.pattern === "string" ? f.pattern : undefined }) as QuestionInput;
       else if (f.type === "number" || f.type === "integer") q.input = keep({ type: f.type, minimum: finite(f.minimum), maximum: finite(f.maximum) }) as QuestionInput;
-      // OpenCode 2 enforces only `required: true`.
-      if (f.required !== true) q.optional = true;
+      // An MCP elicitation field is optional unless `required: true` (what OpenCode 2.3.0 enforces); the `question` tool's fields stay required.
+      if (form.metadata?.kind === "mcp-elicitation" && f.required !== true) q.optional = true;
       const dflt = f.type === "number" || f.type === "integer" ? finite(f.default) : f.default;
       if (dflt !== undefined && f.type !== "external") q.default = Array.isArray(dflt) ? dflt.map((v: unknown) => labelOf(f, v)).join(", ") : labelOf(f, dflt);
       const when = ((f.when as Json[] | undefined) ?? []).filter((w) => texts.has(w.key)).map((w) => ({ question: texts.get(w.key)!, op: w.op === "neq" ? ("neq" as const) : ("eq" as const), value: labelOf(all.find((x) => x.key === w.key), w.value) }));
@@ -1693,7 +1705,9 @@ class OpenCode2EngineImpl implements Engine {
           // OpenCode 2.3.0 creates an MCP elicitation with the session "global" (its folder is the event's location): the run waiting for that server's tool shows it.
           if (sid === "global" && payload.type === "form.created" && dir) {
             const owner = this.globalFormOwner(dir, payload.properties.form);
-            return owner?.event(payload.type, { ...payload.properties, form: { ...payload.properties.form, location: { directory: dir } } });
+            // Undecided: every run of the folder says so (the MCP tool waits for an answer OpenCode cannot get from here).
+            if (!owner) return this.sessions.forEach((o) => o.cwd.replace(/[\\/]+$/, "") === dir.replace(/[\\/]+$/, "") && o.isRunning() && o.unroutedForm(payload.properties.form));
+            return owner.event(payload.type, { ...payload.properties, form: { ...payload.properties.form, location: { directory: dir } } });
           }
           const own = this.sessions.get(sid);
           if (own) return own.event(payload.type, payload.properties);
@@ -1717,7 +1731,7 @@ class OpenCode2EngineImpl implements Engine {
    * The session that shows a global form of `dir`: the only one running there, else the only one running there with a call of the form's MCP server
    * (`metadata.server`, tool key `<server>_<tool>`). None when that is not decided: the form is not shown (a guess could answer for the wrong run).
    */
-  private globalFormOwner(dir: string, form: Json): OpenCode2Session | undefined {
+  globalFormOwner(dir: string, form: Json): OpenCode2Session | undefined {
     const norm = (d: string) => d.replace(/[\\/]+$/, "");
     const here = [...this.sessions.values()].filter((o) => norm(o.cwd) === norm(dir) && o.isRunning());
     if (here.length === 1) return here[0];
