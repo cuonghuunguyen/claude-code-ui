@@ -372,7 +372,7 @@ class OpenCode2Session implements EngineSession {
 
   /** A background shell of the model that OpenCode no longer lists as running ended while the daemon was away (its end notice, if any, is already read): the card stops. */
   private async reconcileShells() {
-    const open = this.mapper.openShells();
+    const open = [this.mapper, ...this.children.mappers()].flatMap((m) => m.openShells());
     if (!open.length) return;
     const running = await this.server
       .client()
@@ -452,7 +452,12 @@ class OpenCode2Session implements EngineSession {
 
   /** `shell.exited` of any shell: the card of the call that started it ends. */
   shellExited(d: Json) {
-    this.emitAll(this.mapper.shellExited(d.id, d.status, typeof d.exit === "number" ? d.exit : undefined));
+    const exit = typeof d.exit === "number" ? d.exit : undefined;
+    this.emitAll(this.mapper.shellExited(d.id, d.status, exit));
+    // A shell of a subagent lives in its child's mapper: its card shows under the child's call.
+    for (const [, child] of this.children.entries()) {
+      for (const part of child.mapper.shellExited(d.id, d.status, exit)) this.session.emit({ ...part, parentId: child.callId });
+    }
   }
 
   private noteUsage(m: { type?: string; tokens?: Json; model?: { id: string; providerID: string } }) {
@@ -1556,6 +1561,10 @@ class OpenCode2Session implements EngineSession {
     const client = await this.server.client();
     const r = await client.session.interrupt({ sessionID: childId });
     if (r?.interrupted === false) {
+      // The idle child left background shells running: they are killed with it (their end notices then arrive as usual).
+      const child = this.children.get(childId);
+      if (child)
+        await Promise.all(child.mapper.openShells().map(([, sh]) => client.shell.remove({ id: sh, location: { directory: this.cwd } }).catch(() => undefined)));
       // The card of a nested subagent is in its parent child's mapper and shows under that child's call.
       const owner = [...this.children.entries()].find(([, c]) => c.mapper.childOf(callId) === childId);
       for (const part of (owner?.[1].mapper ?? this.mapper).subagentEnded(childId, "stopped", Date.now())) this.session.emit(owner ? { ...part, parentId: owner[1].callId } : part);
@@ -1575,22 +1584,29 @@ class OpenCode2Session implements EngineSession {
     return true;
   };
   /** The shell a card of the Shells list stands for: a background call of the model, or a bash mode command moved to the background (its part id is the shell id). */
-  private shellFor = (id: string) => this.mapper.shellOf(id) ?? (this.backgrounded.has(id) ? id : undefined);
+  private shellFor = (id: string): { sh: string; mapper: OpenCode2Mapper } | undefined => {
+    for (const m of [this.mapper, ...this.children.mappers()]) {
+      const sh = m.shellOf(id);
+      if (sh) return { sh, mapper: m };
+    }
+    return this.backgrounded.has(id) ? { sh: id, mapper: this.mapper } : undefined;
+  };
   /** Kill: OpenCode removes the shell (its end then shows on the card). False for an unknown or ended shell. */
   stopShell = async (id: string) => {
-    const sh = this.shellFor(id);
-    if (!sh || this.mapper.shellEnd(sh)) return false;
+    const f = this.shellFor(id);
+    if (!f || f.mapper.shellEnd(f.sh)) return false;
     const client = await this.server.client();
-    await client.shell.remove({ id: sh, location: { directory: this.cwd } });
+    await client.shell.remove({ id: f.sh, location: { directory: this.cwd } });
     return true;
   };
   /** Output tails shown in the Shells list: the last read while the shell ran, for a killed one (OpenCode forgets its output). */
   private readonly shellTails = new Map<string, string>();
   /** The tail of a background shell's output: read from OpenCode while it runs, the end notice's text after. */
   shellOutput = async (id: string) => {
-    const sh = this.shellFor(id);
-    if (!sh) return undefined;
-    const end = this.mapper.shellEnd(sh);
+    const f = this.shellFor(id);
+    if (!f) return undefined;
+    const sh = f.sh;
+    const end = f.mapper.shellEnd(sh);
     let out = end?.output ?? (end ? this.shellTails.get(sh) : undefined);
     let truncated = false;
     if (out === undefined && end) return undefined;
