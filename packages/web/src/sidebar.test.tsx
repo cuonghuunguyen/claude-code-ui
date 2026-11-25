@@ -743,8 +743,8 @@ describe("one repository on several Sides is one group (GH-591)", () => {
     const btn = idle.querySelector<HTMLElement>('[data-testid="worktree-toggle"]')!;
     expect(btn.hasAttribute("aria-expanded")).toBe(false);
     expect(idle.textContent).toBe("idle");
-    expect(btn.getAttribute("aria-describedby")).toBe("sidebar-empty-row");
-    expect(el.querySelector("#sidebar-empty-row")!.textContent).toBe("No sessions yet");
+    expect(btn.getAttribute("aria-describedby")).toBeTruthy();
+    expect(el.querySelector(`[id="${btn.getAttribute("aria-describedby")}"]`)!.textContent).toBe("No sessions yet");
     await act(async () => btn.click());
     expect(onNew).toHaveBeenCalledWith(`${mac}/.claude/worktrees/idle`);
     // The WSL main checkout has no session now and keeps its toggle and empty line.

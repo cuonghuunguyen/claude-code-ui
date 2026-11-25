@@ -33,7 +33,7 @@ export function MenuEntries({ kind, entries }: { kind: "menu" | "context"; entri
         );
       if (e.kind === "info")
         return (
-          <div key={`info:${e.label}`} className="flex max-w-72 items-center gap-2 px-2 py-1 text-muted-foreground text-xs" data-testid="menu-info">
+          <div key={`info:${e.label}`} className="flex max-w-72 items-center gap-2 px-2 py-1 text-muted-foreground text-xs" aria-hidden data-testid="menu-info">
             {e.icon}
             <span className="min-w-0 truncate">{e.label}</span>
           </div>

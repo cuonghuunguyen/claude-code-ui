@@ -2,7 +2,7 @@
 import { EngineTag } from "./engine-tag.tsx";
 import { SideBadge, SideIcon, SideLabel, SideState, SideStatusLine } from "./sides.tsx";
 import { LabelIcon } from "./label-icon.tsx";
-import { Fragment, memo, use, useEffect, useRef, useState, type ReactElement, type ReactNode, type UIEvent } from "react";
+import { Fragment, memo, use, useEffect, useId, useRef, useState, type ReactElement, type ReactNode, type UIEvent } from "react";
 import { useNarrow } from "@/lib/use-narrow.ts";
 import { Menu } from "@base-ui/react/menu";
 import { ArchiveIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, CircleAlertIcon, EllipsisVerticalIcon, LocateFixedIcon, FolderPlusIcon, GitBranchIcon, GitBranchPlusIcon, HouseIcon, LoaderCircleIcon, LockIcon, SearchIcon, SquarePenIcon, Trash2Icon, UsersIcon, XIcon } from "lucide-react";
@@ -226,6 +226,7 @@ export function SessionList({
   onArchiveIdle?: (ids: string[], where: string, days: number) => void;
 }) {
   const t = useT();
+  const emptyId = useId();
   useLabels();
   const narrow = useNarrow();
   const sideOf = use(SideLabel);
@@ -347,7 +348,10 @@ export function SessionList({
     onArchive: (days: number) => onArchiveIdle?.(idle(sessions(), days), where, days),
   });
   /** The Side of each project of a merged group with several Sides, in the order of its rows; empty for any other group. */
-  const sidesOf = (g: SessionGroup) => (g.repo && g.sides!.length > 1 ? g.sides!.map((id) => ({ cwd: g.members.find((m) => (sideInfo(m)?.id ?? LOCAL_SIDE) === id) ?? g.cwd, title: "" })).map((x) => ({ ...x, title: sideOf(x.cwd)?.label ?? lastSegment(x.cwd) })) : []);
+  const sidesOf = (g: SessionGroup) => (g.repo && g.sides!.length > 1 ? g.sides!.map((id) => {
+        const cwd = g.members.find((m) => (sideInfo(m)?.id ?? LOCAL_SIDE) === id) ?? g.cwd;
+        return { cwd, title: sideOf(cwd)?.label ?? lastSegment(cwd) };
+      }) : []);
   /** A Side's state in words for the Sides tooltip. */
   const sideStateText = (cwd: string) => {
     const st = sideInfo(cwd)?.state ?? "ready";
@@ -386,7 +390,7 @@ export function SessionList({
       newSession: r.outsideRoots || isBusy(r) ? undefined : () => onNew(r.path),
       copyPath: onCopy && (() => (count("copyPath"), onCopy(r.path, "path"))),
       cleanUp: member && onCleanUp ? () => onCleanUp({ kind: "project", cwd: project }) : undefined,
-      info: g.repo && g.sides!.length > 1 ? [{ icon: <SideIcon cwd={project} />, label: `${sideOf(project)?.label ?? ""} · ${r.path}` }] : undefined,
+      info: g.repo && g.sides!.length > 1 ? [{ icon: <SideIcon cwd={project} />, label: [sideOf(project)?.label, r.path].filter(Boolean).join(" · ") }] : undefined,
       projectSettings: member && onProjectSettings ? () => onProjectSettings(project, sideOf(project)?.label) : undefined,
       tail: member
         ? { id: `${prefix}remove`, label: t("sidebar.menu.removeFromList"), onSelect: () => onRemove(project) }
@@ -648,7 +652,7 @@ export function SessionList({
         </p>
       )}
       <nav className="-mx-1 flex min-h-0 flex-col gap-2 overflow-y-auto px-1" aria-label={t("sidebar.sessions")} data-testid="session-list" ref={listRef} onScroll={onListScroll}>
-        <span id="sidebar-empty-row" hidden>
+        <span id={emptyId} hidden>
           {t("sidebar.emptyRow")}
         </span>
         {archived && !!groups.length && (
@@ -758,18 +762,18 @@ export function SessionList({
                   const compact = !r.main && !r.outsideRoots && !r.sessions.length && !(baseGroup(g.cwd)?.worktrees.find((x) => x.path === r.path)?.sessions.length);
                   const rowButton = (
                         <button
-                          className={cn("flex h-7 w-full items-center gap-2 rounded-md pr-14 pl-6 text-left text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11 max-md:pr-26 pointer-coarse:pr-26", compact ? "text-muted-foreground/80" : "text-muted-foreground")}
+                          className={cn("flex h-7 w-full items-center gap-2 rounded-md pr-14 pl-6 text-left text-sm outline-none transition-colors hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset motion-reduce:transition-none max-md:h-11 max-md:pr-26 pointer-coarse:pr-26", "text-muted-foreground")}
                           aria-expanded={compact ? undefined : rowOpen}
                           onClick={() => (compact ? onNew(r.path) : toggle(rowKey(r.path)))}
                           aria-label={narrow || rowSide ? `${label}${r.outsideRoots ? ` ${t("sidebar.outsideRoots")}` : ""}` : undefined}
-                          aria-describedby={compact ? "sidebar-empty-row" : undefined}
+                          aria-describedby={compact ? emptyId : undefined}
                           title={rowSide ? undefined : `${narrow ? `${label}\n` : ""}${r.outsideRoots ? t("sidebar.outsideRootsTitle", { path: r.path }) : r.path}`}
                           data-testid="worktree-toggle"
                           data-empty={compact || undefined}
                         >
                           {busy ? <LoaderCircleIcon className="size-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden /> : r.main ? <HouseIcon className="size-4 shrink-0 text-foreground" aria-hidden data-testid="main-mark" /> : <GitBranchIcon className="size-4 shrink-0 text-faint" aria-hidden />}
                           {rowSide && <SideIcon cwd={project} />}
-                          <span className={cn("min-w-0 truncate", r.main ? "font-medium text-foreground" : "font-medium")}>{text}</span>
+                          <span className={cn("min-w-0 truncate", r.main ? "font-medium text-foreground" : compact ? "font-normal" : "font-medium")}>{text}</span>
                           {busy && (
                             <span className="shrink-0 text-xs" data-testid="worktree-removing">
                               {t("sidebar.removing")}
