@@ -1,6 +1,6 @@
 // Question panel (replaces the prompt box) and its timeline marker (docs/spec.md "Questions").
 import { useState, type FormEvent, type ReactNode } from "react";
-import type { Question } from "@claude-ui/protocol";
+import { checkAnswer, isActive, type InputError, type Question } from "@claude-ui/protocol";
 import { CircleCheckIcon, CircleHelpIcon, CircleIcon, CircleXIcon } from "lucide-react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,12 @@ export type Choice = { chosen: string[]; other?: string };
 /** The answer Claude gets: chosen labels in option order, then the Other text, joined with ", " (the SDK's multi-select format). */
 export function answerText(q: Question, { chosen, other }: Choice): string {
   const labels = q.options.map((o) => o.label).filter((l) => chosen.includes(l));
-  const text = other?.trim();
+  let text = other?.trim();
+  // A date-time input holds the local value; the answer is RFC 3339 (UTC, no fraction).
+  if (text && q.input?.type === "date-time") {
+    const at = new Date(text);
+    text = Number.isNaN(at.getTime()) ? text : at.toISOString().replace(/\.\d{3}Z$/, "Z");
+  }
   return [...labels, ...(text ? [text] : [])].join(", ");
 }
 
@@ -25,25 +30,63 @@ export function answerList(q: Question, { chosen, other }: Choice): string[] {
   return [...q.options.map((o) => o.label).filter((l) => chosen.includes(l)), ...(text ? [text] : [])];
 }
 
+/** The pre-filled choice of a question: its `default` as chosen labels, else as the free text. */
+function initial(q: Question): Choice {
+  if (q.default === undefined) return { chosen: [] };
+  if (q.input?.type === "date-time") {
+    // The input shows local time.
+    const at = new Date(q.default);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return { chosen: [], other: Number.isNaN(at.getTime()) ? q.default : `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}` };
+  }
+  if (q.input) return { chosen: [], other: q.default };
+  const labels = q.options.map((o) => o.label);
+  const chosen = q.multiSelect ? labels.filter((l) => q.default!.split(", ").includes(l)) : labels.filter((l) => l === q.default);
+  return chosen.length ? { chosen } : { chosen: [], other: q.default };
+}
+
+const HTML_TYPE = { text: "text", number: "number", integer: "number", date: "date", "date-time": "datetime-local", email: "email", uri: "url" } as const;
+const STEP = { integer: 1, number: "any", "date-time": 1 } as Partial<Record<NonNullable<Question["input"]>["type"], number | string>>;
+const INPUT_MODE = { number: "decimal", integer: "numeric", email: "email", uri: "url" } as const;
+const ERROR_KEY = { number: "number", integer: "integer", minimum: "minimum", maximum: "maximum", minLength: "minLength", maxLength: "maxLength", pattern: "pattern", date: "date", "date-time": "dateTime", email: "email", uri: "uri" } as const satisfies Record<InputError["code"], string>;
+
 /** Preview controls: only a diagram's fullscreen, so a small preview (two columns on a phone) can be read. */
 const PREVIEW_CONTROLS = { code: false, table: false, image: false, mermaid: { fullscreen: true, copy: false, download: false, panZoom: false } } as const;
 
 /** OpenCode question dock: one question per page, option cards, tray Dismiss · Back · Next / Submit. `onDismiss`: Claude Code's Esc (stops the turn). */
 export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: QuestionRequest; onAnswer: (answers: Record<string, string>, choices: Record<string, string[]>) => void; onDismiss?: () => void; mode?: ReactNode }) {
   const t = useT();
-  const [choices, setChoices] = useState<Choice[]>(() => part.questions.map(() => ({ chosen: [] })));
+  const [choices, setChoices] = useState<Choice[]>(() => part.questions.map(initial));
   const [page, setPage] = useState(0);
+  const [touched, setTouched] = useState<Set<number>>(new Set());
   const answers = part.questions.map((q, i) => answerText(q, choices[i]!));
+  const byText = Object.fromEntries(part.questions.map((q, i) => [q.question, answers[i]!]));
+  // A question whose `when` fails is not a page and not sent; its answer stays in state.
+  const active = part.questions.map((q) => isActive(q, byText, part.questions));
+  const activeIdx = part.questions.flatMap((_, i) => (active[i] ? [i] : []));
+  const problem = (i: number): InputError | undefined => {
+    const q = part.questions[i]!;
+    return q.input && answers[i] ? checkAnswer(q.input, answers[i]!) : undefined;
+  };
+  const ready = (i: number) => (answers[i] ? !problem(i) : !!part.questions[i]!.optional);
   const set = (i: number, c: Choice) => setChoices((all) => all.map((x, j) => (j === i ? c : x)));
-  const last = page === part.questions.length - 1;
+  const next = activeIdx.find((i) => i > page);
+  const prev = activeIdx.filter((i) => i < page).pop();
+  const last = next === undefined;
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (!last) return answers[page] && setPage(page + 1);
-    onAnswer(Object.fromEntries(part.questions.map((q, i) => [q.question, answers[i]!])), Object.fromEntries(part.questions.map((q, i) => [q.question, answerList(q, choices[i]!)])));
+    if (!ready(page)) return setTouched((all) => new Set(all).add(page));
+    if (!last) return setPage(next);
+    if (!activeIdx.every(ready)) return;
+    const sent = activeIdx.filter((i) => answers[i]);
+    onAnswer(Object.fromEntries(sent.map((i) => [part.questions[i]!.question, answers[i]!])), Object.fromEntries(sent.map((i) => [part.questions[i]!.question, answerList(part.questions[i]!, choices[i]!)])));
   };
   const q = part.questions[page]!;
   const c = choices[page]!;
   const type = q.multiSelect ? "checkbox" : "radio";
+  const typed = q.input && q.options.length === 0 ? q.input : undefined;
+  const bad = touched.has(page) ? problem(page) : undefined;
+  const errorText = bad ? t(`session.question.error.${ERROR_KEY[bad.code]}`, { limit: String(bad.limit ?? "") }) : "";
   const toggle = (label: string) => set(page, q.multiSelect ? { ...c, chosen: c.chosen.includes(label) ? c.chosen.filter((l) => l !== label) : [...c.chosen, label] } : { chosen: [label] });
   // A visualization in the card may fill the Other text (VisualizeAnswerContext); the user still submits.
   const fillOther = (text: string) => set(page, q.multiSelect ? { ...c, other: text } : { chosen: [], other: text });
@@ -58,7 +101,8 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
       <fieldset key={q.question} className="flex flex-col gap-2 p-3" aria-labelledby={`${part.id}-q${page}`}>
         <p className="flex items-center gap-2 text-muted-foreground text-xs">
           <span className="rounded bg-secondary px-1.5 py-0.5 text-secondary-foreground">{q.header}</span>
-          {t("session.question.page", { page: page + 1, total: part.questions.length })}
+          {q.optional && <span className="rounded border px-1.5 py-0.5">{t("session.question.optional")}</span>}
+          {t("session.question.page", { page: activeIdx.indexOf(page) + 1, total: activeIdx.length })}
         </p>
         {/* Markdown, so no <legend> (phrasing content only): the fieldset is named by aria-labelledby. */}
         <div id={`${part.id}-q${page}`} className="font-medium" data-testid="question-text">
@@ -88,7 +132,7 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
             })}
           </div>
         )}
-        <p className="text-muted-foreground text-xs">{q.multiSelect ? t("session.question.selectMany") : t("session.question.selectOne")}</p>
+        {!typed && <p className="text-muted-foreground text-xs">{q.multiSelect ? t("session.question.selectMany") : t("session.question.selectOne")}</p>}
         {q.options.map((o) => (
           <label key={o.label} className={card(c.chosen.includes(o.label))}>
             <input type={type} name={q.question} className="mt-1" checked={c.chosen.includes(o.label)} onChange={() => toggle(o.label)} />
@@ -98,6 +142,34 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
             </span>
           </label>
         ))}
+        {typed ? (
+          <>
+            <input
+              key={q.question}
+              id={`${part.id}-in${page}`}
+              type={HTML_TYPE[typed.type]}
+              className="min-w-0 rounded-md border bg-transparent px-2 py-1 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11 pointer-coarse:text-base"
+              aria-labelledby={`${part.id}-q${page}`}
+              aria-invalid={!!bad}
+              aria-describedby={bad ? `${part.id}-err${page}` : undefined}
+              placeholder={typed.placeholder ?? t("session.question.otherPlaceholder")}
+              value={c.other ?? ""}
+              inputMode={INPUT_MODE[typed.type as keyof typeof INPUT_MODE]}
+              step={STEP[typed.type]}
+              min={typed.type === "number" || typed.type === "integer" ? typed.minimum : undefined}
+              max={typed.type === "number" || typed.type === "integer" ? typed.maximum : undefined}
+              minLength={typed.type === "text" ? typed.minLength : undefined}
+              maxLength={typed.type === "text" ? typed.maxLength : undefined}
+              onChange={(e) => set(page, { chosen: [], other: e.target.value })}
+              onBlur={() => setTouched((all) => new Set(all).add(page))}
+            />
+            {bad && (
+              <p id={`${part.id}-err${page}`} className="text-destructive text-xs" role="alert">
+                {errorText}
+              </p>
+            )}
+          </>
+        ) : (
         <label className={card(c.other !== undefined)}>
           <input
             type={type}
@@ -118,6 +190,7 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
             />
           </span>
         </label>
+        )}
       </fieldset>
       </VisualizeAnswerContext>
       </div>
@@ -129,12 +202,12 @@ export function QuestionPanel({ part, onAnswer, onDismiss, mode }: { part: Quest
           </Button>
         )}
         <div className="ml-auto flex gap-2">
-          {page > 0 && (
-            <Button type="button" variant="outline" onClick={() => setPage(page - 1)}>
+          {prev !== undefined && (
+            <Button type="button" variant="outline" onClick={() => setPage(prev)}>
               {t("session.question.back")}
             </Button>
           )}
-          <Button type="submit" variant={last ? "default" : "outline"} className={last ? "bg-send shadow-button-contrast hover:bg-send/80" : undefined} disabled={last ? answers.some((a) => !a) : !answers[page]}>
+          <Button type="submit" variant={last ? "default" : "outline"} className={last ? "bg-send shadow-button-contrast hover:bg-send/80" : undefined} disabled={last ? !activeIdx.every(ready) : !ready(page)}>
             {last ? t("session.question.submit") : t("session.question.next")}
           </Button>
         </div>
