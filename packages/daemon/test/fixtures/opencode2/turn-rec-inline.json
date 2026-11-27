@@ -1,0 +1,228 @@
+[
+ {
+  "event": "session.execution.started",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "agent": "build",
+   "model": {
+    "id": "deepseek-flash",
+    "providerID": "deepseek"
+   },
+   "assistantMessageID": "$A1",
+   "started": 1795780499229
+  }
+ },
+ {
+  "event": "session.step.first-token",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1"
+  }
+ },
+ {
+  "event": "session.tool.input.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "name": "read"
+  }
+ },
+ {
+  "event": "session.usage.updated",
+  "data": {
+   "sessionID": "$SESSION",
+   "cost": 0.000035718000000000006,
+   "tokens": {
+    "input": 213,
+    "output": 5,
+    "reasoning": 0,
+    "cache": {
+     "read": 256,
+     "write": 0
+    }
+   }
+  }
+ },
+ {
+  "event": "session.tool.input.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "text": "{\"path\": \"notes.txt\"}"
+  }
+ },
+ {
+  "event": "session.tool.called",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "input": {
+    "path": "notes.txt"
+   },
+   "executed": false
+  }
+ },
+ {
+  "event": "session.step.streamed",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1"
+  }
+ },
+ {
+  "event": "session.tool.success",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "content": [
+    {
+     "type": "text",
+     "text": "Read file notes.txt, lines 1-2\n1: first line of the notes\n2: second line"
+    }
+   ],
+   "metadata": {
+    "truncated": false
+   },
+   "executed": false
+  }
+ },
+ {
+  "event": "session.step.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "finish": "tool-calls",
+   "rawFinish": "tool_calls",
+   "tokens": {
+    "input": 4140,
+    "output": 38,
+    "reasoning": 0,
+    "cache": {
+     "read": 6656,
+     "write": 0
+    }
+   },
+   "cost": 0.0006637679999999999
+  }
+ },
+ {
+  "event": "session.usage.updated",
+  "data": {
+   "sessionID": "$SESSION",
+   "cost": 0.0006994859999999999,
+   "tokens": {
+    "input": 4353,
+    "output": 43,
+    "reasoning": 0,
+    "cache": {
+     "read": 6912,
+     "write": 0
+    }
+   }
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "agent": "build",
+   "model": {
+    "id": "deepseek-flash",
+    "providerID": "deepseek"
+   },
+   "assistantMessageID": "$A2",
+   "started": 1795780499983
+  }
+ },
+ {
+  "event": "session.step.first-token",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2"
+  }
+ },
+ {
+  "event": "session.text.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "ordinal": 0
+  }
+ },
+ {
+  "event": "session.text.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "ordinal": 0,
+   "delta": "The first line of notes.txt is \"first line of the notes\"."
+  }
+ },
+ {
+  "event": "session.text.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "ordinal": 0,
+   "text": "The first line of notes.txt is \"first line of the notes\"."
+  }
+ },
+ {
+  "event": "session.step.streamed",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2"
+  }
+ },
+ {
+  "event": "session.step.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "finish": "stop",
+   "rawFinish": "stop",
+   "tokens": {
+    "input": 245,
+    "output": 15,
+    "reasoning": 0,
+    "cache": {
+     "read": 10624,
+     "write": 0
+    }
+   },
+   "cost": 0.000077622
+  }
+ },
+ {
+  "event": "session.usage.updated",
+  "data": {
+   "sessionID": "$SESSION",
+   "cost": 0.0007771079999999999,
+   "tokens": {
+    "input": 4598,
+    "output": 58,
+    "reasoning": 0,
+    "cache": {
+     "read": 17536,
+     "write": 0
+    }
+   }
+  }
+ },
+ {
+  "event": "session.execution.succeeded",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ }
+]

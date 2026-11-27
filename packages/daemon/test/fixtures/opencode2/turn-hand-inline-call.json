@@ -1,0 +1,44 @@
+[
+ {
+  "event": "session.execution.started",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "agent": "build",
+   "model": {
+    "id": "m",
+    "providerID": "fake"
+   },
+   "assistantMessageID": "$A1"
+  }
+ },
+ {
+  "event": "session.tool.input.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "name": "claude-ui-parentxxxx_inline_task"
+  }
+ },
+ {
+  "event": "session.tool.called",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "input": {
+    "prompt": "Read notes.txt and reply with its first line."
+   },
+   "executed": false
+  }
+ },
+ {
+  "hold": true
+ }
+]
