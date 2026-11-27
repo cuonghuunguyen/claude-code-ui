@@ -1224,9 +1224,9 @@ export function SettingsDialog({ open, changed = 0, request, onClose, tabGroupin
     ...(localHistory ? [{ id: "history", title: sectionTitle(localHistory.id), category: "Sessions" as const, body: daemonSection(localHistory) }] : []),
     ...(settings ? [{ id: "account", title: t("settings.group.account"), category: "Integrations" as const, body: <>{project && overrides.account !== undefined && side === LOCAL_SIDE && <OverriddenMarker id="settings-account-overridden" onOpen={openProject} />}<ClaudeAccountSection active={settings.claude?.account ?? ""} accounts={claudeAccounts} envToken={!!daemon?.claudeEnvToken} request={request} onResult={(r) => (setSettings(r.settings), setClaudeAccounts(r.claudeAccounts ?? []), setError(undefined))} onError={setError} onLogin={onLogin ?? (() => {})} /></> }] : []),
     ...(git ? [{ id: "git", title: sectionTitle(git.id), category: "Integrations" as const, body: daemonSection(git) }] : []),
-    // GH-646: only for a browser on the daemon machine, and a daemon that lists editors (older ones and Sides have no `editor`).
-    ...(settings?.editor && daemon?.editors && onDaemonMachine()
-      ? [{ id: "open-in-app", title: t("settings.openApp.title"), category: "Integrations" as const, body: <OpenAppSection editor={settings.editor} saving={saving} request={request} onResult={(r) => (setSettings(r.settings), setDaemon(r.daemon), setError(undefined))} onError={setError} /> }]
+    // GH-646: a daemon that lists editors (older ones and Sides have no `editor`). GH-1021: read-only for a browser not on the daemon machine.
+    ...(settings?.editor && daemon?.editors
+      ? [{ id: "open-in-app", title: t("settings.openApp.title"), category: "Integrations" as const, body: <OpenAppSection editor={settings.editor} readOnly={!onDaemonMachine()} saving={saving} request={request} onResult={(r) => (setSettings(r.settings), setDaemon(r.daemon), setError(undefined))} onError={setError} /> }]
       : []),
     // GH-447: an older daemon has no `jira` settings: no group.
     ...(settings?.jira

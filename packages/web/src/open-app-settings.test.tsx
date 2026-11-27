@@ -13,7 +13,7 @@ const type = (el: HTMLInputElement, v: string) => {
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, v);
   el.dispatchEvent(new Event("input", { bubbles: true }));
 };
-async function setup(fail?: { code: string; message: string }, hold?: Promise<void>) {
+async function setup(fail?: { code: string; message: string }, hold?: Promise<void>, readOnly = false) {
   const request = vi.fn(async (_m: unknown) => {
     await hold;
     if (fail) throw Object.assign(new Error(fail.message), { code: fail.code });
@@ -24,7 +24,7 @@ async function setup(fail?: { code: string; message: string }, hold?: Promise<vo
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
-  await act(async () => root!.render(<OpenAppSection editor={{ command: "", name: "" }} saving={false} request={request as never} onResult={onResult} onError={onError} />));
+  await act(async () => root!.render(<OpenAppSection editor={{ command: "", name: "" }} saving={false} request={request as never} onResult={onResult} onError={onError} readOnly={readOnly} />));
   const q = (id: string) => document.querySelector<HTMLInputElement>(`[data-testid="${id}"]`)!;
   const edit = async (id: string, v: string, how: "blur" | "enter" = "blur") => {
     const input = q(id);
@@ -91,4 +91,11 @@ it("inputs are disabled while the section's own save is pending", async () => {
   expect(q("settings-openapp-name").disabled).toBe(true);
   await act(async () => release());
   expect(q("settings-openapp-command").disabled).toBe(false);
+});
+
+it("readOnly (a browser not on the daemon machine, GH-1021): fields disabled, one line says why", async () => {
+  const { q } = await setup(undefined, undefined, true);
+  expect(q("settings-openapp-command").disabled).toBe(true);
+  expect(q("settings-openapp-name").disabled).toBe(true);
+  expect(q("settings-openapp-readonly").textContent).toBe("The editor command can be changed only from a browser on the daemon machine.");
 });

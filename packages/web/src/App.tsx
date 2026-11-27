@@ -1407,8 +1407,8 @@ export function App() {
     ws.dispatch({ type: "pin", id, on: !ws.get().pinned.includes(id) });
   }
 
-  /** GH-612: only for a browser on the daemon machine (the daemon refuses any other), and only against a daemon that lists editors (older ones lack the request). */
-  const openExternal: OpenExternal | undefined = onDaemonMachine() && appEditors
+  /** GH-612, GH-1021: for every paired browser (the app starts on the daemon machine), against a daemon that lists editors (older ones lack the request). */
+  const openExternal: OpenExternal | undefined = appEditors
     ? { editors: appEditors, canOpen: (cwd) => canOpenSide(sideOf.sideOf(cwd)), isLocal: (cwd) => sideOf.sideOf(cwd) === LOCAL_SIDE, run: (path, how, cwd) => void client.current?.request({ type: "fs.openExternal", path, cwd, with: how }).catch((e: RequestError) => setToast(e.code === "open_failed" && appEditors.find((x) => x.id === how) ? tr("files.menu.openFailed", { app: appEditors.find((x) => x.id === how)!.label, reason: e.message }) : e.message)) }
     : undefined;
 

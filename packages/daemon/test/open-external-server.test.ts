@@ -62,11 +62,11 @@ describe("fs.openExternal", () => {
     expect(run.mock.calls[1]![0]).toMatchObject({ cmd: "/bin/code", args: [root, join(root, "a.txt")] });
     expect(await req(open(join(root, "sub"), "reveal"))).toMatchObject({ type: "reply" });
   });
-  it("refuses a Host that is not local (tailscale, LAN) and runs nothing", async () => {
+  it("a Host that is not local (tailscale, LAN) opens the app too (GH-1021)", async () => {
     run.mockClear();
     const req = await client(tailPort, "box.tail1234.ts.net");
-    expect(await req(open(join(root, "a.txt"), "reveal"))).toMatchObject({ type: "error", code: "not_local" });
-    expect(run).not.toHaveBeenCalled();
+    expect(await req(open(join(root, "a.txt"), "reveal"))).toMatchObject({ type: "reply", result: {} });
+    expect(run).toHaveBeenCalledOnce();
   });
   it.skipIf(!canSymlink)(needsLinks("refuses a link inside the root that leads out of it"), async () => {
     const req = await client(port);
@@ -134,11 +134,6 @@ describe("fs.openExternal in a WSL daemon (winPath)", () => {
     run.mockClear();
     winPath.mockRejectedValueOnce(new Error("wslpath: not found"));
     expect(await virtual(wsl)(open(join(root, "a.txt"), "reveal"))).toMatchObject({ type: "error", code: "open_failed", message: "wslpath: not found" });
-    expect(run).not.toHaveBeenCalled();
-  });
-  it("a daemon without winPath still refuses a virtual connection", async () => {
-    run.mockClear();
-    expect(await virtual(plain)(open(join(root, "a.txt"), "reveal"))).toMatchObject({ type: "error", code: "not_local" });
     expect(run).not.toHaveBeenCalled();
   });
 });

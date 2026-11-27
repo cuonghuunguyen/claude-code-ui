@@ -314,7 +314,7 @@ export type ClientMessage = { reqId: string; side?: string } & (
    * `covered` (GH-158): the sessions this page shows in-app notification cards for (in-app on, page focused and visible); no push or desktop notification for them either. Absent otherwise; an empty array is a page with in-app on and no listed session.
    */
   | { type: "push.focus"; sessionId?: string; covered?: string[] }
-  /** Opens a file or folder (absolute, inside the roots; `cwd` is the session folder, also inside) in the OS file manager (`reveal`), the default app (`default`, files only) or a detected editor. Only for a browser on the daemon machine (`not_local` otherwise); a side's path: `side_unsupported`. Reply `{}`. Other errors: `bad_request`, `cwd_not_allowed`, `path_not_allowed`, `not_found`, `editor_missing`, `open_failed`. */
+  /** Opens a file or folder (absolute, inside the roots; `cwd` is the session folder, also inside) in the OS file manager (`reveal`), the default app (`default`, files only) or a detected editor. Any paired browser may ask; the app starts on the daemon machine. A Docker or SSH side's path: `side_unsupported`. Reply `{}`. Other errors: `bad_request`, `cwd_not_allowed`, `path_not_allowed`, `not_found`, `editor_missing`, `open_failed`. */
   | { type: "fs.openExternal"; path: string; cwd: string; with: "reveal" | "default" | EditorId | "custom" }
   /** Text files only; `mtime` (ms) identifies the disk version. */
   | { type: "fs.read"; path: string }

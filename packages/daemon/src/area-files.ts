@@ -285,7 +285,6 @@ export function createFilesArea(ctx: FilesAreaContext, conn: Connection): Area<F
 
   const openExternal = async (msg: Msg<"fs.openExternal">, r: Respond) => {
     if (!opts.openExternal) return r.fail("unknown_type", "fs.openExternal is not available here");
-    if (!conn.sameHost) return r.fail("not_local", "Open in an app only works from a browser on the daemon machine");
     if (!isOpenWith(msg.with)) return r.fail("bad_request", `unknown with: ${String(msg.with)}`);
     const root = allowed(msg.cwd);
     if (!root) return r.fail("cwd_not_allowed", `outside the allowlisted roots: ${String(msg.cwd)}`);

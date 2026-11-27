@@ -386,6 +386,7 @@ export default {
   "settings.openApp.name": "Tên trong menu",
   "settings.openApp.nameHint": "Hiện là \"Mở bằng <tên>\". Để trống: tên chương trình.",
   "settings.openApp.namePlaceholder": "ví dụ: Sublime Text",
+  "settings.openApp.readOnly": "Chỉ trình duyệt trên máy chạy daemon mới đổi được lệnh trình soạn thảo.",
   "settings.openApp.notLocal": "Chỉ trình duyệt trên máy chạy daemon mới đổi được lệnh trình soạn thảo.",
   "jira.urlHint": "Cloud: https://<site>.atlassian.net. Data Center hoặc Server: địa chỉ https của Jira của bạn. Đổi máy chủ sẽ xóa token.",
   "jira.email": "Email",

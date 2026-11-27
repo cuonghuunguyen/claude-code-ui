@@ -14,12 +14,14 @@ type Props = {
   onResult: (r: SettingsResult) => void;
   /** A failure that is not about the typed value (network, older daemon). */
   onError: (message: string) => void;
+  /** The browser is not on the daemon machine: the daemon refuses a change (`not_local`), so the fields only show the values. */
+  readOnly?: boolean;
 };
 
 const INPUT = "h-8 w-full min-w-0 rounded-md border bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 max-md:text-base";
 const ROW = "flex flex-col gap-1 border-t py-2";
 
-export function OpenAppSection({ editor, saving, request, onResult, onError }: Props) {
+export function OpenAppSection({ editor, saving, request, onResult, onError, readOnly }: Props) {
   const t = useT();
   const [draft, setDraft] = useState<Partial<Record<Key, string>>>({});
   const [busy, setBusy] = useState(false);
@@ -56,7 +58,7 @@ export function OpenAppSection({ editor, saving, request, onResult, onError }: P
           onChange={(e) => (setDraft((d) => ({ ...d, [k]: e.target.value })), setBad(({ [k]: _, ...rest }) => rest))}
           onBlur={() => void commit(k)}
           onKeyDown={(e) => e.key === "Enter" && !isImeKey(e.nativeEvent) && (e.preventDefault(), e.currentTarget.blur())} // preventDefault: on a phone the focus falls to Back and this Enter would click it
-          disabled={saving || busy}
+          disabled={saving || busy || readOnly}
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"
@@ -83,6 +85,11 @@ export function OpenAppSection({ editor, saving, request, onResult, onError }: P
       <h3 id="settings-openapp" className="pb-1 font-medium text-[13px] text-muted-foreground">
         {t("settings.openApp.title")}
       </h3>
+      {readOnly && (
+        <p className="pb-1 text-muted-foreground text-xs" data-testid="settings-openapp-readonly">
+          {t("settings.openApp.readOnly")}
+        </p>
+      )}
       {field("command", { mono: true })}
       {field("name", {})}
     </section>

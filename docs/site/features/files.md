@@ -47,7 +47,7 @@ Right-click (long press, or <kbd>Shift</kbd>+<kbd>F10</kbd>) a file or folder:
 
 ### Open in the file manager, an editor or the default app
 
-The three **Reveal**, **Open in** and **Open with Default App** items start a program on the computer that runs the daemon, so they show only when the browser runs on that computer (`localhost`) or the file is in a WSL [side](wsl-docker). A phone, a Tailscale browser, a Docker or an SSH side does not get them. On Linux, **Open Containing Folder** opens the folder without selecting the file. The same items are in the menus of Changes rows. The command palette has **Open in file manager** (no default key) for the open file, the selected Changes row or the session folder. **Settings › Open in app** can add your own editor command.
+The three **Reveal**, **Open in** and **Open with Default App** items start a program on the computer that runs claude-code-ui, not on the computer of your browser. They show in every browser you paired (a phone, a Tailscale or LAN address too) for a file on that computer or in a WSL [side](wsl-docker). If nobody looks at that computer's screen, you see nothing happen. A Docker or an SSH side does not get them. A browser that is not on that computer shows **Open Containing Folder** instead of the name of the file manager. On Linux, **Open Containing Folder** opens the folder without selecting the file. The same items are in the menus of Changes rows. The command palette has **Open in file manager** (no default key) for the open file, the selected Changes row or the session folder. **Settings › Open in app** can add your own editor command.
 
 ## Copy, cut, paste and drag
 

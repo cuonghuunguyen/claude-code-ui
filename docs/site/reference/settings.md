@@ -187,7 +187,7 @@ For the [OpenCode engine](../features/opencode).
 
 ## Open in app
 
-**Editor command** and **Name in the menu** add your own program to the file menus (**Open in** *name*). Use `{path}` for the file or folder and `{root}` for the session folder. Only a browser on the daemon's computer can change it. See [Files](../features/files#open-in-the-file-manager-an-editor-or-the-default-app).
+**Editor command** and **Name in the menu** add your own program to the file menus (**Open in** *name*). Use `{path}` for the file or folder and `{root}` for the session folder. Only a browser on the daemon's computer can change it; other browsers see it read-only. See [Files](../features/files#open-in-the-file-manager-an-editor-or-the-default-app).
 
 ## Sides
 
