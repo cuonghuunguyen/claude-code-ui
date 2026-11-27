@@ -25,10 +25,10 @@ import { visualizeReadable } from "./visualize-write.ts";
 // ponytail: stat polling, robust to atomic rename-writes and WSL; fs.watch per directory if many tabs make polling costly.
 export const WATCH_INTERVAL_MS = 1000;
 
-export type FilesAreaContext = Pick<DaemonContext, "git" | "allowed" | "inside" | "roots" | "missingInRoots" | "localHistory" | "replaceUndo" | "reposOf" | "lastOpen" | "appSettings" | "media" | "fsOps" | "uploads" | "checkArtifact"> & { opts: Pick<DaemonContext["opts"], "openExternal"> };
+export type FilesAreaContext = Pick<DaemonContext, "git" | "allowed" | "inside" | "roots" | "missingInRoots" | "localHistory" | "replaceUndo" | "reposOf" | "lastOpen" | "appSettings" | "media" | "fsOps" | "uploads" | "checkArtifact" | "within"> & { opts: Pick<DaemonContext["opts"], "openExternal"> };
 
 export function createFilesArea(ctx: FilesAreaContext, conn: Connection): Area<FilesTypes> {
-  const { git, allowed, inside, roots, missingInRoots, localHistory, replaceUndo, reposOf, lastOpen, appSettings, media, fsOps, uploads, checkArtifact, opts } = ctx;
+  const { git, allowed, inside, roots, missingInRoots, localHistory, replaceUndo, reposOf, lastOpen, appSettings, media, fsOps, uploads, checkArtifact, within, opts } = ctx;
   // fs.watch: watched path as the client gave it → canonical path and its stat listener.
   const watched = new Map<string, { real: string; listener: (curr: Stats, prev: Stats) => void }>();
   /** The running `fs.grep` of this connection: stopped by a newer one and the close. */
@@ -296,6 +296,7 @@ export function createFilesArea(ctx: FilesAreaContext, conn: Connection): Area<F
     const c = checkArtifact(file);
     if ("code" in c) return r.fail(c.code, c.message);
     const rel = pageKeyOf(c.path, root);
+    if (!rel && within(c.path, root)) return r.fail("path_not_allowed", `the path cannot be served: ${msg.path}`);
     const key = rel ?? publishedKey(basename(c.path));
     if (!key) return r.fail("path_not_allowed", `the name cannot be served: ${msg.path}`);
     const dir = rel ? root : undefined;

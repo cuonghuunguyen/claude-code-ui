@@ -564,7 +564,9 @@ export function FileEditor({
   useEffect(() => viewRef.current?.requestMeasure(), [view, htmlPreview]);
   // A jump to a line (a search hit, a problem) shows the source it points into.
   useEffect(() => {
-    if (goto?.path === path && htmlPreview) store.setHtmlView(path, "source");
+    if (goto?.path !== path || !htmlPreview) return;
+    store.setHtmlView(path, "source");
+    if (active?.notice) store.clearGoto(); // no editor mounts to consume it
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [goto, path]);
 
