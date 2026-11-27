@@ -2,7 +2,7 @@
 // stream of the server feeds every open session; prompts, permissions and questions go back as HTTP calls.
 import { limitOfApiError, type LimitStop } from "./opencode-limit.ts";
 import { randomUUID } from "node:crypto";
-import { agentMentions, permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
+import { agentMentions, capabilitiesFromSupport, permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand, type SupportTable } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT } from "./aside.ts";
 import { DeniedRetryError } from "./denied-retry.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
@@ -25,7 +25,9 @@ import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 export const OPENCODE_MODES: PermissionMode[] = ["config", "default", "acceptEdits", "dontAsk", "plan", "bypassPermissions"];
 /** Modes offered: config first (the default, GH-705); plan is the plan agent (GH-684). */
 export const OPENCODE_PERMISSION_MODES: PermissionMode[] = ["config", "default", "acceptEdits", "dontAsk", "bypassPermissions"];
-export const OPENCODE_CAPABILITIES: EngineCapabilities = { permissionModes: OPENCODE_PERMISSION_MODES, agents: true, providers: true, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true, shell: true, config: { mcpScopes: ["project", "user"], pluginRemoveScopes: ["project", "user"], mcpTransports: ["stdio", "http"], skillStates: ["on", "ask", "off"], gaps: { mcpTools: "OpenCode does not list the tools of a server.", skillTokens: "OpenCode does not report a token count.", pluginSwitch: "OpenCode has no switch for a plugin. Uninstall removes it from opencode.json.", pluginUpdate: "OpenCode has no update for a plugin.", pluginCatalog: "OpenCode has no plugin catalog. Type an npm package or a path.", pluginRemoveScope: "A plugin found in a plugins folder (.opencode/plugins or ~/.config/opencode/plugins) is removed by deleting its file.", pluginStatus: "OpenCode reports no load result or error for a plugin.", marketplaces: "OpenCode has no marketplaces." } } };
+/** What OpenCode 1 has: every feature of the table. */
+export const OPENCODE_SUPPORT: SupportTable = { shell: "supported" };
+export const OPENCODE_CAPABILITIES: EngineCapabilities = capabilitiesFromSupport(OPENCODE_SUPPORT, { permissionModes: OPENCODE_PERMISSION_MODES, agents: true, providers: true, effort: true, rewind: true, fork: true, steering: true, slashCommands: true, planMeter: false, account: false, contextUsage: true, config: { mcpScopes: ["project", "user"], pluginRemoveScopes: ["project", "user"], mcpTransports: ["stdio", "http"], skillStates: ["on", "ask", "off"], gaps: { mcpTools: "OpenCode does not list the tools of a server.", skillTokens: "OpenCode does not report a token count.", pluginSwitch: "OpenCode has no switch for a plugin. Uninstall removes it from opencode.json.", pluginUpdate: "OpenCode has no update for a plugin.", pluginCatalog: "OpenCode has no plugin catalog. Type an npm package or a path.", pluginRemoveScope: "A plugin found in a plugins folder (.opencode/plugins or ~/.config/opencode/plugins) is removed by deleting its file.", pluginStatus: "OpenCode reports no load result or error for a plugin.", marketplaces: "OpenCode has no marketplaces." } } });
 
 export type Rule = { permission: string; pattern: string; action: "allow" | "ask" | "deny" };
 /** An entry of `GET /agent`. */
@@ -1518,6 +1520,7 @@ class OpenCodeSession implements EngineSession {
 
 class OpenCodeEngineImpl implements Engine {
   readonly name = "opencode" as const;
+  readonly support = OPENCODE_SUPPORT;
   readonly capabilities = OPENCODE_CAPABILITIES;
   private readonly sessions = new Set<OpenCodeSession>();
   private unsubscribe: (() => void) | undefined;

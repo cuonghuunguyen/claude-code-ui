@@ -2,10 +2,10 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ALL_CAPABILITIES, createAdapter, EFFORTS, permissionModesFor, type ModelInfo, type PermissionMode, type SessionListItem, type SlashCommand } from "@claude-ui/protocol";
+import { createAdapter, EFFORTS, permissionModesFor, type ModelInfo, type PermissionMode, type SessionListItem, type SlashCommand } from "@claude-ui/protocol";
 import { deleteSession, forkSession, getSessionInfo, listSessions, renameSession, tagSession, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { asideForkPoint } from "./aside.ts";
-import { claudeEngine } from "./claude-engine.ts";
+import { CLAUDE_CAPABILITIES, claudeEngine } from "./claude-engine.ts";
 import { readDefaultMode } from "./default-mode.ts";
 import { projectOverrides } from "./project-overrides.ts";
 import { isModel, type CatalogueContext, type CatalogueList, type EngineCatalogue, type ListCtx } from "./engine-catalogue.ts";
@@ -179,7 +179,7 @@ export function createClaudeCatalogue(ctx: CatalogueContext, d: ClaudeDeps): Eng
       // An Aside is not a session of the list until Keep as session.
       if (!t.cwd || !allowedCwd(t.cwd) || linked.get(t.sessionId)?.ownerId) continue;
       const loaded = ctx.session(t.sessionId);
-      const live = loaded?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [], capabilities: ALL_CAPABILITIES, engine: claudeEngine.name };
+      const live = loaded?.info() ?? { state: "closed" as const, model: "default", permissionMode: "default" as const, effort: "default" as const, permissionModes: [], capabilities: CLAUDE_CAPABILITIES, engine: claudeEngine.name };
       const title = CLEARED.test(t.summary) ? (loaded?.untitled() ? "New session" : await clearedTitle(t.sessionId, t.cwd, t)) : t.summary;
       if (loaded) hadTranscript.add(t.sessionId);
       items.set(t.sessionId, { ...live, id: t.sessionId, cwd: (process.platform === "win32" && allowedCwd(t.cwd)) || t.cwd, title, lastActivity: lastAt.get(t.sessionId) ?? t.lastModified, archived: t.tag === ARCHIVED_TAG, transcript: true, ...(!loaded?.live() && { live: false as const }), ...links(t.sessionId) });
@@ -207,7 +207,7 @@ export function createClaudeCatalogue(ctx: CatalogueContext, d: ClaudeDeps): Eng
       const inRootsCwd = (cwd: string) => (ok.has(cwd) ? ok.get(cwd)! : (ok.set(cwd, !!ctx.allowed(cwd)), ok.get(cwd)!));
       return (await d.transcripts()).filter((t) => t.cwd && inRootsCwd(t.cwd)).map((t) => t.sessionId);
     },
-    entry: () => ({ engine: claudeEngine.name, capabilities: ALL_CAPABILITIES, permissionModes: permissionModesFor({ allowBypass: ctx.allowBypass, supportsAuto: d.supportsAuto("default") }) }),
+    entry: () => ({ engine: claudeEngine.name, capabilities: CLAUDE_CAPABILITIES, permissionModes: permissionModesFor({ allowBypass: ctx.allowBypass, supportsAuto: d.supportsAuto("default") }) }),
     startMode: async (cwd, model) => {
       await d.modelList(cwd).catch(() => {});
       return defaultModeFor(cwd, model) as Promise<PermissionMode | undefined>;

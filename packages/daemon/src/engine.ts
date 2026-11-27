@@ -1,10 +1,13 @@
 // The Engine interface (CONTEXT.md "Engine", ADR 0012): the agent runtime behind a Session: the Claude Engine and the OpenCode Engine.
-import type { Effort, Engine as EngineName, EngineCapabilities, PermissionMode, RewindMode, RewindPreview } from "@claude-ui/protocol";
+import type { Effort, Engine as EngineName, EngineCapabilities, PermissionMode, RewindMode, RewindPreview, SupportTable } from "@claude-ui/protocol";
 import type { ForkResult, ForkSpec, InlineHooks, InlineRunner } from "./inline-types.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 export interface Engine {
   readonly name: EngineName;
+  /** What the adapter has and lacks, per feature; the conformance suite (test/conformance) runs every `supported` feature against recorded fixtures. */
+  readonly support: SupportTable;
+  /** The wire flags: the table-derived ones come from `support` (capabilitiesFromSupport). */
   readonly capabilities: EngineCapabilities;
   /** Modes a session can switch to now. */
   permissionModes(o: { allowBypass?: boolean; supportsAuto?: boolean }): PermissionMode[];

@@ -5,7 +5,7 @@
 import { limitOfFailure, type LimitStop } from "./opencode-limit.ts";
 import { randomUUID } from "node:crypto";
 import type { OpenCodeClient } from "@opencode/client";
-import { agentMentions, checkAnswer, permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type Part, type PermissionMode, type PermissionUpdate, type Question, type QuestionInput, type RewindMode, type RewindPreview, type SlashCommand } from "@claude-ui/protocol";
+import { agentMentions, capabilitiesFromSupport, checkAnswer, permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type Part, type PermissionMode, type PermissionUpdate, type Question, type QuestionInput, type RewindMode, type RewindPreview, type SlashCommand, type SupportTable } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT } from "./aside.ts";
 import { DAEMON_SERVER } from "./daemon-mcp.ts";
 import { DeniedRetryError } from "./denied-retry.ts";
@@ -27,7 +27,9 @@ import type { OpenCodeServer } from "./opencode-server.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 /** What the OpenCode 2 adapter has: as OpenCode 1's (`/compact`, `/undo`, `/redo` are the daemon's commands, the others OpenCode's; `fork`: the Aside). */
-export const OPENCODE2_CAPABILITIES: EngineCapabilities = {
+/** What OpenCode 2 has: every feature of the table. */
+export const OPENCODE2_SUPPORT: SupportTable = { shell: "supported" };
+export const OPENCODE2_CAPABILITIES: EngineCapabilities = capabilitiesFromSupport(OPENCODE2_SUPPORT, {
   ...OPENCODE_CAPABILITIES,
   // The config dialogs (GH-864): OpenCode 2 signs an MCP server in through the OAuth attempt of its integration (`mcpAuth` is no gap here), reports a plugin's load result
   // (a row shows its error) and updates an outdated plugin (`pluginStatus` and `pluginUpdate` are no gaps here).
@@ -35,7 +37,7 @@ export const OPENCODE2_CAPABILITIES: EngineCapabilities = {
     ...OPENCODE_CAPABILITIES.config!,
     gaps,
   }))(OPENCODE_CAPABILITIES.config!.gaps as Record<string, string>),
-};
+});
 
 /** A permission rule of OpenCode 2. */
 export type Rule2 = { action: string; resource: string; effect: "allow" | "deny" | "ask" };
@@ -1823,6 +1825,7 @@ class OpenCode2Session implements EngineSession {
 
 class OpenCode2EngineImpl implements Engine {
   readonly name = "opencode" as const;
+  readonly support = OPENCODE2_SUPPORT;
   readonly capabilities = OPENCODE2_CAPABILITIES;
   private readonly sessions = new Map<string, OpenCode2Session>();
   private unsubscribe: (() => void) | undefined;
