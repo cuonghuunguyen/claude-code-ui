@@ -270,12 +270,13 @@ export function connect(opts: {
       }
       // A wake may have dialed again while the probe above was in flight.
       if (closed || !current()) return;
-      opts.onStatus?.(failures >= OFFLINE_AFTER ? "offline" : "reconnecting");
       if (wokeWhileDialing) {
         wokeWhileDialing = false;
         failures = 0;
+        opts.onStatus?.("reconnecting");
         return dial();
       }
+      opts.onStatus?.(failures >= OFFLINE_AFTER ? "offline" : "reconnecting");
       timer = setTimeout(dial, backoffMs(failures++));
     };
     sock.addEventListener("error", onDown);
@@ -291,6 +292,7 @@ export function connect(opts: {
     const sock = ws;
     if (!sock || sockDown || sock.readyState === WebSocket.CLOSED || sock.readyState === WebSocket.CLOSING) {
       failures = 0;
+      wokeWhileDialing = false;
       return dial();
     }
     if (sock.readyState === WebSocket.CONNECTING) wokeWhileDialing = true;
