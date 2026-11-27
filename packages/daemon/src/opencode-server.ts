@@ -258,7 +258,8 @@ export function createOpenCodeServer(o: OpenCodeServerOpts) {
     // The document belongs to this start: removed when the child ends (stop, crash) or never spawned.
     const dropConfig = () => config.OPENCODE_CONFIG && rmSync(dirname(config.OPENCODE_CONFIG), { recursive: true, force: true });
     const proc = spawn(process.execPath, ["-e", SERVE_WATCHER, run.file, ...run.args], {
-      env: { ...config, ...env(), OPENCODE_SERVER_USERNAME: "opencode", OPENCODE_SERVER_PASSWORD: password },
+      // OpenCode 1: the `task` tool may run a subagent in the background (GH-1014); a value in the user's environment wins.
+      env: { ...config, ...(major === 1 && { OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: "true" }), ...env(), OPENCODE_SERVER_USERNAME: "opencode", OPENCODE_SERVER_PASSWORD: password },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });

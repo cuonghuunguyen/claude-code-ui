@@ -198,7 +198,7 @@ The first-use walkthrough: a dimmed page, a spotlight on one real control and a 
 _Avoid_: onboarding, walkthrough, wizard
 
 **Subagent run**:
-One Agent/Task call: a child agent with its own timeline, inside one turn of the parent session. Stored in the parent's transcript, not as a separate session.
+One Agent/Task call: a child agent with its own timeline, inside one turn of the parent session. Stored in the parent's transcript, not as a separate session. A background Subagent run returns to the parent at once and ends later: its card runs until it ends, also after the parent's turn ended, and its end starts a new turn of the parent.
 _Avoid_: child session, subtask
 
 **External turn**:

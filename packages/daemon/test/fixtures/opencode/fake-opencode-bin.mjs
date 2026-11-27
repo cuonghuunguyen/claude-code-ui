@@ -497,7 +497,7 @@ const server = createServer(async (req, res) => {
 const sockets = new Set();
 server.on("connection", (c) => (dying ? c.resetAndDestroy() : (sockets.add(c), c.on("close", () => sockets.delete(c)))));
 server.listen(port, hostname, () => {
-  log({ type: "start", pid: process.pid, argv: args, passwordSet: true, hostname, port: server.address().port });
+  log({ type: "start", pid: process.pid, argv: args, passwordSet: true, backgroundSubagents: process.env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS, hostname, port: server.address().port });
   console.log(`opencode server listening on http://${hostname}:${server.address().port}`);
   // Dies with its parent: a killed test run must not leave fakes behind (they lingered for tens of minutes and loaded the machine).
   const parent = process.ppid;

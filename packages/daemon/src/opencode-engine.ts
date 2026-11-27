@@ -50,6 +50,7 @@ const MARK = "claude-ui";
 const marker = (pattern: string): Rule => ({ permission: MARK, pattern, action: "allow" });
 const star = (permission: string, action: Rule["action"]): Rule => ({ permission, pattern: "*", action });
 const ANSWERED = "Answered in OpenCode";
+const ENDED_SUBAGENT = "The background subagent ended";
 /**
  * OpenCode answers 499 to every read of lazy state whose first load a client cut off: MCP (GH-682) and providers (GH-679). 1.19.5 keeps the interruption
  * until the folder's instance is disposed (providers: for the whole server, until a restart); every turn in a broken MCP folder then aborts before the
@@ -276,7 +277,7 @@ class OpenCodeSession implements EngineSession {
   private always: Rule[] = [];
   /** The mode of the block last written to OpenCode, undefined when the session has none. */
   private written: PermissionMode | undefined;
-  private readonly reqs = new Map<string, { kind: "permission" | "question"; permission?: string; always?: string[]; callId?: string; questions?: Question[] }>();
+  private readonly reqs = new Map<string, { kind: "permission" | "question"; permission?: string; always?: string[]; callId?: string; /** The session that asked (a background subagent's own). */ sessionId?: string; questions?: Question[] }>();
   private turnAt = 0;
   private aborted = false;
   private failed = false;
@@ -1188,6 +1189,16 @@ class OpenCodeSession implements EngineSession {
         return;
       }
     }
+    // A background task's child ended (GH-1014): its card ends, and the session stops showing as working once nothing else runs.
+    if (!root && sid && (payload.type === "session.idle" || payload.type === "session.error")) {
+      const aborted = payload.type === "session.error" && p.error?.name === "MessageAbortedError";
+      const card = this.mapper.childEnded(sid, payload.type === "session.idle" ? "done" : aborted ? "stopped" : "error", Date.now());
+      this.emitAll(card);
+      // Its pending asks are void: nobody runs the call any more.
+      if (this.mapper.backgroundEnded(sid)) for (const [id, r] of [...this.reqs]) if (r.sessionId === sid && this.session.pendingRequest(id)) (this.reqs.delete(id), this.session.cancel(id, ENDED_SUBAGENT));
+      if (card.length && this.session.currentState() === "idle") this.session.setState("idle");
+      return;
+    }
     switch (payload.type) {
       case "message.updated": {
         const info = p.info;
@@ -1301,6 +1312,8 @@ class OpenCodeSession implements EngineSession {
   private askPermission(e: PermissionAsked) {
     // `reqs` without a pending request: the worker_start card is being made.
     if (this.session.pendingRequest(e.id) || this.reqs.has(e.id)) return;
+    // A stopped background subagent's ask stays listed in OpenCode: nobody waits for it (GH-1014).
+    if (this.mapper.backgroundEnded(e.sessionID)) return;
     if (this.afterStop()) return (this.reqs.set(e.id, { kind: "permission", permission: e.permission, callId: e.tool?.callID }), this.answerPermission(e.id, { kind: "interrupt" }));
     // Don't ask: the block has no ask rule, so a request is one the rules missed (a tool OpenCode asks for by default, a subagent's session): refused at once, no card.
     if (this.permissionMode === "dontAsk") {
@@ -1323,7 +1336,9 @@ class OpenCodeSession implements EngineSession {
       : e.always?.length && !start
         ? [{ type: "addRules", rules: e.always.map((ruleContent) => ({ toolName: tool, ruleContent })), behavior: "allow", destination: "session" }]
         : [];
-    this.reqs.set(e.id, { kind: "permission", permission: e.permission, always: edit || start ? undefined : e.always, callId: e.tool?.callID });
+    this.reqs.set(e.id, { kind: "permission", permission: e.permission, always: edit || start ? undefined : e.always, callId: e.tool?.callID, sessionId: e.sessionID });
+    // A background subagent asks while the main agent is idle: the card names it.
+    const background = this.mapper.backgroundOf(e.sessionID);
     const input: Record<string, unknown> = mapped && Object.keys(mapped.input as object).length ? (mapped.input as Record<string, unknown>) : { ...(!mapped && { patterns: e.patterns ?? [] }), ...fallback.input };
     const part = {
       type: "permission_request" as const,
@@ -1332,7 +1347,7 @@ class OpenCodeSession implements EngineSession {
       toolUseId: e.tool?.callID ?? e.id,
       tool,
       input,
-      ...(!mapped && { title: `OpenCode asks to use ${e.permission}: ${(e.patterns ?? []).join(", ")}` }),
+      ...(background ? { title: `Background subagent "${background.description}" asks to use ${tool}` } : !mapped && { title: `OpenCode asks to use ${e.permission}: ${(e.patterns ?? []).join(", ")}` }),
       noEdit: true as const,
       suggestions,
       settled: false,
@@ -1514,7 +1529,8 @@ class OpenCodeSession implements EngineSession {
   externalTurnRunning = () => false;
   untitled = () => false;
   bashRunning = () => this.shellRun;
-  working = () => false;
+  /** A background subagent (task with `background`) still runs: the session shows as working while it is idle. */
+  working = () => this.mapper.backgroundRunning();
   takesQueued = () => this.session.currentState() === "idle" && this.session.pendingCount() === 0;
 }
 

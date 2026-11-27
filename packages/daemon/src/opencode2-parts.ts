@@ -200,6 +200,8 @@ export class OpenCode2Mapper {
     const c = this.calls.get(id);
     return !!c && (c.type === "tool_call" || c.agentType === "fork") && (c.status === "running" || c.status === "pending");
   };
+  /** A `subagent` call still runs: while the session is idle that is a background subagent (GH-1014). */
+  backgroundRunning = () => [...this.calls.values()].some((c) => c.type === "subagent" && c.agentType !== "fork" && c.status === "running" && this.raw.get(c.id)?.name === "subagent");
   /** The OpenCode names (tool keys) of the calls still pending or running. */
   runningTools = (): string[] => [...this.calls.keys()].filter(this.isRunning).map((id) => this.raw.get(id)?.name ?? "");
   /** The newest running Fork run call (`fork` tool) whose input equals `input` and is not in `skip`. */

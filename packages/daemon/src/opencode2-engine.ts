@@ -1225,7 +1225,10 @@ class OpenCode2Session implements EngineSession {
   }
   private emitAll(parts: ReturnType<OpenCode2Mapper["event"]>) {
     this.linkFrom(this.mapper);
+    const was = this.working();
     for (const part of parts) this.session.emit(part);
+    // The last background subagent ended while the session is idle: the clients drop `working` (GH-1014).
+    if (was && !this.working() && this.session.currentState() === "idle") this.session.setState("idle");
     if (parts.some((p) => p.type === "tool_call" && p.tool === INLINE_TOOL)) this.lateClaims();
   }
 
@@ -1746,7 +1749,9 @@ class OpenCode2Session implements EngineSession {
         await Promise.all(child.mapper.openShells().map(([, sh]) => client.shell.remove({ id: sh, location: { directory: this.cwd } }).catch(() => undefined)));
       // The card of a nested subagent is in its parent child's mapper and shows under that child's call.
       const owner = [...this.children.entries()].find(([, c]) => c.mapper.childOf(callId) === childId);
+      const was = this.working();
       for (const part of (owner?.[1].mapper ?? this.mapper).subagentEnded(childId, "stopped", Date.now())) this.session.emit(owner ? { ...part, parentId: owner[1].callId } : part);
+      if (was && !this.working() && this.session.currentState() === "idle") this.session.setState("idle");
     }
     return true;
   };
@@ -1819,7 +1824,8 @@ class OpenCode2Session implements EngineSession {
   externalTurnRunning = () => false;
   untitled = () => false;
   bashRunning = () => !!this.shellRun;
-  working = () => false;
+  /** A background subagent still runs: the session shows as working while it is idle. */
+  working = () => this.mapper.backgroundRunning();
   takesQueued = () => this.session.currentState() === "idle" && this.session.pendingCount() === 0;
 }
 

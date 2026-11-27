@@ -828,6 +828,22 @@ describe("Session", () => {
   });
 });
 
+describe("a request while no turn runs (GH-1014, a background subagent asks)", () => {
+  const ask = (s: Session) => s.request({ part: { type: "permission_request", id: "req_1", requestId: "req_1", toolUseId: "call_1", tool: "Bash", input: { command: "ls" }, suggestions: [], settled: false, at: 1 } as never, reply: () => {} });
+
+  it("needs_input from idle, and the answer leads back to idle; a request during a turn still leads back to running", () => {
+    const s = new Session("/tmp", { query: permissionQuery as never });
+    ask(s);
+    expect(s.info().state).toBe("needs_input");
+    expect(s.respond("req_1", { decision: "allow" })).toBe(true);
+    expect(s.info().state).toBe("idle");
+    s.setState("running");
+    ask(s);
+    s.respond("req_1", { decision: "allow" });
+    expect(s.info().state).toBe("running");
+  });
+});
+
 describe("worker requests (GH-835)", () => {
   const cwd = mkdtempSync(join(tmpdir(), "worker-request-"));
   const parts = (events: Event[], type: "permission_request" | "question") => events.filter((e) => e.part.type === type).map((e) => e.part as { escalated?: boolean; settled: boolean });
