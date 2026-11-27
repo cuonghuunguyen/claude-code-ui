@@ -20,3 +20,12 @@ export function reopenMenu(row: HTMLElement | undefined, selector: string, tries
   };
   poll(tries);
 }
+
+/** The session's sidebar row when the user can see it: rendered, not display:none and inside the window (a closed phone drawer is only moved off screen). */
+export function sessionRow(id: string): HTMLElement | undefined {
+  return [...document.querySelectorAll<HTMLElement>(`[data-testid="session-item"][data-session-id="${CSS.escape(id)}"]`)].find((e) => {
+    if (e.checkVisibility?.() === false) return false;
+    const r = e.getBoundingClientRect();
+    return r.right > 0 && r.left < window.innerWidth;
+  });
+}

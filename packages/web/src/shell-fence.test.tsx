@@ -52,3 +52,16 @@ it("a fence without Run in terminal never shows the tip", async () => {
   expect(write).toHaveBeenCalledTimes(2);
   expect(show).not.toHaveBeenCalled();
 });
+
+it("no tip while the fence is still streaming (its Run button is disabled)", async () => {
+  const show = vi.fn();
+  localStorage.clear();
+  resetPageForTests();
+  setRecommendationHost({ blocked: () => false, show });
+  Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true });
+  const el = document.createElement("div");
+  document.body.append(el);
+  await act(async () => createRoot(el).render(<RunInTerminalContext value={vi.fn()}><ShellFence code="npm te" language="bash" isIncomplete /></RunInTerminalContext>));
+  for (let i = 0; i < 3; i++) await act(async () => el.querySelector<HTMLButtonElement>("[data-testid=shell-copy]")!.click());
+  expect(show).not.toHaveBeenCalled();
+});

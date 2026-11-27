@@ -32,7 +32,7 @@ export function ShellFence({ code, language, isIncomplete }: { code: string; lan
             onClick={() => {
               void navigator.clipboard?.writeText(code).then(() => (setCopied(true), setTimeout(() => setCopied(false), 2000)));
               // GH-1015: the copy above is not held up by the recommendation.
-              tipRunInTerminal(!!run && !isIncomplete && !!command,() => runBtn.current?.isConnected && (ringLocate(runBtn.current), runBtn.current.focus({ preventScroll: true })));
+              tipRunInTerminal(!!run && !isIncomplete && !!command, () => runBtn.current?.isConnected && (ringLocate(runBtn.current), runBtn.current.focus({ preventScroll: true })));
             }}
           >
             {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}

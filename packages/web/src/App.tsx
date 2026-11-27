@@ -98,7 +98,7 @@ import { AddonBands, AddonFrame, type AddonHandle } from "./addon-frame.tsx";
 import { addonThemes } from "./themes.ts";
 import { Backdrop } from "./backdrop.tsx";
 import { AddonEffects } from "./addon-effects.tsx";
-import { reopenMenu } from "./rec-highlight.ts";
+import { reopenMenu, sessionRow } from "./rec-highlight.ts";
 import { QuickCompactCard, QuickCompactSourceContext } from "./quick-compact-card.tsx";
 import { SlotsProvider, useThinkingPhrase } from "./slots.tsx";
 import { isPreviewHash } from "./addon-preview-route.ts";
@@ -2564,12 +2564,12 @@ export function App() {
   function quickCompactFacts(id: string) {
     const item = list.find((x) => x.id === id);
     const info = item ?? infos[id];
-    const row = [...document.querySelectorAll<HTMLElement>(`[data-testid="session-item"][data-session-id="${CSS.escape(id)}"]`)].find((e) => e.checkVisibility?.() !== false);
+    const row = sessionRow(id);
     return { supported: !!info && !!item?.transcript && capabilitiesOf(info).contextUsage, running: quickCompacting.current.has(id), row: !!row };
   }
   /** The quick-compact recommendation's button: the session's menu opens with Quick compact ringed. It does not run it. */
   function showQuickCompact(sessionId: string) {
-    reopenMenu(document.querySelector<HTMLElement>(`[data-testid="session-item"][data-session-id="${CSS.escape(sessionId)}"]`) ?? undefined, '[data-testid="action-quick-compact"]');
+    reopenMenu(sessionRow(sessionId), '[data-testid="action-quick-compact"]');
   }
   /** The recommendation's button: the context meter of the session's area opens. */
   function openContextMeter(sessionId: string) {
