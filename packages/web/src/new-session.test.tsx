@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ModelInfo } from "@claude-ui/protocol";
 import { FIRST_SEND_TIMEOUT_MS } from "./first-send.ts";
+import { SideLabel } from "./sides.tsx";
 import { draftStartMode, NewSession, NewSessionTab, startSession, type StartOptions } from "./App.tsx";
 
 Element.prototype.scrollIntoView ??= () => {};
@@ -12,12 +13,16 @@ import type { EngineCapabilities } from "@claude-ui/protocol";
 const models: ModelInfo[] = [{ value: "default", displayName: "Default (recommended)", description: "", supportsEffort: true, supportedEffortLevels: ["low", "high"] }];
 let unmount = () => {};
 // App owns the draft's model, mode and effort; the harness holds them like App does.
-type Props = Omit<ComponentProps<typeof NewSession>, "draft" | "onDraft" | "modes"> & { engine?: StartOptions["engine"] };
+type Props = Omit<ComponentProps<typeof NewSession>, "draft" | "onDraft" | "modes"> & { engine?: StartOptions["engine"]; sideLabel?: (cwd: string) => { label: string; short: string } | undefined };
 // Like App: another engine's draft starts clean and takes that engine's flags.
 const OPENCODE_CAPS = { permissionModes: ["default", "plan"], effort: false, rewind: false, fork: false, steering: false, slashCommands: false, planMeter: false, account: false, contextUsage: false, shell: false, agents: true } as EngineCapabilities;
-function Draft({ engine, ...p }: Props) {
+function Draft({ engine, sideLabel = () => undefined, ...p }: Props) {
   const [draft, setDraft] = useState<StartOptions>({ model: "default", mode: "default", effort: "default", engine });
-  return <NewSession {...p} draft={draft} onDraft={(d) => setDraft(d.engine !== draft.engine ? { ...d, model: "default", effort: "default" } : d)} modes={["default", "acceptEdits", "plan"]} caps={draft.engine === "opencode" ? OPENCODE_CAPS : undefined} />;
+  return (
+    <SideLabel value={sideLabel}>
+      <NewSession {...p} draft={draft} onDraft={(d) => setDraft(d.engine !== draft.engine ? { ...d, model: "default", effort: "default" } : d)} modes={["default", "acceptEdits", "plan"]} caps={draft.engine === "opencode" ? OPENCODE_CAPS : undefined} />
+    </SideLabel>
+  );
 }
 afterEach(() => unmount());
 
@@ -276,14 +281,50 @@ it("the project chip is an app-styled popup: picking a project sets the draft cw
     return [...document.querySelectorAll<HTMLElement>("[role=option]")];
   };
   let options = await names();
-  expect(options.map((o) => o.textContent)).toEqual(["Aa/p/a", "Bb/p/b", "Open project…"]);
+  expect(options.map((o) => o.textContent)).toEqual(["Aa/p/a", "Bb/p/b"]);
   await act(async () => options[1]!.click());
   expect(onCwd).toHaveBeenCalledWith("/p/b");
   expect(onOpenProject).not.toHaveBeenCalled();
-  options = await names();
-  await act(async () => options[2]!.click());
+  await names();
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="open-project"]')!.click());
   expect(onOpenProject).toHaveBeenCalledTimes(1);
   expect(onCwd).toHaveBeenCalledTimes(1);
+});
+
+it("the project popup has a focused search over name, path and Side label; no match keeps Open project…; Enter picks, Escape returns focus", async () => {
+  const onCwd = vi.fn();
+  const { el } = await render({ projects: ["/p/alpha", "/p/beta", "/w/gamma"], cwd: "/p/alpha", onCwd, sideLabel: (cwd) => (cwd.startsWith("/w/") ? { label: "WSL: Ubuntu", short: "WSL" } : undefined) });
+  const chip = el.querySelector<HTMLElement>('[data-testid="project-chip"]')!;
+  const names = () => [...document.querySelectorAll<HTMLElement>("[role=option]")].map((o) => o.querySelector("span span")?.textContent);
+  const search = () => document.querySelector<HTMLInputElement>('[data-testid="project-search"]')!;
+  const find = async (q: string) =>
+    act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search(), q);
+      search().dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  await act(async () => chip.click());
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  expect(document.activeElement).toBe(search());
+  expect(names()).toEqual(["alpha", "beta", "gamma"]);
+  await find("BET");
+  expect(names()).toEqual(["beta"]);
+  await find("/p/");
+  expect(names()).toEqual(["alpha", "beta"]);
+  await find("wsl");
+  expect(names()).toEqual(["gamma"]);
+  await find("zzz");
+  expect(names()).toEqual([]);
+  expect(document.body.textContent).toContain("No projects match");
+  expect(document.querySelector('[data-testid="open-project"]')).not.toBeNull();
+  await find("p/");
+  await key(search(), { key: "ArrowDown" });
+  await key(search(), { key: "Enter" });
+  expect(onCwd).toHaveBeenCalledTimes(1);
+  await act(async () => chip.click());
+  expect(search().value).toBe("");
+  await key(search(), { key: "Escape" });
+  await act(async () => new Promise((r) => setTimeout(r, 50)));
+  expect(document.activeElement).toBe(chip);
 });
 
 it("the project chip opens with ArrowDown and Escape returns focus to it", async () => {
@@ -291,7 +332,7 @@ it("the project chip opens with ArrowDown and Escape returns focus to it", async
   const chip = el.querySelector<HTMLElement>('[data-testid="project-chip"]')!;
   await act(async () => chip.focus());
   await key(chip, { key: "ArrowDown" });
-  expect(document.querySelectorAll("[role=option]").length).toBe(3);
+  expect(document.querySelectorAll("[role=option]").length).toBe(2);
   await key(document.activeElement as HTMLElement, { key: "Escape" });
   await act(async () => new Promise((r) => setTimeout(r, 50)));
   expect(chip.getAttribute("aria-expanded")).toBe("false");
@@ -440,7 +481,7 @@ it("a project without linked worktrees inside the roots has no Run session in ch
   await rerender({ cwd: "/p/b" });
   expect(el.querySelector('[data-testid="worktree-chip"]')).toBeNull();
   await act(async () => el.querySelector<HTMLElement>('[data-testid="project-chip"]')!.click());
-  expect(options().map((o) => o.textContent)).toEqual(["Aa/p/a", "Bb/p/b", "Open project…"]);
+  expect(options().map((o) => o.textContent)).toEqual(["Aa/p/a", "Bb/p/b"]);
 });
 
 it("Run session in offers New worktree, also for a repository with only its main checkout; picking it calls onNewWorktree with the project", async () => {

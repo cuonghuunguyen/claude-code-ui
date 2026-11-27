@@ -710,6 +710,8 @@ export default {
   "app.main.askClaudeIn": "Hỏi {engine} trong {place}…",
   "app.main.openProjectToStart": "Hãy mở một dự án để bắt đầu",
   "app.main.project": "Dự án",
+  "app.main.projectSearch": "Tìm dự án",
+  "app.main.projectSearchEmpty": "Không có dự án nào khớp",
   "app.main.engine": "Engine",
   "app.main.engineNamed": "Engine: {name}",
   "app.main.openOpenCodeSettings": "Mở cài đặt OpenCode",
