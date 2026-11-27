@@ -323,8 +323,8 @@ function backgroundEnd(m: OpenCodeMapper, child: string, messages: readonly Open
   const last = [...messages].reverse().find((x) => x.info.role === "assistant");
   const at = last?.info.time?.completed;
   // A step that ends with tool calls is complete but the child goes on.
-  if (!last || !at || last.info.finish === "tool-calls") return [];
-  const error = last.info.error?.name;
+  const error = last?.info.error?.name;
+  if (!last || !at || (!error && last.info.finish === "tool-calls")) return [];
   return m.childEnded(child, error === "MessageAbortedError" ? "stopped" : error ? "error" : "done", at);
 }
 

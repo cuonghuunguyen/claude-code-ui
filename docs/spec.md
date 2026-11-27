@@ -298,6 +298,7 @@ An OpenCode agent can start a subagent that runs on while the parent goes on or 
 - Stop: **Stop agent** on the card aborts the child session. Stop of the parent session while its turn runs stops its running background children too (OpenCode aborts them with the parent); while only a child runs the session has no Stop button: use Stop agent.
 - Permission: a child's ask is routed to the session like a foreground child's. For a background child the request carries the title `Background subagent "<description>" asks to use <tool>`. Asked while no turn runs, the session is `needs_input` (alerts and notifications as for any ask) and the answer leads back to `idle` (`Session.request`). The ask is cancelled when its child ends, and a leftover ask of an ended child (OpenCode keeps listing it after an abort) is not asked again.
 - No limit on parallel background subagents and no timeout (none in OpenCode); the control is Stop agent and Stop.
+- Known gaps: a stream reconnect exactly across a child's end re-emits the card but neither the idle state without `working` nor the cancel of that child's asks; a parent turn that ends while a child's ask waits shows `idle` until the ask is answered.
 - Known gap: while a background child's ask waits (`needs_input`), a notice turn of another child that ended is not shown as a turn.
 
 ### Fork runs (GH-718)
