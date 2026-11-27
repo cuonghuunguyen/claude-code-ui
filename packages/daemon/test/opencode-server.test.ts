@@ -441,6 +441,22 @@ describe("OpenCode engine: lifecycle, create and list", () => {
     expect((await run(BIN, {}, 1)).configFile).toBeUndefined();
   });
 
+  it("an OpenCode 1 server starts with background subagents on (GH-1014); a value of the user's environment is kept", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "oc-bg-")));
+    const logFile = join(root, "fake.log");
+    const run = async (env: NodeJS.ProcessEnv) => {
+      const server = createOpenCodeServer({ path: () => "", command: [process.execPath, BIN], env: () => ({ FAKE_OPENCODE_LOG: logFile, ...env }) });
+      try {
+        await server.ensure(1);
+      } finally {
+        await server.close();
+      }
+      return readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((l) => l.type === "start").at(-1).backgroundSubagents;
+    };
+    expect(await run({})).toBe("true");
+    expect(await run({ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: "false" })).toBe("false");
+  });
+
   it("the OpenCode 2 client reaches the server through the authenticated node:http transport", async () => {
     const server = createOpenCodeServer({ path: () => "", command: [process.execPath, BIN2] });
     try {

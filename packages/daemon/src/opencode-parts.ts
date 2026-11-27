@@ -24,12 +24,13 @@ export type OpenCodePart = {
   tokens?: { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } };
   cost?: number;
 };
-export type OpenCodeMessage = { info: { id: string; role: "user" | "assistant"; /** An assistant message: the user message it answers. */ parentID?: string; agent?: string; providerID?: string; modelID?: string; time?: { created?: number; completed?: number }; /** OpenCode's error of the message (a turn it aborted: `MessageAbortedError`). */ error?: OpenCodeError & { name: string }; summary?: { diffs?: { file: string; additions: number; deletions: number }[] }; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } }; parts: OpenCodePart[] };
+export type OpenCodeMessage = { info: { id: string; role: "user" | "assistant"; /** An assistant message: the user message it answers. */ parentID?: string; agent?: string; providerID?: string; modelID?: string; time?: { created?: number; completed?: number }; /** Why the step ended (`tool-calls`: the loop goes on). */ finish?: string; /** OpenCode's error of the message (a turn it aborted: `MessageAbortedError`). */ error?: OpenCodeError & { name: string }; summary?: { diffs?: { file: string; additions: number; deletions: number }[] }; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } }; parts: OpenCodePart[] };
 export type OpenCodeTodo = { content: string; status: string };
 
 /** The error text of a tool OpenCode 1 refused: the user's rejection, or a permission rule that denies it. */
 export const REJECTED = /^The user (rejected permission to use this specific tool call|has specified a rule which prevents you from using this specific tool call)/;
 
+type BackgroundEnd = { status: ToolStatus; at?: number };
 const STATUS: Record<string, ToolStatus> = { completed: "done", error: "error", pending: "pending", running: "running" };
 
 /** OpenCode tool -> Claude card name and input shape; other tools keep their name and input. */
@@ -105,6 +106,11 @@ export class OpenCodeMapper {
   private readonly denied = new Set<string>();
   /** child session id -> the task call that started it. */
   private readonly children = new Map<string, string>();
+  /** Background task calls (GH-1014; OpenCode's `background` task option): the call returns at once, the card runs until the child ends. Call id -> child session id. */
+  private readonly bgCalls = new Map<string, string>();
+  /** How each background child ended (the first end stays), and ends that came before the call's update. */
+  private readonly bgEnds = new Map<string, BackgroundEnd>();
+  private readonly bgEarly = new Map<string, BackgroundEnd>();
   /** Input of each Fork run's call (a Fork run shows as a `subagent` part, which has none): `runningFork` matches a run to its call by it. */
   private readonly forkInputs = new Map<string, Record<string, unknown>>();
   private readonly finishes = new Map<string, OpenCodePart>();
@@ -116,6 +122,34 @@ export class OpenCodeMapper {
   /** The child session of a task call. */
   childOf = (callId: string) => [...this.children].find(([, c]) => c === callId)?.[0];
   isChild = (sessionId: string) => this.children.has(sessionId);
+  /** Whether a background task call of this session still runs: the session is working while it idles. */
+  backgroundRunning = () => [...this.bgCalls.keys()].some((id) => this.calls.get(id)?.status === "running");
+  /** The card of the background task whose child session is `sessionId`; none for the root, a foreground child or an inline run. */
+  backgroundOf(sessionId: string | undefined): (Part & { type: "subagent" }) | undefined {
+    const callId = sessionId ? this.children.get(sessionId) : undefined;
+    const call = callId && this.bgCalls.has(callId) ? this.calls.get(callId) : undefined;
+    return call?.type === "subagent" ? call : undefined;
+  }
+  /** Whether the background child `sessionId` ended already (its leftover permission asks are no longer asked). */
+  backgroundEnded = (sessionId: string) => this.bgEnds.has(sessionId);
+  /** The child of a background task call ended (its session idle, error or abort): the card shows how. The first end stays; an unlinked child's end waits for its call. */
+  childEnded(childId: string, status: ToolStatus, at?: number): Part[] {
+    const end: BackgroundEnd = { status, ...(at && { at }) };
+    const callId = this.children.get(childId);
+    if (!callId || !this.bgCalls.has(callId)) {
+      // Linked to a foreground task or a run: no background end. Unlinked: its call's update has not come.
+      if (!callId && !this.bgEarly.has(childId)) this.bgEarly.set(childId, end);
+      return [];
+    }
+    if (!this.bgEnds.has(childId)) this.bgEnds.set(childId, end);
+    const call = this.calls.get(callId);
+    if (!call || call.type !== "subagent") return [];
+    const { status: st, at: endedAt } = this.bgEnds.get(childId)!;
+    if (call.status === st && call.endedAt === endedAt) return [];
+    const next = { ...call, status: st, ...(endedAt && { endedAt }) };
+    this.calls.set(callId, next);
+    return [next];
+  }
   /** An inline task's child session (GH-734): its parts show under the call `callId`. */
   adopt = (childId: string, callId: string) => void this.children.set(childId, callId);
   /** Forgets an inline task's child session after its run ended. */
@@ -208,7 +242,17 @@ export class OpenCodeMapper {
     if (p.tool === "task") {
       const child = s.metadata?.sessionId;
       if (typeof child === "string") this.children.set(child, callId);
-      const sub = { type: "subagent" as const, id: callId, toolUseId: callId, description: String(s.input?.description ?? s.title ?? ""), status, startedAt: s.time?.start ?? 0, ...(s.time?.end && { endedAt: s.time.end }) };
+      // A background call is "completed" at once and the child runs on (metadata.background): the card runs until the child's end.
+      const background = status === "done" && s.metadata?.background === true && typeof child === "string";
+      if (background) {
+        this.bgCalls.set(callId, child);
+        const early = this.bgEarly.get(child);
+        if (early && !this.bgEnds.has(child)) (this.bgEnds.set(child, early), this.bgEarly.delete(child));
+      }
+      const ended = background ? this.bgEnds.get(child) : undefined;
+      if (background) status = ended?.status ?? "running";
+      const endedAt = background ? ended?.at : s.time?.end;
+      const sub = { type: "subagent" as const, id: callId, toolUseId: callId, description: String(s.input?.description ?? s.title ?? ""), status, startedAt: s.time?.start ?? 0, ...(endedAt && { endedAt }) };
       this.calls.set(callId, sub);
       return [sub];
     }
@@ -254,7 +298,7 @@ export function openCodeParts(messages: readonly OpenCodeMessage[], children: Re
       ...msg.parts.flatMap((p) => {
         const out = m.part({ ...p, messageID: p.messageID ?? msg.info.id, sessionID: p.sessionID ?? sessionID }, false);
         const child = p.state?.metadata?.sessionId;
-        if (typeof child === "string" && children[child]) return [...out, ...walk(children[child]!, child)];
+        if (typeof child === "string" && children[child]) return [...out, ...walk(children[child]!, child), ...backgroundEnd(m, child, children[child]!)];
         // A Fork run: its fork session holds a copy of the parent's history first (`prefix` messages), which is no step of the run.
         const fork = p.callID ? forks.find((f) => f.callId === p.callID) : undefined;
         // An inline task: its session's assistant messages are the steps (its prompt is the call's input).
@@ -272,6 +316,16 @@ export function openCodeParts(messages: readonly OpenCodeMessage[], children: Re
       ...(!sessionID ? failure(msg.info) : []),
     ]);
   return dedupeUser(walk(messages));
+}
+
+/** A stored background task: its end is the child's last assistant message (completed, aborted or failed); one still unfinished keeps the card running. */
+function backgroundEnd(m: OpenCodeMapper, child: string, messages: readonly OpenCodeMessage[]): Part[] {
+  const last = [...messages].reverse().find((x) => x.info.role === "assistant");
+  const at = last?.info.time?.completed;
+  // A step that ends with tool calls is complete but the child goes on.
+  const error = last?.info.error?.name;
+  if (!last || !at || (!error && last.info.finish === "tool-calls")) return [];
+  return m.childEnded(child, error === "MessageAbortedError" ? "stopped" : error ? "error" : "done", at);
 }
 
 /** The warning notice of a root assistant message that ended with an error (not an abort); id `error:<message id>`. */

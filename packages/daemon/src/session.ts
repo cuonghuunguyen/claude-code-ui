@@ -469,9 +469,13 @@ export class Session {
     const part = this.opts.worker?.(this.id) ? { ...e.part, escalated: true as const } : e.part;
     this.pending.set(part.requestId, { part, reply: e.reply, ctx: e.ctx, onAllow: e.onAllow });
     this.emit(part);
+    // An ask while no turn runs (a background subagent, GH-1014): the answer leads back to idle, not to a turn that does not exist.
+    if (this.state === "idle") this.askedIdle = true;
     this.setState("needs_input");
     if (part.type === "permission_request") this.markLowTier(part.requestId);
   }
+
+  private askedIdle = false;
 
   /** Stop (Esc): denies pending permission requests and cancels pending questions. */
   interruptPending() {
@@ -570,7 +574,11 @@ export class Session {
     this.pending.delete(requestId);
     if (allowed) this.bump();
     this.emit({ ...req.part, ...done, settled: true } as Part);
-    if (!this.pending.size && this.state === "needs_input") this.setState("running");
+    if (!this.pending.size && this.state === "needs_input") {
+      const idle = this.askedIdle;
+      this.askedIdle = false;
+      this.setState(idle ? "idle" : "running");
+    }
     return true;
   }
 
@@ -578,6 +586,7 @@ export class Session {
   /** Engine use. */
   setState(state: SessionState) {
     this.state = state;
+    if (state !== "needs_input") this.askedIdle = false; // the ask from idle is over (a turn or an end settled the state)
     if (state === "running" && this.limitStopped) {
       this.limitStopped = false;
       this.emit({ type: "limit_stop", id: "limit_stop", stopped: false });

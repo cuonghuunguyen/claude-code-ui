@@ -3406,7 +3406,7 @@ export function App() {
       mode: view?.permissionMode ?? shown.permissionMode,
       modes: modesOf(shown.permissionModes, view?.model ?? shown.model, modelsOf(engineOf(shown), shown.cwd), capabilitiesOf(shown)),
       capabilities: capabilitiesOf(shown),
-      running: view?.state === "running" || view?.state === "needs_input",
+      running: view?.state === "running" || view?.state === "needs_input" || (view?.state === "idle" && !!view.working && !view.externalTurn && engineOf(shown) === "opencode"),
       prompts: timeline(view!).flatMap((i) => (i.kind === "part" && i.part.type === "user_text" && !(isCoordinator(shown.id) && noticeMarker(i.part.text)) && !quickCompactOf(i.part.text) ? [{ id: i.part.id, text: summarizePasted(i.part.text) }] : [])),
     } : undefined,
     runInBackground: shown && ownerOnScreen && !draftShown && view && foregroundShells(view).length
@@ -5561,6 +5561,8 @@ export function SessionPane({
   const modePicker = <ModePicker mode={view.permissionMode ?? session.permissionMode} modes={modesOf(session.permissionModes, view.model ?? session.model, models, capabilitiesOf(session))} onMode={onMode} shortcut={false} />;
   // Waiting for a permission answer is part of the running turn.
   const turnRunning = view.state === "running" || view.state === "needs_input";
+  // Idle while a background subagent of an OpenCode session runs (GH-1014; Claude's idle Stop does not end background work): Stop, Esc and the Stop button end it; the box still takes prompts.
+  const backgroundOnly = view.state === "idle" && !!view.working && !view.externalTurn && engineOf(session) === "opencode";
   const sendModeSetting = useSendMode();
   const isClearing = clearing(view, pending);
   // A bash mode command runs: Stop and Esc kill it.
@@ -5587,7 +5589,7 @@ export function SessionPane({
   const alwaysAllowStable = useCallback((id: string, scope: "session" | "local") => alwaysAllowRef.current!(id, scope), []);
   // Esc stops the turn, like Claude Code; in a subagent view it stops only that run, like Stop agent. The command picker handles
   // its own Esc first (preventDefault), and an open modal dialog owns Esc.
-  const escStops = current ? isRunning(current) && !(stopOf && !stopOf.error) : turnRunning || shellRunning;
+  const escStops = current ? isRunning(current) && !(stopOf && !stopOf.error) : turnRunning || shellRunning || backgroundOnly;
   const onEscape = useEffectEvent(() => (current ? stopRun(current.id) : onInterrupt()));
   useEffect(() => {
     if (!escStops || !active) return;
@@ -5993,7 +5995,7 @@ export function SessionPane({
               onInserted={() => (treeDrop !== undefined ? setTreeDrop(undefined) : onInserted())}
               treeRing={treeRing}
               draft={draft}
-              state={connected ? (turnRunning ? (view.state as "running" | "needs_input") : shellRunning ? "running" : "idle") : "disconnected"}
+              state={connected ? (turnRunning ? (view.state as "running" | "needs_input") : shellRunning || backgroundOnly ? "running" : "idle") : "disconnected"}
               onInterrupt={onInterrupt}
               usage={view.contextUsage}
               stats={totals(view)}

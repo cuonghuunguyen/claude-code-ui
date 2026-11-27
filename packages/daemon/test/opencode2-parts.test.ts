@@ -149,9 +149,12 @@ it("a subagent call links its child session live and stored; the card runs after
   expect(live.takeLinks()).toEqual([]);
   const back = live.event("session.tool.success", { ...base, id: "call_s", content: [], metadata: meta });
   expect(back[0]).toMatchObject({ type: "subagent", id: "call_s", status: "running" });
+  expect(live.backgroundRunning()).toBe(true); // GH-1014: the session is working while it idles
+  expect(live.runningSubagents()).toEqual(["call_s"]); // idle Stop ends each
   const notice = (state: string) => ({ item: { type: "synthetic", payload: { text: "n", metadata: { source: "subagent", childID: "ses_c", state } } } });
   expect(live.inbox(notice("running"))).toEqual([]);
   expect(live.inbox(notice("cancelled"))[0]).toMatchObject({ id: "call_s", status: "stopped" });
+  expect(live.backgroundRunning()).toBe(false);
   // The first end stays: a later notice of the same child changes nothing.
   expect(live.inbox(notice("completed"))[0]).toMatchObject({ status: "stopped" });
 

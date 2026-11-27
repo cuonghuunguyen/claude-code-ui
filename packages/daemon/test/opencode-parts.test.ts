@@ -87,6 +87,44 @@ describe("OpenCodeMapper (live)", () => {
     expect(m.todos("ses_1", [{ content: "a", status: "cancelled" }, { content: "b", status: "in_progress" }])).toEqual({ type: "todo_update", id: "ses_1:todos", items: [{ content: "a", status: "completed" }, { content: "b", status: "in_progress" }] });
   });
 
+  describe("a background task call (GH-1014)", () => {
+    const call = (extra: Record<string, unknown> = {}) => tool({ status: "completed", input: { description: "dig" }, output: '<task id="ses_kid" state="running">', metadata: { sessionId: "ses_kid", background: true }, time: { start: 7, end: 8 }, ...extra }, { tool: "task", callID: "call_bg" });
+    const card = (status: string, endedAt?: number) => ({ type: "subagent", id: "call_bg", toolUseId: "call_bg", description: "dig", status, startedAt: 7, ...(endedAt && { endedAt }) });
+
+    it("the call returns at once but the card runs until the child ends; the end shows how, the first end stays", () => {
+      const m = ready();
+      expect(m.part(call())).toEqual([card("running")]);
+      expect(m.backgroundRunning()).toBe(true);
+      expect(m.childEnded("ses_kid", "done", 50)).toEqual([card("done", 50)]);
+      expect(m.backgroundRunning()).toBe(false);
+      expect(m.childEnded("ses_kid", "error", 60)).toEqual([]);
+      // A later update of the call keeps the end.
+      expect(m.part(call())).toEqual([card("done", 50)]);
+    });
+
+    it("an end that came before the call's update is applied when the call arrives; a foreground task's child end changes nothing", () => {
+      const early = ready();
+      expect(early.childEnded("ses_kid", "stopped", 40)).toEqual([]);
+      expect(early.part(call())).toEqual([card("stopped", 40)]);
+      const fg = ready();
+      fg.part(tool({ status: "completed", input: { description: "dig" }, metadata: { sessionId: "ses_kid" }, time: { start: 7, end: 9 } }, { tool: "task", callID: "call_bg" }));
+      expect(fg.childEnded("ses_kid", "error", 99)).toEqual([]);
+      expect(fg.backgroundRunning()).toBe(false);
+    });
+
+    it("a restored history ends the card from the child's last assistant message: completed = done, aborted = stopped, error = error, unfinished = running", () => {
+      const parent: OpenCodeMessage = { info: { id: "msg_p", role: "assistant" }, parts: [{ id: "prt_bg", type: "tool", messageID: "msg_p", callID: "call_bg", tool: "task", state: { status: "completed", input: { description: "dig" }, metadata: { sessionId: "ses_kid", background: true }, time: { start: 7, end: 8 } } }] };
+      const kid = (info: Partial<OpenCodeMessage["info"]>): Record<string, OpenCodeMessage[]> => ({ ses_kid: [{ info: { id: "msg_k", role: "assistant", ...info }, parts: [] }] });
+      const last = (children: Record<string, OpenCodeMessage[]>) => openCodeParts([parent], children).filter((p) => p.type === "subagent").at(-1);
+      expect(last(kid({ time: { completed: 55 } }))).toEqual(card("done", 55));
+      expect(last(kid({ time: { completed: 55 }, error: { name: "MessageAbortedError" } }))).toEqual(card("stopped", 55));
+      expect(last(kid({ time: { completed: 55 }, error: { name: "APIError" } }))).toEqual(card("error", 55));
+      expect(last(kid({ time: {} }))).toEqual(card("running"));
+      expect(last(kid({ time: { completed: 55 }, finish: "tool-calls" }))).toEqual(card("running"));
+      expect(last(kid({ time: { completed: 55 }, finish: "tool-calls", error: { name: "MessageAbortedError" } }))).toEqual(card("stopped", 55));
+    });
+  });
+
   it("the echo of an own user message adds nothing; a user message of OpenCode's own UI is one user_text with its text and images; synthetic parts are left out", () => {
     const m = new OpenCodeMapper();
     m.own.add("msg_own");
