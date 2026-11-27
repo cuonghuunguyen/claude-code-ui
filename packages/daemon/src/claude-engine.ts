@@ -20,6 +20,7 @@ import {
 import {
   ALL_CAPABILITIES,
   bashRecords,
+  capabilitiesFromSupport,
   escapeBash,
   alwaysRule,
   createAdapter,
@@ -27,11 +28,13 @@ import {
   permissionModesFor,
   ruleString,
   type Effort,
+  type EngineCapabilities,
   type Part,
   type PermissionMode,
   type Question,
   type RewindMode,
   type RewindPreview,
+  type SupportTable,
 } from "@claude-ui/protocol";
 import { sharedDirs } from "./shared-dirs.ts";
 import { claudeEnv } from "./claude-env.ts";
@@ -1569,9 +1572,14 @@ export class ClaudeSession implements EngineSession {
   }
 }
 
+/** Claude has every feature of the table. */
+export const CLAUDE_SUPPORT: SupportTable = { shell: "supported" };
+export const CLAUDE_CAPABILITIES: EngineCapabilities = capabilitiesFromSupport(CLAUDE_SUPPORT, ALL_CAPABILITIES);
+
 export const claudeEngine: Engine = {
   name: "claude",
-  capabilities: ALL_CAPABILITIES,
+  support: CLAUDE_SUPPORT,
+  capabilities: CLAUDE_CAPABILITIES,
   permissionModes: (o) => permissionModesFor(o),
   open: (session, opts, restored) => new ClaudeSession(session, opts, restored),
 };

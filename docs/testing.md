@@ -48,6 +48,7 @@ Order of pruning only, not keep or delete: high churn, past bug density and comp
 9. E2E only for the critical journeys below.
 10. The PR description states, per new test, the risk it covers. Test names state the behaviour; no risk comments in code.
 11. A flaky test is fixed or deleted. No retry to hide it.
+12. A behaviour every Engine adapter has or lacks (ADR 0012) is proven in the engine conformance suite (`packages/daemon/test/conformance`): one scenario with one engine-neutral reference sequence, run against every adapter, plus a support-table entry per adapter. Do not write a separate per-adapter test of the same behaviour; adapter-only edge cases stay in the adapter's own test file.
 
 ## Critical user journeys (E2E scope)
 
