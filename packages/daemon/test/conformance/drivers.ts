@@ -102,7 +102,7 @@ const claude: Driver = {
   support: CLAUDE_SUPPORT,
   async open(f) {
     const cwd = scratch();
-    // A scenario without a Claude fixture (bash mode: the daemon runs the shell) still needs a query that never answers.
+    // A scenario without a Claude fixture (bash mode: the daemon runs the shell) still needs a query; the fixture is never replayed because the command makes no turn.
     const query = f.claude ? fixtureQuery(claudeFixture(f.claude)) : fixtureQuery(claudeFixture("two-turn-text"));
     const session = new Session(cwd, { engine: claudeEngine, query: query as never });
     return runOf(claudeEngine, session, async () => rmSync(cwd, { recursive: true, force: true }));

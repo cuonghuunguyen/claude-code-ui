@@ -26,9 +26,9 @@ import { OpenCode2Mapper, bashPart, failureText, mapTool2, type Failure, type Op
 import type { OpenCodeServer } from "./opencode-server.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
-/** What the OpenCode 2 adapter has: as OpenCode 1's (`/compact`, `/undo`, `/redo` are the daemon's commands, the others OpenCode's; `fork`: the Aside). */
 /** What OpenCode 2 has: every feature of the table. */
 export const OPENCODE2_SUPPORT: SupportTable = { shell: "supported" };
+/** What the OpenCode 2 adapter has: as OpenCode 1's (`/compact`, `/undo`, `/redo` are the daemon's commands, the others OpenCode's; `fork`: the Aside). */
 export const OPENCODE2_CAPABILITIES: EngineCapabilities = capabilitiesFromSupport(OPENCODE2_SUPPORT, {
   ...OPENCODE_CAPABILITIES,
   // The config dialogs (GH-864): OpenCode 2 signs an MCP server in through the OAuth attempt of its integration (`mcpAuth` is no gap here), reports a plugin's load result

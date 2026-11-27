@@ -1,7 +1,9 @@
 // Scenarios of the conformance suite. Each has one engine-neutral reference sequence, written by hand (not taken from any adapter), and the fixture each adapter replays.
 import type { Feature } from "@claude-ui/protocol";
-import type { Fixtures, Run } from "./drivers.ts";
+import type { AdapterName, Fixtures, Run } from "./drivers.ts";
 import type { Pattern, Step } from "./normalize.ts";
+
+export type Variant = { adapters: AdapterName[]; steps: Pattern[] };
 
 export type Scenario = {
   name: string;
@@ -9,8 +11,8 @@ export type Scenario = {
   feature?: Feature;
   fixtures: Fixtures;
   play(run: Run): Promise<void>;
-  /** The reference sequence; a list of sequences when the adapters legitimately show the same thing in different parts (the first that matches counts). */
-  expected: Pattern[] | Pattern[][];
+  /** The reference sequence; a list of variants when adapters legitimately show the same thing in different parts: each adapter may match only the variants that name it. */
+  expected: Pattern[] | Variant[];
   /** Step kinds an adapter may add (a model that thinks first). */
   optional?: Step["kind"][];
 };
@@ -37,6 +39,9 @@ export const SCENARIOS: Scenario[] = [
     fixtures: { opencode1: "shell", opencode2: "shell" },
     play: (run) => run.bash("echo e2e-ok"),
     // OpenCode 1 runs the command through its shell route, which records a Bash tool call: the web shows it as a Bash card. Claude and OpenCode 2 emit the `bash` part.
-    expected: [[{ kind: "bash", status: "done", failed: false }], [{ kind: "tool", tool: "Bash", status: "done" }, { kind: "tool_result", error: false }]],
+    expected: [
+      { adapters: ["claude", "opencode2"], steps: [{ kind: "bash", status: "done", failed: false }] },
+      { adapters: ["opencode1"], steps: [{ kind: "tool", tool: "Bash", status: "done" }, { kind: "tool_result", error: false }] },
+    ],
   },
 ];

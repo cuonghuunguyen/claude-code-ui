@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { gapReason, isSupported } from "@claude-ui/protocol";
 import { DRIVERS } from "./drivers.ts";
 import { compare, normalize, type Pattern } from "./normalize.ts";
-import { SCENARIOS } from "./scenarios.ts";
+import { SCENARIOS, type Variant } from "./scenarios.ts";
 
 describe.each(DRIVERS)("$label", (driver) => {
   for (const scenario of SCENARIOS) {
@@ -14,7 +14,7 @@ describe.each(DRIVERS)("$label", (driver) => {
       try {
         await scenario.play(run);
         const steps = normalize(run.events);
-        const variants: Pattern[][] = Array.isArray(scenario.expected[0]) ? (scenario.expected as Pattern[][]) : [scenario.expected as Pattern[]];
+        const variants: Pattern[][] = scenario.expected.length > 0 && "steps" in scenario.expected[0]! ? (scenario.expected as Variant[]).filter((v) => v.adapters.includes(driver.adapter)).map((v) => v.steps) : [scenario.expected as Pattern[]];
         const differences = variants.map((v) => compare(steps, v, scenario.optional));
         expect(differences.some((d) => d === undefined), `${differences.join(" | ")}\nactual: ${JSON.stringify(steps)}`).toBe(true);
       } finally {
