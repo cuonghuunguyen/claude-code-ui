@@ -81,6 +81,8 @@ export function connect(opts: {
   let probing = false;
   /** The current socket reported error or close; its readyState can lag behind (a browser fires error first). */
   let sockDown = false;
+  /** A wake came while a dial was in flight: if that dial fails, redial at once instead of sitting out the backoff. */
+  let wokeWhileDialing = false;
   let failures = 0;
   /** Why the last socket went down: logged in the console now, sent to the daemon log once the next socket opens. */
   let lastDrop: string | undefined;
@@ -227,6 +229,7 @@ export function connect(opts: {
       if (!current()) return;
       isOpen = true;
       failures = 0;
+      wokeWhileDialing = false;
       openedAt = Date.now();
       since = { msgs: 0, bytes: 0, parseMs: 0 };
       markOpen();
@@ -267,6 +270,12 @@ export function connect(opts: {
       }
       // A wake may have dialed again while the probe above was in flight.
       if (closed || !current()) return;
+      if (wokeWhileDialing) {
+        wokeWhileDialing = false;
+        failures = 0;
+        opts.onStatus?.("reconnecting");
+        return dial();
+      }
       opts.onStatus?.(failures >= OFFLINE_AFTER ? "offline" : "reconnecting");
       timer = setTimeout(dial, backoffMs(failures++));
     };
@@ -283,8 +292,10 @@ export function connect(opts: {
     const sock = ws;
     if (!sock || sockDown || sock.readyState === WebSocket.CLOSED || sock.readyState === WebSocket.CLOSING) {
       failures = 0;
+      wokeWhileDialing = false;
       return dial();
     }
+    if (sock.readyState === WebSocket.CONNECTING) wokeWhileDialing = true;
     if (sock.readyState !== WebSocket.OPEN || probing || !(force || hidFor >= (opts.probeAfterMs ?? PROBE_AFTER_MS))) return;
     probing = true;
     request({ type: "ping" }, { timeoutMs: opts.probeTimeoutMs ?? PROBE_TIMEOUT_MS })
