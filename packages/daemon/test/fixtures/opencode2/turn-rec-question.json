@@ -1,0 +1,276 @@
+[
+ {
+  "event": "session.execution.started",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ },
+ {
+  "event": "session.usage.updated",
+  "data": {
+   "sessionID": "$SESSION",
+   "cost": 0.000035567999999999996,
+   "tokens": {
+    "input": 216,
+    "output": 4,
+    "reasoning": 0,
+    "cache": {
+     "read": 256,
+     "write": 0
+    }
+   }
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "agent": "build",
+   "model": {
+    "id": "deepseek-flash",
+    "providerID": "deepseek"
+   },
+   "assistantMessageID": "$A1",
+   "started": 1795775937123
+  }
+ },
+ {
+  "event": "session.step.first-token",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1"
+  }
+ },
+ {
+  "event": "session.tool.input.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "name": "question"
+  }
+ },
+ {
+  "event": "session.tool.input.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "text": "{\"questions\": [{\"question\": \"Do you prefer red or blue?\", \"header\": \"Color preference\", \"options\": [{\"label\": \"Red\", \"description\": \"You prefer red.\"}, {\"label\": \"Blue\", \"description\": \"You prefer blue.\"}]}]}"
+  }
+ },
+ {
+  "event": "session.tool.called",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "input": {
+    "questions": [
+     {
+      "question": "Do you prefer red or blue?",
+      "header": "Color preference",
+      "options": [
+       {
+        "label": "Red",
+        "description": "You prefer red."
+       },
+       {
+        "label": "Blue",
+        "description": "You prefer blue."
+       }
+      ]
+     }
+    ]
+   },
+   "executed": false
+  }
+ },
+ {
+  "event": "session.step.streamed",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1"
+  }
+ },
+ {
+  "form": {
+   "fields": [
+    {
+     "key": "q0",
+     "title": "Color preference",
+     "description": "Do you prefer red or blue?",
+     "type": "string",
+     "options": [
+      {
+       "value": "Red",
+       "label": "Red",
+       "description": "You prefer red."
+      },
+      {
+       "value": "Blue",
+       "label": "Blue",
+       "description": "You prefer blue."
+      }
+     ],
+     "custom": true
+    }
+   ]
+  }
+ },
+ {
+  "wait": "form"
+ },
+ {
+  "event": "session.tool.success",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "content": [
+    {
+     "type": "text",
+     "text": "User has answered your questions: \"Do you prefer red or blue?\"=\"Red\". You can now continue with the user's answers in mind."
+    }
+   ],
+   "metadata": {
+    "answers": [
+     [
+      "Red"
+     ]
+    ],
+    "truncated": false
+   },
+   "executed": false
+  }
+ },
+ {
+  "event": "session.step.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "finish": "tool-calls",
+   "rawFinish": "tool_calls",
+   "tokens": {
+    "input": 4141,
+    "output": 90,
+    "reasoning": 0,
+    "cache": {
+     "read": 6656,
+     "write": 0
+    }
+   },
+   "cost": 0.0006951179999999999
+  }
+ },
+ {
+  "event": "session.usage.updated",
+  "data": {
+   "sessionID": "$SESSION",
+   "cost": 0.0007306859999999999,
+   "tokens": {
+    "input": 4357,
+    "output": 94,
+    "reasoning": 0,
+    "cache": {
+     "read": 6912,
+     "write": 0
+    }
+   }
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "agent": "build",
+   "model": {
+    "id": "deepseek-flash",
+    "providerID": "deepseek"
+   },
+   "assistantMessageID": "$A2",
+   "started": 1795775938469
+  }
+ },
+ {
+  "event": "session.step.first-token",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2"
+  }
+ },
+ {
+  "event": "session.text.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "ordinal": 0
+  }
+ },
+ {
+  "event": "session.text.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "ordinal": 0,
+   "delta": "Red it is — glad that's settled."
+  }
+ },
+ {
+  "event": "session.text.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "ordinal": 0,
+   "text": "Red it is — glad that's settled."
+  }
+ },
+ {
+  "event": "session.step.streamed",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2"
+  }
+ },
+ {
+  "event": "session.step.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "finish": "stop",
+   "rawFinish": "stop",
+   "tokens": {
+    "input": 175,
+    "output": 10,
+    "reasoning": 0,
+    "cache": {
+     "read": 10752,
+     "write": 0
+    }
+   },
+   "cost": 0.000064506
+  }
+ },
+ {
+  "event": "session.usage.updated",
+  "data": {
+   "sessionID": "$SESSION",
+   "cost": 0.0007951919999999999,
+   "tokens": {
+    "input": 4532,
+    "output": 104,
+    "reasoning": 0,
+    "cache": {
+     "read": 17664,
+     "write": 0
+    }
+   }
+  }
+ },
+ {
+  "event": "session.execution.succeeded",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ }
+]

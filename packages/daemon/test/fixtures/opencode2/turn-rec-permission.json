@@ -1,0 +1,311 @@
+[
+ {
+  "event": "session.execution.started",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ },
+ {
+  "event": "session.usage.updated",
+  "data": {
+   "sessionID": "$SESSION",
+   "cost": 0.000036018,
+   "tokens": {
+    "input": 211,
+    "output": 6,
+    "reasoning": 0,
+    "cache": {
+     "read": 256,
+     "write": 0
+    }
+   }
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "agent": "build",
+   "model": {
+    "id": "deepseek-flash",
+    "providerID": "deepseek"
+   },
+   "assistantMessageID": "$A1",
+   "started": 1795775930612
+  }
+ },
+ {
+  "event": "session.step.first-token",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1"
+  }
+ },
+ {
+  "event": "session.reasoning.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "native": {
+    "reasoningField": "reasoning_content"
+   }
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": "The"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " user wants me to run `touch conformance.txt` with the bash tool. The only shell tool is \"shell\", which runs on macOS using"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " zsh. The instruction says \"with the bash tool\" — I don't have a tool literally named bash"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": ", but I have shell. I should use shell. They said use no other tool.\n\nLet me do it."
+  }
+ },
+ {
+  "event": "session.tool.input.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "name": "shell"
+  }
+ },
+ {
+  "event": "session.reasoning.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "text": "The user wants me to run `touch conformance.txt` with the bash tool. The only shell tool is \"shell\", which runs on macOS using zsh. The instruction says \"with the bash tool\" — I don't have a tool literally named bash, but I have shell. I should use shell. They said use no other tool.\n\nLet me do it.",
+   "native": {
+    "reasoningField": "reasoning_content"
+   }
+  }
+ },
+ {
+  "event": "session.tool.input.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "text": "{\"command\": \"touch conformance.txt\"}"
+  }
+ },
+ {
+  "event": "session.tool.called",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "input": {
+    "command": "touch conformance.txt"
+   },
+   "executed": false
+  }
+ },
+ {
+  "event": "session.step.streamed",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1"
+  }
+ },
+ {
+  "event": "permission.asked",
+  "data": {
+   "id": "$PERM",
+   "sessionID": "$SESSION",
+   "action": "shell",
+   "resources": [
+    "touch conformance.txt"
+   ],
+   "save": [
+    "touch *"
+   ],
+   "source": {
+    "type": "tool",
+    "messageID": "$A1",
+    "id": "$CALL"
+   }
+  }
+ },
+ {
+  "wait": "permission"
+ },
+ {
+  "event": "session.tool.success",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "content": [
+    {
+     "type": "text",
+     "text": "(no output)"
+    }
+   ],
+   "metadata": {
+    "status": "completed",
+    "truncated": false,
+    "exit": 0
+   },
+   "executed": false
+  }
+ },
+ {
+  "event": "session.step.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "finish": "tool-calls",
+   "rawFinish": "tool_calls",
+   "tokens": {
+    "input": 4138,
+    "output": 40,
+    "reasoning": 75,
+    "cache": {
+     "read": 6656,
+     "write": 0
+    }
+   },
+   "cost": 0.0007096679999999999
+  }
+ },
+ {
+  "event": "session.usage.updated",
+  "data": {
+   "sessionID": "$SESSION",
+   "cost": 0.0007456859999999999,
+   "tokens": {
+    "input": 4349,
+    "output": 46,
+    "reasoning": 75,
+    "cache": {
+     "read": 6912,
+     "write": 0
+    }
+   }
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "agent": "build",
+   "model": {
+    "id": "deepseek-flash",
+    "providerID": "deepseek"
+   },
+   "assistantMessageID": "$A2",
+   "started": 1795775932180
+  }
+ },
+ {
+  "event": "session.step.first-token",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2"
+  }
+ },
+ {
+  "event": "session.text.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "ordinal": 0
+  }
+ },
+ {
+  "event": "session.text.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "ordinal": 0,
+   "delta": "`conformance.txt` was created in the working directory."
+  }
+ },
+ {
+  "event": "session.text.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "ordinal": 0,
+   "text": "`conformance.txt` was created in the working directory."
+  }
+ },
+ {
+  "event": "session.step.streamed",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2"
+  }
+ },
+ {
+  "event": "session.step.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "finish": "stop",
+   "rawFinish": "stop",
+   "tokens": {
+    "input": 171,
+    "output": 13,
+    "reasoning": 0,
+    "cache": {
+     "read": 10752,
+     "write": 0
+    }
+   },
+   "cost": 0.00006570599999999998
+  }
+ },
+ {
+  "event": "session.usage.updated",
+  "data": {
+   "sessionID": "$SESSION",
+   "cost": 0.0008113919999999999,
+   "tokens": {
+    "input": 4520,
+    "output": 59,
+    "reasoning": 75,
+    "cache": {
+     "read": 17664,
+     "write": 0
+    }
+   }
+  }
+ },
+ {
+  "event": "session.execution.succeeded",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ }
+]

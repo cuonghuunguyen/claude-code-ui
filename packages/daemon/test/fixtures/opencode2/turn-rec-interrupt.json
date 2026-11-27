@@ -1,0 +1,219 @@
+[
+ {
+  "event": "session.execution.started",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ },
+ {
+  "event": "session.usage.updated",
+  "data": {
+   "sessionID": "$SESSION",
+   "cost": 0.000032268000000000003,
+   "tokens": {
+    "input": 198,
+    "output": 3,
+    "reasoning": 0,
+    "cache": {
+     "read": 256,
+     "write": 0
+    }
+   }
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "agent": "build",
+   "model": {
+    "id": "deepseek-flash",
+    "providerID": "deepseek"
+   },
+   "assistantMessageID": "$A1",
+   "started": 1795775943437
+  }
+ },
+ {
+  "event": "session.step.first-token",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1"
+  }
+ },
+ {
+  "event": "session.reasoning.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "native": {
+    "reasoningField": "reasoning_content"
+   }
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": "The"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " user wants a 600-word essay about rivers, no tools. Just write it. Aim ~600 words.\n\nLet me draft a thoughtful"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " essay with some structure but not too heavy on headings — an essay should flow. Maybe a"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " title and 5 paragraphs. Count words roughly to hit 600.\n\nLet me write it, then estimate word count. I'll aim"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " for around 600-620.\n\nDraft:\n\nTitle: The Long Argument of Water\n\nParagraphs about"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " rivers as geology, as civilization, as metaphor, as ecology, as time.\n\nLet me write and"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " count carefully-ish. I'll write about 600 words.\n\nI'll compose then count with a mental estimate —"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " better to just write naturally around 5 paragraphs of ~120 words each.\n\nLet me write.\n\nParagraph 1 (~120"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " words): Rivers begin as accidents. A spring, a seep, a seam"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " of snow... gather.\nParagraph 2 (~120): Rivers as engineers, carving"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": ".\nParagraph 3 (~120): Rivers and cities/civilization.\nParagraph 4 (~120): Rivers as borders, and modern"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " engineering/control, dams.\nParagraph 5 (~120): Rivers as time"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": "/metaphor and closing.\n\nI'll write ~600 total. Then I can note the word count? Keep"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " it simple, no meta commentary beyond maybe a brief line. Just deliver the essay."
+  }
+ },
+ {
+  "event": "session.text.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0
+  }
+ },
+ {
+  "event": "session.text.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": "# The Long Argument of Water\n\nA river begins as an accident. A spring pushes up through gravel, a seam of"
+  }
+ },
+ {
+  "event": "session.text.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " snow gives way in July, a hillside seeps after rain, and somewhere"
+  }
+ },
+ {
+  "event": "session.text.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " downhill a thread of water finds a groove it likes. Nothing about"
+  }
+ },
+ {
+  "hold": true
+ }
+]
