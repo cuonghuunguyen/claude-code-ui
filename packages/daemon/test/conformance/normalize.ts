@@ -1,4 +1,5 @@
-// Part events -> an engine-neutral structure. Kept: the kind of each part, a tool's name and final status, a result's error flag, a bash command's final status.
+// Part events -> an engine-neutral structure. Kept: the kind of each part, a tool's name and final status, a result's error flag, a bash command's final status,
+// a permission request's tool and decision, a question's field count and whether it was answered, the interrupt marker.
 // Dropped: ids, timestamps, text, input, output, usage, and every part that is session bookkeeping (state, model, commands...).
 import type { Event, Part } from "@claude-ui/protocol";
 
@@ -8,7 +9,10 @@ export type Step =
   | { kind: "thinking" }
   | { kind: "tool"; tool: string; status: string }
   | { kind: "tool_result"; error: boolean }
-  | { kind: "bash"; status: string; failed: boolean };
+  | { kind: "bash"; status: string; failed: boolean }
+  | { kind: "permission"; tool: string; settled: boolean; decision?: string }
+  | { kind: "question"; fields: number; settled: boolean; answered: boolean }
+  | { kind: "interrupted" };
 
 const stepOf = (p: Part): Step | undefined => {
   switch (p.type) {
@@ -22,6 +26,12 @@ const stepOf = (p: Part): Step | undefined => {
       return { kind: "tool_result", error: p.isError };
     case "bash":
       return { kind: "bash", status: p.status, failed: (p.exitCode ?? 0) !== 0 };
+    case "permission_request":
+      return { kind: "permission", tool: p.tool, settled: p.settled, ...(p.decision && { decision: p.decision }) };
+    case "question":
+      return { kind: "question", fields: p.questions.length, settled: p.settled, answered: !!p.answers };
+    case "turn_interrupted":
+      return { kind: "interrupted" };
     default:
       return undefined;
   }
@@ -42,7 +52,7 @@ export function normalize(events: Event[]): Step[] {
 }
 
 /** A step of a reference sequence: a field left out matches any value. */
-export type Pattern = { kind: Step["kind"]; tool?: string; status?: string; error?: boolean; failed?: boolean };
+export type Pattern = { kind: Step["kind"]; tool?: string; status?: string; error?: boolean; failed?: boolean; settled?: boolean; decision?: string; fields?: number; answered?: boolean };
 
 const matches = (a: Step, p: Pattern) => Object.entries(p).every(([k, v]) => (a as Record<string, unknown>)[k] === v);
 

@@ -3,12 +3,16 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fakeUsage } from "../fake-query.ts";
-import type { SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { CanUseTool, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
-export function fixtureTurns(file: URL): SDKMessage[][] {
-  const turns: SDKMessage[][] = [[]];
+/** A line of the recorder (scripts/record-fixture.ts) that is not an SDK message: the engine asked `canUseTool`, or the recorder pressed Stop. */
+export type RecorderLine = { type: "__can_use_tool"; toolName: string; toolUseID: string; input: Record<string, unknown>; reply: { behavior: "allow" | "deny" } } | { type: "__action"; action: "interrupt" };
+type Line = SDKMessage | RecorderLine;
+
+export function fixtureTurns(file: URL): Line[][] {
+  const turns: Line[][] = [[]];
   for (const line of readFileSync(file, "utf8").trim().split("\n")) {
-    const m = JSON.parse(line) as SDKMessage;
+    const m = JSON.parse(line) as Line;
     turns.at(-1)!.push(m);
     if (m.type === "result") turns.push([]);
   }
@@ -18,7 +22,10 @@ export function fixtureTurns(file: URL): SDKMessage[][] {
 /** `query` option of a Session: turn n of the fixture answers the n-th prompt. */
 export const fixtureQuery = (file: URL) => {
   const turns = fixtureTurns(file);
-  return ({ prompt }: { prompt: AsyncIterable<SDKUserMessage> }) => {
+  return ({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options?: { canUseTool?: CanUseTool } }) => {
+    // The recorder's Stop: the turn goes on after the engine called interrupt().
+    let interrupted!: () => void;
+    const stopPressed = new Promise<void>((r) => (interrupted = r));
     // close() ends the wait for the next prompt, as the real query ends when its input closes: the Session's close() waits for the loop.
     let stop!: () => void;
     const stopped = new Promise<{ done: true; value: undefined }>((r) => (stop = () => r({ done: true, value: undefined })));
@@ -38,7 +45,18 @@ export const fixtureQuery = (file: URL) => {
         }
         const turn = turns[n++];
         if (!turn) throw new Error(`fixture has no turn ${n}`);
-        yield* turn;
+        for (const line of turn) {
+          if (line.type === "__can_use_tool") {
+            // The scenario answers; the answer must be the recorded one, else the recorded rest of the turn would not follow.
+            if (!options?.canUseTool) throw new Error("the fixture asks canUseTool, the query has none");
+            const opts: Parameters<CanUseTool>[2] = { signal: new AbortController().signal, suggestions: [], toolUseID: line.toolUseID, requestId: randomUUID() } as Parameters<CanUseTool>[2];
+            const got = await options.canUseTool(line.toolName, line.input, opts);
+            if (got.behavior !== line.reply.behavior) throw new Error(`${line.toolName}: the engine answered ${got.behavior}, the recording continues after ${line.reply.behavior}`);
+          } else if (line.type === "__action") {
+            if (line.action !== "interrupt") throw new Error(`unknown recorder action ${line.action}`);
+            await Promise.race([stopPressed, stopped]);
+          } else yield line;
+        }
       }
     })();
     return Object.assign(q, {
@@ -48,6 +66,7 @@ export const fixtureQuery = (file: URL) => {
       supportedModels: async () => [],
       supportedCommands: async () => [],
       getContextUsage: async () => fakeUsage,
+      interrupt: async () => interrupted(),
       close: stop,
     });
   };

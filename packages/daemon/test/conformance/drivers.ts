@@ -22,6 +22,12 @@ export type Run = {
   events: Event[];
   /** Sends a prompt and settles when the turn ended (the session is idle again). */
   prompt(text: string): Promise<void>;
+  /** Sends a prompt and returns at once: the scenario answers what the turn asks, then calls `settle`. */
+  start(text: string): void;
+  /** Settles when the turn started by `start` ended. */
+  settle(): Promise<void>;
+  /** Settles when a part event satisfies `match`; fails after the timeout. */
+  waitFor(what: string, match: (part: Event["part"]) => boolean): Promise<void>;
   /** Bash mode: runs `command` in the session cwd and settles when it ended. */
   bash(command: string): Promise<void>;
   close(): Promise<void>;
@@ -30,7 +36,10 @@ export type Run = {
 /** What a scenario needs from a fixture: one name per adapter; the driver maps it to its own file. */
 export type Fixtures = { claude?: string; opencode1?: string; opencode2?: string };
 
-export type Driver = { adapter: AdapterName; label: string; /** The adapter's support table, known before a session opens: it decides which scenarios are skipped. */ support: SupportTable; open(fixtures: Fixtures): Promise<Run> };
+/** `manual`: the scenario answers permission requests itself; by default the driver allows each once so a recorded turn that asks (turn-edit) completes. */
+export type OpenOptions = { manual?: boolean };
+
+export type Driver = { adapter: AdapterName; label: string; /** The adapter's support table, known before a session opens: it decides which scenarios are skipped. */ support: SupportTable; open(fixtures: Fixtures, options?: OpenOptions): Promise<Run> };
 
 const TIMEOUT_MS = 15_000;
 const claudeFixture = (name: string) => new URL(`../../../protocol/test/fixtures/${name}.jsonl`, import.meta.url);
@@ -61,14 +70,15 @@ const turnEnded = (events: Event[], from: number) => events.slice(from).some((e)
 const commandEnded = (events: Event[], from: number) =>
   events.slice(from).some((e) => (e.part.type === "bash" && e.part.status !== "running") || (e.part.type === "tool_call" && e.part.tool === "Bash" && (e.part.status === "done" || e.part.status === "error"))) && idle(events);
 
-function runOf(engine: Engine, session: Session, cleanup: () => Promise<void>): Run {
+function runOf(engine: Engine, session: Session, cleanup: () => Promise<void>, manual = false): Run {
   const events: Event[] = [];
   const asked = new Set<string>();
+  let started = 0;
   session.subscribe(0, (e) => {
     events.push(e);
     // A recorded turn that asks for permission (turn-edit) is answered "allow once": the permission scenarios have their own replies.
     const p = e.part;
-    if (p.type === "permission_request" && !p.settled && !asked.has(p.requestId)) {
+    if (!manual && p.type === "permission_request" && !p.settled && !asked.has(p.requestId)) {
       asked.add(p.requestId);
       queueMicrotask(() => session.respond(p.requestId, { decision: "allow" }));
     }
@@ -77,6 +87,12 @@ function runOf(engine: Engine, session: Session, cleanup: () => Promise<void>): 
     engine,
     session,
     events,
+    start(text) {
+      started = events.length;
+      session.prompt(text);
+    },
+    settle: () => until("the turn to end", () => turnEnded(events, started)),
+    waitFor: (what, match) => until(what, () => events.some((e) => match(e.part))),
     async prompt(text) {
       const from = events.length;
       session.prompt(text);
@@ -100,12 +116,12 @@ const claude: Driver = {
   adapter: "claude",
   label: "Claude",
   support: CLAUDE_SUPPORT,
-  async open(f) {
+  async open(f, o) {
     const cwd = scratch();
     // A scenario without a Claude fixture (bash mode: the daemon runs the shell) still needs a query; the fixture is never replayed because the command makes no turn.
     const query = f.claude ? fixtureQuery(claudeFixture(f.claude)) : fixtureQuery(claudeFixture("two-turn-text"));
     const session = new Session(cwd, { engine: claudeEngine, query: query as never });
-    return runOf(claudeEngine, session, async () => rmSync(cwd, { recursive: true, force: true }));
+    return runOf(claudeEngine, session, async () => rmSync(cwd, { recursive: true, force: true }), o?.manual);
   },
 };
 
@@ -115,7 +131,7 @@ function opencode(adapter: "opencode1" | "opencode2"): Driver {
     adapter,
     label: v2 ? "OpenCode 2" : "OpenCode 1",
     support: v2 ? OPENCODE2_SUPPORT : OPENCODE_SUPPORT,
-    async open(f) {
+    async open(f, o) {
       const cwd = scratch();
       const script = (v2 ? f.opencode2 : f.opencode1)?.split(",").filter(Boolean).map(v2 ? turn2 : turn1).join(",") ?? "";
       const env: Record<string, string> = v2 ? { FAKE_OPENCODE2_SCRIPT: script } : { FAKE_OPENCODE_SCRIPT: script };
@@ -140,7 +156,7 @@ function opencode(adapter: "opencode1" | "opencode2"): Driver {
       return runOf(engine, session, async () => {
         await server.close();
         rmSync(cwd, { recursive: true, force: true });
-      });
+      }, o?.manual);
     },
   };
 }

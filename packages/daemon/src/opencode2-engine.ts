@@ -8,7 +8,7 @@ import type { OpenCodeClient } from "@opencode/client";
 import { agentMentions, capabilitiesFromSupport, checkAnswer, permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type Part, type PermissionMode, type PermissionUpdate, type Question, type QuestionInput, type RewindMode, type RewindPreview, type SlashCommand, type SupportTable } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT } from "./aside.ts";
 import { DAEMON_SERVER } from "./daemon-mcp.ts";
-import { DeniedRetryError } from "./denied-retry.ts";
+import { DeniedRetryError, NO_AUTO_MODE } from "./denied-retry.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
 import { INLINE_TIMEOUT_MS, withDenials, type ForkResult, type ForkSpec, type InlineHooks, type InlineResult, type InlineSpec } from "./inline-types.ts";
 import { ascending } from "./opencode-id.ts";
@@ -27,7 +27,7 @@ import type { OpenCodeServer } from "./opencode-server.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 /** What OpenCode 2 has: every feature of the table. */
-export const OPENCODE2_SUPPORT: SupportTable = { shell: "supported" };
+export const OPENCODE2_SUPPORT: SupportTable = { shell: "supported", permissions: "supported", questions: "supported", interrupt: "supported", deniedRetry: { gap: NO_AUTO_MODE } };
 /** What the OpenCode 2 adapter has: as OpenCode 1's (`/compact`, `/undo`, `/redo` are the daemon's commands, the others OpenCode's; `fork`: the Aside). */
 export const OPENCODE2_CAPABILITIES: EngineCapabilities = capabilitiesFromSupport(OPENCODE2_SUPPORT, {
   ...OPENCODE_CAPABILITIES,
@@ -685,10 +685,10 @@ class OpenCode2Session implements EngineSession {
     this.changed("agent");
   }
   allowDenied(_toolUseId: string): string | undefined {
-    throw new DeniedRetryError("unsupported", "this session's engine has no auto mode");
+    throw new DeniedRetryError("unsupported", NO_AUTO_MODE);
   }
   alwaysAllowDenied(_toolUseId: string, _scope: "session" | "local"): Promise<string | undefined> {
-    throw new DeniedRetryError("unsupported", "this session's engine has no auto mode");
+    throw new DeniedRetryError("unsupported", NO_AUTO_MODE);
   }
 
   /** Replaces the session's rules in OpenCode with the ones of `mode` and `agent` (default: the session's). */

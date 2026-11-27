@@ -11,6 +11,9 @@ type Ev = Extract<Entry, { kind: "event" }>;
 type Json = Record<string, any>;
 
 const V1_KEEP = new Set(["message.updated", "message.part.updated", "message.part.delta", "session.status", "session.idle", "session.error", "permission.asked", "permission.replied", "question.asked", "question.replied"]);
+// Events of the session the adapters do not read: dropped and counted. Any other event type of the session fails the cut, so a type the adapters start to read later is not lost silently.
+const V1_DROP = new Set(["session.created", "session.updated", "session.diff"]);
+const V2_DROP = new Set(["session.created", "session.inbox.enqueued", "session.inbox.delivered", "session.instructions.updated", "session.renamed", "session.tool.progress", "shell.created", "shell.exited", "form.replied", "permission.replied"]);
 const V2_KEEP = /^(session\.(execution|step|text|reasoning|tool)\.|session\.usage\.updated$|permission\.asked$|form\.created$)/;
 
 /** The session an event belongs to. */
@@ -38,7 +41,7 @@ function scrub<T>(value: T, cwd: string): T {
 type Cut = { before: Ev[]; after: Ev[]; dropped: Map<string, number> };
 
 /** Splits the recording's events of the session at `at` (an action of the recorder, or the ask event); the recorder's own lines are not events. */
-function split(entries: Entry[], sid: string, keep: (e: Ev) => boolean, atAction?: string): Cut {
+function split(entries: Entry[], sid: string, keep: (e: Ev) => boolean, known: ReadonlySet<string>, atAction?: string): Cut {
   const dropped = new Map<string, number>();
   const cutAt = atAction ? entries.findIndex((e) => e.kind === "action" && e.action === atAction) : -1;
   const before: Ev[] = [];
@@ -47,7 +50,10 @@ function split(entries: Entry[], sid: string, keep: (e: Ev) => boolean, atAction
     if (e.kind !== "event") return;
     const s = sessionOf(e.properties);
     if (s !== sid) return;
-    if (!keep(e)) return void dropped.set(e.type, (dropped.get(e.type) ?? 0) + 1);
+    if (!keep(e)) {
+      if (!known.has(e.type)) throw new Error(`unknown event type ${e.type}: add it to the keep or the drop list of cut-turn.ts`);
+      return void dropped.set(e.type, (dropped.get(e.type) ?? 0) + 1);
+    }
     (cutAt >= 0 && i > cutAt ? after : before).push(e);
   });
   return { before, after, dropped };
@@ -65,7 +71,7 @@ export function cutV1(entries: Entry[]) {
   const has = (a: string) => scenarioActions.includes(a);
   const keep = (e: Ev) => V1_KEEP.has(e.type);
   const at = has("permission.reply") ? "permission.reply" : has("question.reply") ? "question.reply" : has("interrupt") ? "interrupt" : undefined;
-  const { before, after, dropped } = split(entries, sid, keep, at);
+  const { before, after, dropped } = split(entries, sid, keep, V1_DROP, at);
   const asks = ["permission.asked", "question.asked"];
   // An ask ends the node's events: what OpenCode sent between the ask and the recorder's reply belongs to the reply's node.
   const askAt = before.findIndex((e) => asks.includes(e.type));
@@ -91,7 +97,7 @@ export function cutV2(entries: Entry[]) {
   // A tool that ran a shell reports it by `shell*` events and a progress line naming the shell; neither is kept (the call's own success ends the card).
   const keep = (e: Ev) => V2_KEEP.test(e.type) && !(e.type === "session.tool.progress" && e.properties.metadata?.shellID);
   const at = has("interrupt") ? "interrupt" : undefined;
-  const { before, dropped } = split(entries, sid, keep, at);
+  const { before, dropped } = split(entries, sid, keep, V2_DROP, at);
   const ids = new Map<string, string>([[sid, "$SESSION"]]);
   const assistants: string[] = [];
   const calls = new Set<string>();
