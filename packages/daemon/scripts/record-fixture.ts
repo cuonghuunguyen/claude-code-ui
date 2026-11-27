@@ -35,6 +35,7 @@ const SCENARIOS: Record<string, Scenario> = {
 const argv = process.argv.slice(2);
 const flag = argv.indexOf("--scenario");
 const name = flag >= 0 ? argv.splice(flag, 2)[1] : undefined;
+if (flag >= 0 && !name) (console.error("--scenario needs a name"), process.exit(2));
 const scenario = name ? SCENARIOS[name] : undefined;
 if (name && !scenario) (console.error(`unknown scenario ${name}; one of ${Object.keys(SCENARIOS).join(", ")}`), process.exit(2));
 

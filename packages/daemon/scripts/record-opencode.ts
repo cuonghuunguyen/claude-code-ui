@@ -31,7 +31,7 @@ const modelArg = arg("--model") ?? "deepseek/deepseek-flash";
 const auth = resolve(arg("--auth") ?? join(homedir(), ".local/share/opencode/auth.json"));
 if (!major || !bin || !scenarioName || !SCENARIOS[scenarioName] || !outDir) (console.error("usage: record-opencode --v1|--v2 --bin <opencode> --scenario plain|permission|question|interrupt --out <dir> [--model p/m] [--auth file]"), process.exit(2));
 // ADR 0002 and the owner's rule: the paid DeepSeek model, never a free one.
-if (/free|big-pickle/i.test(modelArg)) (console.error(`refusing the model ${modelArg}: recordings use DeepSeek V4.1 Flash`), process.exit(2));
+if (modelArg !== "deepseek/deepseek-flash") (console.error(`refusing the model ${modelArg}: recordings use deepseek/deepseek-flash (DeepSeek V4.1 Flash)`), process.exit(2));
 if (!existsSync(auth)) (console.error(`no OpenCode login at ${auth}`), process.exit(2));
 const [providerID, ...rest] = modelArg.split("/");
 const modelID = rest.join("/");
@@ -65,7 +65,8 @@ const env: NodeJS.ProcessEnv = {
   OPENCODE_DISABLE_AUTOUPDATE: "1",
 };
 writeFileSync(env.OPENCODE_CONFIG!, JSON.stringify({ $schema: "https://opencode.ai/config.json", model: modelArg, autoupdate: false }));
-for (const v of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]) delete process.env[v];
+// Nothing of the shell may shape a recording: no API keys, no OPENCODE_* settings of the user (the recorder sets its own below).
+for (const v of Object.keys(process.env)) if (v === "ANTHROPIC_API_KEY" || v === "ANTHROPIC_AUTH_TOKEN" || (v.startsWith("OPENCODE_") && !(v in env))) delete process.env[v];
 
 const server = createOpenCodeServer({ path: () => resolve(bin!), env: () => env });
 const wait = async (what: string, done: () => boolean, ms = 180_000) => {
