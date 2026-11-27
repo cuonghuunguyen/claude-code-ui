@@ -20,8 +20,7 @@ export type Scenario = {
 export const SCENARIOS: Scenario[] = [
   {
     name: "plain prompt",
-    // OpenCode 2 has no recorded text-only turn: an empty script plays the fake binary's own plain turn.
-    fixtures: { claude: "two-turn-text", opencode1: "text", opencode2: "" },
+    fixtures: { claude: "two-turn-text", opencode1: "text", opencode2: "rec-plain" },
     play: (run) => run.prompt("hello"),
     expected: [{ kind: "user_text" }, { kind: "assistant_text" }],
     optional: ["thinking", "tool", "tool_result"],

@@ -1,0 +1,678 @@
+{
+ "events": [
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_01a21c95dde4rec00000000000",
+     "role": "user",
+     "sessionID": "ses_ROOT",
+     "time": {
+      "created": 1795775913450
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "deepseek",
+      "modelID": "deepseek-flash"
+     }
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_01a21c95dde4rec00000000000",
+     "type": "text",
+     "text": "Use the question tool to ask me whether I prefer red or blue (those two options). After my answer reply with one short sentence. Use no other tool.",
+     "messageID": "msg_01a21c95dde4rec00000000000",
+     "sessionID": "ses_ROOT"
+    },
+    "time": 1795775913455
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_ASSISTANT",
+     "parentID": "msg_01a21c95dde4rec00000000000",
+     "role": "assistant",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "modelID": "deepseek-flash",
+     "providerID": "deepseek",
+     "time": {
+      "created": 1795775913668
+     },
+     "sessionID": "ses_ROOT"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "role": "user",
+     "time": {
+      "created": 1795775913450
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "deepseek",
+      "modelID": "deepseek-flash"
+     },
+     "id": "msg_01a21c95dde4rec00000000000",
+     "sessionID": "ses_ROOT",
+     "summary": {
+      "diffs": []
+     }
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_21c95e148001ZdLA7bqlt922Mk",
+     "messageID": "msg_ASSISTANT",
+     "sessionID": "ses_ROOT",
+     "type": "step-start"
+    },
+    "time": 1795775914312
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_21c95e2310012uF577Yc8OO0cy",
+     "messageID": "msg_ASSISTANT",
+     "sessionID": "ses_ROOT",
+     "type": "tool",
+     "tool": "question",
+     "callID": "call_00_ET_q9McyQ2RYSX6wpgDT3HX8416",
+     "state": {
+      "status": "pending",
+      "input": {},
+      "raw": ""
+     }
+    },
+    "time": 1795775914546
+   }
+  },
+  {
+   "type": "question.asked",
+   "properties": {
+    "id": "que_21c95e2c60010DwHQ8sK3iwnwr",
+    "sessionID": "ses_ROOT",
+    "questions": [
+     {
+      "question": "Do you prefer red or blue?",
+      "header": "Color preference",
+      "options": [
+       {
+        "label": "Red",
+        "description": "Pick red"
+       },
+       {
+        "label": "Blue",
+        "description": "Pick blue"
+       }
+      ]
+     }
+    ],
+    "tool": {
+     "messageID": "msg_ASSISTANT",
+     "callID": "call_00_ET_q9McyQ2RYSX6wpgDT3HX8416"
+    }
+   }
+  }
+ ],
+ "on": {
+  "answer": {
+   "events": [
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "question",
+       "callID": "call_00_ET_q9McyQ2RYSX6wpgDT3HX8416",
+       "state": {
+        "status": "running",
+        "input": {
+         "questions": [
+          {
+           "question": "Do you prefer red or blue?",
+           "header": "Color preference",
+           "options": [
+            {
+             "label": "Red",
+             "description": "Pick red"
+            },
+            {
+             "label": "Blue",
+             "description": "Pick blue"
+            }
+           ]
+          }
+         ]
+        },
+        "time": {
+         "start": 1795775914694
+        }
+       },
+       "id": "prt_21c95e2310012uF577Yc8OO0cy",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_ASSISTANT"
+      },
+      "time": 1795775914694
+     }
+    },
+    {
+     "type": "question.replied",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "requestID": "que_21c95e2c60010DwHQ8sK3iwnwr",
+      "answers": [
+       [
+        "Red"
+       ]
+      ]
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "question",
+       "callID": "call_00_ET_q9McyQ2RYSX6wpgDT3HX8416",
+       "state": {
+        "status": "completed",
+        "input": {
+         "questions": [
+          {
+           "question": "Do you prefer red or blue?",
+           "header": "Color preference",
+           "options": [
+            {
+             "label": "Red",
+             "description": "Pick red"
+            },
+            {
+             "label": "Blue",
+             "description": "Pick blue"
+            }
+           ]
+          }
+         ]
+        },
+        "output": "User has answered your questions: \"Do you prefer red or blue?\"=\"Red\". You can now continue with the user's answers in mind.",
+        "metadata": {
+         "answers": [
+          [
+           "Red"
+          ]
+         ],
+         "truncated": false
+        },
+        "title": "Asked 1 question",
+        "time": {
+         "start": 1795775914694,
+         "end": 1795775914702
+        }
+       },
+       "id": "prt_21c95e2310012uF577Yc8OO0cy",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_ASSISTANT"
+      },
+      "time": 1795775914702
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_21c95e2d1001urusnR7rZL7Rhg",
+       "reason": "tool-calls",
+       "messageID": "msg_ASSISTANT",
+       "sessionID": "ses_ROOT",
+       "type": "step-finish",
+       "tokens": {
+        "total": 13793,
+        "input": 12042,
+        "output": 87,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 1664
+        }
+       },
+       "cost": 0.001863492
+      },
+      "time": 1795775914705
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_ASSISTANT",
+       "parentID": "msg_01a21c95dde4rec00000000000",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/"
+       },
+       "cost": 0.001863492,
+       "tokens": {
+        "total": 13793,
+        "input": 12042,
+        "output": 87,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 1664
+        }
+       },
+       "modelID": "deepseek-flash",
+       "providerID": "deepseek",
+       "time": {
+        "created": 1795775913668,
+        "completed": 1795775914707
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_ASSISTANT",
+       "parentID": "msg_01a21c95dde4rec00000000000",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/"
+       },
+       "cost": 0.001863492,
+       "tokens": {
+        "total": 13793,
+        "input": 12042,
+        "output": 87,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 1664
+        }
+       },
+       "modelID": "deepseek-flash",
+       "providerID": "deepseek",
+       "time": {
+        "created": 1795775913668,
+        "completed": 1795775914707
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_ASSISTANT_2",
+       "parentID": "msg_01a21c95dde4rec00000000000",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/"
+       },
+       "cost": 0,
+       "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+         "read": 0,
+         "write": 0
+        }
+       },
+       "modelID": "deepseek-flash",
+       "providerID": "deepseek",
+       "time": {
+        "created": 1795775914708
+       },
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "role": "user",
+       "time": {
+        "created": 1795775913450
+       },
+       "agent": "build",
+       "model": {
+        "providerID": "deepseek",
+        "modelID": "deepseek-flash"
+       },
+       "summary": {
+        "diffs": []
+       },
+       "id": "msg_01a21c95dde4rec00000000000",
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_21c95e43e001WmxsjBow8VfwVf",
+       "messageID": "msg_ASSISTANT_2",
+       "sessionID": "ses_ROOT",
+       "type": "step-start"
+      },
+      "time": 1795775915070
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_21c95e5aa0015XTGaABAbxEeX3",
+       "messageID": "msg_ASSISTANT_2",
+       "sessionID": "ses_ROOT",
+       "type": "text",
+       "text": "",
+       "time": {
+        "start": 1795775915434
+       }
+      },
+      "time": 1795775915434
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_ASSISTANT_2",
+      "partID": "prt_21c95e5aa0015XTGaABAbxEeX3",
+      "field": "text",
+      "delta": "You"
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_ASSISTANT_2",
+      "partID": "prt_21c95e5aa0015XTGaABAbxEeX3",
+      "field": "text",
+      "delta": " prefer"
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_ASSISTANT_2",
+      "partID": "prt_21c95e5aa0015XTGaABAbxEeX3",
+      "field": "text",
+      "delta": " red"
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_ASSISTANT_2",
+      "partID": "prt_21c95e5aa0015XTGaABAbxEeX3",
+      "field": "text",
+      "delta": "."
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_21c95e5aa0015XTGaABAbxEeX3",
+       "messageID": "msg_ASSISTANT_2",
+       "sessionID": "ses_ROOT",
+       "type": "text",
+       "text": "You prefer red.",
+       "time": {
+        "start": 1795775915434,
+        "end": 1795775915452
+       }
+      },
+      "time": 1795775915452
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_21c95e5bd001pDl6Cwtpj0EEFt",
+       "reason": "stop",
+       "messageID": "msg_ASSISTANT_2",
+       "sessionID": "ses_ROOT",
+       "type": "step-finish",
+       "tokens": {
+        "total": 13838,
+        "input": 137,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 13696
+        }
+       },
+       "cost": 0.000064638
+      },
+      "time": 1795775915453
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_ASSISTANT_2",
+       "parentID": "msg_01a21c95dde4rec00000000000",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/"
+       },
+       "cost": 0.000064638,
+       "tokens": {
+        "total": 13838,
+        "input": 137,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 13696
+        }
+       },
+       "modelID": "deepseek-flash",
+       "providerID": "deepseek",
+       "time": {
+        "created": 1795775914708,
+        "completed": 1795775915454
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "stop"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_ASSISTANT_2",
+       "parentID": "msg_01a21c95dde4rec00000000000",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/"
+       },
+       "cost": 0.000064638,
+       "tokens": {
+        "total": 13838,
+        "input": 137,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 13696
+        }
+       },
+       "modelID": "deepseek-flash",
+       "providerID": "deepseek",
+       "time": {
+        "created": 1795775914708,
+        "completed": 1795775915454
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "stop"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "idle"
+      }
+     }
+    },
+    {
+     "type": "session.idle",
+     "properties": {
+      "sessionID": "ses_ROOT"
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "role": "user",
+       "time": {
+        "created": 1795775913450
+       },
+       "agent": "build",
+       "model": {
+        "providerID": "deepseek",
+        "modelID": "deepseek-flash"
+       },
+       "summary": {
+        "diffs": []
+       },
+       "id": "msg_01a21c95dde4rec00000000000",
+       "sessionID": "ses_ROOT"
+      }
+     }
+    }
+   ]
+  }
+ }
+}

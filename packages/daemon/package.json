@@ -6,6 +6,8 @@
     "start": "tsx src/main.ts",
     "dev": "tsx watch src/main.ts --no-open",
     "record-fixture": "tsx scripts/record-fixture.ts",
+    "record-opencode": "tsx scripts/record-opencode.ts",
+    "cut-turn": "tsx scripts/cut-turn.ts",
     "typecheck": "tsc -p ."
   },
   "dependencies": {

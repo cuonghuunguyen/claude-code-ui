@@ -1,0 +1,997 @@
+{
+ "events": [
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_01a21c95c3e4rec00000000000",
+     "role": "user",
+     "sessionID": "ses_ROOT",
+     "time": {
+      "created": 1795775906794
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "deepseek",
+      "modelID": "deepseek-flash"
+     }
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_01a21c95c3e4rec00000000000",
+     "type": "text",
+     "text": "Run the shell command `touch conformance.txt` with the bash tool, then confirm in one short sentence. Use no other tool.",
+     "messageID": "msg_01a21c95c3e4rec00000000000",
+     "sessionID": "ses_ROOT"
+    },
+    "time": 1795775906798
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_ASSISTANT",
+     "parentID": "msg_01a21c95c3e4rec00000000000",
+     "role": "assistant",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "modelID": "deepseek-flash",
+     "providerID": "deepseek",
+     "time": {
+      "created": 1795775907014
+     },
+     "sessionID": "ses_ROOT"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "role": "user",
+     "time": {
+      "created": 1795775906794
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "deepseek",
+      "modelID": "deepseek-flash"
+     },
+     "id": "msg_01a21c95c3e4rec00000000000",
+     "sessionID": "ses_ROOT",
+     "summary": {
+      "diffs": []
+     }
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_21c95c73f001gZt4Ufq87C3quB",
+     "messageID": "msg_ASSISTANT",
+     "sessionID": "ses_ROOT",
+     "type": "step-start"
+    },
+    "time": 1795775907647
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_21c95c817001oKqJQlv3bPv4JX",
+     "messageID": "msg_ASSISTANT",
+     "sessionID": "ses_ROOT",
+     "type": "reasoning",
+     "text": "",
+     "time": {
+      "start": 1795775907864
+     }
+    },
+    "time": 1795775907864
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": "The"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " user"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " wants"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " me"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " to"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " run"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " `"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": "touch"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " con"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": "formance"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": ".txt"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": "`"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " with"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " the"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " bash"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " tool"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": ","
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " then"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " confirm"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " in"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " one"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " short"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " sentence"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": ","
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " use"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " no"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " other"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": " tool"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c95c817001oKqJQlv3bPv4JX",
+    "field": "text",
+    "delta": "."
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_21c95c817001oKqJQlv3bPv4JX",
+     "messageID": "msg_ASSISTANT",
+     "sessionID": "ses_ROOT",
+     "type": "reasoning",
+     "text": "The user wants me to run `touch conformance.txt` with the bash tool, then confirm in one short sentence, use no other tool.",
+     "time": {
+      "start": 1795775907864,
+      "end": 1795775908209
+     }
+    },
+    "time": 1795775908209
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_21c95c972001xPFyoTYOYCMN7k",
+     "messageID": "msg_ASSISTANT",
+     "sessionID": "ses_ROOT",
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_00_aTsYD7yM4mBCo2RXLDOQ2184",
+     "state": {
+      "status": "pending",
+      "input": {},
+      "raw": ""
+     }
+    },
+    "time": 1795775908210
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "type": "tool",
+     "tool": "bash",
+     "callID": "call_00_aTsYD7yM4mBCo2RXLDOQ2184",
+     "state": {
+      "status": "running",
+      "input": {
+       "command": "touch conformance.txt"
+      },
+      "time": {
+       "start": 1795775908266
+      }
+     },
+     "id": "prt_21c95c972001xPFyoTYOYCMN7k",
+     "sessionID": "ses_ROOT",
+     "messageID": "msg_ASSISTANT"
+    },
+    "time": 1795775908266
+   }
+  },
+  {
+   "type": "permission.asked",
+   "properties": {
+    "id": "per_21c95c9b60018o9HpNMTrOY1Cg",
+    "sessionID": "ses_ROOT",
+    "permission": "bash",
+    "patterns": [
+     "touch conformance.txt"
+    ],
+    "metadata": {
+     "command": "touch conformance.txt"
+    },
+    "always": [
+     "touch *"
+    ],
+    "tool": {
+     "messageID": "msg_ASSISTANT",
+     "callID": "call_00_aTsYD7yM4mBCo2RXLDOQ2184"
+    }
+   }
+  }
+ ],
+ "on": {
+  "once": {
+   "events": [
+    {
+     "type": "permission.replied",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "requestID": "per_21c95c9b60018o9HpNMTrOY1Cg",
+      "reply": "once"
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "bash",
+       "callID": "call_00_aTsYD7yM4mBCo2RXLDOQ2184",
+       "state": {
+        "metadata": {
+         "output": ""
+        },
+        "status": "running",
+        "input": {
+         "command": "touch conformance.txt"
+        },
+        "time": {
+         "start": 1795775908266
+        }
+       },
+       "id": "prt_21c95c972001xPFyoTYOYCMN7k",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_ASSISTANT"
+      },
+      "time": 1795775908308
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "type": "tool",
+       "tool": "bash",
+       "callID": "call_00_aTsYD7yM4mBCo2RXLDOQ2184",
+       "state": {
+        "status": "completed",
+        "input": {
+         "command": "touch conformance.txt"
+        },
+        "output": "(no output)",
+        "metadata": {
+         "output": "(no output)",
+         "exit": 0,
+         "truncated": false
+        },
+        "title": "touch conformance.txt",
+        "time": {
+         "start": 1795775908266,
+         "end": 1795775908321
+        }
+       },
+       "id": "prt_21c95c972001xPFyoTYOYCMN7k",
+       "sessionID": "ses_ROOT",
+       "messageID": "msg_ASSISTANT"
+      },
+      "time": 1795775908321
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_21c95c9e3001XDs8C66Ar13ZrS",
+       "reason": "tool-calls",
+       "messageID": "msg_ASSISTANT",
+       "sessionID": "ses_ROOT",
+       "type": "step-finish",
+       "tokens": {
+        "total": 13778,
+        "input": 12045,
+        "output": 40,
+        "reasoning": 29,
+        "cache": {
+         "write": 0,
+         "read": 1664
+        }
+       },
+       "cost": 0.001853142
+      },
+      "time": 1795775908323
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_ASSISTANT",
+       "parentID": "msg_01a21c95c3e4rec00000000000",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/"
+       },
+       "cost": 0.001853142,
+       "tokens": {
+        "total": 13778,
+        "input": 12045,
+        "output": 40,
+        "reasoning": 29,
+        "cache": {
+         "write": 0,
+         "read": 1664
+        }
+       },
+       "modelID": "deepseek-flash",
+       "providerID": "deepseek",
+       "time": {
+        "created": 1795775907014,
+        "completed": 1795775908326
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_ASSISTANT",
+       "parentID": "msg_01a21c95c3e4rec00000000000",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/"
+       },
+       "cost": 0.001853142,
+       "tokens": {
+        "total": 13778,
+        "input": 12045,
+        "output": 40,
+        "reasoning": 29,
+        "cache": {
+         "write": 0,
+         "read": 1664
+        }
+       },
+       "modelID": "deepseek-flash",
+       "providerID": "deepseek",
+       "time": {
+        "created": 1795775907014,
+        "completed": 1795775908326
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "tool-calls"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_ASSISTANT_2",
+       "parentID": "msg_01a21c95c3e4rec00000000000",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/"
+       },
+       "cost": 0,
+       "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+         "read": 0,
+         "write": 0
+        }
+       },
+       "modelID": "deepseek-flash",
+       "providerID": "deepseek",
+       "time": {
+        "created": 1795775908327
+       },
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "role": "user",
+       "time": {
+        "created": 1795775906794
+       },
+       "agent": "build",
+       "model": {
+        "providerID": "deepseek",
+        "modelID": "deepseek-flash"
+       },
+       "summary": {
+        "diffs": []
+       },
+       "id": "msg_01a21c95c3e4rec00000000000",
+       "sessionID": "ses_ROOT"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_21c95cb710012qkuDDChqqCPtC",
+       "messageID": "msg_ASSISTANT_2",
+       "sessionID": "ses_ROOT",
+       "type": "step-start"
+      },
+      "time": 1795775908721
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_21c95cd07001EyCmwyDlUsjziK",
+       "messageID": "msg_ASSISTANT_2",
+       "sessionID": "ses_ROOT",
+       "type": "text",
+       "text": "",
+       "time": {
+        "start": 1795775909127
+       }
+      },
+      "time": 1795775909127
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_ASSISTANT_2",
+      "partID": "prt_21c95cd07001EyCmwyDlUsjziK",
+      "field": "text",
+      "delta": "Created"
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_ASSISTANT_2",
+      "partID": "prt_21c95cd07001EyCmwyDlUsjziK",
+      "field": "text",
+      "delta": " con"
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_ASSISTANT_2",
+      "partID": "prt_21c95cd07001EyCmwyDlUsjziK",
+      "field": "text",
+      "delta": "formance"
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_ASSISTANT_2",
+      "partID": "prt_21c95cd07001EyCmwyDlUsjziK",
+      "field": "text",
+      "delta": ".txt"
+     }
+    },
+    {
+     "type": "message.part.delta",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "messageID": "msg_ASSISTANT_2",
+      "partID": "prt_21c95cd07001EyCmwyDlUsjziK",
+      "field": "text",
+      "delta": "."
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_21c95cd07001EyCmwyDlUsjziK",
+       "messageID": "msg_ASSISTANT_2",
+       "sessionID": "ses_ROOT",
+       "type": "text",
+       "text": "Created conformance.txt.",
+       "time": {
+        "start": 1795775909127,
+        "end": 1795775909130
+       }
+      },
+      "time": 1795775909130
+     }
+    },
+    {
+     "type": "message.part.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "part": {
+       "id": "prt_21c95cd0b001pdkZ0IGo69Nvxf",
+       "reason": "stop",
+       "messageID": "msg_ASSISTANT_2",
+       "sessionID": "ses_ROOT",
+       "type": "step-finish",
+       "tokens": {
+        "total": 13798,
+        "input": 224,
+        "output": 6,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 13568
+        }
+       },
+       "cost": 0.000077904
+      },
+      "time": 1795775909131
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_ASSISTANT_2",
+       "parentID": "msg_01a21c95c3e4rec00000000000",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/"
+       },
+       "cost": 0.000077904,
+       "tokens": {
+        "total": 13798,
+        "input": 224,
+        "output": 6,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 13568
+        }
+       },
+       "modelID": "deepseek-flash",
+       "providerID": "deepseek",
+       "time": {
+        "created": 1795775908327,
+        "completed": 1795775909133
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "stop"
+      }
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "id": "msg_ASSISTANT_2",
+       "parentID": "msg_01a21c95c3e4rec00000000000",
+       "role": "assistant",
+       "mode": "build",
+       "agent": "build",
+       "path": {
+        "cwd": "/work/proj",
+        "root": "/"
+       },
+       "cost": 0.000077904,
+       "tokens": {
+        "total": 13798,
+        "input": 224,
+        "output": 6,
+        "reasoning": 0,
+        "cache": {
+         "write": 0,
+         "read": 13568
+        }
+       },
+       "modelID": "deepseek-flash",
+       "providerID": "deepseek",
+       "time": {
+        "created": 1795775908327,
+        "completed": 1795775909133
+       },
+       "sessionID": "ses_ROOT",
+       "finish": "stop"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "type": "session.status",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "status": {
+       "type": "idle"
+      }
+     }
+    },
+    {
+     "type": "session.idle",
+     "properties": {
+      "sessionID": "ses_ROOT"
+     }
+    },
+    {
+     "type": "message.updated",
+     "properties": {
+      "sessionID": "ses_ROOT",
+      "info": {
+       "role": "user",
+       "time": {
+        "created": 1795775906794
+       },
+       "agent": "build",
+       "model": {
+        "providerID": "deepseek",
+        "modelID": "deepseek-flash"
+       },
+       "summary": {
+        "diffs": []
+       },
+       "id": "msg_01a21c95c3e4rec00000000000",
+       "sessionID": "ses_ROOT"
+      }
+     }
+    }
+   ]
+  }
+ }
+}

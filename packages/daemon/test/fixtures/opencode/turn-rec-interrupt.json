@@ -1,0 +1,717 @@
+{
+ "events": [
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_01a21c983e80rec00000000000",
+     "role": "user",
+     "sessionID": "ses_ROOT",
+     "time": {
+      "created": 1795776069252
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "deepseek",
+      "modelID": "deepseek-flash"
+     }
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_01a21c983e80rec00000000000",
+     "type": "text",
+     "text": "Write a 600 word essay about rivers. Do not use tools.",
+     "messageID": "msg_01a21c983e80rec00000000000",
+     "sessionID": "ses_ROOT"
+    },
+    "time": 1795776069257
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_ASSISTANT",
+     "parentID": "msg_01a21c983e80rec00000000000",
+     "role": "assistant",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "modelID": "deepseek-flash",
+     "providerID": "deepseek",
+     "time": {
+      "created": 1795776069470
+     },
+     "sessionID": "ses_ROOT"
+    }
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "role": "user",
+     "time": {
+      "created": 1795776069252
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "deepseek",
+      "modelID": "deepseek-flash"
+     },
+     "id": "msg_01a21c983e80rec00000000000",
+     "sessionID": "ses_ROOT",
+     "summary": {
+      "diffs": []
+     }
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "busy"
+    }
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_21c9841fb001Jj22f6QRlye5Cn",
+     "messageID": "msg_ASSISTANT",
+     "sessionID": "ses_ROOT",
+     "type": "step-start"
+    },
+    "time": 1795776070140
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_21c984272001WSaNxrAriPBTqq",
+     "messageID": "msg_ASSISTANT",
+     "sessionID": "ses_ROOT",
+     "type": "reasoning",
+     "text": "",
+     "time": {
+      "start": 1795776070258
+     }
+    },
+    "time": 1795776070258
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": "The"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " user"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " wants"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " a"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " "
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": "600"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": "-word"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " essay"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " about"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " rivers"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": "."
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " No"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " tools"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": "."
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " Just"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " write"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " it"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": "."
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " Need"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " to"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " be"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " around"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " "
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": "600"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " words"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": "."
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " Deliver"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": " directly"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984272001WSaNxrAriPBTqq",
+    "field": "text",
+    "delta": "."
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_21c984272001WSaNxrAriPBTqq",
+     "messageID": "msg_ASSISTANT",
+     "sessionID": "ses_ROOT",
+     "type": "reasoning",
+     "text": "The user wants a 600-word essay about rivers. No tools. Just write it. Need to be around 600 words. Deliver directly.",
+     "time": {
+      "start": 1795776070258,
+      "end": 1795776070436
+     }
+    },
+    "time": 1795776070436
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_21c984325001QWfjtpQAc5zt6r",
+     "messageID": "msg_ASSISTANT",
+     "sessionID": "ses_ROOT",
+     "type": "text",
+     "text": "",
+     "time": {
+      "start": 1795776070437
+     }
+    },
+    "time": 1795776070437
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984325001QWfjtpQAc5zt6r",
+    "field": "text",
+    "delta": "**"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984325001QWfjtpQAc5zt6r",
+    "field": "text",
+    "delta": "R"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984325001QWfjtpQAc5zt6r",
+    "field": "text",
+    "delta": "ivers"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984325001QWfjtpQAc5zt6r",
+    "field": "text",
+    "delta": ":"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984325001QWfjtpQAc5zt6r",
+    "field": "text",
+    "delta": " The"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984325001QWfjtpQAc5zt6r",
+    "field": "text",
+    "delta": " Lif"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984325001QWfjtpQAc5zt6r",
+    "field": "text",
+    "delta": "elines"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984325001QWfjtpQAc5zt6r",
+    "field": "text",
+    "delta": " of"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984325001QWfjtpQAc5zt6r",
+    "field": "text",
+    "delta": " the"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984325001QWfjtpQAc5zt6r",
+    "field": "text",
+    "delta": " Land"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984325001QWfjtpQAc5zt6r",
+    "field": "text",
+    "delta": "**\n\n"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984325001QWfjtpQAc5zt6r",
+    "field": "text",
+    "delta": "R"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984325001QWfjtpQAc5zt6r",
+    "field": "text",
+    "delta": "ivers"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984325001QWfjtpQAc5zt6r",
+    "field": "text",
+    "delta": " are"
+   }
+  },
+  {
+   "type": "message.part.delta",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "messageID": "msg_ASSISTANT",
+    "partID": "prt_21c984325001QWfjtpQAc5zt6r",
+    "field": "text",
+    "delta": " among"
+   }
+  }
+ ],
+ "abort": [
+  {
+   "type": "session.error",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "error": {
+     "name": "MessageAbortedError",
+     "data": {
+      "message": "Aborted"
+     }
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "idle"
+    }
+   }
+  },
+  {
+   "type": "session.idle",
+   "properties": {
+    "sessionID": "ses_ROOT"
+   }
+  },
+  {
+   "type": "message.part.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "part": {
+     "id": "prt_21c984325001QWfjtpQAc5zt6r",
+     "messageID": "msg_ASSISTANT",
+     "sessionID": "ses_ROOT",
+     "type": "text",
+     "text": "**Rivers: The Lifelines of the Land**\n\nRivers are among",
+     "time": {
+      "start": 1795776070437,
+      "end": 1795776070503
+     }
+    },
+    "time": 1795776070503
+   }
+  },
+  {
+   "type": "message.updated",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "info": {
+     "id": "msg_ASSISTANT",
+     "parentID": "msg_01a21c983e80rec00000000000",
+     "role": "assistant",
+     "mode": "build",
+     "agent": "build",
+     "path": {
+      "cwd": "/work/proj",
+      "root": "/"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "modelID": "deepseek-flash",
+     "providerID": "deepseek",
+     "time": {
+      "created": 1795776069470,
+      "completed": 1795776070504
+     },
+     "sessionID": "ses_ROOT",
+     "error": {
+      "name": "MessageAbortedError",
+      "data": {
+       "message": "Aborted"
+      }
+     }
+    }
+   }
+  },
+  {
+   "type": "session.status",
+   "properties": {
+    "sessionID": "ses_ROOT",
+    "status": {
+     "type": "idle"
+    }
+   }
+  },
+  {
+   "type": "session.idle",
+   "properties": {
+    "sessionID": "ses_ROOT"
+   }
+  }
+ ]
+}
