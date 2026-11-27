@@ -1099,7 +1099,11 @@ class OpenCode2Session implements EngineSession {
    * OpenCode answering that nothing runs (the prompt failed, or the turn ended meanwhile) ends it here.
    */
   async interrupt() {
-    if (this.session.currentState() === "idle") return;
+    if (this.session.currentState() === "idle") {
+      // Only background subagents run (GH-1014): Stop ends each like its Stop agent.
+      await Promise.all(this.mapper.runningSubagents().map((id) => this.stopSubagent(id).catch(() => false)));
+      return;
+    }
     if (this.shellRun) return this.killShell();
     this.stops++;
     this.setRetry(undefined);
