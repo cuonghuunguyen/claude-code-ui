@@ -16,5 +16,6 @@ A capability flag is no longer written by hand per adapter. Each adapter (Claude
 The engine conformance suite (`packages/daemon/test/conformance`) runs every scenario against every adapter, replaying recorded fixtures through a whole `Session`, and compares the Parts it emits with one hand-written, engine-neutral reference sequence per scenario (structure only: part kinds, tool status, error flags; no text, ids or timestamps). A scenario whose feature is a gap for the adapter is skipped, the reason in the test name.
 
 - A new feature that an adapter can lack gets a table entry for every adapter and a scenario in the suite, not an adapter-specific test.
-- A gap is an entry in the table, never an optional method or a silent no-op.
+- A gap is an entry in the table, never an optional method or a silent no-op. The method of a gap throws the table's reason (`deniedRetry`: `allowDenied` and `alwaysAllowDenied` of OpenCode throw `DeniedRetryError("unsupported", reason)`).
+- A feature no recording can show (Allow and retry needs a call auto mode denied) has no scenario; the suite checks that the engine's behaviour follows its table entry.
 - Scenarios replay real recordings; a fixture is recorded only where none exists.

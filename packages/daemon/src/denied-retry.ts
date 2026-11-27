@@ -64,6 +64,9 @@ export class OneShots {
   }
 }
 
+/** The support-table gap of `deniedRetry` on an Engine without auto mode (OpenCode), and the message of the `unsupported` error it throws. */
+export const NO_AUTO_MODE = "this session's engine has no auto mode";
+
 /** A refused Allow and retry; `code` is the wire error code. */
 export class DeniedRetryError extends Error {
   constructor(

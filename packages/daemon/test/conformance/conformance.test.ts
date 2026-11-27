@@ -10,7 +10,7 @@ describe.each(DRIVERS)("$label", (driver) => {
   for (const scenario of SCENARIOS) {
     const gap = scenario.feature && gapReason(driver.support[scenario.feature]);
     (gap ? it.skip : it)(gap ? `${scenario.name} (gap: ${gap})` : scenario.name, async () => {
-      const run = await driver.open(scenario.fixtures);
+      const run = await driver.open(scenario.fixtures, { manual: scenario.manual });
       try {
         await scenario.play(run);
         const steps = normalize(run.events);
@@ -22,6 +22,19 @@ describe.each(DRIVERS)("$label", (driver) => {
       }
     }, 30_000);
   }
+
+  // Allow and retry needs a call auto mode denied; no recording has one, so the table entry is proven by what the engine does with a call it never denied.
+  it("Allow and retry follows its support table entry", async () => {
+    const run = await driver.open({});
+    try {
+      const gap = gapReason(driver.support.deniedRetry);
+      const call = () => run.session.allowDenied("never-denied");
+      if (gap) expect(call).toThrow(expect.objectContaining({ code: "unsupported", message: gap }));
+      else expect(call).toThrow(expect.not.objectContaining({ code: "unsupported" }));
+    } finally {
+      await run.close();
+    }
+  });
 
   it("capability flags of the support table follow it", async () => {
     const run = await driver.open({});

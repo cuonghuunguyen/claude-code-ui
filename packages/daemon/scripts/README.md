@@ -24,8 +24,8 @@ Without `--scenario` the old behaviour stays: plain turns from the prompts given
 
 Besides the SDK messages, a scenario file holds, in the order they happened:
 
-- `{"type":"__can_use_tool","toolName","toolUseID","input","reply"}`: the SDK called `canUseTool`, the recorder answered `reply` (a `PermissionResult`). A player calls `canUseTool` with `toolName` and `input` at this point and expects the reply.
-- `{"type":"__action","action":"interrupt"}`: the recorder called `query.interrupt()`. A player ends the turn at the next `result`.
+- `{"type":"__can_use_tool","toolName","toolUseID","input","reply"}`: the SDK called `canUseTool`, the recorder answered `reply` (a `PermissionResult`). A player calls `canUseTool` with `toolName` and `input` at this point and waits for the engine's answer (`test/conformance/fixture-query.ts`; the scenario decides the answer, `reply` is not compared).
+- `{"type":"__action","action":"interrupt"}`: the recorder called `query.interrupt()`. A player holds the turn until the engine calls `interrupt()`, then plays the rest (the interrupted marker, the aborted `result`).
 
 ## OpenCode
 
@@ -37,6 +37,6 @@ npm run cut-turn -w @claude-ui/daemon -- --v1|--v2 <dir>/<scenario>.events.jsonl
 
 - The server is started by the daemon's own code in a scratch folder with its own XDG dirs and only a minimal config. The login is not copied: `<dir>/data/opencode/auth.json` is a symlink to `--auth` (default `~/.local/share/opencode/auth.json`).
 - `<dir>/<scenario>.events.jsonl` is the raw log (events of the stream and the recorder's actions). It holds machine paths: keep it out of git.
-- The cut keeps the events the adapters read, replaces ids by the placeholders of the fake binaries, names the scratch folder `/work/proj`, and fails when a machine path or a name is left. It prints the event types it dropped. It also fails on a second tool call or more than nine assistant messages (the OpenCode 2 fake knows one `$CALL` and `$A1`..`$A9`): record a shorter scenario.
+- The cut keeps the events the adapters read, replaces ids by the placeholders of the fake binaries, names the scratch folder `/work/proj`, and fails when a machine path or a name is left. It prints the event types it dropped. An event type of the session that is in neither the keep list nor the drop list of `cut-turn.ts` fails the cut: decide for the new type, then add it to a list. It also fails on a second tool call or more than nine assistant messages (the OpenCode 2 fake knows one `$CALL` and `$A1`..`$A9`): record a shorter scenario.
 - OpenCode 2: the tool's `shell.*` events and the shell progress line are dropped; the call's own success ends the card.
 - Check a new fixture by replaying it: a scenario of `test/conformance` that names it.
