@@ -31,7 +31,8 @@ import type { DockerState, SidePhase, SideSetup } from "@claude-ui/protocol";
 import { exitOnSignal, logExit } from "./exit-log.ts";
 import { readProcessTable, watchChain, wrapperChain } from "./ancestors.ts";
 import { startServe, tailscalePreflight } from "./tailscale.ts";
-import { askUpdate, isWsl, openInBrowser, runClient, updateLiveHub } from "./ctl/commands.ts";
+import { askUpdate, isWsl, runClient, updateLiveHub } from "./ctl/commands.ts";
+import { openApp } from "./pwa-launch.ts";
 import { pidAlive, readToken, tokenPath } from "./ctl/connect.ts";
 import { retireAttachHub } from "./ctl/retire.ts";
 import { claimDaemonFile, readDaemonFile } from "./ctl/daemon-file.ts";
@@ -66,7 +67,7 @@ if (cli.kind === "version") (console.log(version), process.exit(0));
 if (cli.kind === "error") (console.error(`claude-ui: ${cli.message}\n${USAGE_HINT}`), process.exit(2));
 if (cli.kind === "client") {
   // A client command only talks to a running daemon: no token creation, sides or update check. Never exits 75.
-  process.exit(await runClient(cli, { env: process.env, dir: configDir(), stdout: (s) => process.stdout.write(s), stderr: (s) => process.stderr.write(s), openUrl: openInBrowser }));
+  process.exit(await runClient(cli, { env: process.env, dir: configDir(), stdout: (s) => process.stdout.write(s), stderr: (s) => process.stderr.write(s), openUrl: (u) => openApp(u) }));
 }
 if (cli.kind === "attach") {
   // The bridge to the Hub of this machine (side-attach.ts); `--start` first starts a detached Hub (this same build) when none runs.
@@ -318,7 +319,7 @@ server.listen(port, lan ? "0.0.0.0" : "127.0.0.1", async () => {
   );
   // This machine's browser gets the loopback pairing URL (always the last); a failing opener only leaves the link above to click.
   if (open !== false && autoOpen(process.env, process.platform, isWsl))
-    openInBrowser(urls.at(-1)!).catch((e: Error) => console.error(`claude-ui: could not open a browser (${e.message}); open the link above`));
+    openApp(urls.at(-1)!).catch((e: Error) => console.error(`claude-ui: could not open a browser (${e.message}); open the link above`));
 });
 
 /** The package folder (has dist/cli.js) a WSL or Docker side installs; a new build gets a new key, so the side installs it again. */
