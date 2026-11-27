@@ -851,6 +851,11 @@ export function createDaemon(opts: {
       }, beforeRemove: async () => {
         const live = [...sessions.values()].filter((s) => isRemoving(s.cwd));
         if (live.some((s) => ["running", "needs_input"].includes(s.info().state))) throw new WorktreeError("has_sessions_running", "A session in this worktree is running or needs input: stop it first");
+        // GH-663: a session or worker here whose worker tree is busy (idle worker of a busy coordinator, session with a background task). `orchestration` exists by now: beforeRemove runs after construction.
+        for (const m of new Set(marked)) {
+          const h = orchestration.holdIn(m, inDir);
+          if (h) throw new WorktreeError("has_sessions_running", h.name ? `Worker ${h.name} or its coordinator is still running or waiting on workers: wait for the batch, then remove it` : "A session in this worktree still works in the background: wait for it");
+        }
         for (const s of live) {
           sessions.delete(s.id);
           syncRunning();
@@ -2137,6 +2142,7 @@ export function createDaemon(opts: {
     removeIn,
     isRemoving,
     inDir,
+    workerHold: (p) => orchestration.holdIn(p, inDir),
     appSettings,
     secrets,
     jira,

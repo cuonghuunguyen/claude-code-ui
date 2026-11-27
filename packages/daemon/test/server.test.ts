@@ -2475,6 +2475,37 @@ describe("daemon", () => {
     }
   });
 
+  it("GH-663: a worktree of an idle worker is blocked and not removed while its coordinator waits for the user", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "wthold-")));
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: repo });
+    const [worker, coordinator] = [randomUUID(), randomUUID()];
+    const wt = join(repo, ".claude", "worktrees", "feat");
+    const settingsFile = join(mkdtempSync(join(tmpdir(), "cfg-")), "sessions.json");
+    writeFileSync(settingsFile, JSON.stringify({ [worker]: { coordinatorId: coordinator, name: "impl", cwd: wt }, [coordinator]: {} }));
+    const d = createDaemon({
+      webRoot, token, roots: [root], query: permissionQuery as never, projects: added(repo), settingsFile,
+      history: { listSessions: (async () => []) as never, getSessionInfo: (async (sid: string) => ({ sessionId: sid, cwd: repo })) as never, getSessionMessages: (async () => []) as never },
+    });
+    await new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+    try {
+      const a = await client((d.address() as AddressInfo).port);
+      expect(await a.request({ type: "worktree.create", cwd: repo, name: "feat" })).toMatchObject({ result: { path: wt } });
+      await a.request({ type: "session.subscribe", sessionId: coordinator, sinceSeq: 0 });
+      await a.request({ type: "session.prompt", sessionId: coordinator, text: "run tests" });
+      const req = (await a.waitFor((m) => m.type === "event" && m.part.type === "permission_request")) as Extract<ServerMessage, { type: "event" }>;
+      expect(await a.request({ type: "worktree.status", cwd: repo, path: wt })).toMatchObject({ result: { safety: "blocked", blocked: "workers_running", heldBy: "impl" } });
+      expect(await a.request({ type: "worktree.remove", cwd: repo, path: wt })).toMatchObject({ code: "has_sessions_running" });
+      expect(existsSync(wt)).toBe(true);
+      await a.request({ type: "permission.respond", requestId: (req.part as { requestId: string }).requestId, decision: "deny" });
+      await vi.waitFor(async () => expect(await a.request({ type: "worktree.status", cwd: repo, path: wt })).toMatchObject({ result: { safety: "safe" } }));
+    } finally {
+      d.close();
+    }
+  });
+
   it("worktree.remove is refused for the main worktree and while a session in it needs input; removes hand-made ones; blocks new sessions and terminals while it runs; then removes and broadcasts", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "wtremove-")));
     const repo = join(root, "repo");

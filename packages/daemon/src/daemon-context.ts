@@ -70,6 +70,8 @@ export type DaemonContext = {
   /** A session or terminal may not start in a worktree being removed. */
   isRemoving(cwd: string): boolean;
   inDir(cwd: string, p: string): boolean;
+  /** GH-663: the session or worker located in worktree `p` whose worker tree is busy (`name` = worker chain path, "" for a plain session); undefined when none. */
+  workerHold(p: string): { id: string; name: string } | undefined;
   // Files, terminals and configuration
   /** Capabilities of fs.media: nonce -> source. */
   media: Map<string, MediaEntry>;

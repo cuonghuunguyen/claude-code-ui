@@ -771,7 +771,7 @@ export type WorktreeBranchesResult = { branches: BranchRow[]; defaultBase: strin
 export type JiraTicket = { key: string; type: string; summary: string; status: string };
 export type JiraSearchResult = { tickets: JiraTicket[] };
 /** Why a worktree cannot be removed now. */
-export type WorktreeBlock = "locked" | "symlink" | "outside_roots" | "sessions_running" | "removing" | "contains_worktree";
+export type WorktreeBlock = "locked" | "symlink" | "outside_roots" | "sessions_running" | "workers_running" | "removing" | "contains_worktree";
 /**
  * `uncommitted`: changed and untracked files (ignored not); `untracked`: the untracked part of it; `commits`: commits only this worktree's branch
  * (or detached HEAD) holds, 0 when the branch is kept (not a Created branch); `ahead`: commits of HEAD in neither the base branch nor the upstream
@@ -780,7 +780,7 @@ export type WorktreeBlock = "locked" | "symlink" | "outside_roots" | "sessions_r
  * "has_work" when `uncommitted` or `ahead` (unless `mergedInto`), else "safe".
  */
 export type WorktreeCachedResult = { statuses: Record<string, WorktreeStatusResult & { stale?: true }> };
-export type WorktreeStatusResult = { /** ms since epoch of the git read behind this result. */ checkedAt: number; uncommitted: number; untracked: number; commits: number; ahead: number; ignored?: number; branch: string; branchMerged: boolean; headTime?: number; running: number; safety: "safe" | "has_work" | "blocked"; blocked?: WorktreeBlock; /** The changes are already in this base ref (squash or rebase merged). */ mergedInto?: string; /** The upstream branch was deleted on the remote (`[gone]`). */ upstreamGone?: true; /** GH-447: the branch is a Created branch (ADR 0005); removal deletes it. */ createdBranch?: true };
+export type WorktreeStatusResult = { /** ms since epoch of the git read behind this result. */ checkedAt: number; uncommitted: number; untracked: number; commits: number; ahead: number; ignored?: number; branch: string; branchMerged: boolean; headTime?: number; running: number; safety: "safe" | "has_work" | "blocked"; blocked?: WorktreeBlock; /** The changes are already in this base ref (squash or rebase merged). */ mergedInto?: string; /** The upstream branch was deleted on the remote (`[gone]`). */ upstreamGone?: true; /** GH-447: the branch is a Created branch (ADR 0005); removal deletes it. */ createdBranch?: true; /** GH-663: with `blocked: "workers_running"`, the worker (chain path) whose busy tree holds the worktree; absent for a plain session. */ heldBy?: string };
 /** `branchKept`: why a kept branch the caller asked to delete stays (git's message). */
 /** `ignoredDeleted`: ignored files removal deleted (counted at removal; the preview does not count them). */
 export type WorktreeRemoveResult = { branchKept?: string; ignoredDeleted?: number };

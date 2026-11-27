@@ -8,7 +8,10 @@ const DAY = 86_400_000;
 /** `repository`: every added project of one merged group (all its Sides and clones); `name` is the group's project name. */
 export type CleanupScope = { kind: "all" } | { kind: "project"; cwd: string } | { kind: "repository"; cwds: string[]; name: string } | { kind: "coordinator"; id: string; title: string };
 export type WorktreeCandidate = { key: string; project: string; path: string; branch?: string; external: boolean; outsideRoots: boolean; locked: boolean; sessions: number; lastActivity?: number };
-export type WorkerCandidate = { key: string; id: string; name: string; cwd: string; state: SessionState; lastActivity: number; /** The session that started it (a worker of a worker has a worker here). */ coordinatorId?: string; /** Path of its linked worktree candidate. */ worktree?: string };
+export type WorkerCandidate = { key: string; id: string; name: string; cwd: string; state: SessionState; lastActivity: number; /** The session that started it (a worker of a worker has a worker here). */ coordinatorId?: string; /** Path of its linked worktree candidate. */ worktree?: string;
+  /** GH-663: its root coordinator or a worker of that tree runs or needs input (state when the dialog opened). */ treeBusy: boolean;
+  /** GH-663: its root coordinator's CLI is open (not closed). */ rootOpen: boolean;
+  /** GH-663: title of the root coordinator. */ rootTitle?: string };
 
 /** Read when shown (getters), so the text follows the language. */
 export const BLOCK_TEXT: Record<WorktreeBlock, string> = {
@@ -23,6 +26,9 @@ export const BLOCK_TEXT: Record<WorktreeBlock, string> = {
   },
   get sessions_running() {
     return t("sidebar.block.sessions_running");
+  },
+  get workers_running() {
+    return t("sidebar.block.workers_running");
   },
   get removing() {
     return t("sidebar.block.removing");
@@ -68,9 +74,37 @@ export function cleanupCandidates(
   }
   const paths = new Set(wts.map((w) => w.path));
   const inProject = (cwd: string) => !only || only.some((p) => cwd === repoOf(p, worktrees) || cwd === p || (worktrees[p] ?? []).some((w) => w.path === cwd));
+  // GH-663: the tree of a worker's root coordinator, from the frozen list. A missing link ends the walk; capped against cycles.
+  const byId = new Map(list.map((s) => [s.id, s]));
+  const rootOf = (s: SessionListItem) => {
+    let cur = s;
+    for (let d = 0; d < 20; d++) {
+      const up = cur.coordinatorId && byId.get(cur.coordinatorId);
+      if (!up) break;
+      cur = up;
+    }
+    return cur;
+  };
+  const busyRoots = new Set<string>();
+  for (const s of list) if (["running", "needs_input"].includes(state(s))) busyRoots.add(rootOf(s).id);
   const workers = workerSessions
     .filter((s) => inProject(s.cwd))
-    .map((s): WorkerCandidate => ({ key: `wk:${s.id}`, id: s.id, name: s.workerName ?? s.title, cwd: s.cwd, state: state(s), lastActivity: s.lastActivity, ...(s.coordinatorId && { coordinatorId: s.coordinatorId }), ...(paths.has(s.cwd) && { worktree: s.cwd }) }));
+    .map((s): WorkerCandidate => {
+      const root = rootOf(s);
+      return {
+        key: `wk:${s.id}`,
+        id: s.id,
+        name: s.workerName ?? s.title,
+        cwd: s.cwd,
+        state: state(s),
+        lastActivity: s.lastActivity,
+        ...(s.coordinatorId && { coordinatorId: s.coordinatorId }),
+        ...(paths.has(s.cwd) && { worktree: s.cwd }),
+        treeBusy: busyRoots.has(root.id),
+        rootOpen: root.id !== s.id && root.live !== false && state(root) !== "closed",
+        ...(root.id !== s.id && { rootTitle: root.title }),
+      };
+    });
   return { worktrees: wts, workers };
 }
 
@@ -87,6 +121,7 @@ export function rowSafety(r: Row): { safety: "safe" | "has_work" | "blocked" | "
   if (r.kind === "worker") {
     if (r.state === "running") return { safety: "blocked", reason: t("sidebar.agents.running") };
     if (r.state === "needs_input") return { safety: "blocked", reason: t("sidebar.agents.needsInput") };
+    if (r.treeBusy) return { safety: "blocked", reason: t("sidebar.cl.treeBusy", { name: r.rootTitle ?? "" }) };
     return { safety: "safe" };
   }
   if (r.outsideRoots) return { safety: "blocked", reason: BLOCK_TEXT.outside_roots };
@@ -94,7 +129,7 @@ export function rowSafety(r: Row): { safety: "safe" | "has_work" | "blocked" | "
   if (r.error) return { safety: "blocked", reason: r.error };
   const st = r.status;
   if (!st) return { safety: "checking", ...(r.cached && { cached: rowSafety({ ...r, status: r.cached, cached: undefined }) }) };
-  if (st.safety === "blocked") return { safety: "blocked", reason: st.blocked ? BLOCK_TEXT[st.blocked] : t("sidebar.cl.blocked") };
+  if (st.safety === "blocked") return { safety: "blocked", reason: st.blocked === "workers_running" && st.heldBy ? t("sidebar.cl.heldBy", { name: st.heldBy }) : st.blocked ? BLOCK_TEXT[st.blocked] : t("sidebar.cl.blocked") };
   if (st.safety === "has_work") return { safety: "has_work", reason: st.uncommitted ? `${t("sidebar.cl.files", { count: st.uncommitted })}, ${t("sidebar.wt.commits", { count: st.ahead })}` : t("sidebar.cl.unmerged", { commits: t("sidebar.wt.commits", { count: st.ahead }) }) };
   // Squash or rebase merged: ahead, but the base already has the changes.
   if (st.mergedInto) return { safety: "safe", reason: t("sidebar.cl.merged", { base: st.mergedInto }) };
@@ -104,9 +139,11 @@ export function rowSafety(r: Row): { safety: "safe" | "has_work" | "blocked" | "
 /** Safe worktrees directly in `.claude/worktrees` and closed workers: everything else needs a tick. */
 export function defaultSelection(rows: Row[]): Set<string> {
   const keys = new Set<string>();
+  // GH-663: nothing of a tree whose root coordinator is open is pre-ticked: the coordinator may still need the worker and its worktree.
+  const heldPaths = new Set(rows.flatMap((r) => (r.kind === "worker" && r.rootOpen && r.worktree ? [r.worktree] : [])));
   for (const r of rows) {
     const { safety } = rowSafety(r);
-    if (r.kind === "worktree" ? safety === "safe" && !r.external : r.state === "closed" && safety !== "blocked") keys.add(r.key);
+    if (r.kind === "worktree" ? safety === "safe" && !r.external && !heldPaths.has(r.path) : r.state === "closed" && !r.rootOpen && safety !== "blocked") keys.add(r.key);
   }
   return keys;
 }
