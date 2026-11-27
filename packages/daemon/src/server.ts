@@ -2303,7 +2303,9 @@ export function createDaemon(opts: {
     const sidePage = async (id: string, msg: ClientMessage, call: (m: ClientMessage) => Promise<ServerMessage>): Promise<ServerMessage> => {
       const r = await call({ ...msg, reqId: "" } as ClientMessage);
       if (r.type !== "reply") return { ...r, reqId: msg.reqId } as ServerMessage;
-      const { assets, ...result } = r.result as ArtifactPreviewResult;
+      const raw = r.result as ArtifactPreviewResult | null;
+      if (typeof raw !== "object" || raw === null) return { type: "error", reqId: msg.reqId, code: "bad_side_reply", message: "the side sent an unusable preview" };
+      const { assets, ...result } = raw;
       const u = sideArtifactUrl(result.url);
       if (!u || !Number.isSafeInteger(result.size) || result.size < 0 || result.size > ARTIFACT_PREVIEW_MAX || !Number.isFinite(result.mtime)) return { type: "error", reqId: msg.reqId, code: "bad_side_reply", message: "the side sent an unusable preview" };
       const nonce = nonceFor(`page\0${id}\0${u.nonce}`);
@@ -2312,7 +2314,7 @@ export function createDaemon(opts: {
         return a.type === "reply" ? (a.result as MediaReadResult) : undefined;
       };
       media.set(nonce, { src: { kind: "sidePage", page: u.page, assets: Number.isSafeInteger(assets) && assets! > 0, read }, ws, used: Date.now() });
-      return { type: "reply", reqId: msg.reqId, result: { ...result, url: `/artifact/${nonce}/${u.page.split("/").map(encodeURIComponent).join("/")}?v=${result.mtime}` } };
+      return { type: "reply", reqId: msg.reqId, result: { url: `/artifact/${nonce}/${u.page.split("/").map(encodeURIComponent).join("/")}?v=${result.mtime}`, size: result.size, mtime: result.mtime, ...(typeof result.title === "string" && { title: result.title }), ...(Array.isArray(result.unavailable) && result.unavailable.every((x) => typeof x === "string") && result.unavailable.length > 0 && { unavailable: result.unavailable }) } };
     };
     const conn: Connection = { ws, send: (m) => send(ws, m), sameHost, sameBrowser, fromHub: virtual.has(ws), nonceFor };
     const areas = connectAreas(ctx, conn);

@@ -648,7 +648,7 @@ describe("sides", () => {
     expect(g.status).toBe(200);
     expect(g.body.equals(page)).toBe(true);
     expect(String(g.headers["content-security-policy"])).toContain("sandbox allow-scripts");
-    expect(String(g.headers["content-security-policy"])).toContain(`${base.replace("/artifact", "")}`.length ? `/artifact/${/[0-9a-f]{32}/.exec(base)![0]}/` : "");
+    expect(String(g.headers["content-security-policy"])).toContain(`http://127.0.0.1:${port}${base}/`);
     const css = await get(`${base}/style.css`, { "sec-fetch-dest": "style", "sec-fetch-site": "cross-site" });
     expect(css.status).toBe(200);
     expect(String(css.headers["content-type"])).toContain("text/css");
@@ -660,6 +660,7 @@ describe("sides", () => {
     symlinkSync(join(site, "style.css"), join(site, "page.html"));
     expect((await get(r.result.url, { "sec-fetch-dest": "iframe" })).status).toBe(404);
     // The nonce dies with the browser connection.
+    delete sideMessages[artifactSession];
     c.ws.close();
     await vi.waitFor(async () => expect((await get(`${base}/style.css`, { "sec-fetch-dest": "style", "sec-fetch-site": "cross-site" })).status).toBe(404));
   });

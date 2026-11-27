@@ -228,7 +228,7 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     }
     const nonce = conn.nonceFor(`artifact\0${msg.sessionId}\0${msg.partId}`);
     media.set(nonce, { src: { kind: "artifact", named: f.path, path: c.path, page, confine, assets }, ws: conn.ws, used: Date.now() });
-    return r.reply({ url: `/artifact/${nonce}/${encodeURIComponent(page)}?v=${c.mtime}`, size: c.size, mtime: c.mtime, title: f.title, ...(unavailable.length > 0 && { unavailable }), assets: assets.size });
+    return r.reply({ url: `/artifact/${nonce}/${encodeURIComponent(page)}?v=${c.mtime}`, size: c.size, mtime: c.mtime, title: f.title, ...(unavailable.length > 0 && { unavailable }), ...(conn.fromHub && { assets: assets.size }) });
   };
   /** The hub's read of a preview this side built (a side's artifact.preview): only on the hub's virtual connection, only the nonce this connection got. */
   const previewRead = async (msg: Msg<"preview.read">, r: Respond) => {
