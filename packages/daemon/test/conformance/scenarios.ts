@@ -100,19 +100,40 @@ SCENARIOS.push(
     fixtures: { claude: "rec-subagent", opencode1: "rec-subagent", opencode2: "rec-subagent" },
     async play(run) {
       run.start("have a subagent read notes.txt");
-      // OpenCode 2 answers in a second turn after the subagent reported: wait for the answer of the session itself.
-      await run.waitFor("the answer after the subagent", (p) => p.type === "assistant_text" && !p.parentId);
+      // The answer of the session itself comes after the card ended (OpenCode 2: in a second turn after the subagent reported; its first turn already has a text before that).
+      await run.waitFor("the answer after the subagent", () => {
+        const done = run.events.findIndex((e) => e.part.type === "subagent" && e.part.status === "done");
+        return done >= 0 && run.events.slice(done + 1).some((e) => e.part.type === "assistant_text" && !e.part.parentId);
+      });
       await run.settle();
     },
     expected: [
-      { kind: "user_text", child: false },
-      { kind: "subagent", status: "done" },
-      { kind: "tool", tool: "Read", status: "done", child: true },
-      { kind: "tool_result", error: false, child: true },
-      { kind: "assistant_text", child: true },
-      { kind: "assistant_text", child: false },
+      {
+        adapters: ["claude", "opencode1"],
+        steps: [
+          { kind: "user_text", child: false },
+          { kind: "subagent", status: "done" },
+          { kind: "tool", tool: "Read", status: "done", child: true },
+          { kind: "tool_result", error: false, child: true },
+          { kind: "assistant_text", child: true },
+          { kind: "assistant_text", child: false },
+        ],
+      },
+      {
+        // OpenCode 2 reports back in a second turn: the text of the first turn, then the answer after the subagent's notice.
+        adapters: ["opencode2"],
+        steps: [
+          { kind: "user_text", child: false },
+          { kind: "subagent", status: "done" },
+          { kind: "tool", tool: "Read", status: "done", child: true },
+          { kind: "tool_result", error: false, child: true },
+          { kind: "assistant_text", child: true },
+          { kind: "assistant_text", child: false },
+          { kind: "assistant_text", child: false },
+        ],
+      },
     ],
-    optional: ["thinking", { kind: "user_text", child: true }, { kind: "tool_result", child: false }, { kind: "assistant_text", child: false }],
+    optional: ["thinking", { kind: "user_text", child: true }, { kind: "tool_result", error: false, child: false }],
   },
   {
     name: "inline task with child tool calls",
