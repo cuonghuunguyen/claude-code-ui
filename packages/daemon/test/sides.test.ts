@@ -668,6 +668,41 @@ describe("sides", () => {
     await vi.waitFor(async () => expect((await get(`${base}/style.css`, { "sec-fetch-dest": "style", "sec-fetch-site": "cross-site" })).status).toBe(404));
   });
 
+  it.skipIf(win32)("fs.htmlPreview of a side file: the hub serves the page and its files by request path, each read from the side with the side's rules (GH-1020)", async () => {
+    const proj = join(wslRoot, "html1020");
+    mkdirSync(join(proj, "site", "css"), { recursive: true });
+    mkdirSync(join(proj, "img"), { recursive: true });
+    const out = dir("out1020-");
+    writeFileSync(join(out, "o.css"), "SECRET");
+    writeFileSync(join(proj, "site", "index.html"), "<!doctype html><p>side</p>");
+    writeFileSync(join(proj, "site", "css", "a.css"), "a{x:1}");
+    writeFileSync(join(proj, "img", "x.png"), "png-bytes");
+    symlinkSync(join(out, "o.css"), join(proj, "site", "css", "link.css"));
+    const c = await client();
+    await c.request({ type: "side.start", side: "wsl:Ubuntu" });
+    await c.request({ type: "session.list" });
+    const r = await c.request({ type: "fs.htmlPreview", path: join(proj, "site", "index.html"), cwd: proj });
+    expect(r, JSON.stringify(r)).toMatchObject({ type: "reply" });
+    expect(r.result.url).toMatch(/^\/artifact\/[0-9a-f]{32}\/site\/index\.html\?v=\d/);
+    expect(r.result).not.toHaveProperty("assets");
+    expect(r.result).not.toHaveProperty("outside");
+    const base = r.result.url.split("/site/index.html")[0];
+    const g = await get(r.result.url, { "sec-fetch-dest": "iframe" });
+    expect(g.status).toBe(200);
+    expect(g.body.toString()).toContain("<p>side</p>");
+    expect(String(g.headers["content-security-policy"])).toContain(`http://127.0.0.1:${port}${base}/`);
+    const sub = (rest: string) => get(`${base}/${rest}`, { "sec-fetch-dest": "style", "sec-fetch-site": "cross-site" });
+    const css = await sub("site/css/a.css");
+    expect(css.status).toBe(200);
+    expect(String(css.headers["content-type"])).toContain("text/css");
+    expect(css.body.toString()).toBe("a{x:1}");
+    expect((await sub("img/x.png")).body.toString()).toBe("png-bytes"); // ../img/x.png from the page
+    expect((await sub("site/css/link.css")).status).toBe(404); // a link to outside the project
+    expect((await sub("site/css/none.css")).status).toBe(404);
+    expect(sideFrames.some((f) => f.includes('"preview.read"'))).toBe(true);
+    c.ws.close();
+  });
+
   it.skipIf(win32)("preview.read from a browser is refused: only the hub reads a side's preview (GH-336)", async () => {
     const c = await client();
     expect(await c.request({ type: "preview.read", nonce: "0".repeat(32), key: "a.html", offset: 0, length: 0 })).toMatchObject({ type: "error", code: "bad_request" });

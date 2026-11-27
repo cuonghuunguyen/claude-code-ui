@@ -28,6 +28,8 @@ export type Tab = {
   item?: boolean;
   /** A restored draft whose file is gone: Save creates it again (GH-366). */
   gone?: true;
+  /** GH-1020: an HTML file tab shows the rendered page ("preview"); absent: the source, the default. Per tab, kept across a reload. */
+  htmlView?: "preview";
 };
 
 export const openedMedia = (path: string, m: FsMediaResult): Tab => ({ path, disk: "", draft: "", mtime: m.mtime, media: m });
@@ -48,6 +50,7 @@ export function mediaKind(path: string): "image" | "svg" | "video" | "audio" | u
 export const opened = (path: string, r: FsReadResult): Tab => ({ path, disk: r.content, mtime: r.mtime, draft: r.content });
 
 /** Markdown files get the Source / Preview / Split control. */
+export const isHtml = (path: string) => /\.html?$/i.test(path);
 export const isMarkdown = (path: string) => /\.(md|markdown)$/i.test(path);
 
 export type MdView = "source" | "preview" | "split";

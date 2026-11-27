@@ -1,5 +1,5 @@
 // Artifact publish preview (GH-175): which session part names a previewable file, and the headers of GET /artifact/<nonce>/<name>.
-import { basename, extname, isAbsolute, resolve } from "node:path";
+import { basename, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Part } from "@claude-ui/protocol";
 import { MEDIA_TYPES } from "./media.ts";
 
@@ -78,6 +78,14 @@ export function sideArtifactUrl(url: unknown): { nonce: string; page: string } |
   const page = m && assetKey(m[2]!);
   return m && page && /\.html?$/i.test(page) ? { nonce: m[1]!, page } : undefined;
 }
+/** The page key of a project file (GH-1020): its path below `root` joined with "/", as the browser resolves relative URLs against it; undefined when it is not below `root` or a segment cannot be served. Pure: no fs. */
+export function pageKeyOf(path: string, root: string): string | undefined {
+  const rel = relative(root, path);
+  if (rel === "" || rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) return undefined;
+  return publishedKey(rel.split(sep).join("/"));
+}
+/** The URL of a project page: each key segment percent-encoded, `v` the mtime (the cache key of a reload). */
+export const pageUrl = (nonce: string, key: string, mtime: number) => `/artifact/${nonce}/${key.split("/").map(encodeURIComponent).join("/")}?v=${mtime}`;
 /** The key of a published path of the tool input, as the browser resolves it: "." segments dropped; absolute, "..", backslash, NUL or empty segments refused. */
 export function publishedKey(p: string): string | undefined {
   const out: string[] = [];

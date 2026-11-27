@@ -13,6 +13,9 @@ export default {
   "files.artifact.show": "Show preview",
   "files.artifact.hide": "Hide preview",
   "files.artifact.preview": "Preview",
+  "files.html.outside": "Files next to this page do not load: it is outside the project folder.",
+  "files.html.savedOnly": "Preview shows the saved file. Save to see your edits.",
+  "files.panel.htmlView": "HTML view",
   "files.artifact.openOnClaude": "Open on claude.ai",
   // artifacts-pane.tsx, artifacts.ts
   "files.artifacts.failed": "Could not load this session.",

@@ -4,6 +4,7 @@
 import { closeSync, existsSync, fstatSync, ftruncateSync, statSync, unwatchFile, watchFile, type Stats } from "node:fs";
 import { open } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { pageKeyOf, pageUrl, publishedKey } from "./artifact-preview.ts";
 import { CHUNK_BYTES, MAX_SEARCH_CHARS, parseEditorCommand, type FsEntry, type FsGrepResult, type MediaReadResult } from "@claude-ui/protocol";
 import type { FilesTypes } from "./areas.ts";
 import type { DaemonContext, MediaRead } from "./daemon-context.ts";
@@ -24,10 +25,10 @@ import { visualizeReadable } from "./visualize-write.ts";
 // ponytail: stat polling, robust to atomic rename-writes and WSL; fs.watch per directory if many tabs make polling costly.
 export const WATCH_INTERVAL_MS = 1000;
 
-export type FilesAreaContext = Pick<DaemonContext, "git" | "allowed" | "inside" | "roots" | "missingInRoots" | "localHistory" | "replaceUndo" | "reposOf" | "lastOpen" | "appSettings" | "media" | "fsOps" | "uploads"> & { opts: Pick<DaemonContext["opts"], "openExternal"> };
+export type FilesAreaContext = Pick<DaemonContext, "git" | "allowed" | "inside" | "roots" | "missingInRoots" | "localHistory" | "replaceUndo" | "reposOf" | "lastOpen" | "appSettings" | "media" | "fsOps" | "uploads" | "checkArtifact"> & { opts: Pick<DaemonContext["opts"], "openExternal"> };
 
 export function createFilesArea(ctx: FilesAreaContext, conn: Connection): Area<FilesTypes> {
-  const { git, allowed, inside, roots, missingInRoots, localHistory, replaceUndo, reposOf, lastOpen, appSettings, media, fsOps, uploads, opts } = ctx;
+  const { git, allowed, inside, roots, missingInRoots, localHistory, replaceUndo, reposOf, lastOpen, appSettings, media, fsOps, uploads, checkArtifact, opts } = ctx;
   // fs.watch: watched path as the client gave it → canonical path and its stat listener.
   const watched = new Map<string, { real: string; listener: (curr: Stats, prev: Stats) => void }>();
   /** The running `fs.grep` of this connection: stopped by a newer one and the close. */
@@ -283,6 +284,26 @@ export function createFilesArea(ctx: FilesAreaContext, conn: Connection): Area<F
     }
   };
 
+  /** fs.htmlPreview (GH-1020): the page of a file tab. Supporting files are looked up per request below the project folder (`cwd`), never from a list; a page outside it is served alone. */
+  const htmlPreview = async (msg: Msg<"fs.htmlPreview">, r: Respond) => {
+    const str = (v: unknown) => typeof v === "string" && v !== "" && v.length <= 4096 && !v.includes("\0");
+    if (!str(msg.path) || !str(msg.cwd)) return r.fail("bad_request", "path and cwd must be strings of at most 4096 characters");
+    const root = allowed(msg.cwd);
+    if (!root) return r.fail("path_not_allowed", `outside the allowlisted roots: ${msg.cwd}`);
+    const file = allowed(msg.path);
+    if (!file && missingInRoots(msg.path)) return r.fail("not_found", `file is gone: ${msg.path}`);
+    if (!file) return r.fail("path_not_allowed", `outside the allowlisted roots: ${msg.path}`);
+    const c = checkArtifact(file);
+    if ("code" in c) return r.fail(c.code, c.message);
+    const rel = pageKeyOf(c.path, root);
+    const key = rel ?? publishedKey(basename(c.path));
+    if (!key) return r.fail("path_not_allowed", `the name cannot be served: ${msg.path}`);
+    const dir = rel ? root : undefined;
+    const nonce = conn.nonceFor(`page\0${dir ?? ""}\0${c.path}`);
+    media.set(nonce, { src: { kind: "page", named: file, path: c.path, key, ...(dir && { root: dir }) }, ws: conn.ws, used: Date.now() });
+    return r.reply({ url: pageUrl(nonce, key, c.mtime), size: c.size, mtime: c.mtime, ...(!rel && { outside: true }), ...(conn.fromHub && { assets: dir ? 1 : 0 }) });
+  };
+
   const openExternal = async (msg: Msg<"fs.openExternal">, r: Respond) => {
     if (!opts.openExternal) return r.fail("unknown_type", "fs.openExternal is not available here");
     if (!isOpenWith(msg.with)) return r.fail("bad_request", `unknown with: ${String(msg.with)}`);
@@ -433,6 +454,7 @@ export function createFilesArea(ctx: FilesAreaContext, conn: Connection): Area<F
     "fs.read": read,
     "media.read": mediaRead,
     "fs.media": fsMedia,
+    "fs.htmlPreview": htmlPreview,
     "fs.openExternal": openExternal,
     "fs.write": write,
     "history.list": historyRequest,

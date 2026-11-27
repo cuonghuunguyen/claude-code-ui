@@ -6955,6 +6955,171 @@ describe("artifact supporting files (GH-335)", () => {
   });
 });
 
+describe("fs.htmlPreview and /artifact page (GH-1020)", () => {
+  const proj = mkdtempSync(join(webRoot, "html1020-")); // the project folder (cwd) is inside the allowed root
+  const cfg = join(proj, "cfg"); // the daemon's private dir, inside the project
+  const far = mkdtempSync(join(tmpdir(), "far1020-")); // outside every root
+  const SECRET = "TOP-SECRET-1020";
+  mkdirSync(join(proj, "site", "css"), { recursive: true });
+  mkdirSync(join(proj, "img"), { recursive: true });
+  mkdirSync(join(proj, "other"), { recursive: true });
+  mkdirSync(cfg, { recursive: true });
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 9, 8, 7]);
+  const html = (body: string) => `<!doctype html><link rel="stylesheet" href="css/a.css">${body}`;
+  const page = join(proj, "site", "index.html");
+  writeFileSync(page, html("<p>one</p>"));
+  writeFileSync(join(proj, "site", "css", "a.css"), "p{color:red}");
+  writeFileSync(join(proj, "site", "data.json"), '{"a":1}');
+  writeFileSync(join(proj, "site", "app.js"), "window.x=1");
+  writeFileSync(join(proj, "site", "second.html"), "<p>2</p>");
+  writeFileSync(join(proj, "site", "mod.wasm"), "wasm");
+  writeFileSync(join(proj, "site", "noext"), SECRET);
+  writeFileSync(join(proj, "img", "x.png"), png);
+  writeFileSync(join(proj, "note.txt"), "x");
+  writeFileSync(join(proj, "big.html"), "");
+  truncateSync(join(proj, "big.html"), (16 << 20) + 1);
+  writeFileSync(join(cfg, "settings.json"), SECRET);
+  writeFileSync(join(cfg, "c.html"), "<p>cfg</p>");
+  writeFileSync(join(proj, "other", "o.html"), "<p>outside the cwd</p>");
+  writeFileSync(join(proj, "other", "sib.css"), SECRET);
+  writeFileSync(join(far, "far.css"), SECRET);
+  writeFileSync(join(far, "far.html"), "<p>far</p>");
+  let canSymlink = true;
+  try {
+    symlinkSync(join(far, "far.css"), join(proj, "site", "farfile.css"));
+    symlinkSync(join(far, "far.html"), join(proj, "link.html"));
+  } catch {
+    canSymlink = false;
+  }
+  let canJunction = true;
+  try {
+    symlinkSync(far, join(proj, "site", "farlink"), "junction");
+  } catch {
+    canJunction = false;
+  }
+  let canHardLink = true;
+  try {
+    linkSync(join(far, "far.css"), join(proj, "site", "hard.css"));
+  } catch {
+    canHardLink = false;
+  }
+  const d = createDaemon({ webRoot, token, roots: [webRoot], query: fakeQuery as never, privateDir: cfg, uploadDir: join(cfg, "uploads") });
+  const listening = new Promise<void>((r) => d.listen(0, "127.0.0.1", r));
+  afterAll(() => {
+    d.close();
+    rmSync(proj, { recursive: true, force: true });
+    rmSync(far, { recursive: true, force: true });
+  });
+  const dport = () => (d.address() as AddressInfo).port;
+  const open = async () => {
+    await listening;
+    return client(dport());
+  };
+  type Reply = { type: string; code?: string; message?: string; result: { url: string; size: number; mtime: number; outside?: true } };
+  const hp = async (c: Awaited<ReturnType<typeof client>>, path: string, cwd = proj) => (await c.request({ type: "fs.htmlPreview", path, cwd })) as Reply;
+  const nonceOf = (url: string) => /\/artifact\/([0-9a-f]{32})\//.exec(url)![1]!;
+  const get = (url: string, headers: Record<string, string> = {}, method = "GET") =>
+    new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: Buffer }>((resolve, reject) => {
+      const req = httpRequest({ host: "127.0.0.1", port: dport(), path: url, method, headers: { "sec-fetch-dest": "iframe", ...headers } }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (x) => chunks.push(x));
+        res.on("end", () => resolve({ status: res.statusCode!, headers: res.headers, body: Buffer.concat(chunks) }));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  const aget = (nonce: string, rest: string, headers: Record<string, string> = {}) => get(`/artifact/${nonce}/${rest}`, { "sec-fetch-dest": "style", "sec-fetch-site": "cross-site", ...headers });
+
+  it("serves the page under its path below the project folder with the sandbox CSP and the asset base, and supporting files by request path with their types", async () => {
+    const c = await open();
+    const r = await hp(c, page);
+    expect(r.type).toBe("reply");
+    expect(r.result.outside).toBeUndefined();
+    expect(r.result.url).toMatch(new RegExp(`^/artifact/[0-9a-f]{32}/site/index\\.html\\?v=${r.result.mtime}$`));
+    const nonce = nonceOf(r.result.url);
+    const g = await get(r.result.url);
+    expect(g.status).toBe(200);
+    expect(g.body.toString()).toContain("<p>one</p>");
+    expect(String(g.headers["content-security-policy"])).toContain(`style-src 'unsafe-inline' http://127.0.0.1:${dport()}/artifact/${nonce}/`);
+    expect(g.headers["content-security-policy"]).toContain("sandbox allow-scripts");
+    const cases: [string, string, string, Buffer | string][] = [
+      ["site/css/a.css", "style", "text/css; charset=utf-8", "p{color:red}"],
+      ["site/data.json", "empty", "application/json", '{"a":1}'],
+      ["site/app.js", "script", "text/javascript; charset=utf-8", "window.x=1"],
+      ["img/x.png", "image", "image/png", png], // a ../ from the page, resolved by the browser inside the nonce
+    ];
+    for (const [rest, dest, type, body] of cases) {
+      const a = await aget(nonce, rest, { "sec-fetch-dest": dest });
+      expect(a.status, rest).toBe(200);
+      expect(a.body.equals(Buffer.from(body)), rest).toBe(true);
+      expect(a.headers["content-type"]).toBe(type);
+      expect(a.headers).toMatchObject(ARTIFACT_ASSET_HEADERS);
+    }
+    c.ws.close();
+  });
+
+  it("refuses a key that leaves the folder, a type outside the allowlist, a link to outside, a hard link, the config dir and navigation", async () => {
+    const c = await open();
+    const nonce = nonceOf((await hp(c, page)).result.url);
+    const refused = ["site/%2e%2e/%2e%2e/x.css", "site/a%2Fb.css", "site/a%5Cb.css", "site/second.html", "site/mod.wasm", "site/noext", "site/nope.css", "cfg/settings.json", "site//a.css", "site/%00.css"];
+    if (canSymlink) refused.push("site/farfile.css");
+    if (canJunction) refused.push("site/farlink/far.css");
+    if (canHardLink) refused.push("site/hard.css");
+    for (const rest of refused) expect((await aget(nonce, rest)).status, rest).toBe(404);
+    expect((await aget(nonce, "site/css/a.css", { "sec-fetch-mode": "navigate" })).status).toBe(403);
+    expect((await aget(nonce, "site/css/a.css", { origin: "http://evil.example" })).status).toBe(403);
+    expect((await get(`/media/${nonce}/index.html`)).status).toBe(404); // a page nonce is no media nonce
+    expect((await get(`/artifact/${nonce}/site/index.html`, { "sec-fetch-dest": "document" })).status).toBe(403);
+    c.ws.close();
+  });
+
+  it("a page outside the project folder (still in a root) is served alone: outside, no supporting files", async () => {
+    const c = await open();
+    const r = await hp(c, join(proj, "other", "o.html"), join(proj, "site"));
+    expect(r.result.outside).toBe(true);
+    expect(r.result.url).toMatch(/^\/artifact\/[0-9a-f]{32}\/o\.html\?v=/);
+    const g = await get(r.result.url);
+    expect(g.status).toBe(200);
+    expect(g.headers["content-security-policy"]).not.toContain("/artifact/");
+    expect((await aget(nonceOf(r.result.url), "sib.css")).status).toBe(404);
+    c.ws.close();
+  });
+
+  it("fails with a code: bad_request, path_not_allowed, not_found, not_a_file, unsupported_type, too_large", async () => {
+    const c = await open();
+    const code = async (path: unknown, cwd: unknown = proj) => ((await c.request({ type: "fs.htmlPreview", path, cwd } as never)) as Reply).code;
+    expect(await code(5)).toBe("bad_request");
+    expect(await code("a\0.html")).toBe("bad_request");
+    expect(await code(page, "x".repeat(5000))).toBe("bad_request");
+    expect(await code(join(far, "far.html"))).toBe("path_not_allowed");
+    expect(await code(page, far)).toBe("path_not_allowed");
+    expect(await code(join(cfg, "c.html"))).toBe("path_not_allowed");
+    expect(await code(join(proj, "gone.html"))).toBe("not_found");
+    expect(await code(join(proj, "site"))).toBe("not_a_file");
+    expect(await code(join(proj, "note.txt"))).toBe("unsupported_type");
+    expect(await code(join(proj, "big.html"))).toBe("too_large");
+    if (canSymlink) expect(await code(join(proj, "link.html"))).toBe("path_not_allowed");
+    c.ws.close();
+  });
+
+  it("an edit on disk shows in the next request: new mtime in the URL, new bytes, a new asset", async () => {
+    const c = await open();
+    const f = join(proj, "site", "edit.html");
+    writeFileSync(f, "<p>v1</p>");
+    const a = await hp(c, f);
+    expect((await get(a.result.url)).body.toString()).toContain("v1");
+    writeFileSync(f, "<p>version two</p>");
+    utimesSync(f, new Date(Date.now() + 5000), new Date(Date.now() + 5000));
+    writeFileSync(join(proj, "site", "late.css"), "late{x:1}"); // not there when the page was requested: no file list is kept
+    const b = await hp(c, f);
+    expect(b.result.mtime).not.toBe(a.result.mtime);
+    expect(b.result.url).not.toBe(a.result.url);
+    expect((await get(b.result.url)).body.toString()).toContain("version two");
+    expect((await aget(nonceOf(b.result.url), "site/late.css")).status).toBe(200);
+    c.ws.close();
+  });
+});
+
 describe("fs.grep", () => {
   it("searches the cwd, replies empty for a blank query and rejects bad input", async () => {
     const proj = join(webRoot, "grep proj");

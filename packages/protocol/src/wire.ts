@@ -161,6 +161,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "session.media"; sessionId: string; partId: string; index: number }
   /** URL of the local page an Artifact publish part of the session names (GH-175, GH-335); reply ArtifactPreviewResult. */
   | { type: "artifact.preview"; sessionId: string; partId: string }
+  /** URL of the preview of an HTML file of the Files panel (GH-1020); `cwd` is the project folder: supporting files are served by their path below it. Reply HtmlPreviewResult; errors `bad_request`, `path_not_allowed`, `not_found`, `not_a_file`, `unsupported_type`, `too_large`. */
+  | { type: "fs.htmlPreview"; path: string; cwd: string }
   // images: data URLs (`data:image/png;base64,...`); png, jpeg, gif, webp. Reply `{}`; `{ local: true }` (PromptResult) when the Engine ran the text as its own command (OpenCode `/compact`, `/undo`, `/redo`, `/clear`): no `user_text` echo follows, the client drops its pending bubble. `/undo` also sets `draft`: the undone prompt, which the client puts back into the prompt box.
   // once: a repeat with the same key on the same session is not sent again; it gets the first one's reply or error (a retry after a lost reply). Ignored by an older daemon.
   | { type: "session.prompt"; sessionId: string; text: string; images?: string[]; once?: string }
@@ -891,6 +893,8 @@ export type FsReadResult = { content: string; mtime: number };
 /** `title`: the publish's title (GH-400), else the file's base name: names an artifact tab whose part a paged snapshot did not load. */
 /** `assets`: side to hub only, how many supporting files are served (the hub turns it into the page's asset base and strips it). */
 export type ArtifactPreviewResult = { url: string; size: number; mtime: number; unavailable?: string[]; title?: string; assets?: number };
+/** `outside`: the page is outside the project folder, so it has no supporting files. `assets`: side to hub only (1 when supporting files are served; the hub turns it into the page's asset base and strips it). */
+export type HtmlPreviewResult = { url: string; size: number; mtime: number; outside?: true; assets?: number };
 export type FsMediaResult = { url: string; mime: string; size: number; mtime: number };
 /** `data`: base64 of the bytes at the offset (shorter at the end of the file); `size` of the whole file; `mtime` 0 for a file at a commit. */
 export type MediaReadResult = { data: string; size: number; mtime: number; mime: string };

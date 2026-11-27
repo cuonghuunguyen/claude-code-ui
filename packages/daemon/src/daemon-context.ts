@@ -36,7 +36,7 @@ import type { listSessions } from "@anthropic-ai/claude-agent-sdk";
 /** Piece of a media file: undefined when it can no longer be read (gone, outside the roots, side stopped). */
 export type MediaRead = (offset: number, length: number) => Promise<MediaReadResult | undefined>;
 /** fs.media capabilities: nonce -> a hub file (canonical path, streamed from disk) or bytes read in pieces (a file at a commit, a side's file), issuing connection, last use. */
-export type MediaEntry = { src: { kind: "file"; path: string } | { kind: "artifact"; named: string; path: string; page: string; confine: string[]; assets: Map<string, { named: string; path: string; type: string }> } | { kind: "bytes"; read: MediaRead; mime: string; name: string } | { kind: "sidePage"; page: string; assets: boolean; read: (key: string, offset: number, length: number) => Promise<MediaReadResult | undefined> }; ws: Conn; used: number; live?: Set<ServerResponse> };
+export type MediaEntry = { src: { kind: "file"; path: string } | { kind: "artifact"; named: string; path: string; page: string; confine: string[]; assets: Map<string, { named: string; path: string; type: string }> } | { kind: "page"; named: string; path: string; key: string; root?: string } | { kind: "bytes"; read: MediaRead; mime: string; name: string } | { kind: "sidePage"; page: string; assets: boolean; read: (key: string, offset: number, length: number) => Promise<MediaReadResult | undefined> }; ws: Conn; used: number; live?: Set<ServerResponse> };
 
 export type DaemonContext = {
   // Roots and paths
@@ -160,7 +160,7 @@ export type DaemonContext = {
   logEpoch: string;
   checkArtifact(named: string, kind?: "page" | "asset", confine?: string[]): { path: string; size: number; mtime: number } | { code: string; message: string };
   /** One piece (`length` at most MEDIA_CHUNK, 0 for size and mtime only) of the page or a supporting file `key` of an artifact entry, checked again with the rules of /artifact; `not_found` for any mismatch. */
-  readArtifactPiece(src: Extract<MediaEntry["src"], { kind: "artifact" }>, key: string, offset: number, length: number): MediaReadResult | { code: string; message: string };
+  readArtifactPiece(src: Extract<MediaEntry["src"], { kind: "artifact" | "page" }>, key: string, offset: number, length: number): MediaReadResult | { code: string; message: string };
   scratchpadRoot(cwd: string, sessionId: string): string | undefined;
   within(path: string, dir: string): boolean;
   transcripts(): ReturnType<typeof listSessions>;

@@ -15,6 +15,9 @@ export default {
   "files.artifact.show": "Hiện bản xem trước",
   "files.artifact.hide": "Ẩn bản xem trước",
   "files.artifact.preview": "Xem trước",
+  "files.html.outside": "Các tệp cạnh trang này không tải được: trang nằm ngoài thư mục dự án.",
+  "files.html.savedOnly": "Bản xem trước hiển thị tệp đã lưu. Hãy lưu để thấy chỉnh sửa.",
+  "files.panel.htmlView": "Chế độ xem HTML",
   "files.artifact.openOnClaude": "Mở trên claude.ai",
   // artifacts-pane.tsx, artifacts.ts
   "files.artifacts.failed": "Không tải được phiên này.",

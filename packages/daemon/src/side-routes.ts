@@ -28,6 +28,8 @@ const SESSION: Route = { by: "session" };
 const SESSION_PAGE: Route = { by: "session", onSide: "page" };
 const SESSION_OR_PATH: Route = { by: "sessionOrPath" };
 const PATH: Route = { by: "path" };
+/** `fs.htmlPreview`: as `artifact.preview`, the side builds the preview and the hub streams the bytes. */
+const PATH_PAGE: Route = { by: "path", onSide: "page" };
 /** `fs.media`: a file on a Side is proxied in pieces (`opts.media`). */
 const PATH_MEDIA: Route = { by: "path", onSide: "media" };
 /** `fs.openExternal`: only a WSL Side on this machine opens a file in an app; the custom editor command is the Hub's own. */
@@ -125,6 +127,7 @@ export const ROUTES: { readonly [T in ClientMessage["type"]]: Route } = {
   "fs.openExternal": PATH_WSL_APP,
   "fs.read": PATH,
   "fs.media": PATH_MEDIA,
+  "fs.htmlPreview": PATH_PAGE,
   "media.read": PATH,
   // Hub to side only (the hub calls the side directly); a browser on the hub gets bad_request.
   "preview.read": HUB,

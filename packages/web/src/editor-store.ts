@@ -118,7 +118,7 @@ export function createEditorStore(getClient: () => Client | undefined, storage: 
   /** A saved entry read back: the tab, "keep" (disconnected: try again), or undefined (dropped). */
   async function readSaved(p: Pending): Promise<Tab | "keep" | undefined> {
     const { path } = p.tab;
-    const flags = (t: Tab): Tab => ({ ...t, ...(p.tab.preview ? { preview: true } : {}), ...(p.tab.item ? { item: true } : {}), ...(p.tab.outside ? { outside: true } : {}) });
+    const flags = (t: Tab): Tab => ({ ...t, ...(p.tab.preview ? { preview: true } : {}), ...(p.tab.item ? { item: true } : {}), ...(p.tab.outside ? { outside: true } : {}), ...(p.tab.htmlView ? { htmlView: p.tab.htmlView } : {}) });
     try {
       return flags(await readTab(path, p.draft));
     } catch (e) {
@@ -327,6 +327,9 @@ export function createEditorStore(getClient: () => Client | undefined, storage: 
     },
     setActive: (path: string) => set((s) => (s.activePath === path ? s : { ...s, activePath: path })),
     pin: (path: string) => update(path, pin),
+    /** GH-1020: the HTML view of a file tab: the rendered page, or the source (the default, not stored). */
+    setHtmlView: (path: string, v: "preview" | "source") =>
+      update(path, ({ htmlView: _, ...t }) => (v === "preview" ? { ...t, htmlView: "preview" } : t)),
     nudge: () => set((s) => ({ ...s, gitNudge: s.gitNudge + 1 })),
     setSourceOnly: (path: string | undefined) => set((s) => (s.sourceOnly === path ? s : { ...s, sourceOnly: path })),
     moved(from: string, to: string) {
