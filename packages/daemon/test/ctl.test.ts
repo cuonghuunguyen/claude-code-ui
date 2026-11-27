@@ -126,6 +126,9 @@ describe("client against a real daemon", () => {
       const o = await run(["open"]);
       expect(o.code).toBe(0);
       expect(o.opened).toEqual([`http://127.0.0.1:${port}/#token=${token}`]);
+      expect(o.out).toContain("in the browser");
+      const app = await run(["open"], { openUrl: async () => "app" });
+      expect(app.out).toContain("Opened claude-ui in the app.");
       const p = await run(["open", "--print"]);
       expect(p.out.trim()).toBe(`http://127.0.0.1:${port}/#token=${token}`);
       expect(p.opened).toEqual([]);

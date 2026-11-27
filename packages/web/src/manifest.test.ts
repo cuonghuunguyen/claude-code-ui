@@ -23,6 +23,10 @@ describe("web app manifest", () => {
     expect(manifest.background_color).toBe(theme);
   });
 
+  it("focuses the open app window on a launch (claude-ui open reuses it, no second window)", () => {
+    expect(manifest.launch_handler).toEqual({ client_mode: ["focus-existing", "auto"] });
+  });
+
   it("has PNG icons of 192 and 512 for purpose any and a maskable one", () => {
     const has = (purpose: string, sizes: string) => manifest.icons.some((i) => i.type === "image/png" && i.sizes === sizes && (i.purpose ?? "any") === purpose);
     expect(has("any", "192x192")).toBe(true);

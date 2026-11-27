@@ -8,6 +8,7 @@ import { reloadOnStalePage } from "./preload-reload.ts";
 import { adoptToken } from "./pairing.ts";
 import { startBrowserLogs } from "./browser-logs.ts";
 import { stallLog } from "./stall-log.ts";
+import { consumeLaunches } from "./launch-queue.ts";
 
 // First thing, before the theme or the app write any claude-ui.* key: the guided tour starts only in a browser that has none (docs/spec.md "First-use guide").
 takeFirstUseSnapshot();
@@ -23,6 +24,9 @@ applyTheme(loadPref())();
 
 // Pasting the pairing URL into an already open tab only changes the fragment; reload to reconnect with the token.
 addEventListener("hashchange", () => location.hash.includes("token=") && location.reload());
+
+// An installed app window that `claude-ui open` focuses gets the launch URL here (manifest launch_handler); its fragment goes through the hashchange handlers.
+consumeLaunches();
 
 reloadOnStalePage();
 

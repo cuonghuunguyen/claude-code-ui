@@ -15,7 +15,8 @@ export type ClientIo = {
   dir: string;
   stdout: (s: string) => void;
   stderr: (s: string) => void;
-  openUrl: (url: string) => Promise<void>;
+  /** Opens `url`; resolves "app" when the installed app took it (docs/spec.md "Launcher shortcut"), else the browser did. */
+  openUrl: (url: string) => Promise<"app" | "browser" | void>;
   /** Replaces the daemon's `session.list` reply (tests). */
   request?: () => Promise<ListResult>;
 };
@@ -127,12 +128,14 @@ export async function runClient(cli: Client, io: ClientIo): Promise<number> {
           target = `${url}#${cli.sessionId}`;
         }
         if (cli.print) return out(target), 0;
+        let where: "app" | "browser" | void;
         try {
-          await io.openUrl(target);
+          where = await io.openUrl(target);
         } catch (e) {
           throw new CtlError(1, "open_failed", `cannot open a browser: ${(e as Error).message}; use --print`);
         }
-        out(cli.sessionId ? `Opened session ${cli.sessionId} in the browser.` : "Opened claude-ui in the browser.");
+        const into = where === "app" ? "the app" : "the browser";
+        out(cli.sessionId ? `Opened session ${cli.sessionId} in ${into}.` : `Opened claude-ui in ${into}.`);
         return 0;
       }
     }
