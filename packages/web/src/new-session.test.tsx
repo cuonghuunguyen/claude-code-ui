@@ -286,7 +286,7 @@ it("the project chip is an app-styled popup: picking a project sets the draft cw
   expect(onCwd).toHaveBeenCalledWith("/p/b");
   expect(onOpenProject).not.toHaveBeenCalled();
   await names();
-  await act(async () => document.querySelector<HTMLElement>('[data-testid="open-project"]')!.click());
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="project-popup-open"]')!.click());
   expect(onOpenProject).toHaveBeenCalledTimes(1);
   expect(onCwd).toHaveBeenCalledTimes(1);
 });
@@ -315,7 +315,7 @@ it("the project popup has a focused search over name, path and Side label; no ma
   await find("zzz");
   expect(names()).toEqual([]);
   expect(document.body.textContent).toContain("No projects match");
-  expect(document.querySelector('[data-testid="open-project"]')).not.toBeNull();
+  expect(document.querySelector('[data-testid="project-popup-open"]')).not.toBeNull();
   await find("p/");
   await key(search(), { key: "ArrowDown" });
   await key(search(), { key: "Enter" });

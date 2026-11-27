@@ -24,7 +24,7 @@ export function ProjectPicker({ projects, value, onChange, onOpenProject, trigge
       </Combobox.Trigger>
       <Combobox.Portal>
         <Combobox.Positioner side="bottom" align="start" sideOffset={4} collisionPadding={16} className="isolate z-50">
-          <Combobox.Popup className="flex max-h-[min(24rem,var(--available-height))] w-auto min-w-64 max-w-[calc(100vw-2rem)] origin-(--transform-origin) flex-col overflow-hidden rounded-2xl border bg-popover p-0.5 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95">
+          <Combobox.Popup className="flex max-h-[min(24rem,var(--available-height))] w-96 max-w-[calc(100vw-2rem)] origin-(--transform-origin) flex-col overflow-hidden rounded-2xl border bg-popover p-0.5 text-popover-foreground text-sm shadow-floating outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95">
             <div className="flex shrink-0 items-center gap-2 border-b px-3">
               <SearchIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
               <Combobox.Input type="search" autoComplete="off" aria-label={t("app.main.projectSearch")} placeholder={t("app.main.projectSearch")} data-testid="project-search" className="h-9 min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground md:h-8 md:text-sm pointer-coarse:h-11" />
@@ -46,7 +46,7 @@ export function ProjectPicker({ projects, value, onChange, onOpenProject, trigge
               )}
             </Combobox.List>
             <div data-slot="select-footer" className="shrink-0 border-t bg-popover pt-0.5">
-              <button type="button" data-testid="open-project" onClick={() => (setOpen(false), onOpenProject())} className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-sm px-3 text-sm outline-hidden hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent pointer-coarse:h-11">
+              <button type="button" data-testid="project-popup-open" onClick={() => (setOpen(false), onOpenProject())} className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-sm px-3 text-sm outline-hidden hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent pointer-coarse:h-11">
                 <FolderPlusIcon aria-hidden className="size-4" />
                 {t("app.main.openProjectEllipsis")}
               </button>
