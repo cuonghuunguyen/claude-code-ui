@@ -3,7 +3,7 @@
 import type { ClientMessage } from "@claude-ui/protocol";
 
 /** What the router does when the destination is a Side (the Hub's own daemon always runs the message as is). */
-export type OnSide = "forward" | "unsupported" | "media" | "wslApp";
+export type OnSide = "forward" | "unsupported" | "media" | "page" | "wslApp";
 
 /**
  * `by` = how the destination is found; each class reads only its own field(s):
@@ -24,7 +24,8 @@ const HUB: Route = { by: "hub" };
 const REQUEST: Route = { by: "request" };
 const FAN_OUT: Route = { by: "fanOut" };
 const SESSION: Route = { by: "session" };
-const SESSION_UNSUPPORTED: Route = { by: "session", onSide: "unsupported" };
+/** `artifact.preview`: the side builds the preview, the hub issues its own URL and streams the bytes (`opts.page`). */
+const SESSION_PAGE: Route = { by: "session", onSide: "page" };
 const SESSION_OR_PATH: Route = { by: "sessionOrPath" };
 const PATH: Route = { by: "path" };
 /** `fs.media`: a file on a Side is proxied in pieces (`opts.media`). */
@@ -52,7 +53,7 @@ export const ROUTES: { readonly [T in ClientMessage["type"]]: Route } = {
   "session.edits": SESSION,
   "session.artifacts": SESSION,
   "session.media": SESSION,
-  "artifact.preview": SESSION_UNSUPPORTED,
+  "artifact.preview": SESSION_PAGE,
   "session.prompt": SESSION,
   "session.bash": SESSION,
   "session.setModel": SESSION,
@@ -125,6 +126,8 @@ export const ROUTES: { readonly [T in ClientMessage["type"]]: Route } = {
   "fs.read": PATH,
   "fs.media": PATH_MEDIA,
   "media.read": PATH,
+  // Hub to side only (the hub calls the side directly); a browser on the hub gets bad_request.
+  "preview.read": HUB,
   "fs.write": PATH,
   "history.list": PATH,
   "history.read": PATH,

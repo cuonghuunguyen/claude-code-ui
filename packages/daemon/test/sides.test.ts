@@ -37,9 +37,9 @@ function inProcessSide(root = wslRoot, session = sideSession, onDaemon?: (d: Ret
     query: fakeQuery as never,
     projects: createProjects(),
     history: {
-      listSessions: (async () => [{ sessionId: session, cwd: root, summary: "side work", lastModified: 1000 }]) as never,
-      getSessionInfo: (async (id: string) => (id === session ? { sessionId: id, cwd: root } : undefined)) as never,
-      getSessionMessages: (async () => []) as never,
+      listSessions: (async () => [session, ...Object.keys(sideMessages)].map((id) => ({ sessionId: id, cwd: root, summary: "side work", lastModified: 1000 }))) as never,
+      getSessionInfo: (async (id: string) => (id === session || id in sideMessages ? { sessionId: id, cwd: root } : undefined)) as never,
+      getSessionMessages: (async (id: string) => sideMessages[id] ?? []) as never,
     },
   });
   onDaemon?.(side);
@@ -52,6 +52,9 @@ function inProcessSide(root = wslRoot, session = sideSession, onDaemon?: (d: Ret
   return { stdin, stdout, stderr: new PassThrough(), kill: () => stdin.end(), on: (e, l) => exit.on(e, l) };
 }
 let sidePush: (p: PushPayload) => void = () => {};
+/** Extra sessions of the side by id, with their transcript (GH-336 artifact parts). */
+const sideMessages: Record<string, unknown[]> = {};
+const artifactSession = "6e2f3a4b-5c6d-4e7f-8a81-92b3c4d5e6f7";
 /** The side daemon's fs.openExternal option (a WSL daemon: `winPath` set); `run` records the commands. */
 const sideRun = vi.fn(async (_c: { cmd: string; args: string[] }) => {});
 const sideOpen = { run: sideRun, editors: () => new Map(), winPath: async (p: string) => "\\\\wsl.localhost\\Ubuntu" + p.replaceAll("/", "\\") };
@@ -618,12 +621,52 @@ describe("sides", () => {
     expect(await run(true, "docker:dev")).toMatchObject({ code: "side_unsupported" });
   });
 
-  it.skipIf(win32)("artifact.preview of a side session is side_unsupported", async () => {
+  it.skipIf(win32)("artifact.preview of a side session: the hub serves the page and its supporting files, bytes read from the side (GH-336)", async () => {
+    const site = join(wslRoot, "art336");
+    mkdirSync(site, { recursive: true });
+    const page = Buffer.concat([Buffer.from("<!doctype html><link rel=stylesheet href=style.css><p>"), Buffer.alloc((2 << 20) + 5, 97)]);
+    writeFileSync(join(site, "page.html"), page);
+    writeFileSync(join(site, "style.css"), "body{color:red}");
+    writeFileSync(join(site, "a.png"), "png-bytes");
+    writeFileSync(join(site, "x.exe"), "MZ");
+    const call = { id: "toolu_p", name: "Artifact", input: { action: "publish", title: "T", file_path: join(site, "page.html"), files: { "style.css": join(site, "style.css"), "a.png": join(site, "a.png"), "x.exe": join(site, "x.exe"), "gone.css": join(site, "gone.css") } } };
+    sideMessages[artifactSession] = [
+      { type: "user", uuid: "u1", session_id: artifactSession, parent_tool_use_id: null, message: { role: "user", content: "publish" } },
+      { type: "assistant", uuid: "a1", session_id: artifactSession, parent_tool_use_id: null, message: { id: "m1", role: "assistant", content: [{ type: "tool_use", ...call }], stop_reason: "tool_use" } },
+      { type: "user", uuid: "r1", session_id: artifactSession, parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: call.id, content: "ok" }] } },
+    ];
     const c = await client();
     await c.request({ type: "side.start", side: "wsl:Ubuntu" });
     await c.request({ type: "session.list" });
-    const created = await c.request({ type: "session.create", cwd: wslRoot });
-    expect(await c.request({ type: "artifact.preview", sessionId: created.result.session.id, partId: "toolu_a" })).toMatchObject({ type: "error", code: "side_unsupported" });
+    const r = await c.request({ type: "artifact.preview", sessionId: artifactSession, partId: "toolu_p" });
+    expect(r, JSON.stringify(r)).toMatchObject({ type: "reply" });
+    expect(r.result.url).toMatch(/^\/artifact\/[0-9a-f]{32}\/page\.html\?v=\d/);
+    expect(r.result.unavailable?.sort()).toEqual(["gone.css", "x.exe"]);
+    expect(r.result).not.toHaveProperty("assets");
+    const base = r.result.url.split("/page.html")[0];
+    const g = await get(r.result.url, { "sec-fetch-dest": "iframe" });
+    expect(g.status).toBe(200);
+    expect(g.body.equals(page)).toBe(true);
+    expect(String(g.headers["content-security-policy"])).toContain("sandbox allow-scripts");
+    expect(String(g.headers["content-security-policy"])).toContain(`${base.replace("/artifact", "")}`.length ? `/artifact/${/[0-9a-f]{32}/.exec(base)![0]}/` : "");
+    const css = await get(`${base}/style.css`, { "sec-fetch-dest": "style", "sec-fetch-site": "cross-site" });
+    expect(css.status).toBe(200);
+    expect(String(css.headers["content-type"])).toContain("text/css");
+    expect(css.body.toString()).toBe("body{color:red}");
+    expect((await get(`${base}/x.exe`, { "sec-fetch-dest": "style", "sec-fetch-site": "cross-site" })).status).toBe(404);
+    expect(sideFrames.some((f) => f.includes('"preview.read"'))).toBe(true);
+    // A page swapped for a symlink after the URL was issued is refused by the side's rules.
+    rmSync(join(site, "page.html"));
+    symlinkSync(join(site, "style.css"), join(site, "page.html"));
+    expect((await get(r.result.url, { "sec-fetch-dest": "iframe" })).status).toBe(404);
+    // The nonce dies with the browser connection.
+    c.ws.close();
+    await vi.waitFor(async () => expect((await get(`${base}/style.css`, { "sec-fetch-dest": "style", "sec-fetch-site": "cross-site" })).status).toBe(404));
+  });
+
+  it.skipIf(win32)("preview.read from a browser is refused: only the hub reads a side's preview (GH-336)", async () => {
+    const c = await client();
+    expect(await c.request({ type: "preview.read", nonce: "0".repeat(32), key: "a.html", offset: 0, length: 0 })).toMatchObject({ type: "error", code: "bad_request" });
     c.ws.close();
   });
 

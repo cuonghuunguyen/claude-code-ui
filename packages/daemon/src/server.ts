@@ -11,9 +11,9 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { DEFAULT_ENGINE, EFFORTS, type Effort, createAdapter, type Settings, editorLabel, type Engine as EngineName, type PromptResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_UPLOAD_BYTES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type BackMark, BACK_BRIEF_MAX, BACK_TAG, type ClientMessage, type ListResult, type MediaReadResult, type ModelInfo, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
+import { DEFAULT_ENGINE, EFFORTS, type Effort, createAdapter, type Settings, editorLabel, type Engine as EngineName, type PromptResult, type EditorId, imageBlock, LOCAL_SIDE, MAX_UPLOAD_BYTES, TOKEN_PROTOCOL_PREFIX, WS_PROTOCOL, type ArtifactPreviewResult, type BackMark, BACK_BRIEF_MAX, BACK_TAG, type ClientMessage, type ListResult, type MediaReadResult, type ModelInfo, type ServerMessage, type SessionListItem, type SlashCommand, type Worktree } from "@claude-ui/protocol";
 import { deleteSession, forkSession, getSessionInfo, getSessionMessages, getSubagentMessages, listSessions, listSubagents, renameSession, tagSession, type query as sdkQuery, type SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf } from "./artifact-preview.ts";
+import { ARTIFACT_ASSET_HEADERS, ARTIFACT_PREVIEW_MAX, artifactHeaders, assetKey, assetRequestAllowed, assetType, scratchpadOf, sideArtifactUrl } from "./artifact-preview.ts";
 import { configDir } from "./token.ts";
 import { createLocalHistory} from "./local-history.ts";
 import { createSleepWatch, SLEEP_CHECK_MS, SLEEP_KEEP_MS, type Slept } from "./sleep-watch.ts";
@@ -23,7 +23,7 @@ import { clearSearchCache} from "./search.ts";
 import { createReposCache } from "./repos-cache.ts";
 import { foreignPointer, refusedPath, winPathKind } from "./remote-path.ts";
 import { type FsOpsContext } from "./fs-ops.ts";
-import { openChecked, OPEN_READ, real} from "./fd-check.ts";
+import { openChecked, OPEN_READ, readAt, real } from "./fd-check.ts";
 import { MEDIA_CHUNK, MEDIA_HEADERS, MEDIA_TTL_MS, mediaType, parseRange } from "./media.ts";
 import { performance } from "node:perf_hooks";
 import { createPerf, setPerf, type PerfMonitor } from "./perf.ts";
@@ -1712,6 +1712,21 @@ export function createDaemon(opts: {
     ...(ranged && { "content-range": `bytes ${start}-${end}/${size}` }),
     "content-disposition": `${type === "image/svg+xml" ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`,
   });
+  /** Writes bytes `start..end` of a file of `size` and `mtime` to a response whose headers are sent, in MEDIA_CHUNK pieces, one at a time, waiting for drain. A piece that fails, is short, or sees another size or mtime (the file changed) destroys the response. */
+  const streamPieces = async (res: ServerResponse, read: MediaRead, size: number, mtime: number, start: number, end: number) => {
+    let closed = false;
+    res.on("close", () => (closed = true));
+    for (let at = start; at <= end; ) {
+      const want = Math.min(MEDIA_CHUNK, end + 1 - at);
+      const p = await read(at, want);
+      if (closed) return;
+      const data = p && p.size === size && p.mtime === mtime ? Buffer.from(p.data, "base64") : undefined;
+      if (!data || data.length !== want) return void res.destroy();
+      at += want;
+      if (!res.write(data)) await new Promise<void>((ok) => (res.once("drain", ok), res.once("close", ok)));
+    }
+    res.end();
+  };
   /** A bytes entry: size from a first empty read, then the range in MEDIA_CHUNK pieces, one at a time, waiting for drain. A piece that fails, is short, or sees another size or mtime (the file changed) cuts the response. */
   const serveBytes = async (req: IncomingMessage, res: ServerResponse, src: { read: MediaRead; mime: string; name: string }) => {
     const head = await src.read(0, 0);
@@ -1723,18 +1738,7 @@ export function createDaemon(opts: {
     const end = r?.end ?? size - 1;
     res.writeHead(r ? 206 : 200, mediaHead(src.mime, src.name, size, start, end, !!r));
     if (req.method === "HEAD" || size === 0) return void res.end();
-    let closed = false;
-    res.on("close", () => (closed = true));
-    for (let at = start; at <= end; ) {
-      const want = Math.min(MEDIA_CHUNK, end + 1 - at);
-      const p = await src.read(at, want);
-      if (closed) return;
-      const data = p && p.size === size && p.mtime === mtime ? Buffer.from(p.data, "base64") : undefined;
-      if (!data || data.length !== want) return void res.destroy();
-      at += want;
-      if (!res.write(data)) await new Promise<void>((ok) => (res.once("drain", ok), res.once("close", ok)));
-    }
-    res.end();
+    await streamPieces(res, src.read, size, mtime, start, end);
   };
   const mediaEntry = (nonce: string) => {
     const e = media.get(nonce);
@@ -1825,17 +1829,56 @@ export function createDaemon(opts: {
       return undefined;
     }
   };
+  /** One piece of a checked artifact file for the hub (preview.read): the same checks as a GET on this daemon, repeated per piece. */
+  const readArtifactPiece = (src: Extract<MediaEntry["src"], { kind: "artifact" }>, key: string, offset: number, length: number): MediaReadResult | { code: string; message: string } => {
+    const gone = { code: "not_found", message: `no preview file ${key}` };
+    const isPage = key === src.page;
+    const a = isPage ? undefined : src.assets.get(key);
+    if (!isPage && !a) return gone;
+    const c = a ? checkArtifact(a.named, "asset", src.confine) : checkArtifact(src.named);
+    if ("code" in c || c.path !== (a ? a.path : src.path)) return gone;
+    const f = openArtifact(c.path, !!a);
+    if (!f) return gone;
+    try {
+      const st = fstatSync(f.fd);
+      const buf = readAt(f.fd, offset, Math.max(0, Math.min(length, st.size - offset)));
+      return { data: buf.toString("base64"), size: st.size, mtime: st.mtimeMs, mime: a ? a.type : "text/html" };
+    } catch {
+      return gone;
+    } finally {
+      closeSync(f.fd);
+    }
+  };
+  /** The body of a side's preview file: size and mtime from a first empty read, then pieces that must keep them (no Range). The response is registered with the entry, so closing the connection ends it. */
+  const serveSidePiece = async (req: IncomingMessage, res: ServerResponse, entry: MediaEntry, key: string, head: Record<string, string | number>) => {
+    const src = entry.src as Extract<MediaEntry["src"], { kind: "sidePage" }>;
+    const live = (entry.live ??= new Set());
+    live.add(res);
+    res.once("close", () => live.delete(res));
+    const first = await src.read(key, 0, 0);
+    if (!first || !Number.isSafeInteger(first.size) || first.size < 0 || first.size > ARTIFACT_PREVIEW_MAX) return void res.writeHead(404).end();
+    res.writeHead(200, { ...head, "content-length": first.size });
+    if (req.method === "HEAD" || first.size === 0) return void res.end();
+    await streamPieces(res, (offset, length) => src.read(key, offset, length), first.size, first.mtime, 0, first.size - 1);
+  };
   /** GET /artifact/<nonce>/<page name | published path> (GH-175, GH-335): the page in a sandbox CSP (iframe only), or a supporting file named in the same publish (a subresource load only). Lookup is by key, never a file system path. */
   const serveArtifact = (req: IncomingMessage, res: ServerResponse, nonce: string, rest: string) => {
     if (req.method !== "GET" && req.method !== "HEAD") return void res.writeHead(405, { allow: "GET, HEAD" }).end();
     const entry = mediaEntry(nonce);
-    if (!entry || entry.src.kind !== "artifact") return void res.writeHead(404).end();
+    if (!entry || (entry.src.kind !== "artifact" && entry.src.kind !== "sidePage")) return void res.writeHead(404).end();
     const key = assetKey(rest);
     if (key === undefined) return void res.writeHead(404).end();
     const src = entry.src;
     if (key !== src.page) {
       const h = req.headers;
       if (!hostOk(req) || !assetRequestAllowed({ origin: h.origin, dest: h["sec-fetch-dest"] as string | undefined, mode: h["sec-fetch-mode"] as string | undefined }, isOwnOrigin(req, hostnames))) return void res.writeHead(403).end();
+      if (src.kind === "sidePage") {
+        // The type is the hub's decision from the extension, never the side's.
+        const type = assetType(key);
+        if (!type || !src.assets) return void res.writeHead(404).end();
+        entry.used = Date.now();
+        return void serveSidePiece(req, res, entry, key, { ...ARTIFACT_ASSET_HEADERS, "content-type": type, ...(type === "image/svg+xml" && { "content-disposition": "attachment" }) }).catch(() => res.destroy());
+      }
       const a = src.assets.get(key);
       if (!a) return void res.writeHead(404).end();
       entry.used = Date.now();
@@ -1848,6 +1891,10 @@ export function createDaemon(opts: {
     const dest = req.headers["sec-fetch-dest"];
     if (!requestOk(req) || (dest && dest !== "iframe")) return void res.writeHead(403).end();
     entry.used = Date.now();
+    if (src.kind === "sidePage") {
+      const sideBase = src.assets ? `http://${new URL("http://" + req.headers.host).host}/artifact/${nonce}/` : undefined;
+      return void serveSidePiece(req, res, entry, key, artifactHeaders(sideBase)).catch(() => res.destroy());
+    }
     const c = checkArtifact(src.named);
     if ("code" in c || c.path !== src.path) return void res.writeHead(404).end();
     const f = openArtifact(c.path);
@@ -1918,7 +1965,7 @@ export function createDaemon(opts: {
     if (req.method !== "GET" && req.method !== "HEAD") return void res.writeHead(405, { allow: "GET, HEAD" }).end();
     if (!requestOk(req)) return void res.writeHead(403).end();
     const entry = mediaEntry(nonce);
-    if (!entry || entry.src.kind === "artifact") return void res.writeHead(404).end(); // a preview nonce never serves under /media
+    if (!entry || (entry.src.kind !== "file" && entry.src.kind !== "bytes")) return void res.writeHead(404).end(); // a preview nonce never serves under /media
     entry.used = Date.now();
     if (entry.src.kind === "bytes") {
       // The connection's close ends a response still waiting on a side's piece.
@@ -2113,6 +2160,7 @@ export function createDaemon(opts: {
     clock,
     logEpoch,
     checkArtifact,
+    readArtifactPiece,
     scratchpadRoot,
     within,
     transcripts,
@@ -2251,6 +2299,21 @@ export function createDaemon(opts: {
       media.set(nonce, { src: { kind: "bytes", read, mime, name }, ws, used: Date.now() });
       return { type: "reply", reqId: msg.reqId, result: { url: `/media/${nonce}/${encodeURIComponent(name)}?v=${msg.hash ?? r.mtime}`, mime, size: r.size, mtime: r.mtime } };
     };
+    /** artifact.preview of a side's session: the side builds the preview and checks every file; the hub validates its reply (untrusted), issues its own URL and reads the bytes from the side per GET (preview.read). */
+    const sidePage = async (id: string, msg: ClientMessage, call: (m: ClientMessage) => Promise<ServerMessage>): Promise<ServerMessage> => {
+      const r = await call({ ...msg, reqId: "" } as ClientMessage);
+      if (r.type !== "reply") return { ...r, reqId: msg.reqId } as ServerMessage;
+      const { assets, ...result } = r.result as ArtifactPreviewResult;
+      const u = sideArtifactUrl(result.url);
+      if (!u || !Number.isSafeInteger(result.size) || result.size < 0 || result.size > ARTIFACT_PREVIEW_MAX || !Number.isFinite(result.mtime)) return { type: "error", reqId: msg.reqId, code: "bad_side_reply", message: "the side sent an unusable preview" };
+      const nonce = nonceFor(`page\0${id}\0${u.nonce}`);
+      const read = async (key: string, offset: number, length: number) => {
+        const a = await call({ type: "preview.read", reqId: "", nonce: u.nonce, key, offset, length });
+        return a.type === "reply" ? (a.result as MediaReadResult) : undefined;
+      };
+      media.set(nonce, { src: { kind: "sidePage", page: u.page, assets: Number.isSafeInteger(assets) && assets! > 0, read }, ws, used: Date.now() });
+      return { type: "reply", reqId: msg.reqId, result: { ...result, url: `/artifact/${nonce}/${u.page.split("/").map(encodeURIComponent).join("/")}?v=${result.mtime}` } };
+    };
     const conn: Connection = { ws, send: (m) => send(ws, m), sameHost, sameBrowser, fromHub: virtual.has(ws), nonceFor };
     const areas = connectAreas(ctx, conn);
     /** Handles a message in this daemon; its reply or error goes to `out`, events and streams to this connection. */
@@ -2270,6 +2333,7 @@ export function createDaemon(opts: {
         localSessionIds: async () => new Set([...(await sessionIds()), ...sessions.keys()]),
         sameHost: sameBrowser,
         media: sideMedia,
+        page: sidePage,
         mediaTimeoutMs: opts.sideCallTimeoutMs,
         onCreated: (side, msg, engine) => typeof msg.cwd === "string" && rememberLastUsed(side, msg.cwd, engine, msg.model, msg.effort),
       });

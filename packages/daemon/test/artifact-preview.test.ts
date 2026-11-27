@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 import type { Part } from "@claude-ui/protocol";
-import { ARTIFACT_ASSET_HEADERS, ARTIFACT_ASSETS_MAX, ARTIFACT_CSP, ARTIFACT_HEADERS, artifactAssetsOf, artifactCsp, artifactFileOf, artifactHeaders, assetKey, assetRequestAllowed, scratchpadOf } from "../src/artifact-preview.ts";
+import { ARTIFACT_ASSET_HEADERS, ARTIFACT_ASSETS_MAX, ARTIFACT_CSP, ARTIFACT_HEADERS, artifactAssetsOf, artifactCsp, artifactFileOf, artifactHeaders, assetKey, assetRequestAllowed, sideArtifactUrl, scratchpadOf } from "../src/artifact-preview.ts";
 
 const call = (input: unknown, status: string = "done", tool = "Artifact"): Part => ({ type: "tool_call", id: "t", toolUseId: "t", tool, input, status }) as Part;
 
@@ -184,5 +184,17 @@ describe("scratchpadOf", () => {
   it("is undefined for a slug over 200 characters (the CLI adds a hash) and for a session id that is not a uuid", () => {
     expect(scratchpadOf("/" + "a".repeat(201), id, "/tmp")).toBeUndefined();
     for (const bad of ["..", "../x", "", "A".repeat(36)]) expect(scratchpadOf("/p", bad, "/tmp")).toBeUndefined();
+  });
+});
+
+describe("sideArtifactUrl (GH-336)", () => {
+  const n = "a".repeat(32);
+  it("accepts a page key of one or several segments ending .html/.htm", () => {
+    expect(sideArtifactUrl(`/artifact/${n}/p.html?v=1`)).toEqual({ nonce: n, page: "p.html" });
+    expect(sideArtifactUrl(`/artifact/${n}/sub/dir/index.HTM?v=1.5`)).toEqual({ nonce: n, page: "sub/dir/index.HTM" });
+    expect(sideArtifactUrl(`/artifact/${n}/my%20dir/p%20q.html?v=1`)).toEqual({ nonce: n, page: "my dir/p q.html" });
+  });
+  it("refuses a bad nonce, a dot or empty segment, an encoded separator, a non-HTML page, a missing version", () => {
+    for (const u of [`/artifact/abc/p.html?v=1`, `/artifact/${n}/../p.html?v=1`, `/artifact/${n}/a//p.html?v=1`, `/artifact/${n}/./p.html?v=1`, `/artifact/${n}/a%2Fb.html?v=1`, `/artifact/${n}/a%5Cb.html?v=1`, `/artifact/${n}/p.txt?v=1`, `/artifact/${n}/p.html`, `/artifact/${n}/?v=1`, `https://x/artifact/${n}/p.html?v=1`, 5, undefined]) expect(sideArtifactUrl(u), String(u)).toBeUndefined();
   });
 });

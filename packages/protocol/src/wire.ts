@@ -323,6 +323,8 @@ export type ClientMessage = { reqId: string; side?: string } & (
   | { type: "fs.media"; path: string; cwd?: string; hash?: string; exact?: true }
   /** Bytes of a media file, or of the file at a commit (`cwd` + `hash`, as fs.media): `length` at most 1 MiB, 0 for only size, mtime and type. The hub reads a side's media with it for GET /media. Reply MediaReadResult. */
   | { type: "media.read"; path: string; cwd?: string; hash?: string; offset: number; length: number; exact?: true }
+  /** Bytes of a preview file (the page or a supporting file `key`) of a nonce this connection got from artifact.preview; `length` at most 1 MiB, 0 for only size and mtime. Hub to side only: from a browser, `bad_request`. The side checks the file with the rules of /artifact on every piece. Reply MediaReadResult; errors `unknown_nonce`, `not_found`. */
+  | { type: "preview.read"; nonce: string; key: string; offset: number; length: number }
   /** Overwrites an existing file. Fails with `conflict` when `baseMtime` is given and the disk version differs. */
   | { type: "fs.write"; path: string; content: string; baseMtime?: number }
   /** Local history of a file (docs/spec.md "Local history"; `path` must be inside the roots, else `path_not_allowed`). Reply HistoryListResult, newest first. */
@@ -887,7 +889,8 @@ export type FsReadResult = { content: string; mtime: number };
 /** `url`: same-origin path, valid while this connection is open and used within 10 min. */
 /** `unavailable`: published paths of supporting files named in the call that this preview does not serve (absent when none; GH-335). */
 /** `title`: the publish's title (GH-400), else the file's base name: names an artifact tab whose part a paged snapshot did not load. */
-export type ArtifactPreviewResult = { url: string; size: number; mtime: number; unavailable?: string[]; title?: string };
+/** `assets`: side to hub only, how many supporting files are served (the hub turns it into the page's asset base and strips it). */
+export type ArtifactPreviewResult = { url: string; size: number; mtime: number; unavailable?: string[]; title?: string; assets?: number };
 export type FsMediaResult = { url: string; mime: string; size: number; mtime: number };
 /** `data`: base64 of the bytes at the offset (shorter at the end of the file); `size` of the whole file; `mtime` 0 for a file at a commit. */
 export type MediaReadResult = { data: string; size: number; mtime: number; mime: string };
