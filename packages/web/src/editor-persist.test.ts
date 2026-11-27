@@ -19,6 +19,14 @@ it("toSaved keeps order, active, recent and the preview/item/outside flags; clos
   expect(s.recent).toEqual(["/p/a", "/p/b"]);
 });
 
+it("the HTML view of a tab is saved and read back (GH-1020); Source, the default, is not stored", () => {
+  const tabs = { "/p/a.html": clean("/p/a.html", { htmlView: "preview" }), "/p/b.html": clean("/p/b.html") };
+  const s = toSaved({ tabs, recent: [] });
+  expect(s.tabs).toEqual([{ path: "/p/a.html", htmlView: "preview" }, { path: "/p/b.html" }]);
+  writeSaved(s);
+  expect(loadSaved().tabs).toEqual(s.tabs);
+});
+
 it("toSaved stores drafts of dirty text tabs only, with the real base mtime and a conflict flag", () => {
   const media = { ...openedMedia("/p/i.png", { url: "u", mtime: 1 } as never), draft: "zzz" };
   const tabs = { "/p/c": clean("/p/c"), "/p/d": dirty("/p/d"), "/p/m": media, "/p/k": { ...dirty("/p/k"), conflict: { content: "n", mtime: 7 } } };

@@ -1,4 +1,4 @@
-import type { ArtifactPreviewResult } from "@claude-ui/protocol";
+import type { ArtifactPreviewResult, HtmlPreviewResult } from "@claude-ui/protocol";
 import { Menu } from "@base-ui/react/menu";
 import { createContext, use, useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { useKeyboardOpen } from "./menu-keyboard.ts";
 import { t, useT } from "./i18n.ts";
 import { ITEM, POPUP } from "./session-actions.tsx";
+import type { connect } from "./client.ts";
 
 /** Asks the daemon for the preview URL of an Artifact publish part (artifact.preview). */
 export type ArtifactPreviewLoader = (partId: string) => Promise<ArtifactPreviewResult>;
@@ -23,7 +24,9 @@ export const ArtifactTabContext = createContext<((partId: string) => void) | und
 /** GH-512: claude.ai URL -> part id of a previewable publish of this session; a link in assistant text with such a URL gets the menu. */
 export const ArtifactUrlContext = createContext<ReadonlyMap<string, string> | undefined>(undefined);
 
-type State = "idle" | "loading" | { url: string; n: number; unavailable: string[]; title?: string } | { error: string; retry?: boolean };
+/** What a preview loader answers: an Artifact part (artifact.preview) or an HTML file (fs.htmlPreview). */
+type PreviewReply = Pick<ArtifactPreviewResult, "url" | "unavailable" | "title"> & Pick<HtmlPreviewResult, "outside">;
+type State = "idle" | "loading" | { url: string; n: number; unavailable: string[]; title?: string; outside?: boolean } | { error: string; retry?: boolean };
 
 const btn = "min-h-11 md:min-h-0";
 
@@ -32,7 +35,11 @@ const notLoaded = (names: string[]) => t("files.artifact.notLoaded", { count: na
 
 /** The preview URL of one view of a part (GH-400): requested on mount, after a reconnect (down then up, when it has a URL or its request was cut) and on `reload`. Each view owns its URL. */
 export function useArtifactUrl(partId: string): { state: State; reload: () => void } {
-  const load = use(ArtifactPreviewContext);
+  return usePreviewUrl(partId, use(ArtifactPreviewContext));
+}
+
+/** The same for any loader (GH-1020): `partId` is what the view shows (a part id, a file), a new one requests again. */
+export function usePreviewUrl(partId: string, load: ((id: string) => Promise<PreviewReply>) | undefined): { state: State; reload: () => void } {
   const connected = use(ArtifactConnectedContext);
   const [state, setState] = useState<State>("idle");
   const run = useRef(0);
@@ -42,7 +49,7 @@ export function useArtifactUrl(partId: string): { state: State; reload: () => vo
     const mine = ++run.current;
     setState("loading");
     load(partId).then(
-      (r) => mine === run.current && setState({ url: r.url, n: ++frame.current, unavailable: r.unavailable ?? [], title: r.title }),
+      (r) => mine === run.current && setState({ url: r.url, n: ++frame.current, unavailable: r.unavailable ?? [], title: r.title, outside: r.outside === true }),
       (e: { code?: string; message?: string }) => mine === run.current && setState({ error: t("files.artifact.unavailable", { reason: e?.code === "not_found" ? t("files.artifact.gone") : (e?.message ?? t("files.artifact.unknownError")) }), retry: e?.message === "disconnected" }),
     );
   };
@@ -64,7 +71,6 @@ export function useArtifactUrl(partId: string): { state: State; reload: () => vo
 
 /** The page of a part in a sandboxed iframe (no same-origin, scripts only, the daemon's CSP allows no network) under a toolbar: `actions`, then Reload. `fill`: the iframe takes the height of its flex parent (a tab). `onTitle`: the title of the daemon's reply. */
 export function ArtifactFrame({ partId, title, fill, actions, onTitle }: { partId: string; title: string; fill?: boolean; actions?: ReactNode; onTitle?: (title: string) => void }): ReactNode {
-  const t = useT();
   const load = use(ArtifactPreviewContext);
   const { state, reload } = useArtifactUrl(partId);
   const replied = typeof state === "object" && "url" in state ? state : undefined;
@@ -73,6 +79,27 @@ export function ArtifactFrame({ partId, title, fill, actions, onTitle }: { partI
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replied]);
   if (!load) return null;
+  return <PreviewFrame state={state} reload={reload} title={title} fill={fill} actions={actions} />;
+}
+
+/** The preview of an HTML file of a project (GH-1020; fs.htmlPreview): the frame of an Artifact page, filling its tab. `dirty`: the file has unsaved edits, which the preview does not show. */
+export function FilePageFrame({ path, cwd, client, title, dirty }: { path: string; cwd: string; client: Pick<ReturnType<typeof connect>, "request">; title: string; dirty?: boolean }): ReactNode {
+  const t = useT();
+  const { state, reload } = usePreviewUrl(`${cwd}\0${path}`, () => client.request<HtmlPreviewResult>({ type: "fs.htmlPreview", path, cwd }));
+  const outside = typeof state === "object" && "url" in state && state.outside;
+  const notes = (
+    <>
+      {outside && <p className="text-muted-foreground text-xs">{t("files.html.outside")}</p>}
+      {dirty && <p className="text-muted-foreground text-xs">{t("files.html.savedOnly")}</p>}
+    </>
+  );
+  return <PreviewFrame state={state} reload={reload} title={title} fill notes={notes} />;
+}
+
+/** Toolbar (`actions`, Reload), notes, state line and the iframe of a preview state. */
+function PreviewFrame({ state, reload, title, fill, actions, notes }: { state: State; reload: () => void; title: string; fill?: boolean; actions?: ReactNode; notes?: ReactNode }): ReactNode {
+  const t = useT();
+  const replied = typeof state === "object" && "url" in state ? state : undefined;
   return (
     <div className={fill ? "flex min-h-0 flex-1 flex-col gap-1" : "space-y-1"}>
       <div className="flex flex-wrap items-center gap-2">
@@ -82,6 +109,7 @@ export function ArtifactFrame({ partId, title, fill, actions, onTitle }: { partI
         </Button>
       </div>
       <p className="text-muted-foreground text-xs">{t("files.artifact.offlineNote")}</p>
+      {notes}
       {replied && replied.unavailable.length > 0 && <p className="text-muted-foreground text-xs break-all">{notLoaded(replied.unavailable)}</p>}
       {state === "loading" && (
         <p aria-live="polite" className="text-muted-foreground text-xs">

@@ -8,7 +8,10 @@ import type { connect } from "./client.ts";
 import { createEditorStore } from "./editor-store.ts";
 import { FilesPanel, FileTab } from "./files-panel.tsx";
 
-const FILES: Record<string, string> = { "/p/a.ts": "a", "/p/b.md": "# b", "/o/x.ts": "x" };
+// CodeMirror measures text on an animation frame; jsdom has no Range geometry.
+const rangeProto = Range.prototype as { getClientRects?: () => unknown };
+rangeProto.getClientRects ??= () => Object.assign([], { item: () => null });
+const FILES: Record<string, string> = { "/p/a.ts": "a", "/p/b.md": "# b", "/o/x.ts": "x", "/p/a.html": "<p>a</p>", "/p/b.htm": "<p>b</p>" };
 let root: ReturnType<typeof createRoot> | undefined;
 afterEach(() => {
   act(() => root?.unmount());
@@ -19,6 +22,7 @@ function setup() {
   const request = vi.fn(async (m: { type: string; path?: string }) => {
     if (m.type === "fs.list") return { entries: [{ name: "a.ts", path: "/p/a.ts", isDir: false }] };
     if (m.type === "fs.read") return { content: FILES[m.path!] ?? "", mtime: 1 };
+    if (m.type === "fs.htmlPreview") return { url: `/artifact/${"a".repeat(32)}/${m.path!.split("/").pop()}?v=1`, size: 1, mtime: 1 };
     return {};
   });
   const client = { request, onFsChanged: () => () => {} } as unknown as ReturnType<typeof connect>;
@@ -183,4 +187,39 @@ it("GH-504 a new focusKey keeps claiming the editor focus until focus sticks and
   await act(async () => void (await new Promise((r) => setTimeout(r, 300))));
   expect(document.activeElement).toBe(el.querySelector(".cm-content"));
   spy.mockRestore();
+});
+
+it("an HTML file tab has Source and Preview (Source by default); only .html/.htm; the choice is per tab (GH-1020)", async () => {
+  const { client, store, el, request } = setup();
+  const draw = (path: string) => act(async () => root!.render(<FileTab store={store} client={client} path={path} cwd="/p" onSend={() => {}} onFolder={() => {}} onLink={() => {}} onMoveToFiles={() => {}} onFocusTab={() => {}} />));
+  const pressed = (id: string) => q(el, id)!.getAttribute("aria-pressed");
+  for (const p of ["/p/a.ts", "/p/a.html", "/p/b.htm"]) await store.open(p, { cwd: "/p", preview: false, item: true });
+  await draw("/p/a.ts");
+  expect(q(el, "html-view-preview")).toBeNull();
+  await draw("/p/a.html");
+  expect([pressed("html-view-source"), pressed("html-view-preview")]).toEqual(["true", "false"]);
+  expect(el.querySelector("iframe")).toBeNull();
+  expect(request).not.toHaveBeenCalledWith(expect.objectContaining({ type: "fs.htmlPreview" }));
+  await act(async () => q(el, "html-view-preview")!.click());
+  expect(pressed("html-view-preview")).toBe("true");
+  expect(request).toHaveBeenCalledWith({ type: "fs.htmlPreview", path: "/p/a.html", cwd: "/p" });
+  expect(el.querySelector("iframe")?.getAttribute("sandbox")).toBe("allow-scripts");
+  expect(el.querySelector(".cm-editor")?.closest(".hidden")).not.toBeNull(); // the editor stays mounted
+  await draw("/p/b.htm");
+  expect(pressed("html-view-source")).toBe("true");
+  expect(el.querySelector("iframe")).toBeNull();
+  await draw("/p/a.html");
+  expect(pressed("html-view-preview")).toBe("true");
+  expect(store.get().tabs["/p/a.html"]?.htmlView).toBe("preview");
+  expect(store.get().tabs["/p/b.htm"]?.htmlView).toBeUndefined();
+});
+
+it("the HTML preview shows the saved file: an unsaved edit is said so (GH-1020)", async () => {
+  const { client, store, el } = setup();
+  await store.open("/p/a.html", { cwd: "/p", preview: false, item: true });
+  store.setHtmlView("/p/a.html", "preview");
+  await act(async () => root!.render(<FileTab store={store} client={client} path="/p/a.html" cwd="/p" onSend={() => {}} onFolder={() => {}} onLink={() => {}} onMoveToFiles={() => {}} onFocusTab={() => {}} />));
+  expect(el.textContent).not.toContain("Preview shows the saved file");
+  await act(async () => store.update("/p/a.html", (t) => ({ ...t, draft: "<p>edited</p>" })));
+  expect(el.textContent).toContain("Preview shows the saved file. Save to see your edits.");
 });

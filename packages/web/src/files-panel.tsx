@@ -37,7 +37,8 @@ import { blameEntries, type BlameEntry } from "./blame.ts";
 import { TimelinePanel } from "./timeline-panel.tsx";
 import { ListResizer, loadListWidth, saveListWidth } from "./changes-panel.tsx";
 import { usePanelAsk } from "./panel-ask.ts";
-import { fileSize, isDirty, isMarkdown, loadMdView, mediaKind, pin, entryMention, saveMdView, type MdView } from "./files.ts";
+import { FilePageFrame } from "./artifact-preview.tsx";
+import { fileSize, isDirty, isHtml, isMarkdown, loadMdView, mediaKind, pin, entryMention, saveMdView, type MdView } from "./files.ts";
 import { setEditorOf } from "./find-in-files.ts";
 import { docText, lineBreaks, replaceDoc, selectionMention, selectionQuote } from "./editor-doc.ts";
 import { createEditorStore, useEditorStore, useEditorSync, type EditorStore } from "./editor-store.ts";
@@ -557,7 +558,17 @@ export function FileEditor({
   const view: MdView = !md ? "source" : sourceOnly === path ? "source" : mdView === "split" && narrow ? "preview" : mdView;
   const previewDoc = useDeferredValue(active?.draft ?? "");
   const previewBase = useMemo(() => ({ base: path.slice(0, Math.max(path.length - baseName(path).length - 1, 1)), root: cwd }), [path, cwd]);
-  useEffect(() => viewRef.current?.requestMeasure(), [view]);
+  /** GH-1020: an HTML file tab shows its source or, per tab, the rendered page. */
+  const html = !!active && !active.media && isHtml(path);
+  const htmlPreview = html && active?.htmlView === "preview";
+  useEffect(() => viewRef.current?.requestMeasure(), [view, htmlPreview]);
+  // A jump to a line (a search hit, a problem) shows the source it points into.
+  useEffect(() => {
+    if (goto?.path !== path || !htmlPreview) return;
+    store.setHtmlView(path, "source");
+    if (active?.notice) store.clearGoto(); // no editor mounts to consume it
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [goto, path]);
 
   // Annotate: git blame of the saved file in its own repository; re-run on a new disk version (save, outside write). Kept across tabs, not persisted.
   const [annotate, setAnnotate] = useState(false);
@@ -601,18 +612,51 @@ export function FileEditor({
       {place}
     </div>
   );
+  const htmlToggle = html && (
+    <div className="flex rounded-md bg-secondary p-0.5" role="group" aria-label={tr("files.panel.htmlView")}>
+      {(["source", "preview"] as const).map((m) => (
+        <Button
+          key={m}
+          size="sm"
+          variant="ghost"
+          aria-pressed={(m === "preview") === htmlPreview}
+          className={`max-md:h-11 pointer-coarse:h-11 ${(m === "preview") === htmlPreview ? "bg-card shadow-xs hover:bg-card" : ""}`}
+          onClick={() => store.setHtmlView(path, m)}
+          data-testid={`html-view-${m}`}
+        >
+          {m === "source" ? tr("files.panel.source") : tr("files.panel.preview")}
+        </Button>
+      ))}
+    </div>
+  );
+  const htmlFrame = htmlPreview && (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col p-2" data-testid="html-preview">
+      <FilePageFrame path={path} cwd={cwd} client={client} title={baseName(path)} dirty={isDirty(active)} />
+    </div>
+  );
   if (active.notice)
     return (
       <>
-        {placeHeader}
-        <div className="m-auto flex max-w-full flex-col items-center gap-1 p-4 text-center" data-testid="file-notice" role="status">
-          <FileIcon path={path} className="mb-1 size-8" />
-          <div className="w-full max-w-full text-xs">
-            <Breadcrumb path={path} cwd={cwd} onFolder={onFolder} />
+        {html ? (
+          <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1 text-xs" data-testid="file-path-header">
+            {htmlToggle}
+            <span className="flex-1" />
+            {place}
           </div>
-          <span className="text-foreground text-sm">{active.notice}</span>
-          {active.noticeHint && <span className="text-muted-foreground text-xs">{active.noticeHint}</span>}
-        </div>
+        ) : (
+          placeHeader
+        )}
+        {htmlFrame}
+        {!htmlPreview && (
+          <div className="m-auto flex max-w-full flex-col items-center gap-1 p-4 text-center" data-testid="file-notice" role="status">
+            <FileIcon path={path} className="mb-1 size-8" />
+            <div className="w-full max-w-full text-xs">
+              <Breadcrumb path={path} cwd={cwd} onFolder={onFolder} />
+            </div>
+            <span className="text-foreground text-sm">{active.notice}</span>
+            {active.noticeHint && <span className="text-muted-foreground text-xs">{active.noticeHint}</span>}
+          </div>
+        )}
       </>
     );
   return (
@@ -656,6 +700,7 @@ export function FileEditor({
                 ))}
               </div>
             )}
+            {htmlToggle}
             {mediaKind(path) === "svg" && (
               <Button size="xs" variant="outline" disabled={isDirty(active)} onClick={() => void store.switchView(path, false)} className="max-md:h-11 pointer-coarse:h-11">
                 {tr("files.artifact.show")}
@@ -677,7 +722,7 @@ export function FileEditor({
             </p>
           )}
           <div className="flex min-h-0 flex-1">
-            <div className={`min-h-0 min-w-0 flex-1 flex-col ${view === "preview" ? "hidden" : "flex"}`}>
+            <div className={`min-h-0 min-w-0 flex-1 flex-col ${view === "preview" || htmlPreview ? "hidden" : "flex"}`}>
               <CodeEditor
                 key={path}
                 store={store}
@@ -693,6 +738,7 @@ export function FileEditor({
                 blame={repo && onOpenCommit ? { entries: annotate && blame?.path === path ? blame.entries : null, onOpen: (hash) => onOpenCommit(repo, hash) } : undefined}
               />
             </div>
+            {htmlFrame}
             {md && view !== "source" && (
               <div
                 tabIndex={0}

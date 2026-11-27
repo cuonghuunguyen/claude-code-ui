@@ -1834,20 +1834,30 @@ export function createDaemon(opts: {
       return undefined;
     }
   };
+  /** The file a preview key names, before any check of the file (GH-1020: one resolver for a GET here and a hub's preview.read, so a side applies the same rules). A published Artifact looks the key up in its asset map; a project page by its path below its folder, on every request. `path` pins the canonical file of the page and of a published file. */
+  const resolvePreviewKey = (src: Extract<MediaEntry["src"], { kind: "artifact" | "page" }>, key: string): { named: string; path?: string; asset: boolean; type: string; confine: string[] } | undefined => {
+    if (src.kind === "artifact") {
+      if (key === src.page) return { named: src.named, path: src.path, asset: false, type: "text/html", confine: [] };
+      const a = src.assets.get(key);
+      return a && { named: a.named, path: a.path, asset: true, type: a.type, confine: src.confine };
+    }
+    if (key === src.key) return { named: src.named, path: src.path, asset: false, type: "text/html", confine: [] };
+    const type = src.root ? assetType(key) : undefined;
+    return src.root && type ? { named: join(src.root, ...key.split("/")), asset: true, type, confine: [src.root] } : undefined;
+  };
   /** One piece of a checked artifact file for the hub (preview.read): the same checks as a GET on this daemon, repeated per piece. */
-  const readArtifactPiece = (src: Extract<MediaEntry["src"], { kind: "artifact" }>, key: string, offset: number, length: number): MediaReadResult | { code: string; message: string } => {
+  const readArtifactPiece = (src: Extract<MediaEntry["src"], { kind: "artifact" | "page" }>, key: string, offset: number, length: number): MediaReadResult | { code: string; message: string } => {
     const gone = { code: "not_found", message: `no preview file ${key}` };
-    const isPage = key === src.page;
-    const a = isPage ? undefined : src.assets.get(key);
-    if (!isPage && !a) return gone;
-    const c = a ? checkArtifact(a.named, "asset", src.confine) : checkArtifact(src.named);
-    if ("code" in c || c.path !== (a ? a.path : src.path)) return gone;
-    const f = openArtifact(c.path, !!a);
+    const r = resolvePreviewKey(src, key);
+    if (!r) return gone;
+    const c = checkArtifact(r.named, r.asset ? "asset" : "page", r.confine);
+    if ("code" in c || (r.path !== undefined && c.path !== r.path)) return gone;
+    const f = openArtifact(c.path, r.asset);
     if (!f) return gone;
     try {
       const st = fstatSync(f.fd);
       const buf = readAt(f.fd, offset, Math.max(0, Math.min(length, st.size - offset)));
-      return { data: buf.toString("base64"), size: st.size, mtime: st.mtimeMs, mime: a ? a.type : "text/html" };
+      return { data: buf.toString("base64"), size: st.size, mtime: st.mtimeMs, mime: r.type };
     } catch {
       return gone;
     } finally {
@@ -1870,11 +1880,11 @@ export function createDaemon(opts: {
   const serveArtifact = (req: IncomingMessage, res: ServerResponse, nonce: string, rest: string) => {
     if (req.method !== "GET" && req.method !== "HEAD") return void res.writeHead(405, { allow: "GET, HEAD" }).end();
     const entry = mediaEntry(nonce);
-    if (!entry || (entry.src.kind !== "artifact" && entry.src.kind !== "sidePage")) return void res.writeHead(404).end();
+    if (!entry || (entry.src.kind !== "artifact" && entry.src.kind !== "sidePage" && entry.src.kind !== "page")) return void res.writeHead(404).end();
     const key = assetKey(rest);
     if (key === undefined) return void res.writeHead(404).end();
     const src = entry.src;
-    if (key !== src.page) {
+    if (key !== (src.kind === "page" ? src.key : src.page)) {
       const h = req.headers;
       if (!hostOk(req) || !assetRequestAllowed({ origin: h.origin, dest: h["sec-fetch-dest"] as string | undefined, mode: h["sec-fetch-mode"] as string | undefined }, isOwnOrigin(req, hostnames))) return void res.writeHead(403).end();
       if (src.kind === "sidePage") {
@@ -1884,11 +1894,11 @@ export function createDaemon(opts: {
         entry.used = Date.now();
         return void serveSidePiece(req, res, entry, key, { ...ARTIFACT_ASSET_HEADERS, "content-type": type, ...(type === "image/svg+xml" && { "content-disposition": "attachment" }) }).catch(() => res.destroy());
       }
-      const a = src.assets.get(key);
+      const a = resolvePreviewKey(src, key);
       if (!a) return void res.writeHead(404).end();
       entry.used = Date.now();
-      const c = checkArtifact(a.named, "asset", src.confine);
-      if ("code" in c || c.path !== a.path) return void res.writeHead(404).end();
+      const c = checkArtifact(a.named, "asset", a.confine);
+      if ("code" in c || (a.path !== undefined && c.path !== a.path)) return void res.writeHead(404).end();
       const f = openArtifact(c.path, true);
       if (!f) return void res.writeHead(404).end();
       return streamFile(req, res, f.fd, f.size, { ...ARTIFACT_ASSET_HEADERS, "content-type": a.type, ...(a.type === "image/svg+xml" && { "content-disposition": "attachment" }) });
@@ -1904,7 +1914,7 @@ export function createDaemon(opts: {
     if ("code" in c || c.path !== src.path) return void res.writeHead(404).end();
     const f = openArtifact(c.path);
     if (!f) return void res.writeHead(404).end();
-    const base = src.assets.size ? `http://${new URL("http://" + req.headers.host).host}/artifact/${nonce}/` : undefined;
+    const base = (src.kind === "page" ? src.root !== undefined : src.assets.size > 0) ? `http://${new URL("http://" + req.headers.host).host}/artifact/${nonce}/` : undefined;
     streamFile(req, res, f.fd, f.size, artifactHeaders(base));
   };
   /** A theme's CSS file rewritten under its theme root (addon-css.ts). A file that does not scan (broken CSS) or is over the cap is replaced by an empty stylesheet, so a defect costs the theme its rules and never leaks them to other themes (the lint reports it). Cached per file content (a hash, so an edit that keeps size and mtime is seen). */
@@ -2309,7 +2319,7 @@ export function createDaemon(opts: {
     const sidePage = async (id: string, msg: ClientMessage, call: (m: ClientMessage) => Promise<ServerMessage>): Promise<ServerMessage> => {
       const r = await call({ ...msg, reqId: "" } as ClientMessage);
       if (r.type !== "reply") return { ...r, reqId: msg.reqId } as ServerMessage;
-      const raw = r.result as ArtifactPreviewResult | null;
+      const raw = r.result as (ArtifactPreviewResult & { outside?: unknown }) | null;
       if (typeof raw !== "object" || raw === null) return { type: "error", reqId: msg.reqId, code: "bad_side_reply", message: "the side sent an unusable preview" };
       const { assets, ...result } = raw;
       const u = sideArtifactUrl(result.url);
@@ -2320,7 +2330,7 @@ export function createDaemon(opts: {
         return a.type === "reply" ? (a.result as MediaReadResult) : undefined;
       };
       media.set(nonce, { src: { kind: "sidePage", page: u.page, assets: Number.isSafeInteger(assets) && assets! > 0, read }, ws, used: Date.now() });
-      return { type: "reply", reqId: msg.reqId, result: { url: `/artifact/${nonce}/${u.page.split("/").map(encodeURIComponent).join("/")}?v=${result.mtime}`, size: result.size, mtime: result.mtime, ...(typeof result.title === "string" && { title: result.title }), ...(Array.isArray(result.unavailable) && result.unavailable.every((x) => typeof x === "string") && result.unavailable.length > 0 && { unavailable: result.unavailable }) } };
+      return { type: "reply", reqId: msg.reqId, result: { url: `/artifact/${nonce}/${u.page.split("/").map(encodeURIComponent).join("/")}?v=${result.mtime}`, size: result.size, mtime: result.mtime, ...(result.outside === true && { outside: true }), ...(typeof result.title === "string" && { title: result.title }), ...(Array.isArray(result.unavailable) && result.unavailable.every((x) => typeof x === "string") && result.unavailable.length > 0 && { unavailable: result.unavailable }) } };
     };
     const conn: Connection = { ws, send: (m) => send(ws, m), sameHost, sameBrowser, fromHub: virtual.has(ws), nonceFor };
     const areas = connectAreas(ctx, conn);

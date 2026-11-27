@@ -236,7 +236,7 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     const piece = (n: unknown) => Number.isSafeInteger(n) && (n as number) >= 0;
     if (typeof msg.nonce !== "string" || typeof msg.key !== "string" || msg.key.length > 1000 || !piece(msg.offset) || !piece(msg.length) || msg.length > MEDIA_CHUNK) return r.fail("bad_request", `nonce and key must be strings, offset and length integers, length at most ${MEDIA_CHUNK}`);
     const e = media.get(msg.nonce);
-    if (!e || e.ws !== conn.ws || e.src.kind !== "artifact" || Date.now() - e.used >= MEDIA_TTL_MS) return r.fail("unknown_nonce", "no such preview");
+    if (!e || e.ws !== conn.ws || (e.src.kind !== "artifact" && e.src.kind !== "page") || Date.now() - e.used >= MEDIA_TTL_MS) return r.fail("unknown_nonce", "no such preview");
     e.used = Date.now();
     const x = readArtifactPiece(e.src, msg.key, msg.offset, msg.length);
     return "code" in x ? r.fail(x.code, x.message) : r.reply(x);

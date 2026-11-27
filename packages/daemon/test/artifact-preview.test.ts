@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 import type { Part } from "@claude-ui/protocol";
-import { ARTIFACT_ASSET_HEADERS, ARTIFACT_ASSETS_MAX, ARTIFACT_CSP, ARTIFACT_HEADERS, artifactAssetsOf, artifactCsp, artifactFileOf, artifactHeaders, assetKey, assetRequestAllowed, sideArtifactUrl, scratchpadOf } from "../src/artifact-preview.ts";
+import { ARTIFACT_ASSET_HEADERS, ARTIFACT_ASSETS_MAX, ARTIFACT_CSP, ARTIFACT_HEADERS, artifactAssetsOf, artifactCsp, artifactFileOf, artifactHeaders, assetKey, assetRequestAllowed, pageKeyOf, pageUrl, sideArtifactUrl, scratchpadOf } from "../src/artifact-preview.ts";
 
 const call = (input: unknown, status: string = "done", tool = "Artifact"): Part => ({ type: "tool_call", id: "t", toolUseId: "t", tool, input, status }) as Part;
 
@@ -196,5 +196,18 @@ describe("sideArtifactUrl (GH-336)", () => {
   });
   it("refuses a bad nonce, a dot or empty segment, an encoded separator, a non-HTML page, a missing version", () => {
     for (const u of [`/artifact/abc/p.html?v=1`, `/artifact/${n}/../p.html?v=1`, `/artifact/${n}/a//p.html?v=1`, `/artifact/${n}/./p.html?v=1`, `/artifact/${n}/a%2Fb.html?v=1`, `/artifact/${n}/a%5Cb.html?v=1`, `/artifact/${n}/p.txt?v=1`, `/artifact/${n}/p.html`, `/artifact/${n}/?v=1`, `https://x/artifact/${n}/p.html?v=1`, 5, undefined]) expect(sideArtifactUrl(u), String(u)).toBeUndefined();
+  });
+});
+
+describe("pageKeyOf and pageUrl (GH-1020)", () => {
+  const root = resolve("/p");
+  it("is the path below the project folder with /, undefined outside it or for an unservable segment", () => {
+    expect(pageKeyOf(resolve("/p/a.html"), root)).toBe("a.html");
+    expect(pageKeyOf(resolve("/p/sub/dir/i.htm"), root)).toBe("sub/dir/i.htm");
+    for (const f of ["/q/a.html", "/pp/a.html", "/a.html", "/p"]) expect(pageKeyOf(resolve(f), root), f).toBeUndefined();
+    expect(pageKeyOf(resolve("/p/a\\b.html"), root)).toBeUndefined();
+  });
+  it("builds /artifact/<nonce>/<encoded segments>?v=<mtime>", () => {
+    expect(pageUrl("n", "my dir/p q.html", 5)).toBe("/artifact/n/my%20dir/p%20q.html?v=5");
   });
 });

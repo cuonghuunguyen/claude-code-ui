@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ArtifactConnectedContext, ArtifactFrame, ArtifactOpenedContext, ArtifactPreview, ArtifactPreviewContext, ArtifactTabContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
+import { ArtifactConnectedContext, ArtifactFrame, FilePageFrame, ArtifactOpenedContext, ArtifactPreview, ArtifactPreviewContext, ArtifactTabContext, type ArtifactPreviewLoader } from "./artifact-preview.tsx";
 
 const el = document.createElement("div");
 document.body.append(el);
@@ -231,5 +231,25 @@ describe("ArtifactFrame (GH-400)", () => {
     expect(button("Open in tab")).toBeDefined();
     await click("Open in tab");
     expect(onTab).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("FilePageFrame (GH-1020)", () => {
+  const draw = async (request: (m: unknown) => Promise<unknown>) => {
+    await act(async () => root.render(<FilePageFrame path="/p/a.html" cwd="/p" client={{ request } as never} title="a.html" />));
+    await act(async () => {});
+  };
+  it("a page outside the project folder says that its files do not load", async () => {
+    await draw(async () => ({ url: `/artifact/${"a".repeat(32)}/a.html?v=1`, size: 1, mtime: 1, outside: true }));
+    expect(el.textContent).toContain("Files next to this page do not load: it is outside the project folder.");
+    expect(el.querySelector("iframe")).not.toBeNull();
+  });
+  it("a deleted or too large file gives the Preview not available line, no frame", async () => {
+    await draw(() => Promise.reject({ code: "not_found", message: "file is gone: /p/a.html" }));
+    expect(el.querySelector("[role=alert]")?.textContent).toBe("Preview not available: file is gone");
+    await act(async () => root.render(null));
+    await draw(() => Promise.reject({ code: "too_large", message: "larger than 16 MiB: /p/a.html" }));
+    expect(el.querySelector("[role=alert]")?.textContent).toBe("Preview not available: larger than 16 MiB: /p/a.html");
+    expect(el.querySelector("iframe")).toBeNull();
   });
 });

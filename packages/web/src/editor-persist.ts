@@ -6,7 +6,7 @@ import { isDirty } from "./files.ts";
 const LIST_KEY = "claude-ui.editorTabs";
 const DRAFTS_KEY = "claude-ui.editorDrafts";
 
-export type SavedTab = { path: string; preview?: boolean; item?: boolean; outside?: boolean };
+export type SavedTab = { path: string; preview?: boolean; item?: boolean; outside?: boolean; htmlView?: "preview" };
 /** `mtime`: the disk version the draft is based on; `conflict`: a newer disk version was already seen (the draft must not overwrite it). */
 export type SavedDrafts = Record<string, { draft: string; mtime: number; conflict?: true }>;
 export type Saved = { tabs: SavedTab[]; active?: string; recent: string[]; drafts: SavedDrafts };
@@ -17,7 +17,7 @@ export const emptySaved = (): Saved => ({ tabs: [], recent: [], drafts: {} });
 
 /** What to persist for the current tabs (dirty text tabs keep a draft; `recent`: most recently active first). */
 export function toSaved(s: { tabs: Record<string, Tab>; activePath?: string; recent: string[] }): Saved {
-  const tabs = Object.values(s.tabs).map((t): SavedTab => ({ path: t.path, ...(t.preview ? { preview: true } : {}), ...(t.item ? { item: true } : {}), ...(t.outside ? { outside: true } : {}) }));
+  const tabs = Object.values(s.tabs).map((t): SavedTab => ({ path: t.path, ...(t.preview ? { preview: true } : {}), ...(t.item ? { item: true } : {}), ...(t.outside ? { outside: true } : {}), ...(t.htmlView ? { htmlView: t.htmlView } : {}) }));
   const drafts: SavedDrafts = {};
   for (const t of Object.values(s.tabs)) if (!t.media && isDirty(t)) drafts[t.path] = { draft: t.draft, mtime: t.mtime, ...(t.conflict ? { conflict: true as const } : {}) };
   return { tabs, active: s.activePath && s.tabs[s.activePath] ? s.activePath : undefined, recent: s.recent.filter((p) => s.tabs[p]), drafts };
@@ -40,7 +40,7 @@ export function parseSaved(rawList: string | null, rawDrafts: string | null): Sa
   if (obj(l) && l.v === 1 && Array.isArray(l.tabs)) {
     for (const t of l.tabs) {
       if (!obj(t) || typeof t.path !== "string" || out.tabs.some((x) => x.path === t.path)) continue;
-      out.tabs.push({ path: t.path, ...(t.preview === true ? { preview: true } : {}), ...(t.item === true ? { item: true } : {}), ...(t.outside === true ? { outside: true } : {}) });
+      out.tabs.push({ path: t.path, ...(t.preview === true ? { preview: true } : {}), ...(t.item === true ? { item: true } : {}), ...(t.outside === true ? { outside: true } : {}), ...(t.htmlView === "preview" ? { htmlView: "preview" as const } : {}) });
     }
     if (typeof l.active === "string") out.active = l.active;
     out.recent = strings(l.recent);
