@@ -818,6 +818,8 @@ export default {
   "rec.diffMode": "Đặt {mode} làm chế độ diff mặc định?",
   "rec.searchSessions": "Đang tìm phiên? Tìm theo tên.",
   "rec.artifactsPane": "Xem mọi artifact của phiên này ở một chỗ.",
+  "rec.quickCompact": "Ngữ cảnh sắp đầy. Quick compact tóm tắt phiên này thành một phiên mới, không gọi mô hình.",
+  "rec.runInTerminal": "Mẹo: Run in terminal gửi lệnh này tới terminal của dự án.",
   "rec.contextBreakdown": "Ngữ cảnh đã đầy một nửa. Xem phần nào dùng nó.",
   "rec.push": "Một phiên cần bạn khi trang này bị ẩn. Bật thông báo đẩy?",
   "rec.keepAwake": "Máy tính đã ngủ khi phiên đang chạy. Giữ máy thức khi phiên chạy?",

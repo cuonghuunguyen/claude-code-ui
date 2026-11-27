@@ -1,8 +1,10 @@
 // A shell code fence with a "Run in terminal" button: the command goes to the project's terminal and runs there.
 import { CheckIcon, CopyIcon, PlayIcon } from "lucide-react";
-import { createContext, use, useState } from "react";
+import { createContext, use, useRef, useState } from "react";
 import { CodeBlock, CodeBlockActions, CodeBlockHeader, CodeBlockTitle } from "@/components/ai-elements/code-block";
 import { useT } from "./i18n.ts";
+import { tipRunInTerminal } from "./recommendations.ts";
+import { ringLocate } from "./locate.ts";
 
 /** Runs a command in the project's terminal; set by the App. Without it a shell fence has no button. */
 export const RunInTerminalContext = createContext<((command: string) => void) | undefined>(undefined);
@@ -16,6 +18,7 @@ export function ShellFence({ code, language, isIncomplete }: { code: string; lan
   const tr = useT();
   const run = use(RunInTerminalContext);
   const [copied, setCopied] = useState(false);
+  const runBtn = useRef<HTMLButtonElement>(null);
   const command = code.replace(/\s+$/, "");
   return (
     <CodeBlock code={code} language={language as never} data-testid="shell-fence">
@@ -26,13 +29,17 @@ export function ShellFence({ code, language, isIncomplete }: { code: string; lan
             type="button"
             className={btn}
             data-testid="shell-copy"
-            onClick={() => void navigator.clipboard?.writeText(code).then(() => (setCopied(true), setTimeout(() => setCopied(false), 2000)))}
+            onClick={() => {
+              void navigator.clipboard?.writeText(code).then(() => (setCopied(true), setTimeout(() => setCopied(false), 2000)));
+              // GH-1015: the copy above is not held up by the recommendation.
+              tipRunInTerminal(!!run, () => runBtn.current?.isConnected && (ringLocate(runBtn.current), runBtn.current.focus({ preventScroll: true })));
+            }}
           >
             {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
             {tr("session.shell.copy")}
           </button>
           {run && (
-            <button type="button" className={btn} data-testid="shell-run" disabled={isIncomplete || !command} onClick={() => run(command)}>
+            <button ref={runBtn} type="button" className={btn} data-testid="shell-run" disabled={isIncomplete || !command} onClick={() => run(command)}>
               <PlayIcon size={12} />
               {tr("session.shell.run")}
             </button>
