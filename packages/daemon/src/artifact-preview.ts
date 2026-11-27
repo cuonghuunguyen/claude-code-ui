@@ -71,6 +71,13 @@ export function assetKey(raw: string): string | undefined {
   }
   return out.join("/");
 }
+/** A side's artifact URL (`/artifact/<32 hex>/<page key>?v=<n>`), which the hub does not trust: the nonce and the page key (one or more segments, each through assetKey, the last one `.html`/`.htm`); undefined for anything else. */
+export function sideArtifactUrl(url: unknown): { nonce: string; page: string } | undefined {
+  if (typeof url !== "string") return undefined;
+  const m = /^\/artifact\/([0-9a-f]{32})\/([^?]+)\?v=/.exec(url);
+  const page = m && assetKey(m[2]!);
+  return m && page && /\.html?$/i.test(page) ? { nonce: m[1]!, page } : undefined;
+}
 /** The key of a published path of the tool input, as the browser resolves it: "." segments dropped; absolute, "..", backslash, NUL or empty segments refused. */
 export function publishedKey(p: string): string | undefined {
   const out: string[] = [];

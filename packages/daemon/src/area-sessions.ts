@@ -22,6 +22,7 @@ import { clearSearchCache } from "./search.ts";
 import type { Session } from "./session.ts";
 import { SESSION_DIR } from "./uploads.ts";
 import { remember, sendOnce } from "./first-send.ts";
+import { MEDIA_CHUNK, MEDIA_TTL_MS } from "./media.ts";
 
 const REWIND_MODES: RewindMode[] = ["code", "conversation", "both"];
 
@@ -46,10 +47,10 @@ function parseKnown(v: unknown): Map<string, string> | undefined | null {
   return out;
 }
 
-export type SessionsAreaContext = Pick<DaemonContext, "sessions" | "findSession" | "restoreRefusal" | "locate" | "titleOf" | "list" | "listVersions" | "sessionIds" | "catalogues" | "rememberEngine" | "rememberLastUsed" | "addProject" | "projects" | "allowed" | "inside" | "refused" | "isRemoving" | "deleting" | "uploads" | "firstSend" | "localFiles" | "localFilesCache" | "mirror" | "holds" | "unhold" | "queue" | "sendPrompt" | "runBash" | "autoContinue" | "briefDropped" | "briefFailed" | "startBrief" | "dropQueuedBrief" | "asideOf" | "settings" | "saveSettings" | "orchestration" | "deleteSessionById" | "appSettings" | "broadcast" | "broadcastSettings" | "clock" | "perfMon" | "logEpoch" | "media" | "checkArtifact" | "scratchpadRoot" | "within" | "transcripts" | "transcriptCwd" | "sessionCwd" | "projectsDir" | "port"> & { opts: Pick<DaemonContext["opts"], "attached" | "replayMaxEvents"> };
+export type SessionsAreaContext = Pick<DaemonContext, "sessions" | "findSession" | "restoreRefusal" | "locate" | "titleOf" | "list" | "listVersions" | "sessionIds" | "catalogues" | "rememberEngine" | "rememberLastUsed" | "addProject" | "projects" | "allowed" | "inside" | "refused" | "isRemoving" | "deleting" | "uploads" | "firstSend" | "localFiles" | "localFilesCache" | "mirror" | "holds" | "unhold" | "queue" | "sendPrompt" | "runBash" | "autoContinue" | "briefDropped" | "briefFailed" | "startBrief" | "dropQueuedBrief" | "asideOf" | "settings" | "saveSettings" | "orchestration" | "deleteSessionById" | "appSettings" | "broadcast" | "broadcastSettings" | "clock" | "perfMon" | "logEpoch" | "media" | "checkArtifact" | "readArtifactPiece" | "scratchpadRoot" | "within" | "transcripts" | "transcriptCwd" | "sessionCwd" | "projectsDir" | "port"> & { opts: Pick<DaemonContext["opts"], "attached" | "replayMaxEvents"> };
 
 export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): Area<SessionsTypes> {
-  const { sessions, findSession, restoreRefusal, locate, titleOf, list, listVersions, sessionIds, catalogues, rememberEngine, rememberLastUsed, addProject, projects, allowed, inside, refused, isRemoving, deleting, uploads, firstSend, localFiles, localFilesCache, mirror, holds, unhold, queue, sendPrompt, runBash, autoContinue, briefDropped, briefFailed, startBrief, dropQueuedBrief, asideOf, settings, saveSettings, orchestration, deleteSessionById, appSettings, broadcast, broadcastSettings, clock, perfMon, logEpoch, media, checkArtifact, scratchpadRoot, within, transcripts, transcriptCwd, sessionCwd, projectsDir, port, opts } = ctx;
+  const { sessions, findSession, restoreRefusal, locate, titleOf, list, listVersions, sessionIds, catalogues, rememberEngine, rememberLastUsed, addProject, projects, allowed, inside, refused, isRemoving, deleting, uploads, firstSend, localFiles, localFilesCache, mirror, holds, unhold, queue, sendPrompt, runBash, autoContinue, briefDropped, briefFailed, startBrief, dropQueuedBrief, asideOf, settings, saveSettings, orchestration, deleteSessionById, appSettings, broadcast, broadcastSettings, clock, perfMon, logEpoch, media, checkArtifact, readArtifactPiece, scratchpadRoot, within, transcripts, transcriptCwd, sessionCwd, projectsDir, port, opts } = ctx;
   const unsubscribes = new Map<string, () => void>();
   /** This connection's session feeds: events go to the socket while its buffer allows, else from the log later (feed.ts). */
   const feeds = createFeeds(conn.ws, (e) => conn.send(e));
@@ -227,7 +228,18 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     }
     const nonce = conn.nonceFor(`artifact\0${msg.sessionId}\0${msg.partId}`);
     media.set(nonce, { src: { kind: "artifact", named: f.path, path: c.path, page, confine, assets }, ws: conn.ws, used: Date.now() });
-    return r.reply({ url: `/artifact/${nonce}/${encodeURIComponent(page)}?v=${c.mtime}`, size: c.size, mtime: c.mtime, title: f.title, ...(unavailable.length > 0 && { unavailable }) });
+    return r.reply({ url: `/artifact/${nonce}/${encodeURIComponent(page)}?v=${c.mtime}`, size: c.size, mtime: c.mtime, title: f.title, ...(unavailable.length > 0 && { unavailable }), ...(conn.fromHub && { assets: assets.size }) });
+  };
+  /** The hub's read of a preview this side built (a side's artifact.preview): only on the hub's virtual connection, only the nonce this connection got. */
+  const previewRead = async (msg: Msg<"preview.read">, r: Respond) => {
+    if (!conn.fromHub) return r.fail("bad_request", "preview.read is for the hub only");
+    const piece = (n: unknown) => Number.isSafeInteger(n) && (n as number) >= 0;
+    if (typeof msg.nonce !== "string" || typeof msg.key !== "string" || msg.key.length > 1000 || !piece(msg.offset) || !piece(msg.length) || msg.length > MEDIA_CHUNK) return r.fail("bad_request", `nonce and key must be strings, offset and length integers, length at most ${MEDIA_CHUNK}`);
+    const e = media.get(msg.nonce);
+    if (!e || e.ws !== conn.ws || e.src.kind !== "artifact" || Date.now() - e.used >= MEDIA_TTL_MS) return r.fail("unknown_nonce", "no such preview");
+    e.used = Date.now();
+    const x = readArtifactPiece(e.src, msg.key, msg.offset, msg.length);
+    return "code" in x ? r.fail(x.code, x.message) : r.reply(x);
   };
   const unsubscribe = async (msg: Msg<"session.unsubscribe">, r: Respond) => {
     // No find(): this must not restore a session.
@@ -718,6 +730,7 @@ export function createSessionsArea(ctx: SessionsAreaContext, conn: Connection): 
     "session.artifacts": pageOrEdits,
     "session.media": sessionMedia,
     "artifact.preview": artifactPreview,
+    "preview.read": previewRead,
     "session.unsubscribe": unsubscribe,
     "session.prompt": prompt,
     "session.enqueue": enqueue,

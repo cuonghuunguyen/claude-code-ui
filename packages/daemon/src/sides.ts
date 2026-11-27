@@ -1384,6 +1384,8 @@ export function createRouter(opts: {
   /** Longest wait for a side's list in the lookup of an unlisted session ID (default LOOKUP_TIMEOUT_MS); no answer: the side lists nothing. */
   lookupTimeoutMs?: number;
   media?: (id: string, msg: Extract<ClientMessage, { type: "fs.media" }>, call: (m: ClientMessage) => Promise<ServerMessage>) => Promise<ServerMessage>;
+  /** artifact.preview of a side's session: the hub forwards it, issues its own URL for the side's page and streams the bytes (server.ts sidePage); `call` asks that side. Absent: refused with side_unsupported. */
+  page?: (id: string, msg: ClientMessage, call: (m: ClientMessage) => Promise<ServerMessage>) => Promise<ServerMessage>;
   /** The browser's list reply: a delta against the `since` version when the daemon holds it (server.ts listVersions, GH-767). Absent: the whole list. Only for a request with `since` (a string, empty for the first one). The lists the router asks of the sides and of the local daemon carry no `since`. */
   encodeList?: (result: ListLike & object, since: unknown) => object;
   /** A side created a session for a forwarded session.create (`engine`: the session's): the Hub records the Project's last choice (server.ts rememberLastUsed). */
@@ -1792,6 +1794,9 @@ export function createRouter(opts: {
           case "media":
             if (!opts.media) return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Preview is not available for files in ${kindName(id)}` });
             return send(await opts.media(id, rest as Extract<ClientMessage, { type: "fs.media" }>, (m) => sideCall(id, m, opts.mediaTimeoutMs ?? MEDIA_PIECE_TIMEOUT_MS)));
+          case "page":
+            if (!opts.page) return send({ type: "error", reqId: msg.reqId, code: "side_unsupported", message: `Preview is not available for sessions in ${kindName(id)}` });
+            return send(await opts.page(id, rest as ClientMessage, (m) => sideCall(id, m, opts.mediaTimeoutMs ?? MEDIA_PIECE_TIMEOUT_MS)));
           case "wslApp":
             // GH-646: the custom editor command is the Hub's own setting; a Side has none.
             if (kindOf(id) === "wsl" && msg.with !== "custom") {

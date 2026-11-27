@@ -51,6 +51,18 @@ export function readAll(fd: number, size: number): Buffer {
   return buf.subarray(0, got);
 }
 
+/** Up to `length` bytes of `fd` from `offset` (fewer at the end of the file). */
+export function readAt(fd: number, offset: number, length: number): Buffer {
+  const buf = Buffer.alloc(length);
+  let got = 0;
+  while (got < length) {
+    const n = readSync(fd, buf, got, length - got, offset + got);
+    if (n === 0) break;
+    got += n;
+  }
+  return buf.subarray(0, got);
+}
+
 /** `data` written at the start of `fd`. */
 export function writeAll(fd: number, data: Buffer): void {
   let at = 0;
