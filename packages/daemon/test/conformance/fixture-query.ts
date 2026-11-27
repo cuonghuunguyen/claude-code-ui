@@ -51,6 +51,7 @@ export const fixtureQuery = (file: URL) => {
             if (!options?.canUseTool) throw new Error("the fixture asks canUseTool, the query has none");
             const opts: Parameters<CanUseTool>[2] = { signal: new AbortController().signal, suggestions: [], toolUseID: line.toolUseID, requestId: randomUUID() } as Parameters<CanUseTool>[2];
             const got = await options.canUseTool(line.toolName, line.input, opts);
+            if (!got) throw new Error(`${line.toolName}: the engine gave no answer to canUseTool`);
             if (got.behavior !== line.reply.behavior) throw new Error(`${line.toolName}: the engine answered ${got.behavior}, the recording continues after ${line.reply.behavior}`);
           } else if (line.type === "__action") {
             if (line.action !== "interrupt") throw new Error(`unknown recorder action ${line.action}`);
