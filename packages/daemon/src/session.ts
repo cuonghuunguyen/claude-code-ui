@@ -586,6 +586,7 @@ export class Session {
   /** Engine use. */
   setState(state: SessionState) {
     this.state = state;
+    if (state !== "needs_input") this.askedIdle = false; // the ask from idle is over (a turn or an end settled the state)
     if (state === "running" && this.limitStopped) {
       this.limitStopped = false;
       this.emit({ type: "limit_stop", id: "limit_stop", stopped: false });

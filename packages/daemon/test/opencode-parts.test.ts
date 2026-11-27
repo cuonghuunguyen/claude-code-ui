@@ -120,6 +120,7 @@ describe("OpenCodeMapper (live)", () => {
       expect(last(kid({ time: { completed: 55 }, error: { name: "MessageAbortedError" } }))).toEqual(card("stopped", 55));
       expect(last(kid({ time: { completed: 55 }, error: { name: "APIError" } }))).toEqual(card("error", 55));
       expect(last(kid({ time: {} }))).toEqual(card("running"));
+      expect(last(kid({ time: { completed: 55 }, finish: "tool-calls" }))).toEqual(card("running"));
     });
   });
 

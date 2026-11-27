@@ -24,7 +24,7 @@ export type OpenCodePart = {
   tokens?: { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } };
   cost?: number;
 };
-export type OpenCodeMessage = { info: { id: string; role: "user" | "assistant"; /** An assistant message: the user message it answers. */ parentID?: string; agent?: string; providerID?: string; modelID?: string; time?: { created?: number; completed?: number }; /** OpenCode's error of the message (a turn it aborted: `MessageAbortedError`). */ error?: OpenCodeError & { name: string }; summary?: { diffs?: { file: string; additions: number; deletions: number }[] }; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } }; parts: OpenCodePart[] };
+export type OpenCodeMessage = { info: { id: string; role: "user" | "assistant"; /** An assistant message: the user message it answers. */ parentID?: string; agent?: string; providerID?: string; modelID?: string; time?: { created?: number; completed?: number }; /** Why the step ended (`tool-calls`: the loop goes on). */ finish?: string; /** OpenCode's error of the message (a turn it aborted: `MessageAbortedError`). */ error?: OpenCodeError & { name: string }; summary?: { diffs?: { file: string; additions: number; deletions: number }[] }; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } }; parts: OpenCodePart[] };
 export type OpenCodeTodo = { content: string; status: string };
 
 /** The error text of a tool OpenCode 1 refused: the user's rejection, or a permission rule that denies it. */
@@ -322,7 +322,8 @@ export function openCodeParts(messages: readonly OpenCodeMessage[], children: Re
 function backgroundEnd(m: OpenCodeMapper, child: string, messages: readonly OpenCodeMessage[]): Part[] {
   const last = [...messages].reverse().find((x) => x.info.role === "assistant");
   const at = last?.info.time?.completed;
-  if (!last || !at) return [];
+  // A step that ends with tool calls is complete but the child goes on.
+  if (!last || !at || last.info.finish === "tool-calls") return [];
   const error = last.info.error?.name;
   return m.childEnded(child, error === "MessageAbortedError" ? "stopped" : error ? "error" : "done", at);
 }

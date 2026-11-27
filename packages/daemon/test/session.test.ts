@@ -841,6 +841,15 @@ describe("a request while no turn runs (GH-1014, a background subagent asks)", (
     ask(s);
     s.respond("req_1", { decision: "allow" });
     expect(s.info().state).toBe("running");
+    // An ask from idle that a turn end settled first must not send a later turn to idle.
+    s.setState("idle");
+    ask(s);
+    s.setState("idle");
+    s.respond("req_1", { decision: "allow" });
+    s.setState("running");
+    ask(s);
+    s.respond("req_1", { decision: "allow" });
+    expect(s.info().state).toBe("running");
   });
 });
 
