@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GAP_MS, KEY, PER_DAY, RULES, gate, localDay, markShown, nextStreak, offer, parseRec, promptBusy, resetPageForTests, scrolledFar, seen, setRecommendationHost, setRecommendationsOn, streak, count, bump, type RecState } from "./recommendations.ts";
+import { GAP_MS, offerAfterTurn, tipRunInTerminal, KEY, PER_DAY, RULES, gate, localDay, markShown, nextStreak, offer, parseRec, promptBusy, resetPageForTests, scrolledFar, seen, setRecommendationHost, setRecommendationsOn, streak, count, bump, type RecState } from "./recommendations.ts";
 
 const fresh = (): RecState => ({ v: 1, shown: [], dayCount: 0, counts: {} });
 const shown = vi.fn();
@@ -38,6 +38,8 @@ const ROWS: { id: keyof typeof RULES; yes: object; no: object[] }[] = [
   { id: "searchSessions", yes: { far: true, empty: true }, no: [{ far: false, empty: true }, { far: true, empty: false }] },
   { id: "artifactsPane", yes: { artifacts: 3, paneSeen: false }, no: [{ artifacts: 2, paneSeen: false }, { artifacts: 3, paneSeen: true }] },
   { id: "contextBreakdown", yes: { visible: true, percent: 51 }, no: [{ visible: false, percent: 80 }, { visible: true, percent: 50 }] },
+  { id: "quickCompact", yes: { visible: true, percent: 71, supported: true, running: false, row: true }, no: [{ visible: false, percent: 90, supported: true, running: false, row: true }, { visible: true, percent: 70, supported: true, running: false, row: true }, { visible: true, percent: 90, supported: false, running: false, row: true }, { visible: true, percent: 90, supported: true, running: true, row: true }, { visible: true, percent: 90, supported: true, running: false, row: false }] },
+  { id: "runInTerminal", yes: { canRun: true, n: 2 }, no: [{ canRun: false, n: 5 }, { canRun: true, n: 1 }] },
   { id: "push", yes: pushOk, no: [{ ...pushOk, needed: false }, { ...pushOk, pushOn: true }, { ...pushOk, supported: false }, { ...pushOk, secure: false }, { ...pushOk, permission: "denied" }, { ...pushOk, desktopOn: true }] },
   { id: "keepAwake", yes: { slept: true, supported: true, on: false }, no: [{ slept: false, supported: true, on: false }, { slept: true, supported: false, on: false }, { slept: true, supported: true, on: true }] },
   { id: "middleClick", yes: { fine: true, n: 2 }, no: [{ fine: false, n: 2 }, { fine: true, n: 1 }] },
@@ -66,6 +68,50 @@ describe("rules", () => {
     expect(offer("diffMode", { mode: "branch", def: "branch", streak: 9 })).toBe(false);
     expect(offer("push", { ...pushOk, pushOn: true })).toBe(false);
     expect(offer("keepAwake", { slept: true, supported: true, on: true })).toBe(false);
+    expect(shown).not.toHaveBeenCalled();
+  });
+});
+
+describe("GH-1015 rules", () => {
+  const q = { visible: true, percent: 81, supported: true, running: false, row: true };
+  it("quickCompact wins over contextBreakdown on the same turn; the breakdown shows at a later turn", () => {
+    const quick = vi.fn(), breakdown = vi.fn();
+    expect(offerAfterTurn(q, quick, breakdown, T0)).toBe(true);
+    expect(shown).toHaveBeenCalledTimes(1);
+    expect(stored().shown).toEqual(["quickCompact"]);
+    resetPageForTests();
+    expect(offerAfterTurn(q, quick, breakdown, T0 + GAP_MS)).toBe(true);
+    expect(stored().shown).toEqual(["quickCompact", "contextBreakdown"]);
+    shown.mock.calls[1]![1].run();
+    expect(breakdown).toHaveBeenCalledOnce();
+    expect(quick).not.toHaveBeenCalled();
+  });
+
+  it("an Engine without Quick compact gets the breakdown", () => {
+    expect(offerAfterTurn({ ...q, supported: false }, () => {}, () => {}, T0)).toBe(true);
+    expect(stored().shown).toEqual(["contextBreakdown"]);
+  });
+
+  it("without a sidebar row nothing is offered for quickCompact and it stays unmarked; it shows at a later turn", () => {
+    expect(offerAfterTurn({ ...q, row: false }, () => {}, () => {}, T0)).toBe(true);
+    expect(stored().shown).toEqual(["contextBreakdown"]);
+    resetPageForTests();
+    expect(offerAfterTurn(q, () => {}, () => {}, T0 + GAP_MS)).toBe(true);
+    expect(stored().shown).toEqual(["contextBreakdown", "quickCompact"]);
+  });
+
+  it("runInTerminal counts every copy, shows from the second, once", () => {
+    expect(tipRunInTerminal(true, () => {})).toBe(false);
+    expect(seen("shellCopy")).toBe(1);
+    expect(tipRunInTerminal(true, () => {})).toBe(true);
+    expect(stored().shown).toEqual(["runInTerminal"]);
+    resetPageForTests();
+    expect(tipRunInTerminal(true, () => {})).toBe(false);
+  });
+
+  it("runInTerminal never shows without a Run in terminal button, but still counts", () => {
+    for (let i = 0; i < 3; i++) expect(tipRunInTerminal(false, () => {})).toBe(false);
+    expect(seen("shellCopy")).toBe(3);
     expect(shown).not.toHaveBeenCalled();
   });
 });

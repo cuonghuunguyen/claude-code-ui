@@ -84,7 +84,7 @@ import { sessionArtifacts } from "./artifacts.ts";
 import { artifactTitle, inlineTaskResult, inlineTaskTool } from "./tools.ts";
 import { MediaContext, restoreImages, type MediaLoader } from "./media.ts";
 import { Toast, ToastRegion } from "./toast.tsx";
-import { count, offer, promptBusy, streak, seen as recSeen, setRecommendationHost } from "./recommendations.ts";
+import { count, offer, offerAfterTurn, promptBusy, streak, seen as recSeen, setRecommendationHost } from "./recommendations.ts";
 import { createModelCatalogue, type ModelSource } from "./model-catalogue.ts";
 import { GHOST, MODE_LABEL, ModePicker, modesOf, nextAgent, nextMode, PromptToolbar, ROW, type ModelFooterProps, type SendState } from "./toolbar.tsx";
 import { activeCommand, asideOf, choose, isQuickCompact, dialogArg, dialogOf, insertSlash, matchCommands, withDialogCommands, type DialogName } from "./commands.ts";
@@ -98,6 +98,7 @@ import { AddonBands, AddonFrame, type AddonHandle } from "./addon-frame.tsx";
 import { addonThemes } from "./themes.ts";
 import { Backdrop } from "./backdrop.tsx";
 import { AddonEffects } from "./addon-effects.tsx";
+import { reopenMenu, sessionRow } from "./rec-highlight.ts";
 import { QuickCompactCard, QuickCompactSourceContext } from "./quick-compact-card.tsx";
 import { SlotsProvider, useThinkingPhrase } from "./slots.tsx";
 import { isPreviewHash } from "./addon-preview-route.ts";
@@ -2545,8 +2546,8 @@ export function App() {
   // Recommendations (GH-518): their own toast slot; `recNow` holds what the triggers read (each render), so a trigger is one call.
   const [rec, setRec] = useState<{ key: number; message: string; action?: { label: string; onClick: () => void } }>();
   const recKey = useRef(0);
-  const recNow = useRef({} as { compact: boolean; grouping: TabGrouping; autoClose: AutoClose; worktrees: Record<string, Worktree[]>; guideRun: boolean; drag: boolean; visibleIds: string[]; pushOn: boolean; togglePush: () => void; desktopOn: boolean; keepAwake: () => void; push: () => boolean; accounts: number });
-  recNow.current = { ...recNow.current, desktopOn: onDaemonMachine() && !!settingsView?.desktop && !settingsView.desktopForcedOff, accounts: (claudeEnvToken ? 1 : 0) + 1 + claudeAccounts.length, compact, grouping, autoClose, worktrees, guideRun: !!guideRun, drag: !!drag, visibleIds: splitOn ? split.ids : [activeId ?? ""], pushOn, togglePush: () => void togglePush(), keepAwake: offerKeepAwake, push: offerPush };
+  const recNow = useRef({} as { compact: boolean; grouping: TabGrouping; autoClose: AutoClose; worktrees: Record<string, Worktree[]>; guideRun: boolean; drag: boolean; visibleIds: string[]; pushOn: boolean; togglePush: () => void; desktopOn: boolean; keepAwake: () => void; push: () => boolean; accounts: number; quickCompact: (id: string) => { supported: boolean; running: boolean; row: boolean } });
+  recNow.current = { ...recNow.current, desktopOn: onDaemonMachine() && !!settingsView?.desktop && !settingsView.desktopForcedOff, accounts: (claudeEnvToken ? 1 : 0) + 1 + claudeAccounts.length, compact, grouping, autoClose, worktrees, guideRun: !!guideRun, drag: !!drag, visibleIds: splitOn ? split.ids : [activeId ?? ""], pushOn, togglePush: () => void togglePush(), keepAwake: offerKeepAwake, push: offerPush, quickCompact: quickCompactFacts };
   const pushTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(pushTimer.current), []);
   /** Performs what the follow module's event rules decided for a batch. */
@@ -2554,10 +2555,21 @@ export function App() {
     for (const f of effects) {
       if (f.type === "notify") notifyRef.current?.(f.event, f.live);
       else if (f.type === "offerPush") (clearTimeout(pushTimer.current), (pushTimer.current = setTimeout(() => document.visibilityState === "visible" && recNow.current.push(), f.afterMs)));
-      else if (f.type === "offerContextBreakdown") offer("contextBreakdown", { visible: f.visible, percent: f.percent }, () => openContextMeter(f.sessionId));
+      else if (f.type === "offerContextBreakdown") offerAfterTurn({ visible: f.visible, percent: f.percent, ...recNow.current.quickCompact(f.sessionId) }, () => showQuickCompact(f.sessionId), () => openContextMeter(f.sessionId));
       else if (f.type === "clearMoved") follow(f.from, f.to);
       else void refreshList();
     }
+  }
+  /** Quick compact rule (GH-1015): the Engine reports context usage (the Engine can Quick compact) and the session has a transcript (its menu item is enabled). */
+  function quickCompactFacts(id: string) {
+    const item = list.find((x) => x.id === id);
+    const info = item ?? infos[id];
+    const row = sessionRow(id);
+    return { supported: !!info && !!item?.transcript && capabilitiesOf(info).contextUsage, running: quickCompacting.current.has(id), row: !!row };
+  }
+  /** The quick-compact recommendation's button: the session's menu opens with Quick compact ringed. It does not run it. */
+  function showQuickCompact(sessionId: string) {
+    reopenMenu(sessionRow(sessionId), '[data-testid="action-quick-compact"]');
   }
   /** The recommendation's button: the context meter of the session's area opens. */
   function openContextMeter(sessionId: string) {

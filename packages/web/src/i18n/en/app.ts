@@ -816,6 +816,8 @@ export default {
   "rec.diffMode": "Make {mode} the default diff view?",
   "rec.searchSessions": "Looking for a session? Search by name.",
   "rec.artifactsPane": "See all of this session's artifacts in one place.",
+  "rec.quickCompact": "Context is filling up. Quick compact digests this session into a new one, with no model call.",
+  "rec.runInTerminal": "Tip: Run in terminal sends this command to the project's terminal.",
   "rec.contextBreakdown": "Context is half full. See what uses it.",
   "rec.push": "A session needed you while this page was hidden. Turn on push notifications?",
   "rec.keepAwake": "This computer slept during a run. Keep it awake while sessions run?",

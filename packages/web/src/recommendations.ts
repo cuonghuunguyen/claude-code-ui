@@ -4,7 +4,7 @@ import { DIFF_MODES, type DiffMode } from "./diff-mode.ts";
 import { t } from "./i18n.ts";
 import type { AutoClose } from "./tab-cleanup.ts";
 
-export type RuleId = "jira" | "compactTabs" | "cleanupTabs" | "autoClose" | "diffMode" | "searchSessions" | "artifactsPane" | "contextBreakdown" | "push" | "keepAwake" | "middleClick" | "phoneSwipe"
+export type RuleId = "jira" | "compactTabs" | "cleanupTabs" | "autoClose" | "diffMode" | "searchSessions" | "artifactsPane" | "contextBreakdown" | "quickCompact" | "runInTerminal" | "push" | "keepAwake" | "middleClick" | "phoneSwipe"
   | "commitInChanges" | "sendSelection" | "findInFiles" | "localHistory" | "defaultMode" | "switchAccount" | "openInFileManager" | "expandChip" | "filePaste";
 type Facts = {
   jira: { ready: boolean };
@@ -15,6 +15,9 @@ type Facts = {
   searchSessions: { far: boolean; empty: boolean };
   artifactsPane: { artifacts: number; paneSeen: boolean };
   contextBreakdown: { visible: boolean; percent: number };
+  // GH-1015: `supported` = the session's Engine can Quick compact and the session has a transcript; `running` = a Quick compact of it runs.
+  quickCompact: { visible: boolean; percent: number; supported: boolean; running: boolean; /** The session's sidebar row is rendered and visible (Show me opens its menu); a collapsed sidebar or a phone layout has none. */ row: boolean };
+  runInTerminal: { canRun: boolean; n: number };
   push: { needed: boolean; pushOn: boolean; supported: boolean; secure: boolean; permission: NotificationPermission; local: boolean; desktopOn: boolean };
   keepAwake: { slept: boolean; supported: boolean; on: boolean };
   middleClick: { fine: boolean; n: number };
@@ -52,6 +55,8 @@ export const RULES: { [K in RuleId]: Rule<K> } = {
   searchSessions: { id: "searchSessions", trigger: "sidebar: the session list stopped scrolling", surface: "toast", button: "showMe", when: (f) => f.far && f.empty, text: () => t("rec.searchSessions") },
   artifactsPane: { id: "artifactsPane", trigger: "App: an artifact tab opened", surface: "toast", button: "showMe", when: (f) => f.artifacts >= 3 && !f.paneSeen, text: () => t("rec.artifactsPane") },
   contextBreakdown: { id: "contextBreakdown", trigger: "App: the context usage after a turn arrives", surface: "toast", button: "showMe", when: (f) => f.visible && f.percent > 50, text: () => t("rec.contextBreakdown") },
+  quickCompact: { id: "quickCompact", trigger: "App: context usage after a turn", surface: "toast", button: "showMe", when: (f) => f.visible && f.percent > 70 && f.supported && f.row && !f.running, text: () => t("rec.quickCompact") },
+  runInTerminal: { id: "runInTerminal", trigger: "shell fence: Copy", surface: "toast", button: "showMe", when: (f) => f.canRun && f.n >= 2, text: () => t("rec.runInTerminal") },
   push: { id: "push", trigger: "App: the page became visible, or shortly after a reconnect that followed a hidden page", surface: "toast", button: "turnOn", when: (f) => f.needed && !f.pushOn && f.supported && f.secure && f.permission !== "denied" && !(f.local && f.desktopOn), text: () => t("rec.push") },
   keepAwake: { id: "keepAwake", trigger: "App: the page became visible or reconnected", surface: "toast", button: "turnOn", when: (f) => f.slept && f.supported && !f.on, text: () => t("rec.keepAwake") },
   middleClick: { id: "middleClick", trigger: "files: Open in tab", surface: "toast", button: "none", when: (f) => f.fine && f.n >= 2, text: () => t("rec.middleClick") },
@@ -197,6 +202,14 @@ export function streak(mode: string, key = "diffMode"): number {
   save(s);
   return s.streaks![key]!.n;
 }
+
+/** The context usage after a turn arrived: one rule at most. Quick compact (over 70 %) goes first; when it shows, the breakdown stays unmarked for a later turn. */
+export function offerAfterTurn(q: Facts["quickCompact"], quickRun: () => void, breakdownRun: () => void, now = Date.now()): boolean {
+  return offer("quickCompact", q, quickRun, now) || offer("contextBreakdown", { visible: q.visible, percent: q.percent }, breakdownRun, now);
+}
+
+/** Copy on a shell fence (every copy counts `shellCopy`); `showMe` rings the fence's Run in terminal button. */
+export const tipRunInTerminal = (canRun: boolean, showMe: () => void) => offer("runInTerminal", { canRun, n: count("shellCopy") }, showMe);
 
 export const tipMiddleClick = () => offer("middleClick", { fine: window.matchMedia?.("(pointer: fine)").matches ?? false, n: count("openInTab") });
 

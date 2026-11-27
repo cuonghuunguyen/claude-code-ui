@@ -10,7 +10,8 @@ import { brotliCompressSync, constants } from "node:zlib";
  * Bytes. Set from the GH-775 build plus about 5% headroom: entry chunk 893,167 raw / 226,553 brotli; the whole first load (the entry and
  * every chunk dist/index.html links to as a module script or modulepreload) 2,245,997 raw.
  */
-export const BUDGET = { raw: 940_000, br: 240_000, initial: 2_360_000 };
+// GH-1015: first load budget +4_000 B for two recommendation rules (about 2.2 KB; they must be in the entry, the rules table is read by the App at load).
+export const BUDGET = { raw: 940_000, br: 240_000, initial: 2_364_000 };
 
 export function entryOf(dist) {
   const html = readFileSync(join(dist, "index.html"), "utf8");
