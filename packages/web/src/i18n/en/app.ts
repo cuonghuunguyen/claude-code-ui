@@ -708,6 +708,8 @@ export default {
   "app.main.askClaudeIn": "Ask {engine} in {place}…",
   "app.main.openProjectToStart": "Open a project to start",
   "app.main.project": "Project",
+  "app.main.projectSearch": "Search projects",
+  "app.main.projectSearchEmpty": "No projects match",
   "app.main.engine": "Engine",
   "app.main.engineNamed": "Engine: {name}",
   "app.main.openOpenCodeSettings": "Open OpenCode settings",

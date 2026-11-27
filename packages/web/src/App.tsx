@@ -191,6 +191,7 @@ import { projectLabel, saveLabel, useLabels } from "./labels.ts";
 import { ENGINE_ICON, ENGINE_NAME, EngineTag } from "./engine-tag.tsx";
 import { BackButton, BackPanel, BackReminderCards, BriefRow } from "./back-panel.tsx";
 import { briefTag, foldBriefTurns, markFields, markOf, staleTurns, useBack } from "./back-marks.ts";
+import { ProjectPicker } from "./project-picker.tsx";
 import { SideBadge, SideLabel, SideState, sideLookup } from "./sides.tsx";
 import { applyListReply } from "./list-delta.ts";
 import { FOCUS_TAB, NEW_TAB, avatarColors, keysFinal as tabKeysFinal, closeTargets, otherGroupTargets, projectName, runFromHash, staleTabs, tabFromHash } from "./tabs.ts";
@@ -5191,7 +5192,6 @@ export function NewSession({
   const project = cwd ? projectOf(cwd, worktrees) : "";
   const runIn = ((project && worktrees[project]) || []).filter((w) => !w.outsideRoots).sort(byRow);
   const here = runIn.find((w) => w.path === cwd);
-  const OPEN = "\0open";
   const NEW_WT = "\0worktree";
   const creating = worktreeJob && !worktreeJob.error;
   // The project's commands, asked when the tab shows or the project changes; until they arrive only the dialog commands are listed.
@@ -5259,7 +5259,7 @@ export function NewSession({
         />
       </div>
       {cwd ? (
-        // Project chip: Base UI Select like the prompt toolbar pickers; "Open project…" is its last item.
+        // Project chip: searchable Base UI Combobox (ProjectPicker); "Open project…" is pinned below the list.
         <div className="flex min-w-0 max-w-full flex-wrap items-center justify-center gap-1">
         <Select value={engine} onValueChange={(v) => v && onDraft({ ...draft, engine: v as Engine })}>
           <SelectTrigger aria-label={tr("app.main.engineNamed", { name: ENGINE_NAME[engine] })} data-testid="engine-chip" className={`${GHOST} max-md:h-11! text-foreground hover:bg-secondary`}>
@@ -5276,32 +5276,21 @@ export function NewSession({
             ))}
           </SelectContent>
         </Select>
-        <Select value={project} onValueChange={(v) => (v === OPEN ? onOpenProject() : v && onCwd(v))}>
-          <SelectTrigger aria-label={tr("app.main.project")} title={project} data-testid="project-chip" className={`${GHOST} min-w-0 max-w-full max-md:h-11! text-foreground hover:bg-secondary`}>
-            <ProjectAvatar cwd={project} />
-            <span className="min-w-0 truncate font-medium" data-testid="new-project">
-              {projectName(project)}
-            </span>
-            <SideBadge cwd={project} />
-          </SelectTrigger>
-          <SelectContent alignItemWithTrigger={false} side="bottom" align="start" className="w-auto min-w-64 max-w-[calc(100vw-2rem)] p-0.5">
-            {projects.map((p) => (
-              <SelectItem key={p} value={p} className={ROW}>
-                <ProjectAvatar cwd={p} />
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate">{projectName(p)}</span>
-                  <span className="truncate text-muted-foreground text-xs" title={p}>{p}</span>
-                </span>
-                <SideBadge cwd={p} />
-              </SelectItem>
-            ))}
-            <SelectSeparator />
-            <SelectItem value={OPEN} className={ROW}>
-              <FolderPlusIcon />
-              {tr("app.main.openProjectEllipsis")}
-            </SelectItem>
-          </SelectContent>
-        </Select>
+        <ProjectPicker
+          projects={projects}
+          value={project}
+          onChange={onCwd}
+          onOpenProject={onOpenProject}
+          trigger={
+            <>
+              <ProjectAvatar cwd={project} />
+              <span className="min-w-0 truncate font-medium" data-testid="new-project">
+                {projectName(project)}
+              </span>
+              <SideBadge cwd={project} />
+            </>
+          }
+        />
         {(runIn.length > 1 || (onNewWorktree && runIn.length > 0)) && (
           <span className="inline-flex min-w-0 max-w-full items-center gap-1">
             <span aria-hidden className="select-none text-faint">
