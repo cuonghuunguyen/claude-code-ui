@@ -27,7 +27,7 @@ const STATUS: Record<string, WorktreeStatusResult> = {
   "/x/ext": st({ branchMerged: true, ignored: 3 }),
 };
 const list = [
-  item("co", M, { coordinator: true }),
+  item("co", M, { coordinator: true, state: "closed", live: false }),
   item("w-closed", M, { coordinatorId: "co", workerName: "closed-one", state: "closed", live: false }),
   item("w-idle", M, { coordinatorId: "co", workerName: "idle-one", state: "idle" }),
   item("w-wt", P("safe"), { coordinatorId: "co", workerName: "in-wt", state: "closed", live: false }),

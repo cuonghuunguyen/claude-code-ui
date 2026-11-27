@@ -2,16 +2,25 @@
 // Per-connection state: the Clean up scans; `close` aborts them.
 import { lstatSync } from "node:fs";
 import { isAbsolute } from "node:path";
+import type { WorktreeStatusResult } from "@claude-ui/protocol";
 import type { WorktreeTypes } from "./areas.ts";
 import type { DaemonContext } from "./daemon-context.ts";
 import type { Area, Msg, Respond } from "./dispatch.ts";
 import { answer, gitFailure } from "./git-request.ts";
 import { cachedStatuses, classify, listBranches, lowPriority, pullRequestBranches, worktreeStatus } from "./git.ts";
 
-export type WorktreeAreaContext = Pick<DaemonContext, "allowed" | "inside" | "refused" | "gitOutside" | "claudeDir" | "createIn" | "removeIn" | "isRemoving" | "inDir" | "sessions">;
+export type WorktreeAreaContext = Pick<DaemonContext, "allowed" | "inside" | "refused" | "gitOutside" | "claudeDir" | "createIn" | "removeIn" | "isRemoving" | "inDir" | "sessions" | "workerHold">;
 
 export function createWorktreeArea(ctx: WorktreeAreaContext): Area<WorktreeTypes> {
-  const { allowed, inside, refused, gitOutside, claudeDir, createIn, removeIn, isRemoving, inDir, sessions } = ctx;
+  const { allowed, inside, refused, gitOutside, claudeDir, createIn, removeIn, isRemoving, inDir, sessions, workerHold } = ctx;
+  /** Block and holder of worktree `p`: removing, running sessions, or (GH-663) a busy worker tree using it. */
+  const blockOf = (p: string, running: number, stBlocked: WorktreeStatusResult["blocked"]): Pick<WorktreeStatusResult, "blocked" | "heldBy"> => {
+    if (stBlocked) return { blocked: stBlocked };
+    if (isRemoving(p)) return { blocked: "removing" as const };
+    if (running) return { blocked: "sessions_running" as const };
+    const h = workerHold(p);
+    return h ? { blocked: "workers_running" as const, ...(h.name && { heldBy: h.name }) } : {};
+  };
   /** Clean up scans (`worktree.status` with `scan`) of this connection: aborted by `worktree.cancel` and when it closes. */
   const scans = new Map<string, AbortController>();
 
@@ -52,7 +61,7 @@ export function createWorktreeArea(ctx: WorktreeAreaContext): Area<WorktreeTypes
     const statuses = await cachedStatuses(paths);
     for (const [p, st] of Object.entries(statuses)) {
       const running = [...sessions.values()].filter((s) => inDir(s.cwd, p) && ["running", "needs_input"].includes(s.info().state)).length;
-      statuses[p] = classify({ ...st, running, blocked: st.blocked ?? (isRemoving(p) ? "removing" : running ? "sessions_running" : undefined) });
+      statuses[p] = classify({ ...st, running, ...blockOf(p, running, st.blocked) });
     }
     return r.reply({ statuses });
   };
@@ -89,7 +98,7 @@ export function createWorktreeArea(ctx: WorktreeAreaContext): Area<WorktreeTypes
           if (ac.signal.aborted) return r.fail("cancelled", "cancelled");
         }
         const running = [...sessions.values()].filter((s) => inDir(s.cwd, path!) && ["running", "needs_input"].includes(s.info().state)).length;
-        return r.reply(classify({ ...st, running, blocked: st.blocked ?? (isRemoving(path!) ? "removing" : running ? "sessions_running" : undefined) }));
+        return r.reply(classify({ ...st, running, ...blockOf(path!, running, st.blocked) }));
       }
       return r.reply(await removeIn(cwd, msg.path, { expectSafe: msg.expectSafe === true, expect: msg.expect, deleteBranch: msg.deleteBranch === true }));
     } catch (e) {

@@ -565,6 +565,47 @@ describe("worker tree: remove of a parent", () => {
   });
 });
 
+describe("worker tree: a busy tree holds its workers and worktrees (GH-663)", () => {
+  const inDir = (cwd: string, p: string) => cwd === p || cwd.startsWith(`${p}/`);
+
+  it("web remove of a closed worker is refused while its coordinator tree is busy; the tool keeps working", async () => {
+    const t = setup(undefined, { maxDepth: 3 });
+    const [C, W1] = tree(t, 1);
+    W1.cli = false;
+    C.works = true;
+    expect(await t.o.userOp("remove", "W1")).toMatchObject({ code: "coordinator_busy" });
+    expect(t.removed).toEqual([]);
+    expect(await call(t.o, "C", "worker_remove", { name: "impl" })).toEqual({ name: "impl", removed: true });
+    // the same web remove once the coordinator is idle
+    const u = setup(undefined, { maxDepth: 3 });
+    const [, V1] = tree(u, 1);
+    V1.cli = false;
+    expect(await u.o.userOp("remove", "W1")).toBeUndefined();
+  });
+
+  it("holdIn reports a worktree whose worker is idle while its coordinator or a sibling works", () => {
+    const t = setup(undefined, { maxDepth: 3 });
+    const [C, W1, W2] = tree(t, 2);
+    t.links.set("W1", { coordinatorId: "C", name: "impl", cwd: "/wt/a", port: 1 });
+    W1.cli = false;
+    expect(t.o.holdIn("/wt/a", inDir)).toBeUndefined();
+    C.state = "running";
+    expect(t.o.holdIn("/wt/a", inDir)).toEqual({ id: "W1", name: "impl" });
+    C.state = "idle";
+    W2.works = true; // below W1: same tree
+    expect(t.o.holdIn("/wt/a", inDir)).toEqual({ id: "W1", name: "impl" });
+    expect(t.o.holdIn("/wt/other", inDir)).toBeUndefined();
+  });
+
+  it("a coordinator session located in the worktree is held while its worker runs elsewhere", () => {
+    const t = setup(undefined, { maxDepth: 3 });
+    const [C, W1] = tree(t, 1);
+    C.cwd = "/wt/support";
+    W1.state = "running";
+    expect(t.o.holdIn("/wt/support", inDir)).toEqual({ id: "C", name: "" });
+  });
+});
+
 describe("worker tree: a refusal nobody consumed", () => {
   const sdk = { name: "orchestration", source: "sdk" };
   const pre = (t: ReturnType<typeof setup>, id: string, name = "x") => t.o.preflight(id, "mcp__orchestration__worker_start", start(name) as never, sdk);
@@ -597,7 +638,9 @@ describe("worker tree: a refusal nobody consumed", () => {
     const [, , W2] = tree(t, 2);
     W2.state = "running";
     expect((await t.o.userOp("close", "W1"))!.message).toMatch(/running or waiting workers.*close it/);
-    expect((await t.o.userOp("remove", "W1"))).toMatchObject({ code: "has_workers" });
+    expect(await t.o.userOp("remove", "W1")).toMatchObject({ code: "coordinator_busy" }); // GH-663: a busy tree comes first
+    W2.state = "idle";
+    expect(await t.o.userOp("remove", "W1")).toMatchObject({ code: "has_workers" });
     expect((await t.o.userOp("remove", "W1"))!.message).toMatch(/remove them first/);
   });
 });

@@ -344,6 +344,21 @@ export function createOrchestration(deps: OrchestrationDeps) {
   };
   /** A coordinator with a worker that is starting, running or waiting for input: the idle close keeps its CLI. */
   const waitingOnWorkers = (id: string) => workers(id).some((w) => starting.has(w.id) || !!deps.sessions.get(w.id)?.working());
+  /** GH-663: a session that is starting, running, needs input, or still works (subagent, background command). */
+  const ownBusy = (id: string) => starting.has(id) || ["running", "needs_input"].includes(deps.sessions.get(id)?.info().state ?? "") || !!deps.sessions.get(id)?.working();
+  /** GH-663: the root coordinator or any worker below it is busy. */
+  const treeBusy = (root: string) => ownBusy(root) || descendants(root).some((d) => ownBusy(d.id));
+  /**
+   * GH-663: the first session or worker located in `path` whose tree is busy. Candidates: loaded sessions and worker links with a cwd in `path`.
+   * `name` is the worker's chain path, "" for a plain session (a session that still works in the background).
+   */
+  const holdIn = (path: string, inDir: (cwd: string, p: string) => boolean): { id: string; name: string } | undefined => {
+    const ids = new Set<string>();
+    for (const s of deps.sessions.values()) if (inDir(s.cwd, path)) ids.add(s.id);
+    for (const [id, l] of deps.links.entries()) if (l.coordinatorId && l.cwd && inDir(l.cwd, path)) ids.add(id);
+    for (const id of ids) if (treeBusy(rootOf(id))) return { id, name: linkOf(id)?.coordinatorId ? chainOf(id).join("/") : "" };
+    return undefined;
+  };
   /** A coordinator that waits: on workers (see above), or on its own running subagent or background command (an idle session that still `working()`). */
   const busyOwn = (s: Session) => s.working() || waitingOnWorkers(s.id);
   const stillWaiting = (id: string) => waitingOnWorkers(id) || !!deps.sessions.get(id)?.working();
@@ -682,7 +697,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
     if (!w) throw new ToolError(`No worker named ${n}. worker_list lists them.`, "unknown_worker");
     refuseHeldElsewhere(w, n);
     const busy = `Worker ${n} is still running or waiting for input. Close it with worker_close first, then call worker_remove.`;
-    if (["running", "needs_input"].includes(deps.sessions.get(w.id)?.info().state ?? "")) throw new ToolError(busy, "session_running");
+    if (ownBusy(w.id)) throw new ToolError(busy, "session_running");
     // Any worker below, live or not: removing the parent would leave their links pointing at a deleted session, out of every tool's reach.
     const below = descendants(w.id);
     if (below.length) throw new ToolError(`Worker ${n} has workers below it: ${below.map((d) => d.path).join(", ")}. Remove them first (worker_remove from the worker that started them, or in the web app).`, "has_workers");
@@ -989,6 +1004,8 @@ export function createOrchestration(deps: OrchestrationDeps) {
   return {
     observe,
     waitingOnWorkers,
+    holdIn,
+    treeBusy,
     /** The idle close dropped the CLI of session `id`: see wake. */
     released: wake,
     /** `live` of session `id` changed (GH-852): a CLI that closed while its worker waited is reported. */
@@ -1000,6 +1017,7 @@ export function createOrchestration(deps: OrchestrationDeps) {
     async userOp(op: "close" | "remove", id: string): Promise<{ code: string; message: string } | undefined> {
       const l = linkOf(id);
       if (!l?.coordinatorId || !l.name) return { code: "not_worker", message: "This session is not a worker" };
+      if (op === "remove" && treeBusy(rootOf(id))) return { code: "coordinator_busy", message: "Its coordinator or a worker of its tree is still running or waiting on workers: wait, then remove it" };
       try {
         await (op === "close" ? closeWorker : removeWorker)(l.coordinatorId, l.name);
       } catch (e) {

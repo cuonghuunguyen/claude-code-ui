@@ -76,6 +76,19 @@ describe("cleanup", () => {
     expect([...defaultSelection(rows)].sort()).toEqual(["wk:closed", "wt:/m"]);
   });
 
+  it("GH-663: a worker of a busy coordinator tree is blocked and nothing of an open tree is pre-ticked", () => {
+    const worktrees = { "/r": [main, managed] };
+    const list = [s("c", "/r", { coordinator: true, state: "running", title: "Coord" }), s("w", "/r/.claude/worktrees/a", { coordinatorId: "c", state: "closed", live: false })];
+    const [w] = cleanupCandidates({ kind: "all" }, list, worktrees, state).workers;
+    expect(w).toMatchObject({ treeBusy: true, rootOpen: true, rootTitle: "Coord" });
+    expect(rowSafety({ kind: "worker", ...w! })).toMatchObject({ safety: "blocked", reason: expect.stringContaining("Coord") });
+    const worktree = wt(managed.path, { status: st() });
+    const idle = { ...w!, treeBusy: false };
+    expect([...defaultSelection([{ kind: "worker", ...idle }, worktree])]).toEqual([]);
+    expect([...defaultSelection([{ kind: "worker", ...idle, rootOpen: false }, worktree])].sort()).toEqual([`wk:w`, `wt:${managed.path}`]);
+    expect(rowSafety(wt(managed.path, { status: st({ safety: "blocked", blocked: "workers_running", heldBy: "impl" }) }))).toMatchObject({ safety: "blocked", reason: expect.stringContaining("impl") });
+  });
+
   it("filterRows: Older than uses max(session activity, headTime); Only safe; unknown activity counts as old", () => {
     const old = { status: st({ headTime: 1 }), lastActivity: 1 } as never;
     const fresh = { status: st({ headTime: NOW - DAY / 2 }), lastActivity: 1 } as never;
