@@ -6,7 +6,7 @@ import { fakeUsage } from "../fake-query.ts";
 import type { CanUseTool, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
 /** A line of the recorder (scripts/record-fixture.ts) that is not an SDK message: the engine asked `canUseTool`, or the recorder pressed Stop. */
-export type RecorderLine = { type: "__can_use_tool"; toolName: string; toolUseID: string; input: Record<string, unknown> } | { type: "__action"; action: "interrupt" };
+export type RecorderLine = { type: "__can_use_tool"; toolName: string; toolUseID: string; input: Record<string, unknown>; reply: { behavior: "allow" | "deny" } } | { type: "__action"; action: "interrupt" };
 type Line = SDKMessage | RecorderLine;
 
 export function fixtureTurns(file: URL): Line[][] {
@@ -47,9 +47,11 @@ export const fixtureQuery = (file: URL) => {
         if (!turn) throw new Error(`fixture has no turn ${n}`);
         for (const line of turn) {
           if (line.type === "__can_use_tool") {
-            // The engine's own answer decides what follows; the recorded reply is not compared (the scenario drives the reply).
+            // The scenario answers; the answer must be the recorded one, else the recorded rest of the turn would not follow.
             if (!options?.canUseTool) throw new Error("the fixture asks canUseTool, the query has none");
-            await options.canUseTool(line.toolName, line.input, { signal: new AbortController().signal, suggestions: [], toolUseID: line.toolUseID, requestId: randomUUID() } as never);
+            const opts: Parameters<CanUseTool>[2] = { signal: new AbortController().signal, suggestions: [], toolUseID: line.toolUseID, requestId: randomUUID() } as Parameters<CanUseTool>[2];
+            const got = await options.canUseTool(line.toolName, line.input, opts);
+            if (got.behavior !== line.reply.behavior) throw new Error(`${line.toolName}: the engine answered ${got.behavior}, the recording continues after ${line.reply.behavior}`);
           } else if (line.type === "__action") {
             if (line.action !== "interrupt") throw new Error(`unknown recorder action ${line.action}`);
             await Promise.race([stopPressed, stopped]);

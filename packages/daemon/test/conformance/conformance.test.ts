@@ -30,7 +30,7 @@ describe.each(DRIVERS)("$label", (driver) => {
       const gap = gapReason(driver.support.deniedRetry);
       const call = () => run.session.allowDenied("never-denied");
       if (gap) expect(call).toThrow(expect.objectContaining({ code: "unsupported", message: gap }));
-      else expect(call).toThrow(expect.not.objectContaining({ code: "unsupported" }));
+      else expect(call).toThrow(expect.objectContaining({ code: "unknown_call" }));
     } finally {
       await run.close();
     }

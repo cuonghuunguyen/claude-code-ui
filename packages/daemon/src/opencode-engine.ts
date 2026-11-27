@@ -2,7 +2,7 @@
 // stream of the server feeds every open session; prompts, permissions and questions go back as HTTP calls.
 import { limitOfApiError, type LimitStop } from "./opencode-limit.ts";
 import { randomUUID } from "node:crypto";
-import { agentMentions, capabilitiesFromSupport, gapReason, permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand, type SupportTable } from "@claude-ui/protocol";
+import { agentMentions, capabilitiesFromSupport, permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type PermissionMode, type PermissionUpdate, type Question, type RewindMode, type RewindPreview, type SlashCommand, type SupportTable } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT } from "./aside.ts";
 import { DeniedRetryError, NO_AUTO_MODE } from "./denied-retry.ts";
 import type { Engine, EngineSession, Reply, Restored } from "./engine.ts";
@@ -508,10 +508,10 @@ class OpenCodeSession implements EngineSession {
   }
   /** Auto mode is Claude's (EngineCapabilities.permissionModes has no auto). */
   allowDenied(_toolUseId: string): string | undefined {
-    throw new DeniedRetryError("unsupported", gapReason(OPENCODE_SUPPORT.deniedRetry)!);
+    throw new DeniedRetryError("unsupported", NO_AUTO_MODE);
   }
   alwaysAllowDenied(_toolUseId: string, _scope: "session" | "local"): Promise<string | undefined> {
-    throw new DeniedRetryError("unsupported", gapReason(OPENCODE_SUPPORT.deniedRetry)!);
+    throw new DeniedRetryError("unsupported", NO_AUTO_MODE);
   }
 
   async setEffort(effort: Effort) {

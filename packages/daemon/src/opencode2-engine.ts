@@ -5,7 +5,7 @@
 import { limitOfFailure, type LimitStop } from "./opencode-limit.ts";
 import { randomUUID } from "node:crypto";
 import type { OpenCodeClient } from "@opencode/client";
-import { agentMentions, capabilitiesFromSupport, checkAnswer, gapReason, permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type Part, type PermissionMode, type PermissionUpdate, type Question, type QuestionInput, type RewindMode, type RewindPreview, type SlashCommand, type SupportTable } from "@claude-ui/protocol";
+import { agentMentions, capabilitiesFromSupport, checkAnswer, permissionModesFor, type Effort, type EffortLevel, type EngineCapabilities, type ModelInfo, type Part, type PermissionMode, type PermissionUpdate, type Question, type QuestionInput, type RewindMode, type RewindPreview, type SlashCommand, type SupportTable } from "@claude-ui/protocol";
 import { ASIDE_NO_EDIT } from "./aside.ts";
 import { DAEMON_SERVER } from "./daemon-mcp.ts";
 import { DeniedRetryError, NO_AUTO_MODE } from "./denied-retry.ts";
@@ -685,10 +685,10 @@ class OpenCode2Session implements EngineSession {
     this.changed("agent");
   }
   allowDenied(_toolUseId: string): string | undefined {
-    throw new DeniedRetryError("unsupported", gapReason(OPENCODE2_SUPPORT.deniedRetry)!);
+    throw new DeniedRetryError("unsupported", NO_AUTO_MODE);
   }
   alwaysAllowDenied(_toolUseId: string, _scope: "session" | "local"): Promise<string | undefined> {
-    throw new DeniedRetryError("unsupported", gapReason(OPENCODE2_SUPPORT.deniedRetry)!);
+    throw new DeniedRetryError("unsupported", NO_AUTO_MODE);
   }
 
   /** Replaces the session's rules in OpenCode with the ones of `mode` and `agent` (default: the session's). */

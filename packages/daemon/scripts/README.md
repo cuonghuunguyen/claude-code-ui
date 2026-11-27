@@ -24,7 +24,7 @@ Without `--scenario` the old behaviour stays: plain turns from the prompts given
 
 Besides the SDK messages, a scenario file holds, in the order they happened:
 
-- `{"type":"__can_use_tool","toolName","toolUseID","input","reply"}`: the SDK called `canUseTool`, the recorder answered `reply` (a `PermissionResult`). A player calls `canUseTool` with `toolName` and `input` at this point and waits for the engine's answer (`test/conformance/fixture-query.ts`; the scenario decides the answer, `reply` is not compared).
+- `{"type":"__can_use_tool","toolName","toolUseID","input","reply"}`: the SDK called `canUseTool`, the recorder answered `reply` (a `PermissionResult`). A player calls `canUseTool` with `toolName` and `input` at this point and waits for the engine's answer (`test/conformance/fixture-query.ts`; the scenario answers, and the player fails when the answer's `behavior` differs from `reply`).
 - `{"type":"__action","action":"interrupt"}`: the recorder called `query.interrupt()`. A player holds the turn until the engine calls `interrupt()`, then plays the rest (the interrupted marker, the aborted `result`).
 
 ## OpenCode

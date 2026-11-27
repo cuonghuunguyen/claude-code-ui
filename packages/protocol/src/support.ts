@@ -1,6 +1,6 @@
 import type { EngineCapabilities } from "./wire.ts";
 
-/** A feature an Engine adapter has or lacks (ADR 0012). Each feature the conformance suite covers is one name; a capability flag of the same name derives from the table; `deniedRetry` (Allow and retry of a call auto mode denied) has no flag: the web shows the control on a denied call, which only Claude produces. */
+/** A feature an Engine adapter has or lacks (ADR 0012). Each feature the conformance suite covers is one name; a capability flag of the same name derives from the table; `permissions`, `questions`, `interrupt` and `deniedRetry` have none: every adapter shows the first three, and the web shows Allow and retry on a call auto mode denied, which only Claude produces. */
 export type Feature = "shell" | "permissions" | "questions" | "interrupt" | "deniedRetry";
 
 /** `supported`: the adapter has it and the conformance suite proves it. `gap`: it does not, with the reason it does not. */
