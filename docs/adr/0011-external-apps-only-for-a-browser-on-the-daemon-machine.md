@@ -22,3 +22,12 @@ Decision: `fs.openExternal` runs only when the connection is from the daemon mac
 ## Amendment (GH-646)
 
 The user can set one editor command (Settings `editor`). The command comes from the hub's own settings file, never from a request, a project file or a project environment: `fs.openExternal` carries only `with: "custom"`. Changing it needs a browser on the daemon machine (`settings.set` answers `not_local` otherwise), so a phone or Tailscale browser cannot plant a command for the local user's next click. The daemon splits the line itself and starts the program without a shell. It is not synced to Sides.
+
+## Amendment (GH-1021)
+
+Supersedes "runs only when the connection is from the daemon machine" for opening. Every paired browser (LAN, Tailscale, a phone) gets Reveal, Open in an editor and Open with the default app, and `fs.openExternal` no longer answers `not_local`. The app starts on the daemon machine's screen; when nobody looks at that screen, nothing visible happens, which is accepted. A token holder can already run any command through a session, so this adds no privilege. The command stays fixed per OS, with no shell and canonical paths inside the roots. Docker and SSH Sides still answer `side_unsupported`.
+
+- A WSL Side daemon no longer needs to trust its attached Hubs for opening: it does not check the origin of the browser. The Windows Hub forwards the request of a WSL Side path for any browser. The accepted-risk note about a Hub on another machine in Consequences no longer adds anything for opening.
+- The rule of the GH-646 amendment stays: `settings.set` with `editor` answers `not_local` for a browser not on the daemon machine, so a remote browser cannot plant a command for the local user's next click. Settings › Open in app shows the values read-only for such a browser, with one line saying why.
+- A browser not on the daemon machine does not know the daemon's OS: the file manager entry uses the neutral name "Open Containing Folder".
+- Every daemon, a Docker or SSH Side daemon too, starts with `openExternal`. The Hub router is the only block for those Sides; a client with that Side daemon's own token could ask it directly. Accepted: a token holder can already run any command.

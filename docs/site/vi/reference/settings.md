@@ -187,7 +187,7 @@ Cho [engine OpenCode](../features/opencode).
 
 ## Mở bằng ứng dụng {#open-in-app}
 
-**Lệnh trình soạn thảo** và **Tên trong menu** thêm chương trình của riêng bạn vào menu tệp (**Mở bằng** *tên*). Dùng `{path}` cho tệp hoặc thư mục và `{root}` cho thư mục phiên. Chỉ trình duyệt trên máy của daemon mới đổi được. Xem [Tệp](../features/files#open-in-the-file-manager-an-editor-or-the-default-app).
+**Lệnh trình soạn thảo** và **Tên trong menu** thêm chương trình của riêng bạn vào menu tệp (**Mở bằng** *tên*). Dùng `{path}` cho tệp hoặc thư mục và `{root}` cho thư mục phiên. Chỉ trình duyệt trên máy của daemon mới đổi được; trình duyệt khác chỉ xem được. Xem [Tệp](../features/files#open-in-the-file-manager-an-editor-or-the-default-app).
 
 ## Môi trường {#sides}
 

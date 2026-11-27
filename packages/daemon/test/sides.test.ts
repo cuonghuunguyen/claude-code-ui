@@ -582,7 +582,7 @@ describe("sides", () => {
     const s = createSides({ targets: [wslSide("Ubuntu")], discoverMs: 0, discover: async () => [], spawn: () => scriptedSide(() => ({})) });
     await s.refresh();
     const sent: ServerMessage[] = [];
-    const router = createRouter({ sides: s, send: (m) => sent.push(m), local: async () => {}, localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: {} }), isLocalSession: async () => false, sameHost: true });
+    const router = createRouter({ sides: s, send: (m) => sent.push(m), local: async () => {}, localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: {} }), isLocalSession: async () => false });
     await router.handle({ type: "fs.openExternal", path: "/p/a", cwd: "/p", with: "custom", side: "wsl:Ubuntu", reqId: "r" } as never);
     expect(sent[0]).toMatchObject({ type: "error", code: "side_unsupported" });
   });
@@ -607,18 +607,21 @@ describe("sides", () => {
     expect(local.length + sent.filter((m) => "reqId" in m && m.reqId === "browser").length).toBeGreaterThan(0);
   });
 
-  it("fs.openExternal: a WSL side is refused for a browser on another machine; a Docker side is side_unsupported", async () => {
-    const s = createSides({ targets: [wslSide("Ubuntu")], discoverMs: 0, discover: async () => [dockerSide("dev")], spawn: () => scriptedSide(() => ({})) });
+  it("fs.openExternal: a WSL side is forwarded for any browser; a Docker side is side_unsupported (GH-1021)", async () => {
+    const frames: { type: string }[] = [];
+    const s = createSides({ targets: [wslSide("Ubuntu")], discoverMs: 0, discover: async () => [dockerSide("dev")], spawn: () => scriptedSide((m) => (frames.push(m), {})) });
     await s.refresh();
-    const run = async (sameHost: boolean | undefined, id: string) => {
+    await s.start("wsl:Ubuntu");
+    const run = async (id: string) => {
       const sent: ServerMessage[] = [];
-      const router = createRouter({ sides: s, send: (m) => sent.push(m), local: async () => {}, localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: {} }), isLocalSession: async () => false, sameHost });
+      const router = createRouter({ sides: s, send: (m) => sent.push(m), local: async () => {}, localCall: async (m) => ({ type: "reply", reqId: m.reqId, result: {} }), isLocalSession: async () => false });
       await router.handle({ type: "fs.openExternal", path: "/p/a", cwd: "/p", with: "reveal", side: id, reqId: "r" } as never);
-      return sent[0] as any;
+      return sent.find((m) => "reqId" in m && m.reqId === "r") as any;
     };
-    expect(await run(false, "wsl:Ubuntu")).toMatchObject({ code: "not_local" });
-    expect(await run(undefined, "wsl:Ubuntu")).toMatchObject({ code: "not_local" });
-    expect(await run(true, "docker:dev")).toMatchObject({ code: "side_unsupported" });
+    expect(await run("docker:dev")).toMatchObject({ code: "side_unsupported" });
+    expect(frames.filter((f) => f.type === "fs.openExternal")).toEqual([]);
+    await run("wsl:Ubuntu");
+    expect(frames.filter((f) => f.type === "fs.openExternal")).toHaveLength(1);
   });
 
   it.skipIf(win32)("artifact.preview of a side session: the hub serves the page and its supporting files, bytes read from the side (GH-336)", async () => {

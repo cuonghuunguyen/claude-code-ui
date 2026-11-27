@@ -384,6 +384,7 @@ export default {
   "settings.openApp.name": "Name in the menu",
   "settings.openApp.nameHint": "Shown as \"Open in <name>\". Empty: the program name.",
   "settings.openApp.namePlaceholder": "e.g. Sublime Text",
+  "settings.openApp.readOnly": "The editor command can be changed only from a browser on the daemon machine.",
   "settings.openApp.notLocal": "Only a browser on the daemon machine can change the editor command.",
   "jira.urlHint": "Cloud: https://<site>.atlassian.net. Data Center or Server: the https address of your Jira. Changing the host clears the token.",
   "jira.email": "Email",

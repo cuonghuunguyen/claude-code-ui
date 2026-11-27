@@ -12,21 +12,21 @@ export const customEditor = (e?: { command: string; name: string }): EditorInfo[
   const label = e ? editorLabel(e) : "";
   return e?.command.trim() && label ? [{ id: "custom", label }] : [];
 };
-/** `run` asks the daemon to open `path` (a session folder `cwd` holds it); absent from the context: the browser is not on the daemon machine or the daemon is older. */
+/** `run` asks the daemon to open `path` (a session folder `cwd` holds it); absent from the context: the daemon is older (no editor list). */
 export type OpenExternal = { editors: EditorInfo[]; run: (path: string, how: ExternalHow, cwd: string) => void; /** The session folder is on this machine or in a WSL side (a Docker or SSH side cannot open it). */ canOpen: (cwd: string) => boolean; /** The folder is on this machine, not in a WSL side: only then the custom editor (a hub setting) is offered. */ isLocal: (cwd: string) => boolean };
 /** The side id of a path: this machine or a WSL distro (its daemon starts the app on the same Windows desktop). */
 export const canOpenSide = (side: string) => side === LOCAL_SIDE || side.startsWith("wsl:");
 export const OpenExternalContext = createContext<OpenExternal | undefined>(undefined);
 export const useOpenExternal = () => useContext(OpenExternalContext);
 
-/** The browser runs on the daemon machine (a LAN or Tailscale address of it counts as remote); the daemon refuses any other browser too. */
+/** The browser runs on the daemon machine (a LAN or Tailscale address of it counts as remote). Gates what the daemon also checks by peer address (editor command, MCP login), not opening an app. */
 export const onDaemonMachine = () => ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
 
 export const isExternalId = (id: string): id is ExternalId => id.startsWith("ext:");
 export const externalHow = (id: ExternalId) => id.slice(4) as ExternalHow;
 
-/** The browser runs on the daemon machine, so its OS names the file manager. */
-const os = () => (typeof navigator === "undefined" ? "" : /Mac|iPhone|iPad/.test(navigator.platform) ? "mac" : /Win/.test(navigator.platform) ? "win" : "other");
+/** On the daemon machine the browser's OS names the file manager; any other browser does not know the daemon's OS, so it gets the neutral name. */
+const os = () => (typeof navigator === "undefined" ? "" : typeof location !== "undefined" && !onDaemonMachine() ? "other" : /Mac|iPhone|iPad/.test(navigator.platform) ? "mac" : /Win/.test(navigator.platform) ? "win" : "other");
 
 /** The section for one file or folder: reveal, the detected editors, and for a file the default app. `disabled`: the file is deleted. */
 export function externalEntries(o: { isDir: boolean; editors: EditorInfo[]; /** false: the path is in a Side, which has no custom editor. */ local?: boolean; disabled?: boolean; platform?: string }): ExternalEntry[] {

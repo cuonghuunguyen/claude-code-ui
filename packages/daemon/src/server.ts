@@ -2226,7 +2226,7 @@ export function createDaemon(opts: {
 
   wss.on("connection", (ws: Conn, req?: IncomingMessage) => {
     const sameBrowser = sameMachine(req);
-    // A WSL daemon's attached Hub is the Windows Hub of this machine, which checked its own browser (ADR 0011).
+    // A WSL daemon's attached Hub is the Windows Hub of this machine, which checked its own browser (ADR 0011). Gates the editor command and MCP login, not fs.openExternal (GH-1021).
     const sameHost = sameBrowser || (virtual.has(ws) && !!opts.openExternal?.winPath);
     // Before `connections.add`: a sleep found now is broadcast to the others, then sent once to this connection below.
     sleepWatch?.check();
@@ -2339,7 +2339,6 @@ export function createDaemon(opts: {
           ),
         isLocalSession,
         localSessionIds: async () => new Set([...(await sessionIds()), ...sessions.keys()]),
-        sameHost: sameBrowser,
         media: sideMedia,
         page: sidePage,
         mediaTimeoutMs: opts.sideCallTimeoutMs,
