@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { Duplex } from "node:stream";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type WebSocket as ServerSocket } from "ws";
 import { backoffMs, connect, type ConnectionStatus } from "./client.ts";
@@ -28,9 +29,11 @@ const countDials = () => {
   return n;
 };
 
-const until = (pred: () => boolean) =>
-  new Promise<void>((resolve) => {
-    const t = setInterval(() => pred() && (clearInterval(t), resolve()), 5);
+/** Resolves when `pred` holds; with `withinMs`, rejects if it does not hold in time. */
+const until = (pred: () => boolean, withinMs?: number) =>
+  new Promise<void>((resolve, reject) => {
+    const t = setInterval(() => pred() && (clearInterval(t), clearTimeout(limit), resolve()), 5);
+    const limit = withinMs === undefined ? undefined : setTimeout(() => (clearInterval(t), reject(new Error(`not true within ${withinMs} ms`))), withinMs);
   });
 
 describe("connect", () => {
@@ -186,10 +189,10 @@ describe("redial on wake", () => {
   async function daemon(onSocket: (s: ServerSocket, n: number) => void = () => {}) {
     const http = createServer((_req, res) => res.writeHead(204).end());
     const w = new WebSocketServer({ noServer: true });
-    const state = { refuse: false, upgrades: 0, sockets: [] as ServerSocket[] };
+    const state = { refuse: false, hold: false, held: [] as Duplex[], upgrades: 0, sockets: [] as ServerSocket[] };
     http.on("upgrade", (req, socket, head) => {
       state.upgrades++;
-      if (state.refuse) return void socket.destroy();
+      if (state.refuse) return void (state.hold ? state.held.push(socket) : socket.destroy()); // hold: the dial stays in flight
       w.handleUpgrade(req, socket, head, (s) => (state.sockets.push(s), s.send(HELLO), onSocket(s, state.sockets.length), w.emit("connection", s, req)));
     });
     await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
@@ -211,12 +214,31 @@ describe("redial on wake", () => {
     const statuses: ConnectionStatus[] = [];
     let opens = 0;
     const c = connect({ url: d.url, token: "t", onEvent: () => {}, onOpen: () => opens++, onStatus: (s) => statuses.push(s), wakeEvents: w.events });
-    await until(() => d.state.upgrades >= 3); // 0.5 s + 1 s of backoff: the next retry is 2 s away
+    await until(() => statuses.length >= 3); // three refused dials: the retry timer (2 s) is set
+    const upgrades = d.state.upgrades;
     d.state.refuse = false;
-    const t0 = Date.now();
     w.wake();
-    await until(() => opens === 1);
-    expect(Date.now() - t0).toBeLessThan(500);
+    await until(() => opens === 1, 1000); // well before the 2 s timer
+    expect(d.state.upgrades).toBe(upgrades + 1);
+    expect(statuses.at(-1)).toBe("connected");
+    c.close();
+    d.stop();
+  });
+
+  it("a wake while a dial is still in flight and then fails redials at once instead of sitting out the backoff", async () => {
+    const d = await daemon();
+    d.state.refuse = true;
+    d.state.hold = true;
+    const w = fakeWake();
+    const statuses: ConnectionStatus[] = [];
+    let opens = 0;
+    const c = connect({ url: d.url, token: "t", onEvent: () => {}, onOpen: () => opens++, onStatus: (s) => statuses.push(s), wakeEvents: w.events });
+    await until(() => d.state.held.length === 1); // the first dial is in flight
+    w.wake(); // nothing to redial yet: the dial in flight is the redial
+    d.state.refuse = false;
+    d.state.hold = false;
+    d.state.held.forEach((s) => s.destroy()); // the dial in flight fails
+    await until(() => opens === 1, 400); // the wake must not wait for the 500 ms timer
     expect(statuses.at(-1)).toBe("connected");
     c.close();
     d.stop();
