@@ -1069,7 +1069,11 @@ class OpenCodeSession implements EngineSession {
   }
 
   async interrupt() {
-    if (this.session.currentState() === "idle") return;
+    if (this.session.currentState() === "idle") {
+      // Only background subagents run (GH-1014): OpenCode aborts them with the idle parent; their cards end as stopped with their events.
+      if (this.mapper.backgroundRunning()) await this.abort();
+      return;
+    }
     this.stopped = true;
     this.setRetry(undefined); // OpenCode waits no more for the retry once the abort reaches it; the line goes at once
     const ways = this.stops.stop();

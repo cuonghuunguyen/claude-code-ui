@@ -25,7 +25,7 @@ function rig() {
   const call = (status: string, extra: Record<string, unknown> = {}) =>
     emit({ type: "message.part.updated", properties: { part: { id: "prt_t", type: "tool", sessionID: "ses_parent", messageID: "msg_p", callID: "call_bg", tool: "task", state: { status, input: { description: "dig" }, metadata: { sessionId: "ses_kid", ...extra }, time: { start: 1, ...(status === "completed" && { end: 2 }) } } } } });
   const cards = () => emitted.filter((p) => p.type === "subagent").map((p) => (p as { status: string }).status);
-  return { run, emit, call, cards, states, asks, cancelled };
+  return { run, emit, call, cards, states, asks, cancelled, server };
 }
 
 describe("OpenCode background subagent", () => {
@@ -69,5 +69,15 @@ describe("OpenCode background subagent", () => {
     expect(t.cancelled).toEqual(["per_1"]);
     ask("per_2"); // OpenCode keeps listing the aborted child's ask
     expect(t.asks).toHaveLength(1);
+  });
+
+  it("Stop on the idle session aborts OpenCode's session while a background subagent runs, and does nothing otherwise", async () => {
+    const t = rig();
+    await t.run.interrupt();
+    const aborts = () => (t.server.request as ReturnType<typeof vi.fn>).mock.calls.filter(([path]) => path === "/session/ses_parent/abort");
+    expect(aborts()).toHaveLength(0);
+    t.call("completed", { background: true });
+    await t.run.interrupt();
+    expect(aborts()).toHaveLength(1);
   });
 });
