@@ -87,7 +87,7 @@ describe("GH-1015 rules", () => {
     expect(quick).not.toHaveBeenCalled();
   });
 
-  it("an Engine without Quick compact, or a running one, gets the breakdown", () => {
+  it("an Engine without Quick compact gets the breakdown", () => {
     expect(offerAfterTurn({ ...q, supported: false }, () => {}, () => {}, T0)).toBe(true);
     expect(stored().shown).toEqual(["contextBreakdown"]);
   });
