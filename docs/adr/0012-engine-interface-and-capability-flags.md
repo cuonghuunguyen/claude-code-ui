@@ -19,3 +19,4 @@ The engine conformance suite (`packages/daemon/test/conformance`) runs every sce
 - A gap is an entry in the table, never an optional method or a silent no-op. The method of a gap throws the table's reason (`deniedRetry`: `allowDenied` and `alwaysAllowDenied` of OpenCode throw `DeniedRetryError("unsupported", reason)`).
 - A feature no recording can show (Allow and retry needs a call auto mode denied) has no scenario; the suite checks that the engine's behaviour follows its table entry.
 - Scenarios replay real recordings; a fixture is recorded only where none exists.
+- A step of a subagent run or inline task is compared as a child of its card or call (`child`), listed directly after its parent, so the order an adapter reports the parent's own result in does not matter. The parent turn of an inline task is a hand-written shell (`hand-inline-call`: the call of the daemon's `inline_task` tool, which a recorder cannot issue); the run it starts is a recording.

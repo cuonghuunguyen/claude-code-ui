@@ -1,11 +1,12 @@
 // One driver per adapter: runs a whole Session on that adapter's Engine, replaying a recorded fixture, and collects the Part events the Session emits.
 // The Claude adapter replays an SDK recording (fixture-query.ts); OpenCode 1 and 2 run the fake `opencode` binary of test/fixtures with scripted turns.
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Event, SupportTable } from "@claude-ui/protocol";
 import type { Engine } from "../../src/engine.ts";
+import type { InlineResult } from "../../src/inline-types.ts";
 import { CLAUDE_SUPPORT, claudeEngine } from "../../src/claude-engine.ts";
 import { createOpenCodeEngine, OPENCODE_SUPPORT } from "../../src/opencode-engine.ts";
 import { createOpenCode2Engine, OPENCODE2_SUPPORT } from "../../src/opencode2-engine.ts";
@@ -30,11 +31,13 @@ export type Run = {
   waitFor(what: string, match: (part: Event["part"]) => boolean): Promise<void>;
   /** Bash mode: runs `command` in the session cwd and settles when it ended. */
   bash(command: string): Promise<void>;
+  /** Runs an inline task for the running `inline_task` call of the turn (the daemon tool calls the engine this way) and returns its result. */
+  inline(text: string): Promise<InlineResult>;
   close(): Promise<void>;
 };
 
-/** What a scenario needs from a fixture: one name per adapter; the driver maps it to its own file. */
-export type Fixtures = { claude?: string; opencode1?: string; opencode2?: string };
+/** What a scenario needs from a fixture: one name per adapter; the driver maps it to its own file. `claudeInline`: the query of an inline task run (Claude runs it as a query of its own; OpenCode as the next turn of the script). */
+export type Fixtures = { claude?: string; claudeInline?: string; opencode1?: string; opencode2?: string };
 
 /** `manual`: the scenario answers permission requests itself; by default the driver allows each once so a recorded turn that asks (turn-edit) completes. */
 export type OpenOptions = { manual?: boolean };
@@ -42,6 +45,9 @@ export type OpenOptions = { manual?: boolean };
 export type Driver = { adapter: AdapterName; label: string; /** The adapter's support table, known before a session opens: it decides which scenarios are skipped. */ support: SupportTable; open(fixtures: Fixtures, options?: OpenOptions): Promise<Run> };
 
 const TIMEOUT_MS = 15_000;
+/** The `inline_task` call of the parent turn fixtures (hand-inline-call): its tool_use id and its input. */
+export const INLINE_CALL = "toolu_inline";
+export const INLINE_PROMPT = "Read notes.txt and reply with its first line.";
 const claudeFixture = (name: string) => new URL(`../../../protocol/test/fixtures/${name}.jsonl`, import.meta.url);
 const BIN1 = fileURLToPath(new URL("../fixtures/opencode/fake-opencode-bin.mjs", import.meta.url));
 const BIN2 = fileURLToPath(new URL("../fixtures/opencode2/fake-opencode2-bin.mjs", import.meta.url));
@@ -98,6 +104,10 @@ function runOf(engine: Engine, session: Session, cleanup: () => Promise<void>, m
       session.prompt(text);
       await until("the turn to end", () => turnEnded(events, from));
     },
+    async inline(text) {
+      // The call the daemon tool would be serving: Claude names it by its tool_use id, OpenCode finds it by its input.
+      return session.run.inlineTask({ text, title: text.slice(0, 60), tools: ["Read"], mcp: [], maxTurns: 5 }, { signal: new AbortController().signal, toolUseId: INLINE_CALL, input: { prompt: INLINE_PROMPT } });
+    },
     async bash(command) {
       const from = events.length;
       session.bash(command);
@@ -119,7 +129,10 @@ const claude: Driver = {
   async open(f, o) {
     const cwd = scratch();
     // A scenario without a Claude fixture (bash mode: the daemon runs the shell) still needs a query; the fixture is never replayed because the command makes no turn.
-    const query = f.claude ? fixtureQuery(claudeFixture(f.claude)) : fixtureQuery(claudeFixture("two-turn-text"));
+    const turns = fixtureQuery(claudeFixture(f.claude ?? "two-turn-text"));
+    const inline = f.claudeInline ? fixtureQuery(claudeFixture(f.claudeInline)) : undefined;
+    // An inline task runs its own query with the prompt text; the session's query takes the messages of the user.
+    const query: typeof turns = (p) => (typeof p.prompt === "string" && inline ? inline(p) : turns(p)) as ReturnType<typeof turns>;
     const session = new Session(cwd, { engine: claudeEngine, query: query as never });
     return runOf(claudeEngine, session, async () => rmSync(cwd, { recursive: true, force: true }), o?.manual);
   },
@@ -135,6 +148,13 @@ function opencode(adapter: "opencode1" | "opencode2"): Driver {
       const cwd = scratch();
       const script = (v2 ? f.opencode2 : f.opencode1)?.split(",").filter(Boolean).map(v2 ? turn2 : turn1).join(",") ?? "";
       const env: Record<string, string> = v2 ? { FAKE_OPENCODE2_SCRIPT: script } : { FAKE_OPENCODE_SCRIPT: script };
+      // OpenCode 2 lists the subagent's session by its parent; the recorded turns name it `ses_child`.
+      const dataDir = v2 ? scratch() : undefined;
+      if (dataDir) {
+        const file = join(dataDir, "data.json");
+        writeFileSync(file, JSON.stringify({ sessions: [{ id: "ses_child", directory: cwd, title: "subagent", time: { created: 1, updated: 2 }, parentID: "ses_parent" }] }));
+        env.FAKE_OPENCODE2_DATA = file;
+      }
       const server = createOpenCodeServer({ path: () => "", command: [process.execPath, v2 ? BIN2 : BIN1], env: () => env });
       // A new session as the catalogue makes it: the OpenCode session first (with the rules of its mode), then the Session on its id.
       let engine: Engine;
@@ -156,6 +176,7 @@ function opencode(adapter: "opencode1" | "opencode2"): Driver {
       return runOf(engine, session, async () => {
         await server.close();
         rmSync(cwd, { recursive: true, force: true });
+        if (dataDir) rmSync(dataDir, { recursive: true, force: true });
       }, o?.manual);
     },
   };

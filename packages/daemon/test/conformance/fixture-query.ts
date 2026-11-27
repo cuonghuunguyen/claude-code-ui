@@ -22,18 +22,19 @@ export function fixtureTurns(file: URL): Line[][] {
 /** `query` option of a Session: turn n of the fixture answers the n-th prompt. */
 export const fixtureQuery = (file: URL) => {
   const turns = fixtureTurns(file);
-  return ({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage>; options?: { canUseTool?: CanUseTool } }) => {
+  return ({ prompt, options }: { prompt: AsyncIterable<SDKUserMessage> | string; options?: { canUseTool?: CanUseTool } }) => {
     // The recorder's Stop: the turn goes on after the engine called interrupt().
     let interrupted!: () => void;
     const stopPressed = new Promise<void>((r) => (interrupted = r));
     // close() ends the wait for the next prompt, as the real query ends when its input closes: the Session's close() waits for the loop.
     let stop!: () => void;
     const stopped = new Promise<{ done: true; value: undefined }>((r) => (stop = () => r({ done: true, value: undefined })));
-    const input = prompt[Symbol.asyncIterator]();
+    // A prompt text is a one-shot run (an inline task): its one turn plays at once and the query ends after it.
+    const input = typeof prompt === "string" ? undefined : prompt[Symbol.asyncIterator]();
     const q = (async function* () {
       let n = 0;
       for (;;) {
-        const next = await Promise.race([input.next(), stopped]);
+        const next = input ? await Promise.race([input.next(), stopped]) : n === 0 ? { done: false as const, value: { shouldQuery: true } as SDKUserMessage } : { done: true as const, value: undefined };
         if (next.done) return;
         const m = next.value;
         if (m.shouldQuery === false) {

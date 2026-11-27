@@ -1,7 +1,8 @@
 // Scenarios of the conformance suite. Each has one engine-neutral reference sequence, written by hand (not taken from any adapter), and the fixture each adapter replays.
 import type { Feature } from "@claude-ui/protocol";
 import type { AdapterName, Fixtures, Run } from "./drivers.ts";
-import type { Pattern, Step } from "./normalize.ts";
+import { INLINE_PROMPT } from "./drivers.ts";
+import type { Optional, Pattern } from "./normalize.ts";
 
 export type Variant = { adapters: AdapterName[]; steps: Pattern[] };
 
@@ -15,8 +16,8 @@ export type Scenario = {
   play(run: Run): Promise<void>;
   /** The reference sequence; a list of variants when adapters legitimately show the same thing in different parts: each adapter may match only the variants that name it. */
   expected: Pattern[] | Variant[];
-  /** Step kinds an adapter may add (a model that thinks first). */
-  optional?: Step["kind"][];
+  /** What an adapter may add (a model that thinks first): step kinds, or patterns for a kind that is only optional in one place. */
+  optional?: Optional[];
 };
 
 export const SCENARIOS: Scenario[] = [
@@ -89,3 +90,50 @@ export const SCENARIOS: Scenario[] = [
     optional: ["thinking"],
   },
 ];
+
+// Subagent and inline task: the steps of the run show under the card or call, as children. The parent-level `tool_result` of the call and a second `assistant_text` (OpenCode 2 reports
+// back in a second turn) are optional; so is the run's own prompt (Claude and OpenCode 1 show it, OpenCode 2 does not by design).
+SCENARIOS.push(
+  {
+    name: "subagent run with child tool calls",
+    feature: "subagents",
+    fixtures: { claude: "rec-subagent", opencode1: "rec-subagent", opencode2: "rec-subagent" },
+    async play(run) {
+      run.start("have a subagent read notes.txt");
+      // OpenCode 2 answers in a second turn after the subagent reported: wait for the answer of the session itself.
+      await run.waitFor("the answer after the subagent", (p) => p.type === "assistant_text" && !p.parentId);
+      await run.settle();
+    },
+    expected: [
+      { kind: "user_text", child: false },
+      { kind: "subagent", status: "done" },
+      { kind: "tool", tool: "Read", status: "done", child: true },
+      { kind: "tool_result", error: false, child: true },
+      { kind: "assistant_text", child: true },
+      { kind: "assistant_text", child: false },
+    ],
+    optional: ["thinking", { kind: "user_text", child: true }, { kind: "tool_result", child: false }, { kind: "assistant_text", child: false }],
+  },
+  {
+    name: "inline task with child tool calls",
+    feature: "inlineTask",
+    fixtures: { claude: "hand-inline-call", claudeInline: "rec-inline", opencode1: "hand-inline-call,rec-inline", opencode2: "hand-inline-call,rec-inline" },
+    async play(run) {
+      // The parent turn is a call of the `inline_task` tool that waits for its result (a stand-in for the daemon tool, which has no recording: hand-inline-call); the run is the recorded one.
+      run.start("use an inline task to read notes.txt");
+      await run.waitFor("the inline_task call", (p) => p.type === "tool_call" && p.tool.endsWith("inline_task") && p.status === "running");
+      const result = await run.inline(INLINE_PROMPT);
+      if (result.status !== "done") throw new Error(`the inline task ended ${result.status}: ${result.error ?? result.text}`);
+      await run.session.interrupt();
+      await run.settle();
+    },
+    expected: [
+      { kind: "user_text", child: false },
+      { kind: "tool", tool: "mcp__claude-ui__inline_task", child: false },
+      { kind: "tool", tool: "Read", status: "done", child: true },
+      { kind: "tool_result", error: false, child: true },
+      { kind: "assistant_text", child: true },
+    ],
+    optional: ["thinking", "interrupted"],
+  },
+);

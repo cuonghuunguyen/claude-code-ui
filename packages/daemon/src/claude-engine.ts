@@ -1573,7 +1573,7 @@ export class ClaudeSession implements EngineSession {
 }
 
 /** Claude has every feature of the table. */
-export const CLAUDE_SUPPORT: SupportTable = { shell: "supported", permissions: "supported", questions: "supported", interrupt: "supported", deniedRetry: "supported" };
+export const CLAUDE_SUPPORT: SupportTable = { shell: "supported", permissions: "supported", questions: "supported", interrupt: "supported", subagents: "supported", inlineTask: "supported", deniedRetry: "supported" };
 export const CLAUDE_CAPABILITIES: EngineCapabilities = capabilitiesFromSupport(CLAUDE_SUPPORT, ALL_CAPABILITIES);
 
 export const claudeEngine: Engine = {

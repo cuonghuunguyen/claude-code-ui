@@ -27,7 +27,7 @@ import type { OpenCodeServer } from "./opencode-server.ts";
 import type { Session, SessionOpts, SessionSettings } from "./session.ts";
 
 /** What OpenCode 2 has: every feature of the table. */
-export const OPENCODE2_SUPPORT: SupportTable = { shell: "supported", permissions: "supported", questions: "supported", interrupt: "supported", deniedRetry: { gap: NO_AUTO_MODE } };
+export const OPENCODE2_SUPPORT: SupportTable = { shell: "supported", permissions: "supported", questions: "supported", interrupt: "supported", subagents: "supported", inlineTask: "supported", deniedRetry: { gap: NO_AUTO_MODE } };
 /** What the OpenCode 2 adapter has: as OpenCode 1's (`/compact`, `/undo`, `/redo` are the daemon's commands, the others OpenCode's; `fork`: the Aside). */
 export const OPENCODE2_CAPABILITIES: EngineCapabilities = capabilitiesFromSupport(OPENCODE2_SUPPORT, {
   ...OPENCODE_CAPABILITIES,

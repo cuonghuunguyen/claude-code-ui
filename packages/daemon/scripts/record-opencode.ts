@@ -1,5 +1,5 @@
 // Records the event stream of a real OpenCode server running one scenario, into <out>/<scenario>.events.jsonl (cut it with scripts/cut-turn.ts).
-// Usage: npm run record-opencode -w @claude-ui/daemon -- --v1|--v2 --bin <opencode binary> --scenario plain|permission|question|interrupt --out <dir>
+// Usage: npm run record-opencode -w @claude-ui/daemon -- --v1|--v2 --bin <opencode binary> --scenario plain|permission|question|interrupt|subagent|inline --out <dir>
 //          [--model deepseek/deepseek-flash] [--auth <auth.json>]
 // The server is started by the daemon's own code (opencode-server.ts), in a scratch folder with its own XDG dirs. The OpenCode login is not copied: <out>/data/opencode/auth.json
 // is a symlink to the original (--auth, default ~/.local/share/opencode/auth.json). Sessions are created and answered the way the engines do (rules of the "default" mode).
@@ -18,6 +18,10 @@ const SCENARIOS = {
   permission: { prompt: "Run the shell command `touch conformance.txt` with the bash tool, then confirm in one short sentence. Use no other tool." },
   question: { prompt: "Use the question tool to ask me whether I prefer red or blue (those two options). After my answer reply with one short sentence. Use no other tool." },
   interrupt: { prompt: "Write a 600 word essay about rivers. Do not use tools." },
+  // A subagent that reads a file of the scratch folder (a read in the folder asks for no permission). OpenCode 1 names the tool `task`, OpenCode 2 `subagent`.
+  subagent: { prompt: "Start one subagent (the task or subagent tool, agent general) that reads the file notes.txt with its read tool and reports the first line. After it reported, reply with one short sentence. Use no other tool." },
+  // What an inline task run does: a plain session turn with one read tool call (the engine's inline run creates such a session). Cut like any turn.
+  inline: { prompt: "Use the read tool to read the file notes.txt, then reply with the first line of it in one short sentence. Use no other tool." },
 } as const;
 type Name = keyof typeof SCENARIOS;
 
@@ -29,7 +33,7 @@ const scenarioName = arg("--scenario") as Name | undefined;
 const outDir = arg("--out");
 const modelArg = arg("--model") ?? "deepseek/deepseek-flash";
 const auth = resolve(arg("--auth") ?? join(homedir(), ".local/share/opencode/auth.json"));
-if (!major || !bin || !scenarioName || !SCENARIOS[scenarioName] || !outDir) (console.error("usage: record-opencode --v1|--v2 --bin <opencode> --scenario plain|permission|question|interrupt --out <dir> [--model p/m] [--auth file]"), process.exit(2));
+if (!major || !bin || !scenarioName || !SCENARIOS[scenarioName] || !outDir) (console.error("usage: record-opencode --v1|--v2 --bin <opencode> --scenario plain|permission|question|interrupt|subagent|inline --out <dir> [--model p/m] [--auth file]"), process.exit(2));
 // ADR 0002 and the owner's rule: the paid DeepSeek model, never a free one.
 if (modelArg !== "deepseek/deepseek-flash") (console.error(`refusing the model ${modelArg}: recordings use deepseek/deepseek-flash (DeepSeek V4.1 Flash)`), process.exit(2));
 if (!existsSync(auth)) (console.error(`no OpenCode login at ${auth}`), process.exit(2));
@@ -43,6 +47,8 @@ for (const d of ["config", "cache", "state"]) mkdirSync(join(out, d), { recursiv
 rmSync(join(out, "data/opencode/auth.json"), { force: true });
 symlinkSync(auth, join(out, "data/opencode/auth.json"));
 const cwd = realpathSync(mkdtempSync(join(tmpdir(), "record-opencode-")));
+// The subagent and inline scenarios read this file.
+writeFileSync(join(cwd, "notes.txt"), "first line of the notes\nsecond line\n");
 const file = join(out, `${scenarioName}.events.jsonl`);
 writeFileSync(file, "");
 const t0 = Date.now();
@@ -114,7 +120,9 @@ try {
       body: { messageID, parts: [{ id: `prt_${messageID.slice(4)}`, type: "text", text: scenario.prompt }], agent: "build", model: { providerID, modelID } },
     });
   }
-  const ended = () => (major === 2 ? entries.slice(from).some((e) => e.kind === "event" && /^session\.execution\.(succeeded|interrupted|failed)$/.test(e.type)) : entries.slice(from).some((e) => e.kind === "event" && (e.type === "session.idle" || (e.type === "session.status" && e.properties.status?.type === "idle"))));
+  // The end of the prompted session's turn (a subagent's own session ends earlier, and its parent can start a second turn when it reports).
+  const mine = (e: Extract<Entry, { kind: "event" }>) => (e.properties.sessionID ?? e.properties.info?.sessionID ?? e.properties.part?.sessionID) === id;
+  const ended = () => (major === 2 ? entries.slice(from).some((e) => e.kind === "event" && mine(e) && /^session\.execution\.(succeeded|interrupted|failed)$/.test(e.type)) : entries.slice(from).some((e) => e.kind === "event" && mine(e) && (e.type === "session.idle" || (e.type === "session.status" && e.properties.status?.type === "idle"))));
 
   if (scenarioName === "permission") {
     await wait("a permission request", () => ended() || !!seen("permission.asked", from));
@@ -156,6 +164,12 @@ try {
     else await server.request(`/session/${id}/abort`, { method: "POST", directory: cwd, timeoutMs: 0 });
   }
   await wait("the turn to end", ended);
+  // A subagent goes on after the parent's turn ended (OpenCode 2 reports back with a second turn): wait until the stream is quiet.
+  if (scenarioName === "subagent") {
+    let last = entries.length;
+    let quietSince = Date.now();
+    await wait("a quiet stream", () => (entries.length !== last ? ((last = entries.length), (quietSince = Date.now()), false) : Date.now() - quietSince > 8000), 300_000);
+  }
   // A few late events (session.idle after the status, the last message update).
   await new Promise((r) => setTimeout(r, 1500));
   console.error(`recorded ${entries.length} lines into ${file}`);

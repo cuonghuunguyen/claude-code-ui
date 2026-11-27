@@ -1,0 +1,652 @@
+[
+ {
+  "event": "session.execution.started",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ },
+ {
+  "event": "session.usage.updated",
+  "data": {
+   "sessionID": "$SESSION",
+   "cost": 0.000038268,
+   "tokens": {
+    "input": 230,
+    "output": 5,
+    "reasoning": 0,
+    "cache": {
+     "read": 256,
+     "write": 0
+    }
+   }
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "agent": "build",
+   "model": {
+    "id": "deepseek-flash",
+    "providerID": "deepseek"
+   },
+   "assistantMessageID": "$A1",
+   "started": 1795780310044
+  }
+ },
+ {
+  "event": "session.step.first-token",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1"
+  }
+ },
+ {
+  "event": "session.reasoning.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "native": {
+    "reasoningField": "reasoning_content"
+   }
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": "The user wants me to start a"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " subagent with agent \"general\" that reads notes.txt with its read tool and reports the first line. Then reply with one short sentence. Use no other tool.\n\nI need"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " to check notes.txt exists? No — the subagent will read it. I should just call the subagent tool. \"Use"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " no other tool.\" So only the subagent tool.\n\nBut does the file exist in the working directory? Let me just call"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": " subagent. I shouldn't use read myself.\n\nI'll call subagent with prompt instruct"
+  }
+ },
+ {
+  "event": "session.reasoning.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "delta": "ing to read notes.txt."
+  }
+ },
+ {
+  "event": "session.tool.input.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "name": "subagent"
+  }
+ },
+ {
+  "event": "session.reasoning.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "ordinal": 0,
+   "text": "The user wants me to start a subagent with agent \"general\" that reads notes.txt with its read tool and reports the first line. Then reply with one short sentence. Use no other tool.\n\nI need to check notes.txt exists? No — the subagent will read it. I should just call the subagent tool. \"Use no other tool.\" So only the subagent tool.\n\nBut does the file exist in the working directory? Let me just call subagent. I shouldn't use read myself.\n\nI'll call subagent with prompt instructing to read notes.txt.",
+   "native": {
+    "reasoningField": "reasoning_content"
+   }
+  }
+ },
+ {
+  "event": "session.tool.input.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "text": "{\"agent\": \"general\", \"description\": \"Read notes.txt first line\", \"prompt\": \"Use the read tool to read the file `notes.txt` in the current working directory (/work/proj). Then report back the first line of that file, exactly as it appears. Do not use any other tools beyond read.\"}"
+  }
+ },
+ {
+  "event": "session.tool.called",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "input": {
+    "agent": "general",
+    "description": "Read notes.txt first line",
+    "prompt": "Use the read tool to read the file `notes.txt` in the current working directory (/work/proj). Then report back the first line of that file, exactly as it appears. Do not use any other tools beyond read."
+   },
+   "executed": false
+  }
+ },
+ {
+  "event": "session.step.streamed",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1"
+  }
+ },
+ {
+  "event": "session.tool.progress",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "metadata": {
+    "sessionID": "ses_child",
+    "status": "running"
+   }
+  }
+ },
+ {
+  "event": "session.tool.success",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "id": "$CALL",
+   "content": [
+    {
+     "type": "text",
+     "text": "The subagent is working in the background (sessionID: ses_child). You will receive a <subagent> message when it goes idle, and again after each later round of work.\nDO NOT sleep, poll, proactively check on its progress, or duplicate this subagent's work.\nWork on non-overlapping tasks, or briefly tell the user what you launched and end your response.\nTo send it follow-ups or change its instructions while it runs, call subagent again with this sessionID."
+    }
+   ],
+   "metadata": {
+    "sessionID": "ses_child",
+    "status": "running",
+    "truncated": false
+   },
+   "executed": false
+  }
+ },
+ {
+  "event": "session.step.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A1",
+   "finish": "tool-calls",
+   "rawFinish": "tool_calls",
+   "tokens": {
+    "input": 4155,
+    "output": 152,
+    "reasoning": 117,
+    "cache": {
+     "read": 6656,
+     "write": 0
+    }
+   },
+   "cost": 0.0008046179999999999
+  }
+ },
+ {
+  "event": "session.usage.updated",
+  "data": {
+   "sessionID": "$SESSION",
+   "cost": 0.0008428859999999999,
+   "tokens": {
+    "input": 4385,
+    "output": 157,
+    "reasoning": 117,
+    "cache": {
+     "read": 6912,
+     "write": 0
+    }
+   }
+  }
+ },
+ {
+  "event": "session.execution.started",
+  "data": {
+   "sessionID": "ses_child"
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "ses_child",
+   "agent": "general",
+   "model": {
+    "id": "deepseek-flash",
+    "providerID": "deepseek"
+   },
+   "assistantMessageID": "msg_c1",
+   "started": 1795780311789
+  }
+ },
+ {
+  "event": "session.step.first-token",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c1"
+  }
+ },
+ {
+  "event": "session.tool.input.started",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c1",
+   "id": "call_2",
+   "name": "read"
+  }
+ },
+ {
+  "event": "session.tool.input.ended",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c1",
+   "id": "call_2",
+   "text": "{\"path\": \"/work/proj/notes.txt\"}"
+  }
+ },
+ {
+  "event": "session.tool.called",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c1",
+   "id": "call_2",
+   "input": {
+    "path": "/work/proj/notes.txt"
+   },
+   "executed": false
+  }
+ },
+ {
+  "event": "session.step.streamed",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c1"
+  }
+ },
+ {
+  "event": "session.tool.success",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c1",
+   "id": "call_2",
+   "content": [
+    {
+     "type": "text",
+     "text": "Read file /work/proj/notes.txt, lines 1-2\n1: first line of the notes\n2: second line"
+    }
+   ],
+   "metadata": {
+    "truncated": false
+   },
+   "executed": false
+  }
+ },
+ {
+  "event": "session.step.ended",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c1",
+   "finish": "tool-calls",
+   "rawFinish": "tool_calls",
+   "tokens": {
+    "input": 1593,
+    "output": 76,
+    "reasoning": 0,
+    "cache": {
+     "read": 8320,
+     "write": 0
+    }
+   },
+   "cost": 0.00030951
+  }
+ },
+ {
+  "event": "session.usage.updated",
+  "data": {
+   "sessionID": "ses_child",
+   "cost": 0.00030951,
+   "tokens": {
+    "input": 1593,
+    "output": 76,
+    "reasoning": 0,
+    "cache": {
+     "read": 8320,
+     "write": 0
+    }
+   }
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "agent": "build",
+   "model": {
+    "id": "deepseek-flash",
+    "providerID": "deepseek"
+   },
+   "assistantMessageID": "$A2",
+   "started": 1795780311779
+  }
+ },
+ {
+  "event": "session.step.first-token",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2"
+  }
+ },
+ {
+  "event": "session.text.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "ordinal": 0
+  }
+ },
+ {
+  "event": "session.text.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "ordinal": 0,
+   "delta": "Launched a general subagent to read `notes.txt` and report its first line."
+  }
+ },
+ {
+  "event": "session.text.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "ordinal": 0,
+   "text": "Launched a general subagent to read `notes.txt` and report its first line."
+  }
+ },
+ {
+  "event": "session.step.streamed",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2"
+  }
+ },
+ {
+  "event": "session.step.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A2",
+   "finish": "stop",
+   "rawFinish": "stop",
+   "tokens": {
+    "input": 196,
+    "output": 19,
+    "reasoning": 0,
+    "cache": {
+     "read": 11008,
+     "write": 0
+    }
+   },
+   "cost": 0.000073824
+  }
+ },
+ {
+  "event": "session.usage.updated",
+  "data": {
+   "sessionID": "$SESSION",
+   "cost": 0.0009167099999999999,
+   "tokens": {
+    "input": 4581,
+    "output": 176,
+    "reasoning": 117,
+    "cache": {
+     "read": 17920,
+     "write": 0
+    }
+   }
+  }
+ },
+ {
+  "event": "session.execution.succeeded",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "ses_child",
+   "agent": "general",
+   "model": {
+    "id": "deepseek-flash",
+    "providerID": "deepseek"
+   },
+   "assistantMessageID": "msg_c2",
+   "started": 1795780312588
+  }
+ },
+ {
+  "event": "session.step.first-token",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c2"
+  }
+ },
+ {
+  "event": "session.text.started",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c2",
+   "ordinal": 0
+  }
+ },
+ {
+  "event": "session.text.delta",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c2",
+   "ordinal": 0,
+   "delta": "The first line of `notes.txt` is:\n\n```\nfirst line of the notes\n```"
+  }
+ },
+ {
+  "event": "session.text.ended",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c2",
+   "ordinal": 0,
+   "text": "The first line of `notes.txt` is:\n\n```\nfirst line of the notes\n```"
+  }
+ },
+ {
+  "event": "session.step.streamed",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c2"
+  }
+ },
+ {
+  "event": "session.step.ended",
+  "data": {
+   "sessionID": "ses_child",
+   "assistantMessageID": "msg_c2",
+   "finish": "stop",
+   "rawFinish": "stop",
+   "tokens": {
+    "input": 206,
+    "output": 19,
+    "reasoning": 0,
+    "cache": {
+     "read": 9856,
+     "write": 0
+    }
+   },
+   "cost": 0.000071868
+  }
+ },
+ {
+  "event": "session.usage.updated",
+  "data": {
+   "sessionID": "ses_child",
+   "cost": 0.000381378,
+   "tokens": {
+    "input": 1799,
+    "output": 95,
+    "reasoning": 0,
+    "cache": {
+     "read": 18176,
+     "write": 0
+    }
+   }
+  }
+ },
+ {
+  "event": "session.execution.succeeded",
+  "data": {
+   "sessionID": "ses_child"
+  }
+ },
+ {
+  "event": "session.inbox.enqueued",
+  "data": {
+   "inboxID": "msg_21cd8fad5002oy4fc9zTIXIuoF",
+   "sessionID": "$SESSION",
+   "item": {
+    "type": "synthetic",
+    "payload": {
+     "text": "<subagent sessionID=\"ses_child\" state=\"completed\" description=\"Read notes.txt first line\">\nThe first line of `notes.txt` is:\n\n```\nfirst line of the notes\n```\n</subagent>",
+     "description": "Read notes.txt first line",
+     "metadata": {
+      "source": "subagent",
+      "childID": "ses_child",
+      "agent": "General",
+      "state": "completed"
+     }
+    },
+    "delivery": "steer"
+   }
+  }
+ },
+ {
+  "event": "session.execution.started",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ },
+ {
+  "event": "session.step.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "agent": "build",
+   "model": {
+    "id": "deepseek-flash",
+    "providerID": "deepseek"
+   },
+   "assistantMessageID": "$A3",
+   "started": 1795780313456
+  }
+ },
+ {
+  "event": "session.step.first-token",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A3"
+  }
+ },
+ {
+  "event": "session.text.started",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A3",
+   "ordinal": 0
+  }
+ },
+ {
+  "event": "session.text.delta",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A3",
+   "ordinal": 0,
+   "delta": "The subagent read `notes.txt` and reported that its first line is \"first line of the notes.\""
+  }
+ },
+ {
+  "event": "session.text.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A3",
+   "ordinal": 0,
+   "text": "The subagent read `notes.txt` and reported that its first line is \"first line of the notes.\""
+  }
+ },
+ {
+  "event": "session.step.streamed",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A3"
+  }
+ },
+ {
+  "event": "session.step.ended",
+  "data": {
+   "sessionID": "$SESSION",
+   "assistantMessageID": "$A3",
+   "finish": "stop",
+   "rawFinish": "stop",
+   "tokens": {
+    "input": 148,
+    "output": 23,
+    "reasoning": 0,
+    "cache": {
+     "read": 11136,
+     "write": 0
+    }
+   },
+   "cost": 0.000069408
+  }
+ },
+ {
+  "event": "session.usage.updated",
+  "data": {
+   "sessionID": "$SESSION",
+   "cost": 0.000986118,
+   "tokens": {
+    "input": 4729,
+    "output": 199,
+    "reasoning": 117,
+    "cache": {
+     "read": 29056,
+     "write": 0
+    }
+   }
+  }
+ },
+ {
+  "event": "session.execution.succeeded",
+  "data": {
+   "sessionID": "$SESSION"
+  }
+ }
+]
