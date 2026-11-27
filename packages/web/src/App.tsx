@@ -2546,7 +2546,7 @@ export function App() {
   // Recommendations (GH-518): their own toast slot; `recNow` holds what the triggers read (each render), so a trigger is one call.
   const [rec, setRec] = useState<{ key: number; message: string; action?: { label: string; onClick: () => void } }>();
   const recKey = useRef(0);
-  const recNow = useRef({} as { compact: boolean; grouping: TabGrouping; autoClose: AutoClose; worktrees: Record<string, Worktree[]>; guideRun: boolean; drag: boolean; visibleIds: string[]; pushOn: boolean; togglePush: () => void; desktopOn: boolean; keepAwake: () => void; push: () => boolean; accounts: number; quickCompact: (id: string) => { supported: boolean; running: boolean } });
+  const recNow = useRef({} as { compact: boolean; grouping: TabGrouping; autoClose: AutoClose; worktrees: Record<string, Worktree[]>; guideRun: boolean; drag: boolean; visibleIds: string[]; pushOn: boolean; togglePush: () => void; desktopOn: boolean; keepAwake: () => void; push: () => boolean; accounts: number; quickCompact: (id: string) => { supported: boolean; running: boolean; row: boolean } });
   recNow.current = { ...recNow.current, desktopOn: onDaemonMachine() && !!settingsView?.desktop && !settingsView.desktopForcedOff, accounts: (claudeEnvToken ? 1 : 0) + 1 + claudeAccounts.length, compact, grouping, autoClose, worktrees, guideRun: !!guideRun, drag: !!drag, visibleIds: splitOn ? split.ids : [activeId ?? ""], pushOn, togglePush: () => void togglePush(), keepAwake: offerKeepAwake, push: offerPush, quickCompact: quickCompactFacts };
   const pushTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(pushTimer.current), []);
@@ -2564,7 +2564,8 @@ export function App() {
   function quickCompactFacts(id: string) {
     const item = list.find((x) => x.id === id);
     const info = item ?? infos[id];
-    return { supported: !!info && !!item?.transcript && capabilitiesOf(info).contextUsage, running: quickCompacting.current.has(id) };
+    const row = [...document.querySelectorAll<HTMLElement>(`[data-testid="session-item"][data-session-id="${CSS.escape(id)}"]`)].find((e) => e.checkVisibility?.() !== false);
+    return { supported: !!info && !!item?.transcript && capabilitiesOf(info).contextUsage, running: quickCompacting.current.has(id), row: !!row };
   }
   /** The quick-compact recommendation's button: the session's menu opens with Quick compact ringed. It does not run it. */
   function showQuickCompact(sessionId: string) {

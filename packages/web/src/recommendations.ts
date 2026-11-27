@@ -16,7 +16,7 @@ type Facts = {
   artifactsPane: { artifacts: number; paneSeen: boolean };
   contextBreakdown: { visible: boolean; percent: number };
   // GH-1015: `supported` = the session's Engine can Quick compact and the session has a transcript; `running` = a Quick compact of it runs.
-  quickCompact: { visible: boolean; percent: number; supported: boolean; running: boolean };
+  quickCompact: { visible: boolean; percent: number; supported: boolean; running: boolean; /** The session's sidebar row is rendered and visible (Show me opens its menu); a collapsed sidebar or a phone layout has none. */ row: boolean };
   runInTerminal: { canRun: boolean; n: number };
   push: { needed: boolean; pushOn: boolean; supported: boolean; secure: boolean; permission: NotificationPermission; local: boolean; desktopOn: boolean };
   keepAwake: { slept: boolean; supported: boolean; on: boolean };
@@ -55,7 +55,7 @@ export const RULES: { [K in RuleId]: Rule<K> } = {
   searchSessions: { id: "searchSessions", trigger: "sidebar: the session list stopped scrolling", surface: "toast", button: "showMe", when: (f) => f.far && f.empty, text: () => t("rec.searchSessions") },
   artifactsPane: { id: "artifactsPane", trigger: "App: an artifact tab opened", surface: "toast", button: "showMe", when: (f) => f.artifacts >= 3 && !f.paneSeen, text: () => t("rec.artifactsPane") },
   contextBreakdown: { id: "contextBreakdown", trigger: "App: the context usage after a turn arrives", surface: "toast", button: "showMe", when: (f) => f.visible && f.percent > 50, text: () => t("rec.contextBreakdown") },
-  quickCompact: { id: "quickCompact", trigger: "App: the context usage after a turn arrives (before contextBreakdown)", surface: "toast", button: "showMe", when: (f) => f.visible && f.percent > 70 && f.supported && !f.running, text: () => t("rec.quickCompact") },
+  quickCompact: { id: "quickCompact", trigger: "App: the context usage after a turn arrives (before contextBreakdown)", surface: "toast", button: "showMe", when: (f) => f.visible && f.percent > 70 && f.supported && f.row && !f.running, text: () => t("rec.quickCompact") },
   runInTerminal: { id: "runInTerminal", trigger: "shell-fence: Copy", surface: "toast", button: "showMe", when: (f) => f.canRun && f.n >= 2, text: () => t("rec.runInTerminal") },
   push: { id: "push", trigger: "App: the page became visible, or shortly after a reconnect that followed a hidden page", surface: "toast", button: "turnOn", when: (f) => f.needed && !f.pushOn && f.supported && f.secure && f.permission !== "denied" && !(f.local && f.desktopOn), text: () => t("rec.push") },
   keepAwake: { id: "keepAwake", trigger: "App: the page became visible or reconnected", surface: "toast", button: "turnOn", when: (f) => f.slept && f.supported && !f.on, text: () => t("rec.keepAwake") },
